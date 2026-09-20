@@ -60,7 +60,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   providers: [
     Resend({
       apiKey: process.env.RESEND_API_KEY,
-      from: process.env.NOTIFY_FROM,
+      // Unused in practice — sendVerificationRequest below does the send — but
+      // kept in sync with it so the two can never disagree about the sender.
+      from: process.env.NOTIFY_FROM || 'Onyx <onboarding@resend.dev>',
       async sendVerificationRequest({ identifier: email, url }) {
         const client = new ResendClient(process.env.RESEND_API_KEY);
         const brand = await loadBrand();
@@ -118,7 +120,24 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             'X-Entity-Type': 'transactional-auth',
           },
         });
-        if (error) throw new Error(`Resend send failed: ${error.message || JSON.stringify(error)}`);
+        if (error) {
+          // Resend's failures here are nearly always one of three setup
+          // mistakes, and its raw message does not say which. Name them,
+          // because this fires during first-run setup when the person has the
+          // least context and the least patience.
+          const detail = error.message || JSON.stringify(error);
+          let hint = '';
+          if (/domain is not verified|not verified/i.test(detail)) {
+            hint = ` — the sending domain in NOTIFY_FROM ("${from}") is not verified in Resend.`
+                 + ' Verify it, or use "Onyx <onboarding@resend.dev>" while testing.';
+          } else if (/testing emails|own email address|can only send/i.test(detail)) {
+            hint = ' — Resend\u2019s onboarding@resend.dev sender only delivers to the address'
+                 + ' your Resend account is registered under. Verify a domain to reach anyone else.';
+          } else if (/api key|unauthorized|invalid/i.test(detail)) {
+            hint = ' — check RESEND_API_KEY.';
+          }
+          throw new Error(`Resend send failed: ${detail}${hint}`);
+        }
       },
     }),
     ...(oktaConfigured
