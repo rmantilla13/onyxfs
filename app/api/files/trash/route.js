@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import {
   buildPrincipal, listFilesForUser, listExpiredTrash,
-  restoreFile, deleteFile, getFileById,
+  restoreFile, deleteFile, getFileById, canModifyFile,
 } from '@/lib/db';
 import { getStorageConfig, storageMode, s3PresignGet, s3DeleteObject, s3MoveObject } from '@/lib/storage';
 
@@ -62,6 +62,14 @@ export async function POST(req) {
 
   const file = await getFileById(id);
   if (!file) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+  // Restore and purge are writes — purge is the permanent one. The listing
+  // above is already access-filtered, but a POST carries an id the caller
+  // chose, so it has to be checked on its own.
+  const actor = await buildPrincipal(session.user.email);
+  if (!(await canModifyFile(file, actor))) {
+    return NextResponse.json({ error: 'No access' }, { status: 403 });
+  }
   let cfg = null;
   try { cfg = await getStorageConfig(); } catch {}
 

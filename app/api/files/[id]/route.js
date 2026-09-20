@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { updateFile, softDeleteFile, deleteFile, getFileById, getFileMetadataSchema, getFeatureFlags } from '@/lib/db';
+import { updateFile, softDeleteFile, deleteFile, getFileById, getFileMetadataSchema, getFeatureFlags, buildPrincipal, canModifyFile } from '@/lib/db';
 import { getStorageConfig, storageMode, s3MoveObject, s3DeleteObject } from '@/lib/storage';
 import { normalizeSchema, validateMetadataPatch } from '@/lib/dam';
 
@@ -8,13 +8,28 @@ export const runtime = 'nodejs';
 
 export const TRASH_PREFIX = '_trash';
 
-/** PATCH /api/files/[id] — rename / move / tag / note / metadata. */
+/**
+ * PATCH /api/files/[id] — rename / move / tag / note / metadata.
+ *
+ * Authorized per file, not merely per session. Being signed in used to be the
+ * whole check here, which meant any member could rename or re-tag anything in
+ * the workspace by id. canModifyFile is a WRITE check and deliberately
+ * stricter than the canAccessFile used for reads — see the note above it in
+ * lib/db.js.
+ */
 export async function PATCH(req, { params }) {
   const session = await auth();
   if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   const { id } = params;
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
+
+  const existing = await getFileById(id);
+  if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const principal = await buildPrincipal(session.user.email);
+  if (!(await canModifyFile(existing, principal))) {
+    return NextResponse.json({ error: 'No access' }, { status: 403 });
+  }
   // Sanitize the metadata object against the field schema (drop unknown keys /
   // coerce types) so only valid fields are stored.
   if (body.metadata !== undefined) {
@@ -51,6 +66,13 @@ export async function DELETE(_req, { params }) {
   try {
     const file = await getFileById(id);
     if (!file) return NextResponse.json({ ok: true }); // already gone
+
+    // Same write gate as PATCH. A delete that only checks for a session is
+    // the most destructive version of the same hole.
+    const principal = await buildPrincipal(session.user.email);
+    if (!(await canModifyFile(file, principal))) {
+      return NextResponse.json({ error: 'No access' }, { status: 403 });
+    }
 
     const flags = await getFeatureFlags();
     const cfg = await getStorageConfig();
