@@ -82,12 +82,23 @@ if (process.env.DATABASE_URL) {
     const u = new URL(process.env.DATABASE_URL);
     if (!/^postgres(ql)?:$/.test(u.protocol)) {
       fail('DATABASE_URL protocol', `expected postgres://, got ${u.protocol}`);
-    } else if (!u.hostname.includes('neon.tech') && !process.env.ONYX_ALLOW_ANY_PG) {
-      // Not fatal — any Postgres works — but the HTTP driver's low-latency
-      // path is Neon-specific, so it is worth knowing.
-      warn('host is not neon.tech', `${u.hostname} — the serverless HTTP driver expects Neon`);
     } else {
       ok('DATABASE_URL parses', u.hostname);
+      // The single most common Supabase-on-serverless mistake: using the
+      // direct connection instead of the pooler. It works locally and then
+      // exhausts the database's connection limit under real traffic, because
+      // every serverless invocation opens its own socket.
+      const port = u.port || '5432';
+      if (u.hostname.includes('supabase')) {
+        if (port === '6543' || u.hostname.includes('pooler')) {
+          ok('using the connection pooler', `port ${port}`);
+        } else {
+          warn('this looks like the DIRECT connection', `port ${port} — use the pooler (6543) on serverless`);
+        }
+      }
+      if (u.searchParams.get('pgbouncer') === 'true') {
+        ok('pgbouncer flag set');
+      }
     }
   } catch (e) {
     fail('DATABASE_URL is not a valid URL', e.message);
@@ -228,7 +239,7 @@ section('Phase 2 readiness');
 try {
   const rows = await sql`SELECT default_version, installed_version FROM pg_available_extensions WHERE name = 'vector'`;
   if (!rows.length) {
-    warn('pgvector unavailable', 'semantic search needs it — check the Neon plan');
+    warn('pgvector unavailable', 'semantic search needs it — enable it in the dashboard');
   } else if (rows[0].installed_version) {
     ok('pgvector installed', `v${rows[0].installed_version}`);
   } else {

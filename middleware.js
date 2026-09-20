@@ -1,4 +1,12 @@
-export { auth as middleware } from '@/auth';
+import NextAuth from 'next-auth';
+import { authConfig } from '@/auth.config';
+
+// Built from the Edge-safe config, NOT from @/auth. Importing the full auth
+// config here would pull the Postgres driver into the Edge bundle, which has
+// no TCP sockets — it builds cleanly and then fails at runtime on every
+// request. See auth.config.js.
+export const { auth: middleware } = NextAuth(authConfig);
+export default middleware;
 
 export const config = {
   // Run on everything EXCEPT the paths below. Each exclusion is load-bearing:

@@ -3,25 +3,42 @@ import Resend from 'next-auth/providers/resend';
 import Okta from 'next-auth/providers/okta';
 import { DrizzleAdapter } from '@auth/drizzle-adapter';
 import { Resend as ResendClient } from 'resend';
-import { db, ensureAuthTables, createMagicLinkRedirect } from '@/lib/db';
+import { getDb, ensureAuthTables, createMagicLinkRedirect } from '@/lib/db';
 import { isEmailGrantedAccess } from '@/lib/auth-allowlist';
 import { loadBrand } from '@/lib/brand-config';
 import { signInEmail } from '@/lib/signin-email';
+import { authConfig } from '@/auth.config';
 
 /**
- * Wrap every adapter method so the Auth.js tables are created on first use.
- * Onyx creates all its own tables lazily; the adapter is the one consumer that
- * reaches the database before any of our code runs, so this is where its
- * schema gets the same treatment. After the first call ensureAuthTables()
- * returns a settled promise, so the overhead is a microtask.
+ * The Auth.js adapter, built on first use rather than at module load, with
+ * every method wrapped so the Auth.js tables are created before it runs.
+ *
+ * Two deferrals in one place, for two different reasons:
+ *
+ *   - The adapter itself is constructed lazily because building it requires a
+ *     live database handle, and this module is imported during the build and
+ *     anywhere DATABASE_URL might be unset. Constructing eagerly turns a
+ *     missing env var into a build failure.
+ *   - Its tables are created lazily because Onyx has no migration step. The
+ *     adapter is the one consumer that reaches the database before any of our
+ *     own code runs, so there is no natural call site to hang an ensure* guard
+ *     on. After the first call ensureAuthTables() returns a settled promise,
+ *     so the steady-state cost is a microtask.
+ *
+ * A Proxy is safe here where it was not around the Drizzle handle: Auth.js
+ * only ever calls methods on the adapter, whereas DrizzleAdapter inspects its
+ * client to pick a SQL dialect.
  */
-function selfCreatingAdapter(base) {
-  return new Proxy(base, {
-    get(target, prop) {
-      const value = target[prop];
-      if (typeof value !== 'function') return value;
+function selfCreatingAdapter() {
+  let real = null;
+  const resolve = () => (real ||= DrizzleAdapter(getDb()));
+  return new Proxy({}, {
+    get(_target, prop) {
       return async (...args) => {
         await ensureAuthTables();
+        const target = resolve();
+        const value = target[prop];
+        if (typeof value !== 'function') return value;
         return value.apply(target, args);
       };
     },
@@ -34,18 +51,12 @@ function selfCreatingAdapter(base) {
 const oktaConfigured =
   process.env.AUTH_OKTA_ID && process.env.AUTH_OKTA_SECRET && process.env.AUTH_OKTA_ISSUER;
 
+// The full configuration: the Edge-safe base plus everything that needs Node.
+// Used by route handlers and server components. Middleware uses authConfig
+// alone — see auth.config.js.
 export const { handlers, signIn, signOut, auth } = NextAuth({
-  adapter: selfCreatingAdapter(DrizzleAdapter(db)),
-  session: { strategy: 'jwt' },
-  trustHost: true,
-  pages: {
-    signIn: '/signin',
-    verifyRequest: '/signin/check-email',
-    // Route Auth.js errors (Configuration, Verification, AccessDenied…) back to
-    // /signin?error=<code> rather than the unstyled default page. The sign-in
-    // screen turns the code into something a person can act on.
-    error: '/signin',
-  },
+  ...authConfig,
+  adapter: selfCreatingAdapter(),
   providers: [
     Resend({
       apiKey: process.env.RESEND_API_KEY,
@@ -121,8 +132,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       : []),
   ],
   callbacks: {
+    ...authConfig.callbacks,
     async signIn({ user, account }) {
       // The final gate: an env-admin, or an approved invite row.
+      //
+      // This is the one callback that cannot live in auth.config.js — it hits
+      // the database, so it would break middleware's Edge bundle. That is
+      // fine: middleware only checks that a valid session exists, and no
+      // session is ever issued without passing through here first.
       //
       // The same check applies to Okta. Okta says WHO is signing in; the
       // allowlist decides WHETHER they may. Neither alone is sufficient, so a
@@ -135,36 +152,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         return false;
       }
       return true;
-    },
-    async redirect({ url, baseUrl }) {
-      // Land on the library after sign-in, unless a same-origin callback was
-      // supplied (someone deep-linked to a file before signing in).
-      try {
-        if (url.startsWith('/')) return `${baseUrl}${url}`;
-        if (new URL(url).origin === baseUrl) return url;
-      } catch {
-        /* malformed — fall through */
-      }
-      return baseUrl;
-    },
-    async jwt({ token, user }) {
-      if (user) {
-        token.id = user.id;
-        token.email = user.email;
-        token.name = user.name;
-      }
-      return token;
-    },
-    async session({ session, token }) {
-      if (token && session.user) {
-        session.user.id = token.id;
-        session.user.email = token.email;
-        session.user.name = token.name;
-      }
-      return session;
-    },
-    authorized({ auth }) {
-      return !!auth?.user;
     },
   },
 });

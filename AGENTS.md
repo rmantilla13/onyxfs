@@ -13,6 +13,19 @@ backward-compatible: no new NOT NULL without a default, no renames. After
 changing DDL, regenerate `db/init.sql` rather than editing it — it is derived
 from these guards.
 
+**Nothing middleware imports may reach `lib/db.js`.** middleware.js runs on the
+Edge runtime, which has no TCP sockets, and the Postgres driver needs them.
+Pulling the driver into that bundle builds cleanly and then fails at runtime on
+every request. This is why the auth config is split: `auth.config.js` is
+Edge-safe and is what middleware builds from; `auth.js` adds the adapter and
+the email provider for Node contexts. Put anything that needs the database in a
+route handler or server component, never in middleware or auth.config.js. After
+changing either, check with:
+
+```bash
+npx next build && grep -c postgres .next/server/middleware.js   # must be 0
+```
+
 **Queries use tagged-template SQL**, not an ORM. Drizzle appears only in
 `lib/schema.js`, only for Auth.js's four tables, because its adapter requires
 real Drizzle objects. Do not query app tables through it.
@@ -38,7 +51,9 @@ source only. `sanitizeStorageConfig()` strips the secret key. Keep it that way.
 ## Checks
 
 ```bash
+npm test                           # 66 unit tests, no database needed
 npm run build                      # web — the real check; JSX errors surface here
+npm run doctor                     # creates the schema and verifies a live database
 cd desktop && npm run build        # tsc -b && vite build
 cd desktop/src-tauri && cargo check
 ```

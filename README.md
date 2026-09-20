@@ -28,7 +28,7 @@ scoped to and its own expiry.
 ## Stack
 
 - Next.js 14 (App Router) on Vercel
-- Postgres (Neon) over the serverless driver, addressed with tagged-template SQL
+- Postgres (Supabase) via postgres.js, addressed with tagged-template SQL
 - Auth.js v5 — Resend magic links, optional Okta SSO
 - S3, or anything S3-compatible (R2, Spaces, B2, Wasabi, MinIO)
 - Tauri 2 + React 19 for the desktop client
@@ -41,10 +41,19 @@ cp .env.local.example .env.local   # fill in DATABASE_URL, AUTH_SECRET, RESEND_A
 npm run dev
 ```
 
+Then `npm run doctor` — it creates the schema, verifies the connection, and
+says exactly what is missing.
+
 There is **no migration step**. Every table is created lazily on first use by
 an `ensure*Table()` guard in `lib/db.js`. `db/init.sql` holds the same DDL if
 you would rather create everything up front; it is generated from those guards,
 so the two cannot drift.
+
+**Use Supabase's connection pooler** (port 6543, transaction mode) for
+`DATABASE_URL`, not the direct connection. Every serverless invocation opens
+its own socket, so the direct URL exhausts the connection limit under real
+traffic. The driver is configured with `prepare: false` to match transaction
+pooling, which does not support prepared statements.
 
 Storage is deliberately *not* an env var. Open `/admin` → **Storage**, enter the
 bucket and keys, hit **Test connection**, then **Apply CORS**. Keeping it in the
