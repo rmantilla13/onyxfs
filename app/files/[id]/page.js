@@ -6,6 +6,7 @@ import { getFileById, buildPrincipal, canAccessFile, canModifyFile, listFilespac
 import { presignFileUrls } from '@/lib/storage';
 import TopNav from '@/app/components/TopNav';
 import FileDetail from '@/app/components/file/FileDetail';
+import { buildLabel, buildDetail } from '@/lib/version';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,6 +48,7 @@ export default async function FilePage({ params }) {
   return (
     <>
       <TopNav
+        build={{ label: buildLabel(), detail: buildDetail() }}
         brandName={brand.name}
         markPath={brand.visual.logo.markPath}
         email={email}

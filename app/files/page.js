@@ -8,6 +8,7 @@ import { applyBetaAdminFlags } from '@/lib/features';
 import { normalizeSchema } from '@/lib/dam';
 import TopNav from '@/app/components/TopNav';
 import FilesClient from './FilesClient';
+import { buildLabel, buildDetail } from '@/lib/version';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Files' };
@@ -34,6 +35,7 @@ export default async function FilesPage({ searchParams }) {
   return (
     <>
       <TopNav
+        build={{ label: buildLabel(), detail: buildDetail() }}
         brandName={brand.name}
         markPath={brand.visual.logo.markPath}
         email={email}

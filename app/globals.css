@@ -174,6 +174,9 @@ textarea.input { min-height: 80px; resize: vertical; }
 .muted { color: var(--muted); }
 .small { font-size: var(--t-sm); }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The build stamp in the nav. Small enough to ignore, present enough to
+   answer "is the fix live yet" without opening a dashboard. */
+.nav-build { font-size: var(--t-xs); opacity: 0.65; white-space: pre-line; }
 
 .tag {
   display: inline-block;
@@ -358,7 +361,7 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 @media (max-width: 720px) {
   .shell { padding: 0 var(--s4); }
   .only-mobile { display: inline-flex; }
-  .nav-email { display: none; }
+  .nav-email, .nav-build { display: none; }
 
   /* Touch targets. 40px is the floor that stays tappable without looking
      like a form from 2009. */

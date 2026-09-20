@@ -4,6 +4,7 @@ import { isAdmin, isSuperAdmin } from '@/lib/auth-allowlist';
 import { loadBrand } from '@/lib/brand-config';
 import TopNav from '@/app/components/TopNav';
 import AdminClient from './AdminClient';
+import { buildLabel, buildDetail } from '@/lib/version';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Admin' };
@@ -20,7 +21,7 @@ export default async function AdminPage() {
   const brand = await loadBrand();
   return (
     <>
-      <TopNav brandName={brand.name} markPath={brand.visual.logo.markPath} email={email} isAdmin />
+      <TopNav brandName={brand.name} markPath={brand.visual.logo.markPath} email={email} isAdmin build={{ label: buildLabel(), detail: buildDetail() }} />
       <AdminClient superAdmin={isSuperAdmin(email)} />
     </>
   );

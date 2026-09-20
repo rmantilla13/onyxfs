@@ -3,7 +3,7 @@
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 
-export default function TopNav({ brandName, markPath, email, isAdmin, filespaces = [], activeFilespace }) {
+export default function TopNav({ brandName, markPath, email, isAdmin, filespaces = [], activeFilespace, build }) {
   const pathname = usePathname();
   const is = (href) => pathname === href || pathname.startsWith(`${href}/`);
 
@@ -39,6 +39,13 @@ export default function TopNav({ brandName, markPath, email, isAdmin, filespaces
           </select>
         )}
 
+        {/* Which build is serving this page. The first question when
+            something looks wrong in production is whether the fix is even
+            live yet, and a version alone does not answer it. Hidden on a
+            phone, where the space is worth more than the answer. */}
+        {build && (
+          <span className="small muted nav-build mono" title={build.detail || build.label}>{build.label}</span>
+        )}
         <span className="small muted nav-email" title={email}>{email}</span>
         <a className="small muted" href="/api/auth/signout" style={{ whiteSpace: 'nowrap' }}>Sign out</a>
       </div>
