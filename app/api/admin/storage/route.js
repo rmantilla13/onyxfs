@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
-import { getStorageConfig, setStorageConfig, sanitizeStorageConfig, s3TestConnection } from '@/lib/storage';
+import { getStorageConfig, setStorageConfig, sanitizeStorageConfig, sanitizeStorageSubmission, s3TestConnection } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,13 +25,18 @@ export async function PUT(req) {
 
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 }); }
-  const incoming = body?.config && typeof body.config === 'object' ? body.config : {};
+  // Whitelisted, because the form is populated from sanitizeStorageConfig and
+  // therefore carries derived fields (hasSecret, mode) that must never become
+  // stored state.
+  const incoming = sanitizeStorageSubmission(body?.config);
 
   const current = await getStorageConfig();
   // Preserve the stored secret when the field comes back blank.
   if (!incoming.secretAccessKey) incoming.secretAccessKey = current.secretAccessKey;
 
-  const merged = { ...current, ...incoming };
+  // Clean the stored side too, so a row written before the whitelist existed
+  // loses its junk on the next save rather than carrying it forever.
+  const merged = { ...sanitizeStorageSubmission(current), ...incoming };
 
   if (body.test && merged.provider === 's3') {
     try { await s3TestConnection(merged); }

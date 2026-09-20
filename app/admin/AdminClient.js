@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { STORAGE_PRESETS, presetById, detectPreset, applyPreset, summarizeChecks } from '@/lib/storage-presets';
 
 const TABS = [
   { key: 'storage', label: 'Storage' },
@@ -96,28 +97,54 @@ function StorageTab() {
   const { data, error, reload, setError } = useResource('/api/admin/storage');
   const [form, setForm] = useState(null);
   const [msg, setMsg] = useState(null);
+  const [diag, setDiag] = useState(null);
+  const [busy, setBusy] = useState(null);
 
   useEffect(() => { if (data?.config) setForm(data.config); }, [data]);
   if (!form) return <p className="muted">Loading…</p>;
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
+  const preset = presetById(detectPreset(form.endpoint)) || presetById('other');
+  // The secret never comes back from the server, so it is not comparable.
+  // Everything else is, and an admin running diagnostics against a form they
+  // have not saved should be told which one they are looking at.
+  const dirty = Object.keys(form).some((k) => k !== 'secretAccessKey' && form[k] !== data?.config?.[k]);
 
-  const save = async () => {
-    setMsg(null); setError(null);
-    try {
-      await api('/api/admin/storage', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(form) });
-      setMsg('Saved.');
-      reload();
-    } catch (e) { setError(e.message); }
+  const run = async (fn, label) => {
+    setBusy(label); setMsg(null); setError(null);
+    try { await fn(); } catch (e) { setError(e.message); } finally { setBusy(null); }
   };
 
-  const act = async (path, label) => {
-    setMsg(null); setError(null);
-    try {
-      const out = await api(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-      setMsg(out.message || `${label} ok.`);
-    } catch (e) { setError(e.message); }
-  };
+  const save = () => run(async () => {
+    // The server takes { config }, not the config itself. Sending the bare
+    // form used to leave `body.config` undefined, so the merge kept every
+    // stored value and the page said "Saved." while changing nothing.
+    await api('/api/admin/storage', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ config: form }),
+    });
+    setMsg('Saved.');
+    setDiag(null);
+    reload();
+  }, 'save');
+
+  const diagnose = () => run(async () => {
+    const out = await api('/api/admin/storage/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ config: form }),
+    });
+    setDiag(out);
+  }, 'diagnose');
+
+  const applyCors = () => run(async () => {
+    const out = await api('/api/admin/storage/cors', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    setMsg(`CORS applied for ${(out.origins || []).join(', ')}.`);
+    setDiag(null);
+  }, 'cors');
 
   return (
     <>
@@ -134,10 +161,23 @@ function StorageTab() {
 
         {form.provider === 's3' && (
           <>
+            <Field label="Service" hint="Fills in the endpoint and region. Anything already typed is kept.">
+              <select
+                className="input"
+                value={preset.id}
+                onChange={(e) => setForm(applyPreset(form, e.target.value))}
+              >
+                {STORAGE_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
+            </Field>
+            <p className="small muted" style={{ margin: '-6px 0 14px' }}>{preset.note}</p>
+
             <Field label="Bucket"><input className="input" value={form.bucket || ''} onChange={set('bucket')} /></Field>
-            <Field label="Region" hint="Use 'auto' for R2."><input className="input" value={form.region || ''} onChange={set('region')} /></Field>
-            <Field label="Endpoint" hint="Leave blank for AWS S3. Set it for B2, R2, Spaces, Wasabi or MinIO.">
-              <input className="input" value={form.endpoint || ''} onChange={set('endpoint')} placeholder="https://s3.us-west-004.backblazeb2.com" />
+            <Field label="Region" hint={`e.g. ${preset.regionPlaceholder}`}>
+              <input className="input" value={form.region || ''} onChange={set('region')} placeholder={preset.regionPlaceholder} />
+            </Field>
+            <Field label="Endpoint" hint="Leave blank for AWS S3.">
+              <input className="input" value={form.endpoint || ''} onChange={set('endpoint')} placeholder="https://…" />
             </Field>
             <Field label="Access key ID"><input className="input" value={form.accessKeyId || ''} onChange={set('accessKeyId')} /></Field>
             <Field label="Secret access key" hint={data?.config?.hasSecret ? 'A secret is stored. Leave blank to keep it.' : undefined}>
@@ -146,35 +186,46 @@ function StorageTab() {
             <Field label="Key prefix" hint="Everything Onyx writes lives under this prefix.">
               <input className="input" value={form.prefix || ''} onChange={set('prefix')} placeholder="files" />
             </Field>
-            <Field label="Role ARN" hint="Optional. With a role, desktop credentials are minted by AssumeRole instead of GetFederationToken.">
+            <Field label="Role ARN" hint="AWS only. With a role, desktop credentials are minted by AssumeRole instead of GetFederationToken.">
               <input className="input" value={form.roleArn || ''} onChange={set('roleArn')} />
             </Field>
-
-            {/* How a desktop or iOS mount will be credentialed, which is not
-                obvious from the fields above and decides whether read-only
-                members can mount at all. */}
-            <p className="small muted" style={{ margin: '4px 0 0' }}>
-              {credentialNote(form)}
-            </p>
           </>
         )}
 
-        <div className="row" style={{ marginTop: 16 }}>
-          <button className="btn btn-primary" onClick={save}>Save</button>
+        <div className="row" style={{ marginTop: 16, flexWrap: 'wrap' }}>
+          <button className="btn btn-primary" onClick={save} disabled={!!busy}>
+            {busy === 'save' ? 'Saving…' : 'Save'}
+          </button>
           {form.provider === 's3' && (
             <>
-              <button className="btn" onClick={() => act('/api/admin/storage', 'Test')}>Test connection</button>
-              <button className="btn" onClick={() => act('/api/admin/storage/cors', 'CORS')}>Apply CORS</button>
+              <button className="btn" onClick={diagnose} disabled={!!busy}>
+                {busy === 'diagnose' ? 'Checking…' : 'Run diagnostics'}
+              </button>
+              <button className="btn" onClick={applyCors} disabled={!!busy}>
+                {busy === 'cors' ? 'Applying…' : 'Apply CORS'}
+              </button>
             </>
           )}
+          {dirty && <span className="tag tag-warning">Unsaved changes</span>}
         </div>
         <Status error={error} ok={msg} />
       </Panel>
 
+      {diag && <Diagnostics result={diag} dirty={dirty} />}
+
       {form.provider === 's3' && !form.endpoint && (
         <Panel title="Transfer Acceleration" hint="AWS S3 only. Needs s3:PutAccelerateConfiguration on the key.">
           <div className="row">
-            <button className="btn" onClick={() => act('/api/admin/storage/accel', 'Acceleration')}>Toggle</button>
+            <button
+              className="btn"
+              onClick={() => run(async () => {
+                const out = await api('/api/admin/storage/accel', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+                setMsg(out.message || 'Acceleration toggled.');
+              }, 'accel')}
+              disabled={!!busy}
+            >
+              Toggle
+            </button>
           </div>
         </Panel>
       )}
@@ -183,22 +234,37 @@ function StorageTab() {
 }
 
 /**
- * Plain-language summary of which credential rung a mount will use. The
- * important case is the last one: on a provider with no scoped mechanism,
- * read-only members cannot mount, and an admin should learn that here rather
- * than from a member's error message.
+ * The diagnostics read-out.
+ *
+ * Every failing check carries its own fix, because the provider's own error
+ * text ("AccessDenied") tells an admin nothing about which of six settings
+ * is wrong.
  */
-function credentialNote(form) {
-  const e = (form.endpoint || '').toLowerCase();
-  if (!e) {
-    return form.roleArn
-      ? 'Mounts use STS AssumeRole — scoped to the filespace prefix and expiring.'
-      : 'Mounts use STS GetFederationToken — scoped and expiring. No role needed.';
-  }
-  if (e.includes('backblazeb2')) {
-    return 'Mounts use B2 application keys scoped to the filespace prefix and expiring after an hour. The key above needs the writeKeys capability to mint them.';
-  }
-  return 'This provider has no scoped-credential API wired up, so mounts use the key above as-is. Read-only members cannot mount on it.';
+function Diagnostics({ result, dirty }) {
+  const summary = summarizeChecks(result.checks);
+  const colour = { pass: 'var(--muted)', warn: 'var(--warning)', fail: 'var(--danger)' };
+  const glyph = { pass: '✓', warn: '!', fail: '✗' };
+
+  return (
+    <Panel
+      title={`Diagnostics · ${result.label}`}
+      hint={dirty ? `${summary.label} Run against the unsaved form above.` : summary.label}
+    >
+      {result.checks.map((c) => (
+        <div key={c.id} style={{ display: 'flex', gap: 10, padding: '10px 0', borderTop: '1px solid var(--line)' }}>
+          <span aria-hidden style={{ color: colour[c.status], fontWeight: 600, width: 12 }}>{glyph[c.status]}</span>
+          <div style={{ minWidth: 0 }}>
+            <div className="small" style={{ fontWeight: 500 }}>
+              {c.label}
+              <span className="sr-only">{` — ${c.status}`}</span>
+            </div>
+            {c.detail && <div className="muted small" style={{ marginTop: 2 }}>{c.detail}</div>}
+            {c.fix && <div className="small" style={{ marginTop: 4, color: colour[c.status] }}>{c.fix}</div>}
+          </div>
+        </div>
+      ))}
+    </Panel>
+  );
 }
 
 // ── Filespaces ──────────────────────────────────────────────────────────────
