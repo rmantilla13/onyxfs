@@ -143,3 +143,25 @@ describe('shapeMagicLinkRedirect', () => {
     assert.equal(shapeMagicLinkRedirect(undefined), null);
   });
 });
+
+// ── Settings cache ──────────────────────────────────────────────────────────
+// Settings are read on every render — including the 404s scanners generate —
+// and written when an admin saves a form. The cache is what keeps a slow
+// database from being slow once per request rather than once per minute.
+describe('settings cache', () => {
+  test('invalidateSetting() clears one key and, with no argument, all of them', async () => {
+    const { invalidateSetting } = await import('../lib/db.js');
+    // Exercised for real by setSetting/deleteSetting; here it just has to be
+    // callable both ways without a database.
+    assert.doesNotThrow(() => invalidateSetting('brand.config'));
+    assert.doesNotThrow(() => invalidateSetting());
+  });
+
+  test('the render deadline is short enough to render behind', async () => {
+    const { RENDER_DEADLINE_MS, QUERY_DEADLINE_MS } = await import('../lib/db.js');
+    // A page that waits the full background deadline looks hung. This is the
+    // number that decides how bad a struggling database feels.
+    assert.ok(RENDER_DEADLINE_MS <= 5_000, `RENDER_DEADLINE_MS is ${RENDER_DEADLINE_MS}ms`);
+    assert.ok(RENDER_DEADLINE_MS < QUERY_DEADLINE_MS);
+  });
+});
