@@ -10,7 +10,8 @@ import assert from 'node:assert/strict';
 
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
-const { lazySchema, withDeadline, shapeMagicLinkRedirect } = await import('../lib/db.js');
+delete process.env.SCHEMA_MANAGED;
+const { lazySchema, withDeadline, shapeMagicLinkRedirect, ensureSchema } = await import('../lib/db.js');
 
 const tick = () => new Promise((r) => setImmediate(r));
 
@@ -59,6 +60,35 @@ describe('lazySchema', () => {
     }
     assert.equal(runs, 2, 'the failed run was cached');
     assert.match(warned[0], /\[t\] failed: permission denied/);
+  });
+});
+
+describe('SCHEMA_MANAGED', () => {
+  test('guards skip DDL on the request path but ensureSchema still runs them', async () => {
+    let runs = 0;
+    const ensure = lazySchema('managed-test', async () => { runs++; });
+    process.env.SCHEMA_MANAGED = '1';
+    try {
+      await ensure();
+      await ensure();
+      assert.equal(runs, 0, 'a managed guard ran DDL on the request path');
+      const results = await ensureSchema();
+      const mine = results.find((r) => r.label === 'managed-test');
+      assert.ok(mine?.ok, 'ensureSchema did not run the guard');
+      assert.equal(runs, 1);
+    } finally {
+      delete process.env.SCHEMA_MANAGED;
+    }
+  });
+
+  test('ensureSchema reports a failing guard instead of throwing', async () => {
+    lazySchema('broken-test', async () => { throw new Error('nope'); });
+    const warn = console.warn;
+    console.warn = () => {};
+    let results;
+    try { results = await ensureSchema(); } finally { console.warn = warn; }
+    const broken = results.find((r) => r.label === 'broken-test');
+    assert.deepEqual(broken, { label: 'broken-test', ok: false, error: 'nope' });
   });
 });
 

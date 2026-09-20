@@ -136,7 +136,7 @@ if (failures) {
 // ── 2. Connection ────────────────────────────────────────────────────────────
 section('Database');
 
-const { sql, ensureAuthTables } = await import(resolve(root, 'lib/db.js'));
+const { sql, ensureSchema } = await import(resolve(root, 'lib/db.js'));
 
 try {
   const t0 = Date.now();
@@ -156,8 +156,16 @@ try {
 section('Schema');
 
 const db = await import(resolve(root, 'lib/db.js'));
+// ensureSchema() runs the DDL regardless of SCHEMA_MANAGED — that flag turns
+// the request-path guards off, and this is one of the places that takes over.
+if (process.env.SCHEMA_MANAGED === '1') {
+  console.log(paint(C.dim, '  SCHEMA_MANAGED=1 — request-path guards are off; applying DDL here instead'));
+}
+for (const r of await ensureSchema()) {
+  r.ok ? ok(r.label) : fail(r.label, r.error);
+}
+
 const warmers = [
-  ['auth tables', () => ensureAuthTables()],
   ['settings', () => db.listSettings('')],
   ['files + acl', () => db.listFilesForUser({ limit: 1 }, { isAdmin: true })],
   ['folders', () => db.listFolderNames()],

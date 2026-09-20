@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { listExpiredTrash, deleteFile, listAllFiles, getFileMetadataSchema, listStaleUploads, deleteUpload } from '@/lib/db';
+import { ensureSchema, listExpiredTrash, deleteFile, listAllFiles, getFileMetadataSchema, listStaleUploads, deleteUpload } from '@/lib/db';
 import { getStorageConfig, s3DeleteObject, s3AbortMultipartUpload } from '@/lib/storage';
 import { normalizeSchema, expiryState } from '@/lib/dam';
 import { notifyExpiringRights } from '@/lib/notify';
@@ -29,7 +29,12 @@ export async function GET(req) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const out = { purged: 0, purgeErrors: 0, expired: 0, soon: 0, uploadsAborted: 0 };
+  const out = { schema: [], purged: 0, purgeErrors: 0, expired: 0, soon: 0, uploadsAborted: 0 };
+
+  // Schema first. With SCHEMA_MANAGED=1 this is the one place in the app that
+  // still runs DDL, so a guard that gained a column since the last init.sql
+  // run is applied here rather than never.
+  out.schema = (await ensureSchema()).filter((r) => !r.ok);
 
   try {
     const cutoff = Date.now() - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
