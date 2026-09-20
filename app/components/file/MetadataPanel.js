@@ -272,7 +272,7 @@ export default function MetadataPanel({ fileId, schema, metadata, canWrite, onSa
         {blank
           ? <p className="muted small" style={{ margin: 0 }}>Nothing recorded yet.</p>
           : groups.map((g) => (
-            <div key={g.name || '_'} className={g.name ? 'meta-group' : undefined}>
+            <div key={g.name ? `group-${g.name}` : 'ungrouped'} className={g.name ? 'meta-group' : undefined}>
               {g.name && <h3 className="meta-group-title">{g.name}</h3>}
               <dl className="detail-list meta-readonly">
                 {g.fields.map((f) => (
@@ -288,7 +288,7 @@ export default function MetadataPanel({ fileId, schema, metadata, canWrite, onSa
   return (
     <Panel title="Metadata" actions={badge}>
       {groups.map((g) => (
-        <div key={g.name || '_'} className={g.name ? 'meta-group' : undefined}>
+        <div key={g.name ? `group-${g.name}` : 'ungrouped'} className={g.name ? 'meta-group' : undefined}>
           {g.name && <h3 className="meta-group-title">{g.name}</h3>}
           {g.fields.map((f) => (
             <FieldControl

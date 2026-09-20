@@ -8,7 +8,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   credentialPlan, fileKind, buildObjectKey, folderToKeyPath, isSystemKey, isThumbnailKey,
-  storageProvider, staticRefusalMessage, b2KeyRequest, b2RegionFromEndpoint,
+  storageProvider, staticRefusalMessage, b2KeyRequest, b2RegionFromEndpoint, b2RegionMismatch,
 } from '../lib/storage.js';
 
 const aws = { provider: 's3', bucket: 'b', region: 'us-east-1', accessKeyId: 'AK', secretAccessKey: 'SK' };
@@ -244,5 +244,42 @@ describe('b2KeyRequest', () => {
     const { keyName } = b2KeyRequest({ ...base, filespaceId: 'a b/c@d' });
     assert.match(keyName, /^[A-Za-z0-9-]+$/, keyName);
     assert.ok(keyName.length <= 100);
+  });
+});
+
+// ── B2 region / endpoint agreement ──────────────────────────────────────────
+// The region and the endpoint are entered as separate fields and each looks
+// fine alone. SigV4 signs the request with the region, so a disagreement
+// surfaces as an authentication failure — which reads as "bad credentials"
+// and sends people to regenerate a perfectly good key.
+describe('b2RegionMismatch', () => {
+  const b2cfg = (over = {}) => ({
+    provider: 's3', bucket: 'b', accessKeyId: 'k', secretAccessKey: 's',
+    endpoint: 'https://s3.us-west-004.backblazeb2.com', region: 'us-west-004', ...over,
+  });
+
+  test('agreement is silent', () => {
+    assert.equal(b2RegionMismatch(b2cfg()), null);
+    assert.equal(b2RegionMismatch(b2cfg({ region: 'US-WEST-004' })), null, 'case should not matter');
+  });
+
+  test('a disagreement names both sides', () => {
+    const m = b2RegionMismatch(b2cfg({ region: 'us-east-005' }));
+    assert.match(m.detail, /us-east-005/);
+    assert.match(m.detail, /us-west-004/);
+    assert.match(m.fix, /us-west-004/);
+  });
+
+  test('a blank region is caught, since SigV4 still signs with something', () => {
+    assert.match(b2RegionMismatch(b2cfg({ region: '' })).detail, /No region/);
+  });
+
+  test('an endpoint that is not a B2 endpoint is called out', () => {
+    assert.match(b2RegionMismatch(b2cfg({ endpoint: 'https://s3.backblazeb2.com' })).detail, /not a recognisable/);
+  });
+
+  test('it says nothing about other providers', () => {
+    assert.equal(b2RegionMismatch({ endpoint: '', region: 'us-east-1' }), null);
+    assert.equal(b2RegionMismatch({ endpoint: 'https://acct.r2.cloudflarestorage.com', region: 'auto' }), null);
   });
 });

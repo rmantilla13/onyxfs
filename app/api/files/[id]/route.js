@@ -3,8 +3,12 @@ import { auth } from '@/auth';
 import {
   updateFile, softDeleteFile, deleteFile, getFileById, getFileMetadataSchema,
   getFeatureFlags, buildPrincipal, canModifyFile, canAccessFile,
+  setFileStorageKey, getFilespaceForUser,
 } from '@/lib/db';
-import { getStorageConfig, storageMode, s3MoveObject, s3DeleteObject, presignFileUrls } from '@/lib/storage';
+import {
+  getStorageConfig, storageMode, s3MoveObject, s3DeleteObject, presignFileUrls,
+  cfgForFilespace, folderToKeyPath,
+} from '@/lib/storage';
 import { normalizeSchema, validateMetadataPatch } from '@/lib/dam';
 
 export const runtime = 'nodejs';
@@ -40,6 +44,23 @@ export async function GET(_req, { params }) {
 }
 
 /**
+ * The version an `If-Match` header is asserting, or undefined when the request
+ * states no condition. HTTP clients quote an entity tag by habit, so `"7"`,
+ * `W/"7"` and a bare `7` all mean the same thing here. `*` is the standard
+ * "any current representation", i.e. no condition at all.
+ *
+ * A value we cannot parse comes back NaN, which fails the equality check at
+ * the call site and so lands in the 409 branch — a precondition that cannot be
+ * verified must not be treated as satisfied.
+ */
+function ifMatchVersion(raw) {
+  if (raw == null) return undefined;
+  const v = raw.trim().replace(/^W\//i, '').replace(/^"(.*)"$/s, '$1').trim();
+  if (!v || v === '*') return undefined;
+  return Number(v);
+}
+
+/**
  * PATCH /api/files/[id] — rename / move / tag / note / metadata.
  *
  * Authorized per file, not merely per session. Being signed in used to be the
@@ -47,6 +68,13 @@ export async function GET(_req, { params }) {
  * the workspace by id. canModifyFile is a WRITE check and deliberately
  * stricter than the canAccessFile used for reads — see the note above it in
  * lib/db.js.
+ *
+ * Optionally conditional: `If-Match: <version>` (the `version` the client last
+ * saw on the row) makes the write fail with 409 instead of clobbering someone
+ * else's edit. The web UI does not send it yet, so an absent header is an
+ * unconditional write, exactly as before.
+ *
+ * A folder change is a MOVE, and moves the object too — see below.
  */
 export async function PATCH(req, { params }) {
   const session = await auth();
@@ -61,15 +89,88 @@ export async function PATCH(req, { params }) {
   if (!(await canModifyFile(existing, principal))) {
     return NextResponse.json({ error: 'No access' }, { status: 403 });
   }
+
+  const want = ifMatchVersion(req.headers.get('if-match'));
+  if (want !== undefined && want !== Number(existing.version)) {
+    // Hand back the row as it now stands, not just the number, so a client can
+    // merge its edit against reality instead of re-fetching and guessing.
+    return NextResponse.json({
+      error: 'This file changed since you loaded it.',
+      code: 'version_mismatch',
+      currentVersion: Number(existing.version),
+      file: existing,
+    }, { status: 409 });
+  }
+
   // Sanitize the metadata object against the field schema (drop unknown keys /
   // coerce types) so only valid fields are stored.
   if (body.metadata !== undefined) {
     const schema = normalizeSchema(await getFileMetadataSchema());
     body.metadata = validateMetadataPatch(body.metadata, schema);
   }
+
+  // The object key encodes the folder, so changing `files.folder` alone leaves
+  // the bucket where it was: the web and a mounted drive disagree, and the next
+  // folder rename — which re-keys by folder prefix — re-keys the wrong set.
+  const movingTo = body.folder !== undefined && String(body.folder) !== String(existing.folder || '')
+    ? String(body.folder)
+    : null;
+  // Left undefined while the question does not arise (no move, or nothing in
+  // the bucket to move); set to false only when the catalog moved without the
+  // bytes, which is the one case a UI has to surface.
+  let objectMoved;
+
   try {
+    if (movingTo !== null && existing.storage === 's3' && existing.storageKey) {
+      const base = await getStorageConfig();
+      // Scope comes from the body like the folders route; the list route spells
+      // the same thing ?filespace=, so accept either rather than silently
+      // downgrading a scoped move to a catalog-only one.
+      const filespaceId = body.filespaceId || new URL(req.url).searchParams.get('filespace') || null;
+      const fs = filespaceId ? await getFilespaceForUser(session.user.email, filespaceId) : null;
+      if (storageMode(base) === 's3') {
+        if (!fs) {
+          // Cross-prefix "All files" view. Without a filespace its prefix is
+          // unknown, so the destination key cannot be computed — the folders
+          // route skips the physical move here for the same reason. The
+          // catalog move still happens; the flag is how the UI can say so.
+          objectMoved = false;
+        } else {
+          const cfg = cfgForFilespace(base, fs);
+          const prefix = (cfg.prefix || '').replace(/^\/+|\/+$/g, '');
+          const name = existing.storageKey.slice(existing.storageKey.lastIndexOf('/') + 1);
+          const newKey = [prefix, folderToKeyPath(movingTo), name].filter(Boolean).join('/');
+          // True also when the key already reads right and nothing physical was
+          // needed: what this reports is whether bucket and catalog agree.
+          objectMoved = true;
+          if (newKey !== existing.storageKey) {
+            try {
+              await s3MoveObject(cfg, existing.storageKey, newKey);
+            } catch (e) {
+              // Bytes first, and if the bytes do not move, nothing moves. The
+              // folders route tolerates a partly-done bulk rename because the
+              // alternative is abandoning hundreds of files mid-way; one file
+              // has no such excuse, and a row pointing at a key that does not
+              // exist is a file gone unreachable with no trace of where to.
+              return NextResponse.json({ error: `Could not move the stored object: ${e.message}` }, { status: 500 });
+            }
+            try {
+              // The old key died with the copy+delete, so record the new one
+              // before the folder write rather than after it: ordered the other
+              // way, a failure here would leave the row pointing at nothing.
+              await setFileStorageKey(id, newKey);
+            } catch (e) {
+              return NextResponse.json({
+                error: `The object moved but its new key could not be recorded (${e.message}). It is now at ${newKey}.`,
+              }, { status: 500 });
+            }
+          }
+        }
+      }
+    }
+
     const file = await updateFile(id, body);
-    return NextResponse.json({ file });
+    return NextResponse.json(objectMoved === undefined ? { file } : { file, objectMoved });
   } catch (e) {
     return NextResponse.json({ error: e.message || 'Update failed.' }, { status: 500 });
   }
