@@ -4,6 +4,11 @@ import { getStorageConfig, setStorageConfig, sanitizeStorageConfig, sanitizeStor
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// Vercel's default ceiling is 300s. Nothing here should take anywhere near
+// that: every query in lib/db.js is bounded at 15s by the driver. A cap keeps
+// a pathological request costing seconds instead of five minutes of a hung
+// invocation — which is what the gateway timeouts on this route looked like.
+export const maxDuration = 30;
 
 /** GET /api/admin/storage → sanitized config (no secret) + current mode. */
 export async function GET() {

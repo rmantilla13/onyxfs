@@ -332,6 +332,15 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 .kind-row { display: flex; align-items: center; gap: var(--s2); min-width: 0; flex: 1 1 auto; }
 .kind-row .kind-strip { min-width: 0; }
 .only-mobile { display: none; }
+/* ── Selection action bar (phone) ──────────────────────────────────────────
+   The header's Trash button scrolls out of reach on a phone, so a selection
+   ends up with nothing to act on. This bar is fixed to the bottom edge and
+   only exists below the phone breakpoint; above it the header is still on
+   screen and a second set of the same controls would be clutter.
+   Hidden by default so that adding it to a component can never leak a
+   phone affordance onto the desktop layout. */
+.files-selbar { display: none; }
+
 
 /* A strip that scrolls sideways on a phone, bleeding to the screen edge so
    the last chip is cut off rather than the strip looking finished. */
@@ -413,4 +422,22 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   .dialog-foot { padding: var(--s3) var(--s4) var(--s4); }
 
   .toast-stack { left: var(--s4); right: var(--s4); bottom: calc(var(--s4) + env(safe-area-inset-bottom)); max-width: none; }
+
+  .files-selbar {
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: var(--z-nav);
+    padding: var(--s3) var(--s4);
+    padding-bottom: calc(var(--s3) + env(safe-area-inset-bottom));
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    box-shadow: var(--shadow-2);
+  }
+  /* Clear the bar so the last row of cards is not sitting underneath it. */
+  .files-grid { padding-bottom: 72px; }
 }

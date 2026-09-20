@@ -21,6 +21,16 @@ const KINDS = [
   { key: 'other', label: 'Other' },
 ];
 
+// Keys must stay in step with SORTS in lib/file-query.js — an unknown key
+// falls back to `new` on the server, which reads as "sorting is broken"
+// rather than as a typo.
+const SORTS = [
+  { key: 'new', label: 'Newest' },
+  { key: 'old', label: 'Oldest' },
+  { key: 'name', label: 'Name' },
+  { key: 'size', label: 'Largest' },
+];
+
 
 export default function FilesClient({ flags, canWrite, schema, filespaceId, filespaces }) {
   const [files, setFiles] = useState([]);
@@ -33,6 +43,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   const [folder, setFolder] = useState('');
   const [query, setQuery] = useState('');
   const [kinds, setKinds] = useState([]);
+  const [sort, setSort] = useState('new');
   const [facets, setFacets] = useState({});
   const [selected, setSelected] = useState(new Set());
   const [uploads, setUploads] = useState([]);
@@ -64,6 +75,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
       if (folder) p.set('folder', folder);
       if (query) p.set('q', query);
       if (kinds.length) p.set('kind', kinds.join(','));
+      p.set('sort', sort);
       if (filespaceId) p.set('filespace', filespaceId);
       if (after) p.set('cursor', after);
       const r = await fetch(`/api/files?${p}`);
@@ -78,7 +90,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     } finally {
       if (token === requestRef.current) { setLoading(false); setLoadingMore(false); }
     }
-  }, [folder, query, kinds, filespaceId]);
+  }, [folder, query, kinds, sort, filespaceId]);
 
   const load = useCallback(() => fetchPage(null), [fetchPage]);
 
@@ -124,6 +136,13 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
       return next;
     });
   };
+
+  // The cursor is keyed to the sort column — it is the last row's value of
+  // that column plus its id — so a cursor taken under one ordering selects a
+  // meaningless slice under another. Dropping it here also unmounts the
+  // infinite-scroll sentinel, which otherwise had a window to request the
+  // next page of the OLD ordering before the refetch replaced the grid.
+  const changeSort = (next) => { setSort(next); setCursor(null); };
 
   const toggleKind = (k) =>
     setKinds((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
@@ -253,8 +272,17 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     });
   }, []);
 
+  // The bottom padding travels as a custom property because the inline
+  // shorthand below outranks any stylesheet rule: the phone selection bar is
+  // fixed, so the page has to reserve room for it, and only the stylesheet
+  // knows whether the bar is on screen.
   return (
-    <main className="shell" style={{ padding: '24px 24px 64px' }} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
+    <main
+      className={`shell files-main${selected.size ? ' is-selecting' : ''}`}
+      style={{ padding: '24px 24px var(--files-pad-b, 64px)' }}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={onDrop}
+    >
       <div className="row" style={{ marginBottom: 20 }}>
         <h1 className="files-title" style={{ fontSize: 24, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{folder || 'All files'}</h1>
         <span className="muted small">
@@ -288,6 +316,17 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+        <select
+          className="input"
+          style={{ width: 'auto' }}
+          aria-label="Sort by"
+          value={sort}
+          onChange={(e) => changeSort(e.target.value)}
+        >
+          {SORTS.map((o) => (
+            <option key={o.key} value={o.key}>{o.label}</option>
+          ))}
+        </select>
         <div className="kind-row">
         <div className="kind-strip edge-scroll">
           {KINDS.map((k) => (
@@ -403,6 +442,21 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
             {loadingMore && <div className="empty" style={{ padding: 24 }}>Loading more…</div>}
           </section>
       </div>
+      {/* Phone only, and shown by the stylesheet rather than a viewport check
+          in JS: the header's Trash button scrolls away, leaving a selection
+          with nothing to act on. Rendered whenever something is selected —
+          .files-selbar is display:none above the phone breakpoint, so a JS
+          check here could only disagree with the CSS during hydration. */}
+      {selected.size > 0 && (
+        <div className="files-selbar" role="toolbar" aria-label="Selected files">
+          <span className="small">{selected.size} selected</span>
+          <div className="spacer" />
+          <button className="btn" onClick={() => setSelected(new Set())}>Clear</button>
+          <button className="btn btn-danger" onClick={trashSelected}>
+            {flags.trash ? 'Trash' : 'Delete'}
+          </button>
+        </div>
+      )}
       {confirmElement}
     </main>
   );
