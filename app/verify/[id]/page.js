@@ -1,6 +1,6 @@
-import { redirect } from 'next/navigation';
 import { getMagicLinkRedirect } from '@/lib/db';
 import { loadBrand } from '@/lib/brand-config';
+import VerifyHop from './VerifyHop';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Signing you in' };
@@ -15,24 +15,35 @@ export const metadata = { title: 'Signing you in' };
  * nothing to flag, and the hop to the real callback is a same-origin
  * navigation from a page the browser already trusts.
  *
+ * The hop is made by the browser (VerifyHop), not by a server-side redirect.
+ * Mail providers fetch links in incoming mail to scan them — Gmail and
+ * Outlook both do, and more aggressively for mail they file as spam. A 307
+ * from here would let that fetch follow through to the callback and consume
+ * the one-time token before the person ever clicks; a page that navigates
+ * from script does not, and carries a button for anyone with script off.
+ *
  * It is safe to leave outside the auth middleware: reaching a valid record
  * requires the short id from the email, and the underlying Auth.js token still
  * has to be valid, unexpired and unused.
  */
 export default async function VerifyPage({ params }) {
-  const row = await getMagicLinkRedirect(params.id);
-  if (row?.targetUrl) redirect(row.targetUrl);
+  const [row, brand] = await Promise.all([getMagicLinkRedirect(params.id), loadBrand()]);
 
-  const brand = await loadBrand();
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
       <div className="card" style={{ width: '100%', maxWidth: 400, padding: 32 }}>
         <img src={brand.visual.logo.markPath} alt="" width={40} height={40} style={{ borderRadius: 10, marginBottom: 24 }} />
-        <h1 style={{ fontSize: 22, marginBottom: 8 }}>This link has expired</h1>
-        <p className="muted small" style={{ marginBottom: 20 }}>
-          Sign-in links last 24 hours and work once. Request a fresh one.
-        </p>
-        <a className="btn btn-primary" href="/signin">Back to sign in</a>
+        {row?.targetUrl ? (
+          <VerifyHop targetUrl={row.targetUrl} brandName={brand.name} />
+        ) : (
+          <>
+            <h1 style={{ fontSize: 22, marginBottom: 8 }}>This link has expired</h1>
+            <p className="muted small" style={{ marginBottom: 20 }}>
+              Sign-in links last 24 hours and work once. Request a fresh one.
+            </p>
+            <a className="btn btn-primary" href="/signin">Back to sign in</a>
+          </>
+        )}
       </div>
     </main>
   );

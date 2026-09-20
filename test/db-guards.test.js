@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
-const { lazySchema, withDeadline } = await import('../lib/db.js');
+const { lazySchema, withDeadline, shapeMagicLinkRedirect } = await import('../lib/db.js');
 
 const tick = () => new Promise((r) => setImmediate(r));
 
@@ -100,5 +100,16 @@ describe('withDeadline', () => {
       process.off('unhandledRejection', onUnhandled);
     }
     assert.equal(unhandled, null, `late rejection escaped: ${unhandled}`);
+  });
+});
+
+describe('shapeMagicLinkRedirect', () => {
+  test('exposes the target as targetUrl', () => {
+    // Regression: the verify page read row.targetUrl off a raw snake_case row
+    // and showed "expired" for every valid link.
+    const out = shapeMagicLinkRedirect({ id: 'abc', target_url: 'https://x/cb?token=1', email: 'a@b.c', created_at: '10', expires_at: '20' });
+    assert.equal(out.targetUrl, 'https://x/cb?token=1');
+    assert.equal(out.expiresAt, 20);
+    assert.equal(shapeMagicLinkRedirect(undefined), null);
   });
 });
