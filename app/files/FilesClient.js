@@ -24,6 +24,8 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [cursor, setCursor] = useState(null);
   const [error, setError] = useState(null);
 
   const [folder, setFolder] = useState('');
@@ -34,9 +36,20 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   const [uploads, setUploads] = useState([]);
 
   const inputRef = useRef(null);
+  const sentinelRef = useRef(null);
+  // Guards against a stale response from a superseded filter overwriting the
+  // results of a newer one — without this, fast typing can leave the grid
+  // showing the results of a query the user has already moved past.
+  const requestRef = useRef(0);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  /**
+   * Fetch one page. `after` is the opaque cursor from the previous page; with
+   * no cursor this is a fresh query and replaces the grid rather than
+   * appending to it.
+   */
+  const fetchPage = useCallback(async (after = null) => {
+    const token = ++requestRef.current;
+    after ? setLoadingMore(true) : setLoading(true);
     setError(null);
     try {
       const p = new URLSearchParams();
@@ -44,23 +57,42 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
       if (query) p.set('q', query);
       if (kinds.length) p.set('kind', kinds.join(','));
       if (filespaceId) p.set('filespace', filespaceId);
+      if (after) p.set('cursor', after);
       const r = await fetch(`/api/files?${p}`);
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Request failed (${r.status})`);
       const data = await r.json();
-      setFiles(data.files || []);
+      if (token !== requestRef.current) return; // superseded
+      setFiles((prev) => (after ? [...prev, ...(data.files || [])] : data.files || []));
       setFolders(data.folders || []);
+      setCursor(data.cursor || null);
     } catch (e) {
-      setError(e.message);
+      if (token === requestRef.current) setError(e.message);
     } finally {
-      setLoading(false);
+      if (token === requestRef.current) { setLoading(false); setLoadingMore(false); }
     }
   }, [folder, query, kinds, filespaceId]);
+
+  const load = useCallback(() => fetchPage(null), [fetchPage]);
 
   // Debounce so typing in the search box doesn't fire a request per keystroke.
   useEffect(() => {
     const t = setTimeout(load, query ? 250 : 0);
     return () => clearTimeout(t);
   }, [load, query]);
+
+  // Infinite scroll. Observing a sentinel below the grid costs nothing while
+  // it is off screen, and at 100k files a "load more" button would be a lot of
+  // clicking. Re-created whenever the cursor changes so it always requests the
+  // page after the one currently held.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !cursor || loading || loadingMore) return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) fetchPage(cursor);
+    }, { rootMargin: '600px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [cursor, loading, loadingMore, fetchPage]);
 
   // Facet counts come from the loaded rows, so they always describe what is
   // actually on screen rather than the whole bucket.
@@ -179,7 +211,9 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     <main className="shell" style={{ padding: '24px 24px 64px' }} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <div className="row" style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 24 }}>{folder || 'All files'}</h1>
-        <span className="muted small">{visible.length}{visible.length !== files.length ? ` of ${files.length}` : ''}</span>
+        <span className="muted small">
+          {visible.length}{visible.length !== files.length ? ` of ${files.length}` : ''}{cursor ? '+' : ''}
+        </span>
         <div className="spacer" />
         {selected.size > 0 && (
           <button className="btn btn-danger" onClick={trashSelected}>
@@ -302,6 +336,10 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
                 ))}
               </div>
             )}
+            {/* Sentinel for infinite scroll. Rendered only while a next page
+                exists, so reaching the end is what stops the observer. */}
+            {cursor && <div ref={sentinelRef} style={{ height: 1 }} />}
+            {loadingMore && <div className="empty" style={{ padding: 24 }}>Loading more…</div>}
           </section>
         </div>
       </div>

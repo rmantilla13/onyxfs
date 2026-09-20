@@ -9,7 +9,7 @@
 -- GENERATED from the same statements lib/db.js executes, so the two agree by
 -- construction; regenerate it rather than hand-editing.
 --
--- Statements: 35
+-- Statements: 71
 
 CREATE TABLE IF NOT EXISTS "user" (
     id              TEXT PRIMARY KEY,
@@ -123,15 +123,73 @@ CREATE INDEX IF NOT EXISTS brand_files_folder_idx ON files (folder);
 
 CREATE INDEX IF NOT EXISTS brand_files_created_idx ON files (created_at DESC);
 
+ALTER TABLE files ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'org';
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS caption TEXT;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS captioned_at BIGINT;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS thumbnail_key TEXT;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_at BIGINT;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS trash_key TEXT;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS thumb_status TEXT;
+
 CREATE INDEX IF NOT EXISTS brand_files_thumb_status_idx ON files (thumb_status);
 
 CREATE INDEX IF NOT EXISTS brand_files_kind_idx ON files (kind);
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
 
 CREATE INDEX IF NOT EXISTS brand_files_metadata_gin ON files USING GIN (metadata jsonb_path_ops);
 
 CREATE INDEX IF NOT EXISTS brand_files_tags_gin ON files USING GIN (tags jsonb_path_ops);
 
+CREATE SEQUENCE IF NOT EXISTS files_change_seq;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS seq BIGINT;
+
+CREATE INDEX IF NOT EXISTS files_seq_idx ON files (seq);
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS search_tsv tsvector
+    GENERATED ALWAYS AS (
+      to_tsvector('english',
+        coalesce(name, '') || ' ' || coalesce(notes, '') || ' ' || coalesce(caption, ''))
+    ) STORED;
+
+CREATE INDEX IF NOT EXISTS files_search_idx ON files USING GIN (search_tsv);
+
+CREATE INDEX IF NOT EXISTS files_created_id_idx ON files (created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS files_name_id_idx ON files (name ASC, id ASC);
+
+CREATE INDEX IF NOT EXISTS files_thumbnail_key_idx ON files (thumbnail_key);
+
+CREATE TABLE IF NOT EXISTS file_tombstones (
+    id          TEXT PRIMARY KEY,
+    seq         BIGINT NOT NULL,
+    folder      TEXT,
+    storage_key TEXT,
+    deleted_at  BIGINT NOT NULL
+  );
+
+CREATE INDEX IF NOT EXISTS file_tombstones_seq_idx ON file_tombstones (seq);
+
 CREATE TABLE IF NOT EXISTS folders (name TEXT PRIMARY KEY, created_at BIGINT NOT NULL);
+
+ALTER TABLE folders ADD COLUMN IF NOT EXISTS parent TEXT DEFAULT '';
+
+ALTER TABLE folders ADD COLUMN IF NOT EXISTS depth INT DEFAULT 0;
+
+ALTER TABLE folders ADD COLUMN IF NOT EXISTS visibility TEXT DEFAULT 'org';
+
+ALTER TABLE folders ADD COLUMN IF NOT EXISTS created_by TEXT;
+
+ALTER TABLE folders ADD COLUMN IF NOT EXISTS filespace TEXT DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS folders_parent_idx ON folders (parent);
 
@@ -143,6 +201,24 @@ CREATE TABLE IF NOT EXISTS file_shares (
   );
 
 CREATE INDEX IF NOT EXISTS file_shares_file_idx ON file_shares (file_id);
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'public';
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS expires_at BIGINT;
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS password_hash TEXT;
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS view_count INT NOT NULL DEFAULT 0;
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'file';
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS folder TEXT;
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS storage_prefix TEXT;
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS brief_id TEXT;
+
+ALTER TABLE file_shares ALTER COLUMN file_id DROP NOT NULL;
 
 CREATE TABLE IF NOT EXISTS folder_access (
     folder TEXT NOT NULL,
@@ -194,6 +270,12 @@ CREATE TABLE IF NOT EXISTS filespace_access (
   );
 
 CREATE INDEX IF NOT EXISTS filespace_access_email_idx ON filespace_access (user_email);
+
+ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS access_key TEXT;
+
+ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS secret_key TEXT;
+
+ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS endpoint TEXT;
 
 CREATE TABLE IF NOT EXISTS desktop_auth_codes (
     code TEXT PRIMARY KEY,

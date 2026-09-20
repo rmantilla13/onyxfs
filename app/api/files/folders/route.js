@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { createFolder, deleteFolder, renameFolder, grantFolderAccess, revokeFolderAccess, buildPrincipal, getFilespaceForUser, listFiles, softDeleteFile, setFileStorageKey } from '@/lib/db';
+import { createFolder, deleteFolder, renameFolder, grantFolderAccess, revokeFolderAccess, buildPrincipal, getFilespaceForUser, listAllFiles, softDeleteFile, setFileStorageKey } from '@/lib/db';
 import { getStorageConfig, storageMode, s3PutFolderMarker, cfgForFilespace, s3MoveObject, s3DeleteObject, folderToKeyPath, s3ListFolderMarkers } from '@/lib/storage';
 
 export const runtime = 'nodejs';
@@ -58,7 +58,7 @@ export async function PATCH(req) {
         if (storageMode(cfg) === 's3' && fs) {
           cfg = cfgForFilespace(cfg, fs);
           const prefix = (cfg.prefix || '').replace(/^\/+|\/+$/g, '');
-          const { files } = await listFiles({ folderPrefix: body.to, storagePrefix: fsPrefix });
+          const files = await listAllFiles({ folderPrefix: body.to, storagePrefix: fsPrefix });
           for (const f of files) {
             if (f.storage !== 's3' || !f.storageKey) continue;
             const base = f.storageKey.slice(f.storageKey.lastIndexOf('/') + 1);
@@ -103,7 +103,7 @@ export async function DELETE(req) {
       const prefix = fs ? String(fs.prefix || '').replace(/^\/+|\/+$/g, '') : undefined;
       let cfg = null; let isS3 = false;
       try { cfg = await getStorageConfig(); isS3 = storageMode(cfg) === 's3'; } catch {}
-      const { files } = await listFiles({ folderPrefix: name, storagePrefix: prefix });
+      const files = await listAllFiles({ folderPrefix: name, storagePrefix: prefix });
       for (const f of files) {
         let trashKey = null;
         if (isS3 && f.storage === 's3' && f.storageKey) {

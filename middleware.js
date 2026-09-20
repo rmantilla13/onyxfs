@@ -12,6 +12,11 @@ export const config = {
   //                sign-in page the desktop app cannot render.
   // api/space      Desktop data plane — filespace listing and STS minting,
   //                all bearer-guarded, same reasoning.
+  // api/files/delta The sync enumeration endpoint. Dual-guarded (cookie or
+  //                bearer) by resolveActor, and read by native clients that
+  //                cannot follow a redirect to a sign-in page. Only this one
+  //                path under api/files is excluded — the rest stay behind the
+  //                cookie gate.
   // api/health     Has its own admin-or-CRON_SECRET check, and has to stay
   //                reachable when sign-in itself is broken so it can say why.
   // api/cron       Bearer-token authed.
@@ -29,6 +34,6 @@ export const config = {
   // unauthenticated user opening the desktop hand-off link SHOULD be sent to
   // sign in and bounced back afterwards.
   matcher: [
-    '/((?!api/auth|api/desktop|api/space|api/health|api/cron|api/share|signin|verify|s/|_next/static|_next/image|_vercel|favicon.ico|icon.png|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
+    '/((?!api/auth|api/desktop|api/space|api/files/delta|api/health|api/cron|api/share|signin|verify|s/|_next/static|_next/image|_vercel|favicon.ico|icon.png|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
   ],
 };

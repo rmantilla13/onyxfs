@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getStorageConfig, storageMode, s3ListObjects, s3ListFolderMarkers, fileKind, presignFileUrls, cfgForFilespace, isThumbnailKey, isSystemKey } from '@/lib/storage';
-import { listFiles, createFile, createFolder, deleteFile, getFilespaceForUser } from '@/lib/db';
+import { listAllFiles, createFile, createFolder, deleteFile, getFilespaceForUser } from '@/lib/db';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -31,7 +31,7 @@ export async function POST(req) {
   const SCAN_MAX = 5000;
   try {
     const objects = await s3ListObjects(cfg, { max: SCAN_MAX });
-    const { files: existing } = await listFiles({});
+    const existing = await listAllFiles();
     const known = new Set(existing.map((f) => f.storageKey).filter(Boolean));
     // Don't ingest generated thumbnails as files: those referenced as a file's
     // thumbnail, plus anything under `_thumbs/`.

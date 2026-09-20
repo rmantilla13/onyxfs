@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { listExpiredTrash, deleteFile, listFiles, getFileMetadataSchema } from '@/lib/db';
+import { listExpiredTrash, deleteFile, listAllFiles, getFileMetadataSchema } from '@/lib/db';
 import { getStorageConfig, s3DeleteObject } from '@/lib/storage';
 import { normalizeSchema, expiryState } from '@/lib/dam';
 import { notifyExpiringRights } from '@/lib/notify';
@@ -46,7 +46,7 @@ export async function GET(req) {
 
   try {
     const schema = normalizeSchema(await getFileMetadataSchema());
-    const { files } = await listFiles({ limit: 5000 });
+    const files = await listAllFiles();
     const expired = [];
     const soon = [];
     for (const f of files) {

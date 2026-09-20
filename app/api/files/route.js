@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { listFilesForUser, createFile, listFileFoldersForUser, listAllTags, buildPrincipal, getFilespaceForUser } from '@/lib/db';
 import { presignFileUrls } from '@/lib/storage';
+import { encodeCursor, decodeCursor } from '@/lib/file-query';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,16 +33,25 @@ export async function GET(req) {
     tagMode: url.searchParams.get('tagMode') || 'all',
     sort: url.searchParams.get('sort') || 'new',
     storagePrefix,
+    // Keyset paging. The cursor is opaque and round-trips from the previous
+    // page; a malformed one reads as "first page" rather than an error.
+    cursor: decodeCursor(url.searchParams.get('cursor')),
+    limit: Number(url.searchParams.get('limit')) || 100,
+    // Counting matched rows costs a second pass over the predicate, so it is
+    // opt-in — the grid only needs to know whether another page exists.
+    withTotal: url.searchParams.get('withTotal') === '1',
   };
 
-  // AUTHORIZE → FILTER → PRESIGN: presign only the rows the viewer may see.
-  const { files, total } = await listFilesForUser(opts, principal);
+  // AUTHORIZE → FILTER → PRESIGN. Access and filtering now happen inside the
+  // query, so only the rows on this page reach presignFileUrls — previously
+  // every row in the library was signed on every request.
+  const { files, cursor, total } = await listFilesForUser(opts, principal);
   const signed = await presignFileUrls(files);
   const [folders, tags] = await Promise.all([
     listFileFoldersForUser(principal, { storagePrefix, filespace: storagePrefix }),
     listAllTags(principal),
   ]);
-  return NextResponse.json({ files: signed, total, folders, tags });
+  return NextResponse.json({ files: signed, cursor: encodeCursor(cursor), total, folders, tags });
 }
 
 /** POST /api/files — record an uploaded asset. Body: { name, url, mime, size, kind, folder, storage, storageKey, tags } */

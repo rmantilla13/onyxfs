@@ -1,13 +1,14 @@
 {
   "name": "onyx",
   "version": "0.1.0",
-  "description": "Onyx — a private file workspace. Web control plane + desktop client that mounts S3 filespaces as a local drive.",
+  "description": "Onyx \u2014 a private file workspace. Web control plane + desktop client that mounts S3 filespaces as a local drive.",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --test \"test/*.test.js\""
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.7.0",
