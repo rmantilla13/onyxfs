@@ -3,47 +3,23 @@ import Resend from 'next-auth/providers/resend';
 import Okta from 'next-auth/providers/okta';
 import { DrizzleAdapter } from '@auth/drizzle-adapter';
 import { Resend as ResendClient } from 'resend';
-import { getDb, ensureAuthTables, createMagicLinkRedirect } from '@/lib/db';
+import { getDb, isDbConfigured, ensureAuthTables, createMagicLinkRedirect } from '@/lib/db';
+import { unconfiguredAdapter, wrapAdapter } from '@/lib/auth-adapter';
 import { isEmailGrantedAccess } from '@/lib/auth-allowlist';
 import { loadBrand } from '@/lib/brand-config';
 import { signInEmail } from '@/lib/signin-email';
 import { authConfig } from '@/auth.config';
 
 /**
- * The Auth.js adapter, built on first use rather than at module load, with
- * every method wrapped so the Auth.js tables are created before it runs.
- *
- * Two deferrals in one place, for two different reasons:
- *
- *   - The adapter itself is constructed lazily because building it requires a
- *     live database handle, and this module is imported during the build and
- *     anywhere DATABASE_URL might be unset. Constructing eagerly turns a
- *     missing env var into a build failure.
- *   - Its tables are created lazily because Onyx has no migration step. The
- *     adapter is the one consumer that reaches the database before any of our
- *     own code runs, so there is no natural call site to hang an ensure* guard
- *     on. After the first call ensureAuthTables() returns a settled promise,
- *     so the steady-state cost is a microtask.
- *
- * A Proxy is safe here where it was not around the Drizzle handle: Auth.js
- * only ever calls methods on the adapter, whereas DrizzleAdapter inspects its
- * client to pick a SQL dialect.
+ * The Auth.js adapter. See lib/auth-adapter.js for why this is a plain object
+ * and never a Proxy — a get-only Proxy passes every obvious check and still
+ * fails Auth.js's presence validation at runtime.
  */
-function selfCreatingAdapter() {
-  let real = null;
-  const resolve = () => (real ||= DrizzleAdapter(getDb()));
-  return new Proxy({}, {
-    get(_target, prop) {
-      return async (...args) => {
-        await ensureAuthTables();
-        const target = resolve();
-        const value = target[prop];
-        if (typeof value !== 'function') return value;
-        return value.apply(target, args);
-      };
-    },
-  });
+function buildAdapter() {
+  if (!isDbConfigured()) return unconfiguredAdapter();
+  return wrapAdapter(DrizzleAdapter(getDb()), ensureAuthTables);
 }
+
 
 // Okta is registered only when all three vars are present. The sign-in page
 // checks NEXT_PUBLIC_OKTA_ENABLED separately, so the provider can be wired up
@@ -56,7 +32,7 @@ const oktaConfigured =
 // alone — see auth.config.js.
 export const { handlers, signIn, signOut, auth } = NextAuth({
   ...authConfig,
-  adapter: selfCreatingAdapter(),
+  adapter: buildAdapter(),
   providers: [
     Resend({
       apiKey: process.env.RESEND_API_KEY,
