@@ -273,10 +273,20 @@ are the hardest things to change once devices are syncing against them.
 
 ### Phase 6 — Compatibility
 
-- **Viewers on non-AWS storage.** R2, MinIO and Spaces have no STS, so
-  `mintFilespaceCredentials()` falls to the static rung — which deliberately
-  refuses viewers, since IAM cannot scope or expire that key. **On non-AWS
-  storage you currently cannot have a read-only member at all.**
+- ~~**Viewers on non-AWS storage.**~~ **Done for Backblaze B2.** B2 has no
+  STS, but `b2_create_key` mints an application key restricted to one bucket,
+  one name prefix and a lifetime — the same three guarantees AssumeRole gives
+  — and the result works against B2's S3-compatible endpoint. The ladder has
+  a `b2-native` rung, so viewers get real scoped credentials there.
+  **Still open for R2, MinIO and Spaces**, which fall to the static rung and
+  therefore refuse viewers. R2 is the same shape of work: its
+  `/accounts/{id}/r2/temp-access-credentials` API returns prefix-scoped
+  credentials with a session token, closer to STS than B2's keys are.
+- **Storage economics.** B2 is roughly a quarter of S3's per-TB price with
+  egress free to 3× stored (and unmetered through Cloudflare), which for a
+  cold-heavy video library is most of the bill. B2 is slower on small-object
+  reads, so it wants the CDN from 3.3 in front of it — which is planned work
+  either way, just load-bearing rather than optional.
 - **Windows.** The WinFSP path is far less exercised than the macOS NFS one.
 
 ---

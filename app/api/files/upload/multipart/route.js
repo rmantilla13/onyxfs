@@ -77,10 +77,12 @@ export async function POST(req) {
         if (fs) scoped = cfgForFilespace(cfg, fs);
       }
 
-      // choosePartSize throws above S3's 5 TiB object ceiling. Surfacing that
-      // here — before a single byte moves — is much kinder than failing on the
-      // final assemble.
-      const partSize = choosePartSize(size);
+      // choosePartSize throws above the provider's single-object ceiling —
+      // 5 TiB on S3, 10 TB on B2. Surfacing that here, before a single byte
+      // moves, is much kinder than failing on the final assemble. It reads
+      // the ceiling from the config the upload will actually use, so a
+      // filespace on a different provider gets that provider's limit.
+      const partSize = choosePartSize(size, scoped);
 
       const { uploadId, key, name } = await s3CreateMultipartUpload(scoped, {
         filename: body.filename,

@@ -136,8 +136,8 @@ function StorageTab() {
           <>
             <Field label="Bucket"><input className="input" value={form.bucket || ''} onChange={set('bucket')} /></Field>
             <Field label="Region" hint="Use 'auto' for R2."><input className="input" value={form.region || ''} onChange={set('region')} /></Field>
-            <Field label="Endpoint" hint="Leave blank for AWS S3. Set it for R2, Spaces, B2, Wasabi or MinIO.">
-              <input className="input" value={form.endpoint || ''} onChange={set('endpoint')} placeholder="https://…" />
+            <Field label="Endpoint" hint="Leave blank for AWS S3. Set it for B2, R2, Spaces, Wasabi or MinIO.">
+              <input className="input" value={form.endpoint || ''} onChange={set('endpoint')} placeholder="https://s3.us-west-004.backblazeb2.com" />
             </Field>
             <Field label="Access key ID"><input className="input" value={form.accessKeyId || ''} onChange={set('accessKeyId')} /></Field>
             <Field label="Secret access key" hint={data?.config?.hasSecret ? 'A secret is stored. Leave blank to keep it.' : undefined}>
@@ -149,6 +149,13 @@ function StorageTab() {
             <Field label="Role ARN" hint="Optional. With a role, desktop credentials are minted by AssumeRole instead of GetFederationToken.">
               <input className="input" value={form.roleArn || ''} onChange={set('roleArn')} />
             </Field>
+
+            {/* How a desktop or iOS mount will be credentialed, which is not
+                obvious from the fields above and decides whether read-only
+                members can mount at all. */}
+            <p className="small muted" style={{ margin: '4px 0 0' }}>
+              {credentialNote(form)}
+            </p>
           </>
         )}
 
@@ -173,6 +180,25 @@ function StorageTab() {
       )}
     </>
   );
+}
+
+/**
+ * Plain-language summary of which credential rung a mount will use. The
+ * important case is the last one: on a provider with no scoped mechanism,
+ * read-only members cannot mount, and an admin should learn that here rather
+ * than from a member's error message.
+ */
+function credentialNote(form) {
+  const e = (form.endpoint || '').toLowerCase();
+  if (!e) {
+    return form.roleArn
+      ? 'Mounts use STS AssumeRole — scoped to the filespace prefix and expiring.'
+      : 'Mounts use STS GetFederationToken — scoped and expiring. No role needed.';
+  }
+  if (e.includes('backblazeb2')) {
+    return 'Mounts use B2 application keys scoped to the filespace prefix and expiring after an hour. The key above needs the writeKeys capability to mint them.';
+  }
+  return 'This provider has no scoped-credential API wired up, so mounts use the key above as-is. Read-only members cannot mount on it.';
 }
 
 // ── Filespaces ──────────────────────────────────────────────────────────────

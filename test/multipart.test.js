@@ -8,7 +8,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { choosePartSize, partCount } from '../lib/storage.js';
+import { choosePartSize, partCount, providerLimits } from '../lib/storage.js';
 
 const MiB = 1024 * 1024;
 const GiB = 1024 * MiB;
@@ -97,5 +97,59 @@ describe('partCount', () => {
     // tried to avoid a small tail would be solving a problem that isn't real.
     const size = 8 * MiB + 1024;
     assert.equal(partCount(size, 8 * MiB), 2);
+  });
+});
+
+// ── Per-provider ceilings ───────────────────────────────────────────────────
+// Every S3-compatible service copies the part rules and then picks its own
+// single-object ceiling. A hardcoded S3 ceiling refuses a file the provider
+// would happily take — and it refuses it for the largest file someone owns,
+// which is the one they care most about.
+
+const b2 = { endpoint: 'https://s3.us-west-004.backblazeb2.com', bucket: 'b' };
+const r2 = { endpoint: 'https://acct.r2.cloudflarestorage.com', bucket: 'b' };
+
+describe('providerLimits', () => {
+  test('B2 allows 10 TB where S3 allows 5 TiB', () => {
+    assert.equal(providerLimits(b2).maxObject, 10 * 1000 * 1000 * 1000 * 1000);
+    assert.equal(providerLimits(undefined).maxObject, 5 * TiB);
+    assert.equal(providerLimits(r2).maxObject, 5 * TiB);
+  });
+
+  test('an unknown endpoint gets the conservative S3 numbers', () => {
+    // Wrong in this direction costs a refusal; wrong the other way costs a
+    // transfer that fails after the bytes have moved.
+    const l = providerLimits({ endpoint: 'https://minio.internal' });
+    assert.equal(l.maxObject, 5 * TiB);
+    assert.equal(l.maxParts, S3_MAX_PARTS);
+    assert.equal(l.minPart, S3_MIN_PART);
+  });
+});
+
+describe('choosePartSize across providers', () => {
+  test('a 6 TiB master is refused on S3 and accepted on B2', () => {
+    assert.throws(() => choosePartSize(6 * TiB), /5 TiB/);
+    assert.doesNotThrow(() => choosePartSize(6 * TiB, b2));
+  });
+
+  test('past B2 own ceiling it is refused, naming B2', () => {
+    assert.throws(() => choosePartSize(11 * 1000 * 1000 * 1000 * 1000, b2), /Backblaze B2.*10 TB/);
+  });
+
+  test('a file at B2 ceiling still fits inside the part limits', () => {
+    const size = 9 * 1000 * 1000 * 1000 * 1000;
+    const ps = choosePartSize(size, b2);
+    const n = partCount(size, ps);
+    assert.ok(n <= S3_MAX_PARTS, `${n} parts, over the limit`);
+    assert.ok(ps >= S3_MIN_PART && ps <= 5 * GiB, `${ps} byte parts`);
+  });
+
+  test('the provider does not change sizing below the ceiling', () => {
+    // Only the ceiling differs; the part arithmetic is the same everywhere,
+    // so an upload that moves between providers does not re-chunk.
+    for (const size of [MiB, GiB, 40 * GiB, 500 * GiB, TiB]) {
+      assert.equal(choosePartSize(size, b2), choosePartSize(size), `${size} differs on B2`);
+      assert.equal(choosePartSize(size, r2), choosePartSize(size), `${size} differs on R2`);
+    }
   });
 });

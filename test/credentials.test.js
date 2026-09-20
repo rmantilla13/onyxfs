@@ -6,7 +6,10 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { credentialPlan, fileKind, buildObjectKey, folderToKeyPath, isSystemKey, isThumbnailKey } from '../lib/storage.js';
+import {
+  credentialPlan, fileKind, buildObjectKey, folderToKeyPath, isSystemKey, isThumbnailKey,
+  storageProvider, staticRefusalMessage, b2KeyRequest, b2RegionFromEndpoint,
+} from '../lib/storage.js';
 
 const aws = { provider: 's3', bucket: 'b', region: 'us-east-1', accessKeyId: 'AK', secretAccessKey: 'SK' };
 const r2 = { ...aws, endpoint: 'https://acct.r2.cloudflarestorage.com', region: 'auto' };
@@ -145,5 +148,101 @@ describe('file kind', () => {
 
   test('an unknown mime falls through to the extension rather than giving up', () => {
     assert.equal(fileKind('application/octet-stream', 'clip.mp4'), 'video');
+  });
+});
+
+// ── Backblaze B2 ────────────────────────────────────────────────────────────
+// B2 has no STS, which is why every non-AWS provider used to fall to the
+// static key and viewers were refused outright. b2_create_key gives the same
+// three guarantees AssumeRole does — one bucket, one prefix, an expiry — so
+// B2 gets a real scoped rung. These tests cover the part that fails silently:
+// a key that carries more authority than the role asked for.
+
+const b2 = { ...aws, endpoint: 'https://s3.us-west-004.backblazeb2.com', region: 'us-west-004' };
+
+describe('Backblaze B2', () => {
+  test('is detected from its endpoint', () => {
+    assert.equal(storageProvider(b2), 'b2');
+    assert.equal(storageProvider(r2), 'r2');
+    assert.equal(storageProvider(aws), 'aws');
+    assert.equal(storageProvider({ ...aws, endpoint: 'https://minio.internal' }), 'other');
+  });
+
+  test('every role gets the scoped rung, viewers included', () => {
+    for (const role of ['viewer', 'editor', 'owner']) {
+      assert.equal(credentialPlan(b2, { id: 'f' }, { role }).strategy, 'b2-native', role);
+    }
+  });
+
+  test('a viewer still may not fall back to the master key', () => {
+    // The scoped rung is tried first, but if minting fails the viewer rule
+    // is what stops a read-only member being handed the deployment's key.
+    assert.equal(credentialPlan(b2, { id: 'f' }, { role: 'viewer' }).staticAllowed, false);
+    assert.equal(credentialPlan(b2, { id: 'f' }, { role: 'editor' }).staticAllowed, true);
+  });
+
+  test('the refusal names the B2 capability, not an AWS IAM action', () => {
+    // An admin told to allow sts:GetFederationToken on B2 goes looking for a
+    // setting that does not exist.
+    assert.match(staticRefusalMessage(b2), /writeKeys/);
+    assert.doesNotMatch(staticRefusalMessage(b2), /sts:/i);
+    assert.match(staticRefusalMessage(aws), /sts:GetFederationToken/);
+  });
+
+  test('the region comes out of the endpoint', () => {
+    assert.equal(b2RegionFromEndpoint('https://s3.us-west-004.backblazeb2.com'), 'us-west-004');
+    assert.equal(b2RegionFromEndpoint('https://s3.eu-central-003.backblazeb2.com'), 'eu-central-003');
+    assert.equal(b2RegionFromEndpoint('https://example.com'), null);
+  });
+});
+
+describe('b2KeyRequest', () => {
+  const base = { accountId: 'acct', bucketId: 'bkt', prefix: 'spaces/alpha', filespaceId: 'alpha' };
+
+  test('a viewer key cannot write or delete', () => {
+    // THE test. A viewer key carrying writeFiles is not an error anyone sees.
+    const { capabilities } = b2KeyRequest({ ...base, role: 'viewer' });
+    for (const cap of ['writeFiles', 'deleteFiles', 'writeKeys', 'deleteBuckets']) {
+      assert.ok(!capabilities.includes(cap), `a viewer key carries ${cap}`);
+    }
+    assert.ok(capabilities.includes('readFiles'));
+  });
+
+  test('an editor key can write', () => {
+    const { capabilities } = b2KeyRequest({ ...base, role: 'editor' });
+    assert.ok(capabilities.includes('writeFiles'));
+    assert.ok(capabilities.includes('deleteFiles'));
+  });
+
+  test('the prefix is terminated, so it cannot match a sibling', () => {
+    // Without the trailing slash a key scoped to "spring" also reaches
+    // "springboard/" — a different filespace.
+    assert.equal(b2KeyRequest({ ...base, prefix: 'spring' }).namePrefix, 'spring/');
+    assert.equal(b2KeyRequest({ ...base, prefix: '/spaces/alpha/' }).namePrefix, 'spaces/alpha/');
+  });
+
+  test('a key with no prefix is refused, not widened to the bucket', () => {
+    assert.throws(() => b2KeyRequest({ ...base, prefix: '' }), /prefix/i);
+    assert.throws(() => b2KeyRequest({ ...base, prefix: '///' }), /prefix/i);
+  });
+
+  test('it is always restricted to one bucket', () => {
+    assert.equal(b2KeyRequest(base).bucketId, 'bkt');
+    assert.throws(() => b2KeyRequest({ ...base, bucketId: '' }), /bucket/i);
+  });
+
+  test('the key always expires, and never lives longer than a day', () => {
+    // B2 keeps a key until it expires, so an unbounded one accumulates a row
+    // per mount forever.
+    assert.equal(b2KeyRequest({ ...base, durationSeconds: 3600 }).validDurationInSeconds, 3600);
+    assert.equal(b2KeyRequest({ ...base, durationSeconds: 999999 }).validDurationInSeconds, 24 * 60 * 60);
+    assert.equal(b2KeyRequest({ ...base, durationSeconds: 5 }).validDurationInSeconds, 900);
+    assert.equal(b2KeyRequest({ ...base, durationSeconds: undefined }).validDurationInSeconds, 3600);
+  });
+
+  test('the key name is legal for B2', () => {
+    const { keyName } = b2KeyRequest({ ...base, filespaceId: 'a b/c@d' });
+    assert.match(keyName, /^[A-Za-z0-9-]+$/, keyName);
+    assert.ok(keyName.length <= 100);
   });
 });
