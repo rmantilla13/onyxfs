@@ -40,8 +40,16 @@ export default async function RootLayout({ children }) {
           <link key={href} rel="stylesheet" href={href} />
         ))}
         {/* The brand as custom properties. globals.css consumes these and
-            hardcodes nothing, so re-branding is a settings write. */}
-        <style>{`:root{${brandCssVars(brand)}}`}</style>
+            hardcodes nothing, so re-branding is a settings write.
+
+            dangerouslySetInnerHTML, not a text child. As a child React
+            HTML-escapes the string on the server, so 'Inter Tight' was
+            served as &#x27;Inter Tight&#x27; — and a <style> element is raw
+            text, which the browser does not decode. The font stack was
+            therefore invalid CSS, and the client, which does not escape,
+            produced different text and failed hydration for the whole root.
+            The value is sanitized in brandCssVars. */}
+        <style dangerouslySetInnerHTML={{ __html: `:root{${brandCssVars(brand)}}` }} />
       </head>
       <body>{children}</body>
     </html>
