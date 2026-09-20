@@ -40,6 +40,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       // kept in sync with it so the two can never disagree about the sender.
       from: process.env.NOTIFY_FROM || 'Onyx <onboarding@resend.dev>',
       async sendVerificationRequest({ identifier: email, url }) {
+        if (!process.env.RESEND_API_KEY) {
+          throw new Error('RESEND_API_KEY is not set — sign-in email cannot be sent. Add it in Vercel → Settings → Environment Variables and redeploy.');
+        }
         const client = new ResendClient(process.env.RESEND_API_KEY);
         const brand = await loadBrand();
 

@@ -22,6 +22,15 @@ export async function requestMagicLink(_prev, formData) {
     return { sent: true };
   }
 
+  // Fail before Auth.js does anything. Without a key the Resend client throws
+  // from its constructor inside sendVerificationRequest, after the
+  // verification token has already been written — and the error it throws
+  // ("Pass it to the constructor") says nothing about where the key goes.
+  if (!process.env.RESEND_API_KEY) {
+    console.error('[signin] RESEND_API_KEY is not set — no sign-in email can be sent. Add it in Vercel → Settings → Environment Variables and redeploy.');
+    return { error: 'Sign-in email is not configured on this server: RESEND_API_KEY is unset. Set it and redeploy.' };
+  }
+
   try {
     await signIn('resend', { email, redirect: false });
     return { sent: true };
