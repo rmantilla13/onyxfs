@@ -58,7 +58,7 @@ section('Environment');
 console.log(paint(C.dim, `  ${envFile ? `loaded ${envFile}` : 'no .env.local found — reading the process environment'}`));
 
 const REQUIRED = [
-  ['DATABASE_URL', 'Postgres connection string (Neon)'],
+  ['__CONNECTION__', 'Postgres connection string — DATABASE_URL or POSTGRES_URL'],
   ['AUTH_SECRET', 'session signing — openssl rand -base64 32'],
   ['RESEND_API_KEY', 'magic-link sign-in; without it nobody can sign in'],
 ];
@@ -70,20 +70,43 @@ const OPTIONAL = [
   ['BLOB_READ_WRITE_TOKEN', 'fallback store; S3 is configured in Admin → Storage'],
 ];
 
+// lib/db.js reads DATABASE_URL first and falls back to POSTGRES_URL, which is
+// what the Supabase-Vercel integration injects. Report which one is actually
+// in play: with two possible sources, "the connection string is set" is not
+// enough to know which string is being used.
+const CONNECTION_VAR = process.env.DATABASE_URL ? 'DATABASE_URL'
+  : process.env.POSTGRES_URL ? 'POSTGRES_URL' : null;
+
 for (const [key, why] of REQUIRED) {
+  if (key === '__CONNECTION__') {
+    if (CONNECTION_VAR) {
+      ok(`connection string via ${CONNECTION_VAR}`);
+      // The shadowing trap. Both set means DATABASE_URL wins, so an old or
+      // hand-typed value silently overrides the one the integration manages —
+      // and the integration keeps updating a variable nothing reads.
+      if (process.env.DATABASE_URL && process.env.POSTGRES_URL
+          && process.env.DATABASE_URL !== process.env.POSTGRES_URL) {
+        warn('DATABASE_URL and POSTGRES_URL differ',
+          'DATABASE_URL wins — the integration-managed POSTGRES_URL is being ignored');
+      }
+    } else {
+      fail('no connection string', why);
+    }
+    continue;
+  }
   process.env[key] ? ok(key) : fail(key, why);
 }
 for (const [key, why] of OPTIONAL) {
   process.env[key] ? ok(key) : warn(`${key} unset`, why);
 }
 
-if (process.env.DATABASE_URL) {
+if (CONNECTION_VAR) {
   try {
-    const u = new URL(process.env.DATABASE_URL);
+    const u = new URL(process.env[CONNECTION_VAR]);
     if (!/^postgres(ql)?:$/.test(u.protocol)) {
-      fail('DATABASE_URL protocol', `expected postgres://, got ${u.protocol}`);
+      fail(`${CONNECTION_VAR} protocol`, `expected postgres://, got ${u.protocol}`);
     } else {
-      ok('DATABASE_URL parses', u.hostname);
+      ok(`${CONNECTION_VAR} parses`, u.hostname);
       // The single most common Supabase-on-serverless mistake: using the
       // direct connection instead of the pooler. It works locally and then
       // exhausts the database's connection limit under real traffic, because
@@ -101,7 +124,7 @@ if (process.env.DATABASE_URL) {
       }
     }
   } catch (e) {
-    fail('DATABASE_URL is not a valid URL', e.message);
+    fail(`${CONNECTION_VAR} is not a valid URL`, e.message);
   }
 }
 
