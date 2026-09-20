@@ -51,12 +51,28 @@ source only. `sanitizeStorageConfig()` strips the secret key. Keep it that way.
 ## Checks
 
 ```bash
-npm test                           # 66 unit tests, no database needed
+npm test                           # unit tests, no database needed
 npm run build                      # web — the real check; JSX errors surface here
 npm run doctor                     # creates the schema and verifies a live database
 cd desktop && npm run build        # tsc -b && vite build
 cd desktop/src-tauri && cargo check
 ```
+
+`grep -c postgres .next/server/middleware.js` must print **0** after a build.
+Anything else means the Postgres driver has been pulled into the Edge bundle,
+which builds cleanly and then fails on every request. See auth.config.js.
+
+Some storage tests want a real S3 API and **skip** when none is listening, so
+a green run does not necessarily mean they ran:
+
+```bash
+pip install 'moto[server]' && python -m moto.server -p 5111
+npm test                           # test/storage-move.test.js now exercises real moves
+```
+
+They are worth starting before touching anything that computes an object key.
+A mock would agree with whatever key we compute; the point is to check the
+object actually lands there and the old one is gone.
 
 `cargo check` needs GTK dev packages on Linux and a file at
 `src-tauri/binaries/rclone-<target-triple>` (the bundler wants the sidecar to
