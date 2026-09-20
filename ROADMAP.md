@@ -129,7 +129,7 @@ are destructive to retrofit.
 |---|---|---|
 | 1.1 | Change cursor + tombstones | Deleting a row leaves an offline client no way to learn the file is gone. Sync needs a tombstone that outlives the trash purge. |
 | 1.2 | `GET /api/files/delta?cursor=` | The shape iOS's `enumerateChanges(from:)` requires. `updated_at` alone is unsafe — two writes in the same millisecond can straddle a cursor. |
-| 1.3 | Multipart resumable upload | A single presigned PUT caps at 5GB and cannot resume. For heavy video this is a blocker today. |
+| ~~1.3~~ | ~~Multipart resumable upload~~ | **Done.** Parts are independently signed and retried; S3 holds the part manifest, so a reload resumes rather than restarts. Abandoned uploads are swept by the daily cron — their parts bill silently and never appear in the bucket listing. |
 | 1.4 | Filtering into SQL | `listFiles()` selects the whole table and filters in JavaScript, while indexes on `folder`, `created_at`, `kind` and a GIN index on `metadata` sit unused. Mostly a matter of writing the query the schema was built for. |
 | 1.5 | Keyset pagination | `OFFSET` degrades linearly at 100k. |
 

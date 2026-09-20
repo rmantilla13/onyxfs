@@ -2,6 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
+import { uploadFileMultipart } from '@/lib/multipart-client';
+
+// Above this, a single presigned PUT is a bad bet: S3 refuses past 5 GB, and
+// well before that a dropped connection costs the whole transfer. Multipart
+// parts are independently retryable and the upload survives a reload.
+const MULTIPART_THRESHOLD = 32 * 1024 * 1024;
 
 const KINDS = [
   { key: 'image', label: 'Images' },
@@ -135,7 +141,18 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
           let storageKey;
           let name = file.name;
 
-          if (cfg.mode === 's3') {
+          if (cfg.mode === 's3' && file.size > MULTIPART_THRESHOLD) {
+            const done = await uploadFileMultipart(file, {
+              folder,
+              filespaceId: filespaceId || undefined,
+              onProgress: ({ pct }) =>
+                setUploads((u) => u.map((x, j) => (j === i ? { ...x, pct } : x))),
+            });
+            url = done.publicUrl;
+            storage = 's3';
+            storageKey = done.key;
+            name = done.name || name;
+          } else if (cfg.mode === 's3') {
             const pre = await fetch('/api/files/presign', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
@@ -261,7 +278,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
               <span>{u.name}</span>
               <div className="spacer" />
               <span className={u.error ? '' : 'muted'} style={u.error ? { color: 'var(--danger)' } : undefined}>
-                {u.error || (u.pct === 100 ? 'Done' : 'Uploading…')}
+                {u.error || (u.pct === 100 ? 'Done' : u.pct ? `${u.pct}%` : 'Uploading…')}
               </span>
             </div>
           ))}

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { listExpiredTrash, deleteFile, listAllFiles, getFileMetadataSchema } from '@/lib/db';
-import { getStorageConfig, s3DeleteObject } from '@/lib/storage';
+import { listExpiredTrash, deleteFile, listAllFiles, getFileMetadataSchema, listStaleUploads, deleteUpload } from '@/lib/db';
+import { getStorageConfig, s3DeleteObject, s3AbortMultipartUpload } from '@/lib/storage';
 import { normalizeSchema, expiryState } from '@/lib/dam';
 import { notifyExpiringRights } from '@/lib/notify';
 
@@ -9,6 +9,10 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 const TRASH_RETENTION_DAYS = 30;
+// How long an untouched upload stays resumable before it is treated as
+// abandoned. Generous on purpose — coming back to a half-finished 40 GB
+// transfer the next day should still work.
+const UPLOAD_STALE_DAYS = 7;
 
 /**
  * Daily maintenance. Two jobs:
@@ -25,7 +29,7 @@ export async function GET(req) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const out = { purged: 0, purgeErrors: 0, expired: 0, soon: 0 };
+  const out = { purged: 0, purgeErrors: 0, expired: 0, soon: 0, uploadsAborted: 0 };
 
   try {
     const cutoff = Date.now() - TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000;
@@ -42,6 +46,26 @@ export async function GET(req) {
     }
   } catch (e) {
     console.warn('[cron] trash purge failed:', e.message);
+  }
+
+  // Abandoned multipart uploads. Their parts are stored and billed
+  // indefinitely and do NOT appear in the bucket's object listing, so without
+  // this they accumulate invisibly. A bucket lifecycle rule for incomplete
+  // multipart uploads is the belt-and-braces backstop.
+  try {
+    const cfg = await getStorageConfig();
+    const cutoff = Date.now() - UPLOAD_STALE_DAYS * 24 * 60 * 60 * 1000;
+    for (const u of await listStaleUploads(cutoff)) {
+      try {
+        await s3AbortMultipartUpload(cfg, { key: u.storageKey, uploadId: u.uploadId });
+        await deleteUpload(u.id);
+        out.uploadsAborted++;
+      } catch (e) {
+        console.warn('[cron] abort upload failed for', u.id, e.message);
+      }
+    }
+  } catch (e) {
+    console.warn('[cron] stale upload sweep failed:', e.message);
   }
 
   try {
