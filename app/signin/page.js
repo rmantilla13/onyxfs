@@ -1,3 +1,5 @@
+import { redirect } from 'next/navigation';
+import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
 import SignInClient from './SignInClient';
 
@@ -11,8 +13,16 @@ const ERRORS = {
 };
 
 export default async function SignInPage({ searchParams }) {
-  const brand = await loadBrand();
+  // Middleware leaves /signin unguarded (it has to), so this page is the one
+  // that has to notice an already signed-in visitor — including the one the
+  // magic-link callback just delivered here — and send them to the library.
   const code = searchParams?.error;
+  if (!code) {
+    const session = await auth();
+    if (session?.user) redirect('/files');
+  }
+
+  const brand = await loadBrand();
   return (
     <SignInClient
       brandName={brand.name}

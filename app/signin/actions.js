@@ -32,7 +32,11 @@ export async function requestMagicLink(_prev, formData) {
   }
 
   try {
-    await signIn('resend', { email, redirect: false });
+    // redirectTo is not optional here. Without it Auth.js takes the callback
+    // URL from the page this action was posted from — /signin — so the
+    // magic link verified, set the session cookie, and delivered the person
+    // straight back to the sign-in form, which did not know they had arrived.
+    await signIn('resend', { email, redirect: false, redirectTo: '/files' });
     return { sent: true };
   } catch (e) {
     console.error('[signin] magic link failed:', e.message);

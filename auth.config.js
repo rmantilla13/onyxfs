@@ -38,13 +38,19 @@ export const authConfig = {
     async redirect({ url, baseUrl }) {
       // Land on the library after sign-in, unless a same-origin callback was
       // supplied (someone deep-linked to a file before signing in).
+      //
+      // Never land on the sign-in or verify pages themselves: Auth.js defaults
+      // the callback to the page sign-in was requested from, and delivering a
+      // freshly signed-in person back to the form reads as "nothing happened".
       try {
-        if (url.startsWith('/')) return `${baseUrl}${url}`;
-        if (new URL(url).origin === baseUrl) return url;
+        const target = new URL(url, baseUrl);
+        if (target.origin !== baseUrl) return `${baseUrl}/files`;
+        if (/^\/(signin|verify)(\/|$)/.test(target.pathname)) return `${baseUrl}/files`;
+        return target.toString();
       } catch {
         /* malformed — fall through */
       }
-      return baseUrl;
+      return `${baseUrl}/files`;
     },
     async jwt({ token, user }) {
       if (user) {
