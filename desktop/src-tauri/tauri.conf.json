@@ -38,7 +38,7 @@
       "active": false,
       "pubkey": "",
       "endpoints": [
-        "https://github.com/rmantilla13/onyx/releases/latest/download/latest.json"
+        "https://github.com/rmantilla13/onyxfs/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"

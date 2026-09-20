@@ -55,7 +55,7 @@ only one extra permission:
 
 ## 2. Deploy the Onyx backend
 
-Changes live on **`main`** of `rmantilla13/onyx`
+Changes live on **`main`** of `rmantilla13/onyxfs`
 (durable clone at `~/Documents/onyx`). All new DB tables are created
 lazily — additive, no migration, safe to roll back. `next build` passes.
 
@@ -92,13 +92,13 @@ Vercel installs the new `@aws-sdk/client-sts` dep automatically.
 
 ## 4. GitHub release repo + signing keys (enables auto-update)
 
-The desktop app auto-updates from GitHub Releases at **`rmantilla13/onyx`**.
+The desktop app auto-updates from GitHub Releases at **`rmantilla13/onyxfs`**.
 
 ### a. Create the repo and push
 ```bash
 cd ~/Documents/onyx
 git init && git add -A && git commit -m "Onyx v0.1.0"
-gh repo create rmantilla13/onyx --private --source=. --remote=origin --push
+gh repo create rmantilla13/onyxfs --private --source=. --remote=origin --push
 ```
 
 ### b. Add the signing key as repo secrets
