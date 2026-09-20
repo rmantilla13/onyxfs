@@ -23,7 +23,23 @@ export async function POST(req) {
   let body = {};
   try { body = await req.json(); } catch { /* no draft — test what is saved */ }
 
-  const stored = await getStorageConfig({ fresh: true });
+  // Strict: a failed read must not be reported as "storage is set to Vercel
+  // Blob", which is a confident and completely wrong diagnosis.
+  let stored;
+  try {
+    stored = await getStorageConfig({ fresh: true, strict: true });
+  } catch (e) {
+    return NextResponse.json({
+      provider: 'unknown',
+      label: 'unknown',
+      mode: 'unknown',
+      checks: [{
+        id: 'config', label: 'Configuration', status: 'fail',
+        detail: `Could not read the saved configuration: ${e.message}`,
+        fix: 'The database did not answer in time. This says nothing about the bucket — try again in a moment.',
+      }],
+    });
+  }
   const draft = body?.config && typeof body.config === 'object' ? body.config : {};
   const cfg = { ...stored, ...draft };
   if (!draft.secretAccessKey) cfg.secretAccessKey = stored.secretAccessKey;

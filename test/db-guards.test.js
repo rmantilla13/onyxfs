@@ -238,3 +238,45 @@ describe('getSetting freshness', () => {
     }
   });
 });
+
+// ── A failed read is not an empty setting ───────────────────────────────────
+// The bug this prevents, in full: the storage form leaves the secret blank to
+// mean "keep the stored one", so the save reads the stored config first. When
+// that read TIMED OUT, getSetting returned null, getStorageConfig turned that
+// into defaults, and the save could not tell "nothing is configured" from "I
+// could not find out" — so it merged the form over blanks and wrote an empty
+// secret over a working bucket. Every save during a slow database silently
+// unconfigured the storage, which then looked like the bucket was at fault.
+describe('getSetting strict mode', () => {
+  test('a read failure throws instead of reading as null', async () => {
+    const { getSetting } = await import('../lib/db.js');
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      // No database is configured in tests, so every real read fails.
+      await assert.rejects(() => getSetting('strict.test.key', { strict: true, fresh: true }));
+      // The same read without strict is still forgiving — a render wants
+      // brand defaults, not an exception.
+      assert.equal(await getSetting('strict.test.key', { fresh: true }), null);
+    } finally {
+      console.warn = warn;
+    }
+  });
+
+  test('a failure is not cached when the caller asked for a fresh read', async () => {
+    const { getSetting } = await import('../lib/db.js');
+    const warn = console.warn;
+    let reads = 0;
+    console.warn = (msg) => { if (String(msg).includes('getSetting')) reads++; };
+    try {
+      await getSetting('nocache.test.key', { fresh: true });
+      await getSetting('nocache.test.key', { fresh: true });
+      assert.equal(reads, 2, 'a fresh read was served from a poisoned negative cache entry');
+      // And the poisoned entry must not leak into an ordinary read either.
+      await getSetting('nocache.test.key');
+      assert.equal(reads, 3, 'an ordinary read after a fresh failure was served stale');
+    } finally {
+      console.warn = warn;
+    }
+  });
+});

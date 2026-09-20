@@ -30,7 +30,23 @@ export async function PUT(req) {
   // stored state.
   const incoming = sanitizeStorageSubmission(body?.config);
 
-  const current = await getStorageConfig({ fresh: true });
+  // Strict, and this is the load-bearing part. The form leaves the secret
+  // blank to mean "keep the stored one", so the save depends on having read
+  // the stored one. When that read merely FAILED, the old code received
+  // defaults, could not tell them from "nothing configured", and wrote an
+  // empty secret over a working bucket — every save during a slow database
+  // quietly unconfigured the storage.
+  let current;
+  try {
+    current = await getStorageConfig({ fresh: true, strict: true });
+  } catch (e) {
+    return NextResponse.json({
+      error: 'Could not read the current storage configuration, so nothing was saved — '
+           + 'saving now would overwrite it with blanks. The database did not answer in time; try again.',
+      code: 'read_failed',
+      detail: e.message,
+    }, { status: 503 });
+  }
   // Preserve the stored secret when the field comes back blank.
   if (!incoming.secretAccessKey) incoming.secretAccessKey = current.secretAccessKey;
 
