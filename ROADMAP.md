@@ -1,163 +1,175 @@
 # Onyx roadmap
 
-Target: **100k+ files, heavy video**, on web, macOS, and a **native iOS app that
-appears in Files.app**.
+**What Onyx is:** an AI-native asset manager for one person's media library. You
+find footage by describing it, not by remembering where you filed it.
 
-That target, not a feature wishlist, is what orders the work below. Three things
-get dramatically more expensive with every file added, so they come first even
-though none of them is visible in the UI.
+**Targets:** 100k+ files, heavy video. S3 is the library. Web, macOS, and a
+native iOS app that appears in Files.app.
 
----
-
-## The three retrofits to avoid
-
-### 1. Deletions leave no trace
-
-`deleteFile()` removes the row. A client that was offline when it happened has
-no way to learn the file is gone — it will keep showing a ghost forever.
-
-Any sync client (the iOS File Provider, and eventually the desktop app) needs
-**tombstones**: a durable record that item X was deleted at time T, retained
-longer than the longest plausible client absence. Adding this later means every
-client that synced before the change has a permanently inconsistent view, with
-no way to repair short of a full re-enumeration.
-
-The `trash` feature is close but not sufficient — it is a UI affordance with a
-purge that hard-deletes. Sync needs the tombstone to outlive the purge.
-
-### 2. There is no way to ask "what changed?"
-
-Every read is a full listing. A File Provider enumerating 100k items on every
-launch is a non-starter — and Apple's API is explicitly built around the
-opposite: `enumerateChanges(from: anchor)` returns a delta and a new anchor.
-
-This needs a **monotonic change cursor** on the files table — a sequence number
-bumped on every insert, update and delete — plus an endpoint that returns
-changes since a given cursor. `updated_at` alone is not safe: two writes in the
-same millisecond can straddle a cursor and one will be missed.
-
-### 3. Uploads cap at 5GB and cannot resume
-
-The upload path is a single presigned `PUT`. That is a hard 5GB S3 ceiling, and
-any network blip loses the entire transfer. For heavy video this is a day-one
-blocker, not a scaling concern.
-
-The fix is multipart: `CreateMultipartUpload`, presign each part, upload parts
-in parallel with retry, `CompleteMultipartUpload`. Part state has to survive a
-page reload for resumability, which means it is a small amount of new schema —
-easier to add before there is an upload history to migrate.
-
-**These three are Phase 1 for a reason.** Everything else on this list can be
-added incrementally without invalidating what came before.
+**Standing constraint:** no recurring AI spend. Everything core runs on hardware
+you already own. Paid enrichment is opt-in, scoped, and never on by default.
 
 ---
 
-## Phase 1 — Foundations
+## The reframe
+
+Onyx as built is *storage-shaped*: folders, tags you typed, a substring match on
+filenames. The product described above is *search-shaped* — the system
+understands the content and you ask it in English.
+
+That moves the ingest pipeline from a nice-to-have to the core of the product,
+and it changes what "performance" means. At 100k+ files the interesting question
+is not how fast a folder listing renders; it is whether you can find one shot
+out of a hundred thousand in under a second.
+
+---
+
+## How the search actually works
+
+CLIP-family models — **SigLIP** is the current recommendation, it outperforms
+CLIP at the same size — embed images and text into a *shared* vector space. So:
+
+1. Embed every image (and sampled video frames) once, at ingest.
+2. At query time, embed the text query.
+3. Nearest neighbours in that space are your results.
+
+No captioning step, no API call, no per-file cost. This is the engine.
+
+### Where the compute goes
+
+**The desktop app is the ingest worker.** It already handles upload; it also
+extracts frames, runs the embedding model locally, and uploads the vectors
+alongside the file. Apple Silicon runs these models well.
+
+This is the design decision that satisfies the no-spend constraint. The cloud
+stores bytes; your machine does the thinking. No GPU instance, no inference
+service, no bill that scales with library size.
+
+Consequence: the same work needs a server-side fallback for files that arrive
+any other way (bucket sync, the web uploader, iOS). Keep the pipeline a single
+module with two callers rather than two implementations.
+
+### Storage: pgvector, in the database you already have
+
+Embeddings live in a column beside the file row on Neon. No vector database, no
+second store to keep in sync, no new infrastructure.
+
+- Images: one vector on the file row.
+- Video: a `file_frames` table — `file_id`, `timestamp_ms`, `embedding` — so a
+  hit returns *the video and the point in it*. Being taken straight to the
+  right second is most of the magic; it is worth the extra table.
+- Index: HNSW with cosine distance.
+
+Scale note: 100k videos at ~50 sampled frames each is ~5M vectors. pgvector
+with HNSW handles that, but it is the number to watch — sample on scene changes
+rather than a fixed interval and it stays far smaller.
+
+### Ranking: hybrid, not pure vector
+
+Vector search has excellent recall and mediocre precision on exact terms — it
+will not reliably find a file because you typed its client's name. Fuse two
+rankings:
+
+- **Vector** similarity for semantic and visual recall.
+- **Postgres full-text** over filenames, tags, captions and transcripts for
+  exact matches.
+
+Reciprocal rank fusion over the two is simple and works well. Both live in the
+same database, so this is one query, not a fan-out.
+
+---
+
+## Paid enrichment stays optional
+
+Claude vision produces captions and structured tags that measurably improve
+recall on abstract queries, and give you human-readable descriptions. ARMRA's
+`lib/vision.js` is a proven template for the prompt — its central lesson is
+worth keeping: *"a person" is useless; "woman pouring from a sachet into a glass
+at a marble counter, morning sunlight, hand-held framing" is gold.*
+
+Rough one-time cost to caption 100k images, via the Batch API at 50%:
+
+| Model | Estimated |
+|---|---|
+| `claude-haiku-4-5` | ~$125 |
+| `claude-sonnet-5` | ~$250 |
+| `claude-opus-5` | ~$625 |
+
+Assumes ~1,500 input tokens per image and ~200 output. Image tokens scale with
+resolution — baseline with `count_tokens` on a real sample before committing to
+any of it.
+
+**This ships off by default, and the controls come before the feature:**
+
+- A **dry run** that reports estimated token spend and dollar cost, and exits.
+- A **hard budget cap** per run, enforced client-side, that aborts on breach.
+- **Scoped runs** — one folder, one filespace, one selection. Never "the whole
+  library" as a default.
+- **Incremental by construction** — only files with no caption, so a re-run
+  costs nothing.
+- **Batch API always**, never the synchronous endpoint, for the 50%.
+
+Anthropic has no embeddings endpoint, so this is strictly about captions and
+tags. The vectors are always local.
+
+Transcripts (Whisper, self-hosted) are the other enrichment worth having and
+cost nothing but compute — for interview and doc footage, searching what was
+*said* is often more valuable than searching what was *shown*.
+
+---
+
+## Phases
+
+### Phase 1 — Foundations
+
+Unchanged from the storage roadmap, and still first: these are the things that
+are destructive to retrofit.
 
 | | Work | Why now |
 |---|---|---|
-| 1.1 | Change cursor + tombstones | Retrofit is destructive (above) |
-| 1.2 | `GET /api/files/delta?cursor=` | The shape iOS requires |
-| 1.3 | Multipart resumable upload | 5GB ceiling today |
-| 1.4 | Push filtering into SQL | See below |
-| 1.5 | Keyset pagination | `OFFSET` degrades linearly at 100k |
-| 1.6 | Postgres full-text search | Replaces a JS substring scan |
+| 1.1 | Change cursor + tombstones | Deleting a row leaves an offline client no way to learn the file is gone. Sync needs a tombstone that outlives the trash purge. |
+| 1.2 | `GET /api/files/delta?cursor=` | The shape iOS's `enumerateChanges(from:)` requires. `updated_at` alone is unsafe — two writes in the same millisecond can straddle a cursor. |
+| 1.3 | Multipart resumable upload | A single presigned PUT caps at 5GB and cannot resume. For heavy video this is a blocker today. |
+| 1.4 | Filtering into SQL | `listFiles()` selects the whole table and filters in JavaScript, while indexes on `folder`, `created_at`, `kind` and a GIN index on `metadata` sit unused. Mostly a matter of writing the query the schema was built for. |
+| 1.5 | Keyset pagination | `OFFSET` degrades linearly at 100k. |
 
-### On 1.4 — the indexes already exist
+### Phase 2 — The ingest pipeline
 
-`listFiles()` runs `SELECT * FROM files ORDER BY created_at DESC` with no
-`WHERE` clause and filters everything in JavaScript — folder, kind, tags,
-filespace prefix, search — then applies ACLs in JS, then slices for pagination.
-The route passes no limit, so every surviving row is returned and presigned.
+The core of the product.
 
-Meanwhile `ensureFilesTable()` already creates indexes on `folder`,
-`created_at DESC`, `kind`, and a GIN index on `metadata`. None of them is used
-by any query. Most of this task is writing the query the schema was built for.
+| | Work |
+|---|---|
+| 2.1 | pgvector: schema, HNSW index, `file_frames` table |
+| 2.2 | Embedding module (SigLIP via ONNX) — one module, two callers |
+| 2.3 | Desktop ingest: frames + embeddings on upload |
+| 2.4 | Server fallback for bucket-sync / web / iOS arrivals |
+| 2.5 | Hybrid search: vector + FTS, reciprocal rank fusion |
+| 2.6 | Search UI — query box, similarity ("more like this"), frame-accurate video hits |
 
-Watch for: ACL filtering has to move into the query too. Filtering after the
-`LIMIT` returns short pages; filtering before it is what makes pagination
-correct.
+**2.7 — fix video thumbnails.** `lib/thumbs.js` caps video at
+`VIDEO_MAX_BYTES = 200MB` and buffers the entire file in memory, so most of a
+heavy-video library silently gets no thumbnail at all. ffmpeg only needs the
+head of a faststart MP4 to pull a frame — range-read instead of downloading.
+The same fix is what makes frame sampling for embeddings viable.
 
-### On 1.6 — Postgres is enough
+**2.8 — video proxies.** Scrubbing a multi-GB master through a presigned URL is
+unusable. Generate an HLS or 1080p proxy at ingest, play that, keep the original
+for download. Same worker as 2.7, so build them together.
 
-At 100k–1M rows, `tsvector` + GIN over name/tags/notes/caption is fast and adds
-no infrastructure. Reach for a dedicated search service only when you want
-fuzzy matching, per-field boosting, or search over transcripts — not before.
+### Phase 3 — Interface and scale
 
----
+| | Work |
+|---|---|
+| 3.1 | Virtualized grid (non-negotiable at this scale) |
+| 3.2 | Facet counts via scoped `GROUP BY`, not a client-side scan |
+| 3.3 | CDN + signed cookies instead of presigning every request |
+| 3.4 | The UI/API gap (below) |
 
-## Phase 2 — The media pipeline
+**3.3 is the biggest perceived-speed win in the plan.** One cookie authorizes a
+whole prefix for the session; thumbnails become plain `<img src>` that cache
+normally, and per-request signing disappears.
 
-Heavy video is where the current design breaks hardest, and none of it is a
-small fix.
-
-### 2.1 Thumbnails are capped at 200MB
-
-`lib/thumbs.js` sets `VIDEO_MAX_BYTES = 200MB` and **downloads the entire file
-into memory** before handing it to ffmpeg. Above that, the file silently gets no
-thumbnail.
-
-Two layers to fix:
-
-- **Range-read instead of full download.** ffmpeg does not need the whole file
-  to grab a frame — with a faststart MP4 the moov atom is at the head, so the
-  first few MB suffice. This alone lifts the cap enormously and is a contained
-  change.
-- **Get off the serverless function.** Even fixed, thumbnailing 100k assets
-  inside Vercel functions is the wrong shape: cold starts, a 300s ceiling, and
-  no backpressure. This wants a real queue and a worker that can stream.
-
-### 2.2 Playback needs proxies, not presigned originals
-
-Scrubbing a multi-GB ProRes or 4K master through a presigned URL is unusable —
-the browser has to range-fetch across the network for every seek.
-
-The answer is the standard one: generate an **HLS proxy** (or a single H.264
-720p/1080p rendition) at ingest, play that, and reserve the original for
-download. This is the same worker as 2.1, so build them together.
-
-### 2.3 Stop presigning per request
-
-At 100k files with a virtualized grid you are signing URLs constantly, and every
-signed URL expires — which breaks browser caching and forces re-signing on
-scroll.
-
-Use a **CDN with signed cookies** (CloudFront, or R2 + Workers). One cookie
-authorizes a whole prefix for the session, thumbnails become plain `<img src>`
-that cache normally, and the per-request signing cost disappears. This is the
-single biggest perceived-speed win in the whole plan.
-
-### 2.4 Storage lifecycle
-
-100k+ of heavy video is a real bill. Intelligent-Tiering for the general case,
-and a lifecycle rule moving originals to Glacier once a proxy exists — the proxy
-stays hot, the master goes cold. Restore-on-demand in the UI.
-
----
-
-## Phase 3 — The interface
-
-### 3.1 Virtualized grid
-
-Non-negotiable at this scale. Render the visible window only, with the delta
-endpoint feeding it.
-
-### 3.2 Facet counts need a strategy
-
-`buildFacets()` currently counts across every loaded row on the client. At 100k
-that is neither possible nor useful. Pick one:
-
-- **Scoped counts** — count only within the active filter, via the GIN index.
-  Accurate and cheap, but counts shift as you filter.
-- **Precomputed summary table** — refreshed by the same worker. Fast and stable,
-  eventually consistent.
-- **Drop the counts** — show facet values without numbers.
-
-Scoped counts are the right default; they are what people actually read.
-
-### 3.3 The UI/API gap
-
-Several backends are ported, verified and have no interface. Cheapest work here:
+**3.4 — backends that are already working with no interface:**
 
 | Working API | Missing UI |
 |---|---|
@@ -168,72 +180,47 @@ Several backends are ported, verified and have no interface. Cheapest work here:
 | `/api/files/folders` | Create / rename folder |
 | `/api/files/[id]/acl` | Per-file sharing |
 
----
+### Phase 4 — Optional enrichment
 
-## Phase 4 — Native iOS
+Claude captions and tags, behind every control listed above. Whisper
+transcripts, self-hosted. Both feed the FTS half of hybrid search.
 
-The goal is Onyx in **Files.app**, behaving like iCloud Drive. That means an
-`NSFileProviderReplicatedExtension` — native Swift, iOS 16+.
+### Phase 5 — Native iOS
 
-### What this is not
+Onyx in Files.app via an `NSFileProviderReplicatedExtension` — native Swift,
+iOS 16+. **Not buildable in Tauri**: a File Provider runs as a separate process
+with roughly a 50MB memory ceiling and no webview.
 
-It is **not** buildable in Tauri. A File Provider runs as a separate extension
-process with roughly a 50MB memory ceiling and no webview. It is a distinct
-native codebase that happens to talk to the same API.
+The architecture already pays off here. `POST /api/space/sts` mints exactly what
+the extension needs — prefix-scoped, expiring credentials — so it streams bytes
+straight from S3 rather than proxying through the control plane, which is also
+the only way to stay under that memory ceiling. **The control plane needs no new
+concepts for iOS.** It needs Phase 1 and nothing beyond it.
 
-### What the architecture already gives you
+Shape of the work: container app + extension sharing auth through a Keychain
+access group (the extension cannot present a login UI); PKCE via
+`ASWebAuthenticationSession` reusing the existing `onyxfs://` scheme; paginated
+enumeration plus delta against 1.2; background `URLSession` for uploads; and an
+explicit conflict policy written down rather than discovered.
 
-More than it might seem. `POST /api/space/sts` already mints exactly what a File
-Provider wants: credentials scoped to one bucket prefix, with an expiry. The
-extension can stream bytes straight from S3 without proxying through the control
-plane — which is also the only way to stay inside that memory ceiling.
+Do not start before Phase 1 ships. The enumeration contract is the hardest thing
+to change once devices are syncing against it.
 
-**The control plane needs no new concepts for iOS.** It needs Phase 1 (delta
-enumeration, tombstones, multipart) and nothing beyond it.
-
-### The shape of the work
-
-1. **App + extension + App Group.** The container app handles sign-in; the
-   extension does the file work. They share the auth token via a Keychain access
-   group — the extension cannot present UI to log in.
-2. **Auth.** `ASWebAuthenticationSession` for the PKCE hand-off, reusing the
-   `onyxfs://` scheme the desktop already uses. The pairing-code fallback works
-   here too.
-3. **Enumeration.** Paginated listing plus `enumerateChanges(from:)` against the
-   Phase 1 delta endpoint. This is where tombstones become load-bearing.
-4. **Materialization.** Fetch content on demand, stream to disk, never buffer.
-   Thumbnails come from the same `_thumbs/` objects the web grid uses.
-5. **Upload.** Multipart from the device, with the extension's background
-   URLSession so transfers survive the app being suspended.
-6. **Conflicts.** Decide the policy explicitly. Last-write-wins is defensible
-   for a single-user workspace; say so in the code rather than discovering it.
-
-### Sequencing
-
-Do not start this before Phase 1 ships. A File Provider built against
-full-listing endpoints will need rewriting, and the enumeration contract is the
-hardest part to change once devices are syncing against it.
-
----
-
-## Phase 5 — Compatibility
+### Phase 6 — Compatibility
 
 - **Viewers on non-AWS storage.** R2, MinIO and Spaces have no STS, so
   `mintFilespaceCredentials()` falls to the static rung — which deliberately
-  refuses viewers, because IAM cannot scope or expire that key. **On non-AWS
-  storage you currently cannot have a read-only member at all.** Fix with a
-  credential-broker proxy, or R2's own scoped-token API.
-- **Windows.** The WinFSP mount path is far less exercised than the macOS NFS
-  one. Needs real testing before it is advertised.
-- **Linux desktop.** Tauri supports it; unverified here.
+  refuses viewers, since IAM cannot scope or expire that key. **On non-AWS
+  storage you currently cannot have a read-only member at all.**
+- **Windows.** The WinFSP path is far less exercised than the macOS NFS one.
 
 ---
 
 ## Cross-cutting
 
-**Tests.** There are currently none. The credential ladder and the ACL filter
-are where a silent regression is most expensive — and Phase 1 rewrites the query
-underneath the ACL filter. Those two deserve tests *before* that work, not after.
+**Tests.** There are none. The credential ladder and the ACL filter are where a
+silent regression costs most — and Phase 1 rewrites the query underneath the ACL
+filter. Those deserve tests *before* that work.
 
 **Decide before first release:** the bundle identifier `io.onyxfs.app` and the
 `onyxfs://` scheme are compiled into the installed app and registered with the
@@ -248,12 +235,14 @@ column (from the dropped video-review feature) and indexes still named
 ## Suggested order
 
 1. Tests around the credential ladder and ACL filter
-2. Phase 1 — cursor, tombstones, delta endpoint, multipart, SQL filtering, keyset paging, FTS
-3. Phase 2.1 + 2.2 — the media worker (range-read thumbnails, HLS proxies)
-4. Phase 3.1 + 3.3 — virtualized grid, then the missing UIs
-5. Phase 2.3 — CDN and signed cookies
-6. Phase 4 — native iOS
-7. Phase 5 — compatibility
+2. Phase 1 — cursor, tombstones, delta, multipart, SQL filtering, keyset paging
+3. Phase 2.7 + 2.8 — the media worker (range-read frames, proxies)
+4. Phase 2.1–2.6 — pgvector, embeddings, hybrid search, search UI
+5. Phase 3 — virtualized grid, CDN, the missing UIs
+6. Phase 5 — native iOS
+7. Phase 4 — paid enrichment, if and when it earns its cost
+8. Phase 6 — compatibility
 
-Phases 1 and 2 are the ones that are painful to defer. Everything from 3 onward
-can be reordered to taste.
+Phase 4 sits deliberately late. By the time free search is good, you will know
+whether captions are worth paying for — and that is a much better position from
+which to spend than guessing now.
