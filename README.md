@@ -49,12 +49,14 @@ an `ensure*Table()` guard in `lib/db.js`. `db/init.sql` holds the same DDL if
 you would rather create everything up front; it is generated from those guards,
 so the two cannot drift.
 
-**In production, run `db/init.sql` once and set `SCHEMA_MANAGED=1`.** That
-turns the lazy guards off on the request path: without it every cold start
-issues a few dozen DDL statements before its first real query, and each
-`ALTER TABLE … ADD COLUMN IF NOT EXISTS` takes an exclusive lock even when it
-adds nothing. With the flag set, schema changes are applied by the daily
-maintenance cron and by `npm run doctor`, both of which call `ensureSchema()`.
+**Run `db/init.sql` once against a production database.** The lazy guards are
+switched off there automatically (`NODE_ENV=production`), because a cold start
+issuing a few dozen DDL statements before its first real query is a liability
+once anyone is using the app — `CREATE` and `ALTER` take an exclusive lock on
+their table even when they change nothing, and concurrent cold starts convoy.
+Schema changes are applied instead by the daily maintenance cron and by
+`npm run doctor`, both of which call `ensureSchema()`. `SCHEMA_MANAGED=0`
+forces the guards back on if a deployment has to bootstrap its own schema.
 
 **Use Supabase's connection pooler** (port 6543, transaction mode) for
 `DATABASE_URL`, not the direct connection. Every serverless invocation opens

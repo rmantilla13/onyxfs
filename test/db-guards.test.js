@@ -64,6 +64,51 @@ describe('lazySchema', () => {
 });
 
 describe('SCHEMA_MANAGED', () => {
+  test('production runs no DDL on the request path by default', async () => {
+    // The default is the whole point: nobody remembers to set a flag, and
+    // production is where request-path DDL does damage.
+    let runs = 0;
+    const ensure = lazySchema('default-prod-test', async () => { runs++; });
+    const prev = process.env.NODE_ENV;
+    delete process.env.SCHEMA_MANAGED;
+    process.env.NODE_ENV = 'production';
+    try {
+      await ensure();
+      assert.equal(runs, 0, 'a guard ran DDL on a production request');
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+  });
+
+  test('development still self-assembles a fresh database', async () => {
+    let runs = 0;
+    const ensure = lazySchema('default-dev-test', async () => { runs++; });
+    const prev = process.env.NODE_ENV;
+    delete process.env.SCHEMA_MANAGED;
+    process.env.NODE_ENV = 'development';
+    try {
+      await ensure();
+      assert.equal(runs, 1, 'the lazy guards are what make a dev database work');
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+  });
+
+  test('SCHEMA_MANAGED=0 forces the guards back on in production', async () => {
+    let runs = 0;
+    const ensure = lazySchema('override-test', async () => { runs++; });
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    process.env.SCHEMA_MANAGED = '0';
+    try {
+      await ensure();
+      assert.equal(runs, 1, 'the escape hatch does not work');
+    } finally {
+      process.env.NODE_ENV = prev;
+      delete process.env.SCHEMA_MANAGED;
+    }
+  });
+
   test('guards skip DDL on the request path but ensureSchema still runs them', async () => {
     let runs = 0;
     const ensure = lazySchema('managed-test', async () => { runs++; });

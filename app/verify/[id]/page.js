@@ -27,7 +27,17 @@ export const metadata = { title: 'Signing you in' };
  * has to be valid, unexpired and unused.
  */
 export default async function VerifyPage({ params }) {
-  const [row, brand] = await Promise.all([getMagicLinkRedirect(params.id), loadBrand()]);
+  // The lookup is deadlined, so it can reject rather than hang. Distinguish
+  // the two failures: a link that is genuinely spent, and a database that
+  // did not answer in time. Telling someone their link expired when it did
+  // not sends them round a loop that never ends.
+  const [row, brand] = await Promise.all([
+    getMagicLinkRedirect(params.id).catch((e) => {
+      console.warn('[verify] lookup failed:', e.message);
+      return { unavailable: true };
+    }),
+    loadBrand(),
+  ]);
 
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
@@ -35,6 +45,15 @@ export default async function VerifyPage({ params }) {
         <img src={brand.visual.logo.markPath} alt="" width={40} height={40} style={{ borderRadius: 10, marginBottom: 24 }} />
         {row?.targetUrl ? (
           <VerifyHop targetUrl={row.targetUrl} brandName={brand.name} />
+        ) : row?.unavailable ? (
+          <>
+            <h1 style={{ fontSize: 22, marginBottom: 8 }}>Something went wrong</h1>
+            <p className="muted small" style={{ marginBottom: 20 }}>
+              We could not check this link just now. It has not been used — try
+              again in a moment.
+            </p>
+            <a className="btn btn-primary" href={`/verify/${params.id}`}>Try again</a>
+          </>
         ) : (
           <>
             <h1 style={{ fontSize: 22, marginBottom: 8 }}>This link has expired</h1>
