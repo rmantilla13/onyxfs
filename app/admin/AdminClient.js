@@ -119,13 +119,19 @@ function StorageTab() {
     // The server takes { config }, not the config itself. Sending the bare
     // form used to leave `body.config` undefined, so the merge kept every
     // stored value and the page said "Saved." while changing nothing.
-    await api('/api/admin/storage', {
+    // Take the saved config from the response rather than re-reading it. A
+    // follow-up GET can be served by a different instance whose settings
+    // cache has not seen the write yet, which redisplays the old values and
+    // reads as the save having silently failed.
+    const out = await api('/api/admin/storage', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ config: form }),
     });
+    if (out?.config) setForm(out.config);
     setMsg('Saved.');
     setDiag(null);
+    // Refresh the baseline too, so the "unsaved changes" marker clears.
     reload();
   }, 'save');
 

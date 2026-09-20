@@ -23,7 +23,7 @@ export async function POST(req) {
   let body = {};
   try { body = await req.json(); } catch { /* no draft — test what is saved */ }
 
-  const stored = await getStorageConfig();
+  const stored = await getStorageConfig({ fresh: true });
   const draft = body?.config && typeof body.config === 'object' ? body.config : {};
   const cfg = { ...stored, ...draft };
   if (!draft.secretAccessKey) cfg.secretAccessKey = stored.secretAccessKey;

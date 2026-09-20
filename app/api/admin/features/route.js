@@ -13,7 +13,7 @@ export async function GET() {
   return NextResponse.json({
     registry: FEATURE_FLAGS,
     defaults: DEFAULT_FLAGS,
-    flags: await getFeatureFlags(),
+    flags: await getFeatureFlags({ fresh: true }),
   });
 }
 

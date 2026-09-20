@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const gate = await requireAdmin();
   if (gate.error) return gate.error;
-  const cfg = await getStorageConfig();
+  const cfg = await getStorageConfig({ fresh: true });
   return NextResponse.json({ config: sanitizeStorageConfig(cfg) });
 }
 
@@ -30,7 +30,7 @@ export async function PUT(req) {
   // stored state.
   const incoming = sanitizeStorageSubmission(body?.config);
 
-  const current = await getStorageConfig();
+  const current = await getStorageConfig({ fresh: true });
   // Preserve the stored secret when the field comes back blank.
   if (!incoming.secretAccessKey) incoming.secretAccessKey = current.secretAccessKey;
 

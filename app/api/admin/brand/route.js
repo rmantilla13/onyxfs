@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const guard = await requireSuperAdmin();
   if (guard.error) return guard.error;
-  const saved = await getBrandConfig();
+  const saved = await getBrandConfig({ fresh: true });
   return NextResponse.json({ saved, defaults: defaultBrandConfig(), resolved: resolveBrand(saved) });
 }
 

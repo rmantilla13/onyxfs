@@ -14,7 +14,7 @@ export async function POST(req) {
   const gate = await requireAdmin();
   if (gate.error) return gate.error;
 
-  const cfg = await getStorageConfig();
+  const cfg = await getStorageConfig({ fresh: true });
   if (storageMode(cfg) !== 's3') {
     return NextResponse.json({ error: 'Storage isn’t configured for a custom S3 bucket.' }, { status: 400 });
   }

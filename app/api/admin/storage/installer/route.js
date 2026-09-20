@@ -16,7 +16,7 @@ export async function GET() {
   const gate = await requireAdmin();
   if (gate.error) return gate.error;
 
-  const cfg = await getStorageConfig();
+  const cfg = await getStorageConfig({ fresh: true });
   if (storageMode(cfg) !== 's3') {
     return NextResponse.json({ error: 'Configure a custom S3 bucket first (Storage → Custom bucket).' }, { status: 400 });
   }

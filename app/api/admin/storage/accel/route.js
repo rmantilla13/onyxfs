@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const gate = await requireAdmin();
   if (gate.error) return gate.error;
-  const cfg = await getStorageConfig();
+  const cfg = await getStorageConfig({ fresh: true });
   return NextResponse.json({ enabled: !!cfg.accelerate, available: storageMode(cfg) === 's3' && !cfg.endpoint });
 }
 
@@ -17,7 +17,7 @@ export async function GET() {
 export async function POST(req) {
   const gate = await requireAdmin();
   if (gate.error) return gate.error;
-  const cfg = await getStorageConfig();
+  const cfg = await getStorageConfig({ fresh: true });
   if (storageMode(cfg) !== 's3' || cfg.endpoint) {
     return NextResponse.json({ error: 'Transfer Acceleration needs an AWS S3 bucket (no custom endpoint).' }, { status: 400 });
   }

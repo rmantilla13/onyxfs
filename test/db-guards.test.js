@@ -210,3 +210,31 @@ describe('settings cache', () => {
     assert.ok(RENDER_DEADLINE_MS < QUERY_DEADLINE_MS);
   });
 });
+
+// ── Cache freshness ─────────────────────────────────────────────────────────
+// The cache is per instance. A PUT handled by one lambda and the GET that
+// follows handled by another would redisplay the pre-write value for up to a
+// minute, which is indistinguishable from the save having failed — so admin
+// reads have to be able to bypass it.
+describe('getSetting freshness', () => {
+  test('a repeat read is served from cache, and fresh: true is not', async () => {
+    const { getSetting } = await import('../lib/db.js');
+    const warn = console.warn;
+    let attempts = 0;
+    // No database here, so every read that actually reaches the driver logs.
+    // Count only getSetting's own line — the schema guard beside it logs too.
+    console.warn = (msg) => { if (String(msg).includes('getSetting')) attempts++; };
+    try {
+      await getSetting('cache.test.key');
+      assert.equal(attempts, 1, 'the first read should have reached the database');
+
+      await getSetting('cache.test.key');
+      assert.equal(attempts, 1, 'the second read should have been cached');
+
+      await getSetting('cache.test.key', { fresh: true });
+      assert.equal(attempts, 2, 'fresh: true did not bypass the cache');
+    } finally {
+      console.warn = warn;
+    }
+  });
+});
