@@ -1,15 +1,39 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { createFolder, deleteFolder, renameFolder, grantFolderAccess, revokeFolderAccess, buildPrincipal, getFilespaceForUser, listAllFiles, softDeleteFile, setFileStorageKey } from '@/lib/db';
+import {
+  createFolder, deleteFolder, renameFolder, grantFolderAccess, revokeFolderAccess,
+  buildPrincipal, getFilespaceForUser, listAllFiles, softDeleteFile, setFileStorageKey,
+  canModifyFolder, canGrantFolderAccess,
+} from '@/lib/db';
 import { getStorageConfig, storageMode, s3PutFolderMarker, cfgForFilespace, s3MoveObject, s3DeleteObject, folderToKeyPath, s3ListFolderMarkers } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
+// ─── Authorization ──────────────────────────────────────────────────────────
+//
+// Every method here used to check only that someone was signed in. That meant
+// any member could rename a folder (which re-keys every object beneath it),
+// delete one with cascade (which trashes every file in it), or grant
+// themselves owner on any folder in the workspace. buildPrincipal was even
+// imported and never called, so the guard was intended and never wired.
+//
+// Three different bars, because these are three different acts:
+//   create    any member who is not a platform viewer — an empty folder is
+//             harmless, and refusing it would make the app unusable
+//   rename /  canModifyFolder: admin, or an editor/owner grant on the folder
+//   delete    or an ancestor. These move and destroy bytes.
+//   grant     canGrantFolderAccess: owner only, matching the per-file ACL
+//             route — granting access is how access spreads.
+
+const forbidden = () => NextResponse.json({ error: 'No access to that folder.' }, { status: 403 });
+
 /** POST /api/files/folders  Body: { name, filespaceId? } — create a folder path (+ ancestors). */
 export async function POST(req) {
   const session = await auth();
   if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const principal = await buildPrincipal(session.user.email);
+  if (principal.roleId === 'viewer' && !principal.isAdmin) return forbidden();
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
   if (!body.name || !String(body.name).trim()) return NextResponse.json({ error: 'Folder name required.' }, { status: 400 });
@@ -43,8 +67,15 @@ export async function PATCH(req) {
   if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
+  const principal = await buildPrincipal(session.user.email);
   try {
     if (body.from != null && body.to != null) {
+      // Both ends: you must be allowed to take the subtree out of where it is
+      // AND to put it where it is going, or a rename becomes a way to move
+      // files into a folder you control.
+      if (!(await canModifyFolder(body.from, principal))) return forbidden();
+      if (!(await canModifyFolder(body.to, principal))) return forbidden();
+      const rekeyFailures = [];
       const r = await renameFolder(body.from, body.to);
       // Re-key the underlying S3 objects so the move/rename also moves the files
       // in the bucket (and thus on a mounted drive) — not just the catalog.
@@ -65,16 +96,35 @@ export async function PATCH(req) {
             const fp = folderToKeyPath(f.folder);
             const newKey = [prefix, fp, base].filter(Boolean).join('/');
             if (newKey === f.storageKey) continue;
-            try { await s3MoveObject(cfg, f.storageKey, newKey); await setFileStorageKey(f.id, newKey); } catch {}
+            try {
+              await s3MoveObject(cfg, f.storageKey, newKey);
+              await setFileStorageKey(f.id, newKey);
+            } catch (e) {
+              // Counted, not swallowed. The catalog rename has already
+              // committed, so a failure here leaves the row and the bucket
+              // disagreeing; reporting 200 "renamed" with no hint of that is
+              // how a UI ends up lying.
+              rekeyFailures.push({ id: f.id, error: e.message });
+            }
           }
           // Update folder markers (empty folders) for the renamed node.
           try { await s3DeleteObject(cfg, `${[prefix, folderToKeyPath(body.from)].filter(Boolean).join('/')}/`); } catch {}
           try { await s3PutFolderMarker(cfg, body.to); } catch {}
         }
-      } catch (e) { console.warn('[folders rename re-key] failed:', e.message); }
+      } catch (e) {
+        console.warn('[folders rename re-key] failed:', e.message);
+        rekeyFailures.push({ id: null, error: e.message });
+      }
+      if (rekeyFailures.length) {
+        console.warn(`[folders rename] ${rekeyFailures.length} object(s) did not move`);
+        return NextResponse.json({ ...r, rekeyFailed: rekeyFailures.length });
+      }
       return NextResponse.json(r);
     }
     if (body.folder != null && body.subject) {
+      if (!(await canGrantFolderAccess(body.folder, principal))) {
+        return NextResponse.json({ error: 'Only a folder owner or an admin can change folder access.' }, { status: 403 });
+      }
       if (body.revoke) { await revokeFolderAccess({ folder: body.folder, subjectType: body.subjectType, subject: body.subject }); }
       else { await grantFolderAccess({ folder: body.folder, subjectType: body.subjectType, subject: body.subject, role: body.role, grantedBy: session.user.email }); }
       return NextResponse.json({ ok: true });
@@ -89,9 +139,11 @@ export async function PATCH(req) {
 export async function DELETE(req) {
   const session = await auth();
   if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const principal = await buildPrincipal(session.user.email);
   const url = new URL(req.url);
   const name = String(url.searchParams.get('name') || '').replace(/^\/+|\/+$/g, '');
   if (!name) return NextResponse.json({ error: 'name required' }, { status: 400 });
+  if (!(await canModifyFolder(name, principal))) return forbidden();
   const cascade = url.searchParams.get('cascade') === '1';
   const filespaceId = url.searchParams.get('filespace');
   try {

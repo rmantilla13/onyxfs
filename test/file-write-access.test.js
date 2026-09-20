@@ -119,3 +119,63 @@ describe('fileWriteDecision', () => {
     }
   });
 });
+
+// ── Folder authorization ────────────────────────────────────────────────────
+// /api/files/folders checked only that someone was signed in, on methods that
+// re-key every object under a folder and, with cascade, trash every file in
+// it. buildPrincipal was imported and never called — the guard was intended
+// and never wired.
+//
+// The database lookup is not testable here; the rule it feeds is, and the
+// rule is where a mistake would be silent.
+
+const { strongestFolderRole, folderRoleAllows } = await import('../lib/db.js');
+
+describe('strongestFolderRole', () => {
+  test('an inherited owner grant beats a direct viewer grant', () => {
+    // Grants come from the folder AND every ancestor, so holding both is
+    // normal. Taking the first, or the most specific, would silently demote
+    // someone who owns the parent.
+    assert.equal(strongestFolderRole(['viewer', 'owner']), 'owner');
+    assert.equal(strongestFolderRole(['owner', 'viewer']), 'owner');
+    assert.equal(strongestFolderRole(['viewer', 'editor']), 'editor');
+  });
+
+  test('no grants is null, not a default role', () => {
+    assert.equal(strongestFolderRole([]), null);
+    assert.equal(strongestFolderRole(), null);
+    assert.equal(strongestFolderRole([null, undefined, '']), null);
+  });
+
+  test('an unrecognised role is not promoted to anything', () => {
+    assert.equal(strongestFolderRole(['superuser', 'admin']), null);
+  });
+});
+
+describe('folderRoleAllows', () => {
+  test('a viewer can neither restructure nor grant', () => {
+    assert.equal(folderRoleAllows('viewer', 'modify'), false);
+    assert.equal(folderRoleAllows('viewer', 'grant'), false);
+  });
+
+  test('an editor may restructure but may not hand out access', () => {
+    assert.equal(folderRoleAllows('editor', 'modify'), true);
+    assert.equal(folderRoleAllows('editor', 'grant'), false);
+  });
+
+  test('an owner may do both', () => {
+    assert.equal(folderRoleAllows('owner', 'modify'), true);
+    assert.equal(folderRoleAllows('owner', 'grant'), true);
+  });
+
+  test('no role permits nothing', () => {
+    assert.equal(folderRoleAllows(null, 'modify'), false);
+    assert.equal(folderRoleAllows(undefined, 'grant'), false);
+  });
+
+  test('an unknown action is refused rather than allowed', () => {
+    // Fail closed: a typo in a call site must not become permission.
+    assert.equal(folderRoleAllows('owner', 'delete'), false);
+    assert.equal(folderRoleAllows('owner'), false);
+  });
+});

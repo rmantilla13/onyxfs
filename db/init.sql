@@ -155,6 +155,13 @@ ALTER TABLE files ADD COLUMN IF NOT EXISTS seq BIGINT;
 
 CREATE INDEX IF NOT EXISTS files_seq_idx ON files (seq);
 
+-- Two version tokens per item, for syncing clients. `version` changes on any
+-- write and backs the If-Match precondition; `content_hash` changes only when
+-- the bytes change, so a client can tell a rename from a re-upload without a
+-- HEAD to S3 per item.
+ALTER TABLE files ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 1;
+ALTER TABLE files ADD COLUMN IF NOT EXISTS content_hash TEXT;
+
 ALTER TABLE files ADD COLUMN IF NOT EXISTS search_tsv tsvector
     GENERATED ALWAYS AS (
       to_tsvector('english',
