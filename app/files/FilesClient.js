@@ -1,8 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
 import { uploadFileMultipart } from '@/lib/multipart-client';
+import FileGrid from '@/app/components/ui/FileGrid';
+import { useToast } from '@/app/components/ui/Toast';
+import { useConfirm } from '@/app/components/ui/Confirm';
 
 // Above this, a single presigned PUT is a bad bet: S3 refuses past 5 GB, and
 // well before that a dropped connection costs the whole transfer. Multipart
@@ -17,14 +21,6 @@ const KINDS = [
   { key: 'other', label: 'Other' },
 ];
 
-const fmtSize = (n) => {
-  if (!n) return '';
-  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0;
-  let v = Number(n);
-  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
-  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
-};
 
 export default function FilesClient({ flags, canWrite, schema, filespaceId, filespaces }) {
   const [files, setFiles] = useState([]);
@@ -43,6 +39,9 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   // Phone only: facets live behind a toggle. On desktop the sidebar is always
   // there and this is ignored by the stylesheet.
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const router = useRouter();
+  const toast = useToast();
+  const { confirm, confirmElement } = useConfirm();
 
   const inputRef = useRef(null);
   const sentinelRef = useRef(null);
@@ -82,6 +81,11 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   }, [folder, query, kinds, filespaceId]);
 
   const load = useCallback(() => fetchPage(null), [fetchPage]);
+
+  // Drop the selection whenever the result set changes underneath it.
+  // Without this, switching folders with 40 files selected left "Trash 40"
+  // acting on rows that were no longer on screen.
+  useEffect(() => { setSelected(new Set()); }, [folder, query, kinds, filespaceId]);
 
   // Debounce so typing in the search box doesn't fire a request per keystroke.
   useEffect(() => {
@@ -219,13 +223,35 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
 
   const trashSelected = async () => {
     if (!selected.size) return;
-    const verb = flags.trash ? 'Move to trash' : 'Permanently delete';
-    if (!confirm(`${verb} ${selected.size} file${selected.size === 1 ? '' : 's'}?`)) return;
+    const n = selected.size;
+    const ok = await confirm({
+      title: flags.trash
+        ? `Move ${n} file${n === 1 ? '' : 's'} to trash?`
+        : `Permanently delete ${n} file${n === 1 ? '' : 's'}?`,
+      body: flags.trash
+        ? 'Trashed files are kept for 30 days before they are purged.'
+        : 'This cannot be undone.',
+      confirmLabel: flags.trash ? 'Move to trash' : 'Delete',
+    });
+    if (!ok) return;
     // The server decides trash-vs-purge from its own flag state.
-    await Promise.all([...selected].map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' })));
+    const results = await Promise.all([...selected].map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' })));
+    const failed = results.filter((r) => !r.ok).length;
     setSelected(new Set());
     load();
+    if (failed) toast.error(`${failed} of ${n} could not be ${flags.trash ? 'trashed' : 'deleted'}.`);
+    else toast.success(`${n} file${n === 1 ? '' : 's'} ${flags.trash ? 'moved to trash' : 'deleted'}.`);
   };
+
+  const openFile = useCallback((f) => { if (f?.id) router.push(`/files/${f.id}`); }, [router]);
+
+  const toggleSelect = useCallback((f) => {
+    setSelected((s) => {
+      const n = new Set(s);
+      n.has(f.id) ? n.delete(f.id) : n.add(f.id);
+      return n;
+    });
+  }, []);
 
   return (
     <main className="shell" style={{ padding: '24px 24px 64px' }} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
@@ -349,31 +375,27 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
           <section>
             {loading ? (
               <div className="empty">Loading…</div>
-            ) : visible.length === 0 ? (
-              <div className="empty">
-                {files.length === 0
-                  ? canWrite ? 'Nothing here yet. Drop files anywhere on this page to upload.' : 'Nothing here yet.'
-                  : 'No files match those filters.'}
-              </div>
             ) : (
-              <div className="files-grid">
-                {visible.map((f) => (
-                  <FileCard
-                    key={f.id}
-                    file={f}
-                    schema={schema}
-                    showExpiry={flags.usageRights}
-                    selected={selected.has(f.id)}
-                    onToggle={() =>
-                      setSelected((s) => {
-                        const n = new Set(s);
-                        n.has(f.id) ? n.delete(f.id) : n.add(f.id);
-                        return n;
-                      })
-                    }
-                  />
-                ))}
-              </div>
+              <FileGrid
+                files={visible}
+                selected={selected}
+                onSelect={toggleSelect}
+                onOpen={openFile}
+                labelFor={(f) => deriveAuto(f).format || f.kind}
+                badgesFor={(f) => {
+                  const e = flags.usageRights ? expiryState(f, schema) : null;
+                  if (e === 'expired') return <span className="tag tag-danger">Expired</span>;
+                  if (e === 'soon') return <span className="tag tag-warning">Expiring</span>;
+                  return null;
+                }}
+                emptyState={(
+                  <div className="empty">
+                    {files.length === 0
+                      ? canWrite ? 'Nothing here yet. Drop files anywhere on this page to upload.' : 'Nothing here yet.'
+                      : 'No files match those filters.'}
+                  </div>
+                )}
+              />
             )}
             {/* Sentinel for infinite scroll. Rendered only while a next page
                 exists, so reaching the end is what stops the observer. */}
@@ -381,6 +403,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
             {loadingMore && <div className="empty" style={{ padding: 24 }}>Loading more…</div>}
           </section>
       </div>
+      {confirmElement}
     </main>
   );
 }
@@ -401,43 +424,5 @@ function FolderLink({ active, onClick, children }) {
     <button onClick={onClick} className={`small folder-link${active ? ' active' : ''}`}>
       {children}
     </button>
-  );
-}
-
-function FileCard({ file, schema, showExpiry, selected, onToggle }) {
-  const auto = deriveAuto(file);
-  const expiry = showExpiry ? expiryState(file, schema) : null;
-  const preview = file.thumbnailUrl || (file.kind === 'image' ? file.url : null);
-
-  return (
-    <div
-      className="card"
-      onClick={onToggle}
-      style={{
-        overflow: 'hidden',
-        cursor: 'pointer',
-        outline: selected ? '2px solid var(--accent)' : 'none',
-        outlineOffset: -1,
-      }}
-    >
-      <div style={{ aspectRatio: '4/3', background: 'color-mix(in srgb, var(--ink) 4%, transparent)', display: 'grid', placeItems: 'center' }}>
-        {preview ? (
-          <img src={preview} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" />
-        ) : (
-          <span className="muted small mono">{auto.format || file.kind}</span>
-        )}
-      </div>
-      <div style={{ padding: 10 }}>
-        <div className="small" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={file.name}>
-          {file.name}
-        </div>
-        <div className="row small muted" style={{ gap: 6, marginTop: 4 }}>
-          <span>{fmtSize(file.size)}</span>
-          <div className="spacer" />
-          {expiry === 'expired' && <span className="tag tag-danger">Expired</span>}
-          {expiry === 'soon' && <span className="tag tag-warning">Expiring</span>}
-        </div>
-      </div>
-    </div>
   );
 }

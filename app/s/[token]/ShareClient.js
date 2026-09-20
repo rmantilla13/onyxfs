@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import FileCard from '@/app/components/ui/FileCard';
 
 export default function ShareClient({ brand, title, files = [], needsPassword, wrong }) {
   const [password, setPassword] = useState('');
@@ -39,18 +40,11 @@ export default function ShareClient({ brand, title, files = [], needsPassword, w
         <span className="muted small">{files.length} file{files.length === 1 ? '' : 's'}</span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16 }}>
+      {/* The same card the library grid uses. This was a second copy with a
+          different tile size, and the copies had already drifted. */}
+      <div className="files-grid">
         {files.filter(Boolean).map((f) => (
-          <a key={f.id} className="card" href={f.url} download={f.name} style={{ overflow: 'hidden' }}>
-            <div style={{ aspectRatio: '4/3', background: 'color-mix(in srgb, var(--ink) 4%, transparent)', display: 'grid', placeItems: 'center' }}>
-              {f.kind === 'image' ? (
-                <img src={f.thumbnailUrl || f.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" />
-              ) : (
-                <span className="muted small mono">{f.kind}</span>
-              )}
-            </div>
-            <div className="small" style={{ padding: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</div>
-          </a>
+          <FileCard key={f.id} file={f} href={f.url} downloadName={f.name} />
         ))}
       </div>
     </main>

@@ -1,5 +1,6 @@
 import './globals.css';
 import { loadBrand, brandCssVars } from '@/lib/brand-config';
+import { ToastProvider } from '@/app/components/ui/Toast';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,9 +50,13 @@ export default async function RootLayout({ children }) {
             therefore invalid CSS, and the client, which does not escape,
             produced different text and failed hydration for the whole root.
             The value is sanitized in brandCssVars. */}
-        <style dangerouslySetInnerHTML={{ __html: `:root{${brandCssVars(brand)}}` }} />
+        <style dangerouslySetInnerHTML={{ __html: `:root,::backdrop{${brandCssVars(brand)}}` }} />
       </head>
-      <body>{children}</body>
+      <body>
+        {/* One provider for the whole app. children stays a server component
+            — it is passed as a prop, not rendered inside the client boundary. */}
+        <ToastProvider>{children}</ToastProvider>
+      </body>
     </html>
   );
 }

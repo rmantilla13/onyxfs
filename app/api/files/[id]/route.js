@@ -1,12 +1,43 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { updateFile, softDeleteFile, deleteFile, getFileById, getFileMetadataSchema, getFeatureFlags, buildPrincipal, canModifyFile } from '@/lib/db';
-import { getStorageConfig, storageMode, s3MoveObject, s3DeleteObject } from '@/lib/storage';
+import {
+  updateFile, softDeleteFile, deleteFile, getFileById, getFileMetadataSchema,
+  getFeatureFlags, buildPrincipal, canModifyFile, canAccessFile,
+} from '@/lib/db';
+import { getStorageConfig, storageMode, s3MoveObject, s3DeleteObject, presignFileUrls } from '@/lib/storage';
 import { normalizeSchema, validateMetadataPatch } from '@/lib/dam';
 
 export const runtime = 'nodejs';
 
 export const TRASH_PREFIX = '_trash';
+
+// Long enough that a video paused mid-watch still seeks when it resumes. The
+// listing signs for an hour, which is right for a thumbnail; a player issues
+// a range request per seek, so an expired URL there fails as the browser's
+// generic media error with nothing to explain it. Six hours is what
+// s3PresignGet already documents as the playable-video default.
+const DETAIL_URL_TTL = 21600;
+
+/** GET /api/files/[id] — one file, authorized and presigned for playback. */
+export async function GET(_req, { params }) {
+  const session = await auth();
+  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+
+  const file = await getFileById(params.id);
+  if (!file) return NextResponse.json({ error: 'File not found' }, { status: 404 });
+
+  // Authorize → presign, in that order, so a URL is never minted for a file
+  // the caller may not have.
+  const principal = await buildPrincipal(session.user.email);
+  if (!(await canAccessFile(file, principal))) return NextResponse.json({ error: 'No access' }, { status: 403 });
+
+  const [signed] = await presignFileUrls([file], { expiresIn: DETAIL_URL_TTL });
+  return NextResponse.json({
+    file: signed,
+    // The detail view hides the controls it would only get a 403 from.
+    canWrite: await canModifyFile(file, principal),
+  });
+}
 
 /**
  * PATCH /api/files/[id] — rename / move / tag / note / metadata.
