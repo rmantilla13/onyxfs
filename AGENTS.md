@@ -1,0 +1,58 @@
+# Working in this repo
+
+Onyx is a web control plane (repo root) plus a Tauri desktop client
+(`desktop/`). Read `README.md` first — it explains the control-plane /
+data-plane split that the rest of the design follows from.
+
+## Conventions that are load-bearing
+
+**No migrations.** Tables are created lazily by `ensure*Table()` guards in
+`lib/db.js`. To add a column, add an `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+to the relevant guard. Because rows already exist, every change must be
+backward-compatible: no new NOT NULL without a default, no renames. After
+changing DDL, regenerate `db/init.sql` rather than editing it — it is derived
+from these guards.
+
+**Queries use tagged-template SQL**, not an ORM. Drizzle appears only in
+`lib/schema.js`, only for Auth.js's four tables, because its adapter requires
+real Drizzle objects. Do not query app tables through it.
+
+**Read paths go authorize → filter → presign, in that order.** Never presign
+before filtering; that mints a URL for a row the caller may not be entitled to.
+
+**Enforce feature flags on the server.** A flag that changes behaviour must be
+read server-side, not passed in by the client. `DELETE /api/files/[id]` is the
+reference case: it reads the `trash` flag itself rather than taking a parameter.
+
+**Never render `BRAND` directly.** Go through `resolveBrand()` / `loadBrand()`,
+and style from the CSS custom properties the root layout emits. Hardcoding a
+colour or the name "Onyx" in a component breaks the white-label layer.
+
+**Roles subtract, never add.** `effectiveFlags()` narrows the global flag map;
+a role must not be able to enable something the platform has off. Admin access
+is env-gated (`ADMIN_EMAILS`) on purpose — keep it independent of roles.
+
+**Secrets never reach the client.** `listConfigKeys()` returns presence and
+source only. `sanitizeStorageConfig()` strips the secret key. Keep it that way.
+
+## Checks
+
+```bash
+npm run build                      # web — the real check; JSX errors surface here
+cd desktop && npm run build        # tsc -b && vite build
+cd desktop/src-tauri && cargo check
+```
+
+`cargo check` needs GTK dev packages on Linux and a file at
+`src-tauri/binaries/rclone-<target-triple>` (the bundler wants the sidecar to
+exist; a stub is fine for a type-check). The app itself targets macOS.
+
+## Things to leave alone unless asked
+
+- The `onyxfs://` scheme is compiled into the desktop bundle and registered with
+  the OS. Changing it in `lib/brand.js` alone silently breaks browser hand-off —
+  it must match `desktop/src-tauri/tauri.conf.json`.
+- `AUTH_SECRET` and `DATABASE_URL` are in `LOCKED_KEYS` (`lib/config.js`) and
+  must stay there. Overriding either from a table read through them is circular.
+- The magic-link email sends both HTML and plain-text parts and keeps the raw
+  URL out of the body. Both are deliberate anti-spam-filter measures.

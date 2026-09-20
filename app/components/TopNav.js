@@ -1,0 +1,64 @@
+'use client';
+
+import { usePathname } from 'next/navigation';
+import Link from 'next/link';
+
+export default function TopNav({ brandName, markPath, email, isAdmin, filespaces = [], activeFilespace }) {
+  const pathname = usePathname();
+  const is = (href) => pathname === href || pathname.startsWith(`${href}/`);
+
+  return (
+    <header style={{ borderBottom: '1px solid var(--line)', background: '#fff', position: 'sticky', top: 0, zIndex: 10 }}>
+      <div className="shell row" style={{ height: 56 }}>
+        <Link href="/files" className="row" style={{ gap: 8 }}>
+          <img src={markPath} alt="" width={24} height={24} style={{ borderRadius: 6 }} />
+          <strong style={{ fontFamily: 'var(--font-display)', letterSpacing: '-0.02em' }}>{brandName}</strong>
+        </Link>
+
+        <nav className="row" style={{ gap: 4, marginLeft: 16 }}>
+          <NavLink href="/files" active={is('/files')}>Files</NavLink>
+          {isAdmin && <NavLink href="/admin" active={is('/admin')}>Admin</NavLink>}
+        </nav>
+
+        <div className="spacer" />
+
+        {filespaces.length > 0 && (
+          <select
+            className="input"
+            style={{ width: 'auto', maxWidth: 220 }}
+            value={activeFilespace || ''}
+            onChange={(e) => {
+              const v = e.target.value;
+              window.location.href = v ? `/files?filespace=${encodeURIComponent(v)}` : '/files';
+            }}
+          >
+            <option value="">All files</option>
+            {filespaces.map((f) => (
+              <option key={f.id} value={f.id}>{f.name}</option>
+            ))}
+          </select>
+        )}
+
+        <span className="small muted" title={email}>{email}</span>
+        <a className="small muted" href="/api/auth/signout">Sign out</a>
+      </div>
+    </header>
+  );
+}
+
+function NavLink({ href, active, children }) {
+  return (
+    <Link
+      href={href}
+      style={{
+        padding: '6px 10px',
+        borderRadius: 'var(--radius)',
+        fontSize: 14,
+        fontWeight: active ? 600 : 400,
+        background: active ? 'color-mix(in srgb, var(--ink) 6%, transparent)' : 'transparent',
+      }}
+    >
+      {children}
+    </Link>
+  );
+}
