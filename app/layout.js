@@ -14,6 +14,22 @@ export async function generateMetadata() {
   };
 }
 
+/**
+ * Viewport lives beside metadata rather than in it (Next 14 splits them).
+ * viewportFit: cover lets the page paint under the iPhone's home indicator;
+ * themeColor tints Safari's chrome to the brand's paper so the sign-in card
+ * and the browser bar read as one surface.
+ */
+export async function generateViewport() {
+  const brand = await loadBrand();
+  return {
+    width: 'device-width',
+    initialScale: 1,
+    viewportFit: 'cover',
+    themeColor: brand.visual.palette.paper,
+  };
+}
+
 export default async function RootLayout({ children }) {
   const brand = await loadBrand();
   const fonts = [brand.visual.fonts.display.url, brand.visual.fonts.body.url].filter(Boolean);

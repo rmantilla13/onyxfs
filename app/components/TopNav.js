@@ -9,13 +9,13 @@ export default function TopNav({ brandName, markPath, email, isAdmin, filespaces
 
   return (
     <header style={{ borderBottom: '1px solid var(--line)', background: '#fff', position: 'sticky', top: 0, zIndex: 10 }}>
-      <div className="shell row" style={{ height: 56 }}>
+      <div className="shell row" style={{ height: 56, flexWrap: 'nowrap', minWidth: 0 }}>
         <Link href="/files" className="row" style={{ gap: 8 }}>
           <img src={markPath} alt="" width={24} height={24} style={{ borderRadius: 6 }} />
           <strong style={{ fontFamily: 'var(--font-display)', letterSpacing: '-0.02em' }}>{brandName}</strong>
         </Link>
 
-        <nav className="row" style={{ gap: 4, marginLeft: 16 }}>
+        <nav className="row" style={{ gap: 4, marginLeft: 12 }}>
           <NavLink href="/files" active={is('/files')}>Files</NavLink>
           {isAdmin && <NavLink href="/admin" active={is('/admin')}>Admin</NavLink>}
         </nav>
@@ -39,8 +39,8 @@ export default function TopNav({ brandName, markPath, email, isAdmin, filespaces
           </select>
         )}
 
-        <span className="small muted" title={email}>{email}</span>
-        <a className="small muted" href="/api/auth/signout">Sign out</a>
+        <span className="small muted nav-email" title={email}>{email}</span>
+        <a className="small muted" href="/api/auth/signout" style={{ whiteSpace: 'nowrap' }}>Sign out</a>
       </div>
     </header>
   );

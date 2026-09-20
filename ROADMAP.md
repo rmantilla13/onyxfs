@@ -3,8 +3,9 @@
 **What Onyx is:** an AI-native asset manager for one person's media library. You
 find footage by describing it, not by remembering where you filed it.
 
-**Targets:** 100k+ files, heavy video. S3 is the library. Web, macOS, and a
-native iOS app that appears in Files.app.
+**Targets:** 100k+ files, heavy video. S3 is the library. Web, a native macOS
+app that appears in Finder, and a native iOS app that appears in Files.app —
+one Swift codebase for both.
 
 **Standing constraint:** no recurring AI spend. Everything core runs on hardware
 you already own. Paid enrichment is opt-in, scoped, and never on by default.
@@ -185,26 +186,90 @@ normally, and per-request signing disappears.
 Claude captions and tags, behind every control listed above. Whisper
 transcripts, self-hosted. Both feed the FTS half of hybrid search.
 
-### Phase 5 — Native iOS
+### Phase 5 — Native Apple apps: macOS and iOS
 
-Onyx in Files.app via an `NSFileProviderReplicatedExtension` — native Swift,
-iOS 16+. **Not buildable in Tauri**: a File Provider runs as a separate process
-with roughly a 50MB memory ceiling and no webview.
+One Swift codebase, two hosts. The shared piece is a File Provider extension
+(`NSFileProviderReplicatedExtension`, macOS 11+ / iOS 16+) — the same API on
+both platforms — wrapped by a thin SwiftUI app per platform. That is what puts
+Onyx in Finder's sidebar and in Files.app with on-demand download, sync badges
+and eviction, without a kernel extension, an NFS mount, or a webview.
 
-The architecture already pays off here. `POST /api/space/sts` mints exactly what
-the extension needs — prefix-scoped, expiring credentials — so it streams bytes
-straight from S3 rather than proxying through the control plane, which is also
-the only way to stay under that memory ceiling. **The control plane needs no new
-concepts for iOS.** It needs Phase 1 and nothing beyond it.
+**Why this replaces the Tauri app on macOS.** Today macOS mounts the bucket
+through rclone over NFS. It works, but it is a foreign filesystem: no sync
+status in Finder, no offline eviction, every stat is a network call, and it
+dies with the process. A File Provider domain is what iCloud Drive, Dropbox and
+Shade are built on. The Tauri app stays for Windows (WinFSP) until there is a
+reason to do otherwise.
 
-Shape of the work: container app + extension sharing auth through a Keychain
-access group (the extension cannot present a login UI); PKCE via
-`ASWebAuthenticationSession` reusing the existing `onyxfs://` scheme; paginated
-enumeration plus delta against 1.2; background `URLSession` for uploads; and an
-explicit conflict policy written down rather than discovered.
+**Not buildable in Tauri**: a File Provider runs as a separate process with
+roughly a 50MB memory ceiling and no webview. It has to be native.
 
-Do not start before Phase 1 ships. The enumeration contract is the hardest thing
-to change once devices are syncing against it.
+**The control plane already has what it needs.** Phase 1 shipped the two
+contracts the extension is built on: `GET /api/files/delta?cursor=` is the
+exact shape `enumerateChanges(from:)` requires, and `POST /api/space/sts`
+mints prefix-scoped, expiring credentials so the extension streams bytes
+straight from S3 rather than proxying through the app — which is also the only
+way to stay under that memory ceiling. Multipart upload is the same server
+protocol the web uploader uses.
+
+#### Shape of the code
+
+```
+apple/
+  Onyx.xcworkspace
+  OnyxKit/                 Swift package — everything shared
+    Auth/                  PKCE via ASWebAuthenticationSession on the existing
+                           onyxfs:// scheme; tokens in a Keychain access group
+                           so the extension can read them (it cannot show a
+                           login UI)
+    API/                   typed client for /api/files, /delta, /space/sts,
+                           multipart, search
+    Sync/                  the enumeration + change engine: cursor per domain,
+                           tombstone handling, conflict policy
+    S3/                    SigV4 GET/PUT with range requests — small enough to
+                           hand-roll; the AWS SDK for Swift is a 60MB
+                           dependency for two request types
+    Ingest/                SigLIP via Core ML for Phase 2 embeddings (macOS
+                           first; the Neural Engine on M-series makes the
+                           desktop the ingest worker the roadmap already
+                           assumes)
+  OnyxFileProvider/        the extension target, shared source, built twice
+  OnyxMac/                 menu-bar app: sign in, choose filespaces, sync
+                           status, pause, "open in Finder", ingest queue
+  OnyxIOS/                 SwiftUI browser + search, camera-roll import,
+                           share-sheet "Save to Onyx", Files.app via the
+                           extension
+```
+
+#### Milestones
+
+| | Work | Notes |
+|---|---|---|
+| 5.0 | Decide identifiers, once | `io.onyxfs.app` (already chosen), `io.onyxfs.app.fileprovider`, app group `group.io.onyxfs`, one Keychain access group. Compiled into every install; changing them later orphans every device. |
+| 5.1 | OnyxKit: auth + API client | Sign in on macOS and iOS against production. Tokens visible to the extension. Reuses `/api/desktop/*` PKCE routes as-is. |
+| 5.2 | Read-only File Provider, macOS | Enumerate from `/delta`, materialise files on open via STS + ranged S3 GET, evict. Finder shows Onyx. This is the milestone that proves the architecture. |
+| 5.3 | Same extension on iOS | The source is shared; this is provisioning, memory profiling under the 50MB cap, and Files.app testing. |
+| 5.4 | Writes | Create, rename, move, delete, modify → `POST /api/files`, `PATCH /api/files/[id]`, multipart for large. Background `URLSession` so a 20GB upload survives the app being killed. |
+| 5.5 | Conflict policy, written down | Server keeps a `version` counter per file; a write carries the version it was based on; mismatch → the server keeps both, the loser is renamed `name (conflict from <device>)`. Decided here, not discovered later. |
+| 5.6 | iOS app proper | Browse, search (Phase 2.5's hybrid endpoint), preview, share links, camera-roll import, share-sheet extension. |
+| 5.7 | macOS ingest worker | Move Phase 2.3 here: frames + SigLIP embeddings on upload, on the Neural Engine. The Tauri worker becomes Windows-only. |
+| 5.8 | Distribution | Apple Developer account, notarised direct download for macOS (Sparkle for updates, replacing Tauri's updater), TestFlight then App Store for iOS. |
+
+#### Server work this needs (small)
+
+- `files.version INT` and `files.content_hash` for 5.5. Add to the guard and
+  `db/init.sql` together.
+- `PATCH /api/files/[id]` already renames and moves; make it accept
+  `If-Match: <version>`.
+- `/api/files/delta` should include `version` and `content_hash` in each row
+  so the extension can tell a metadata change from a content change without
+  a HEAD to S3.
+- A device registry: `devices` table (`id`, `email`, `name`, `platform`,
+  `last_seen`, `cursor`), so the admin can see and revoke a device, and so
+  the conflict rename above can name it.
+
+Do not start 5.2 before 5.5 is written. The enumeration and conflict contracts
+are the hardest things to change once devices are syncing against them.
 
 ### Phase 6 — Compatibility
 
@@ -239,7 +304,7 @@ column (from the dropped video-review feature) and indexes still named
 3. Phase 2.7 + 2.8 — the media worker (range-read frames, proxies)
 4. Phase 2.1–2.6 — pgvector, embeddings, hybrid search, search UI
 5. Phase 3 — virtualized grid, CDN, the missing UIs
-6. Phase 5 — native iOS
+6. Phase 5 — native macOS + iOS (5.0–5.5 first: the File Provider core)
 7. Phase 4 — paid enrichment, if and when it earns its cost
 8. Phase 6 — compatibility
 

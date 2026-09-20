@@ -40,6 +40,9 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   const [facets, setFacets] = useState({});
   const [selected, setSelected] = useState(new Set());
   const [uploads, setUploads] = useState([]);
+  // Phone only: facets live behind a toggle. On desktop the sidebar is always
+  // there and this is ignored by the stylesheet.
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const inputRef = useRef(null);
   const sentinelRef = useRef(null);
@@ -227,7 +230,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   return (
     <main className="shell" style={{ padding: '24px 24px 64px' }} onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
       <div className="row" style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 24 }}>{folder || 'All files'}</h1>
+        <h1 className="files-title" style={{ fontSize: 24, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{folder || 'All files'}</h1>
         <span className="muted small">
           {visible.length}{visible.length !== files.length ? ` of ${files.length}` : ''}{cursor ? '+' : ''}
         </span>
@@ -251,24 +254,38 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
         )}
       </div>
 
-      <div className="row" style={{ marginBottom: 16, flexWrap: 'wrap' }}>
+      <div className="files-toolbar">
         <input
           className="input"
-          style={{ maxWidth: 280 }}
+          type="search"
           placeholder="Search files…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        {KINDS.map((k) => (
+        <div className="kind-row">
+        <div className="kind-strip edge-scroll">
+          {KINDS.map((k) => (
+            <button
+              key={k.key}
+              className="btn"
+              onClick={() => toggleKind(k.key)}
+              style={kinds.includes(k.key) ? { background: 'var(--ink)', color: 'var(--paper)', borderColor: 'var(--ink)' } : undefined}
+            >
+              {k.label}
+            </button>
+          ))}
+        </div>
+        {flags.metadata && facetDefs.some((d) => d.values.length > 0) && (
           <button
-            key={k.key}
-            className="btn"
-            onClick={() => toggleKind(k.key)}
-            style={kinds.includes(k.key) ? { background: 'var(--ink)', color: 'var(--paper)', borderColor: 'var(--ink)' } : undefined}
+            className="btn only-mobile"
+            onClick={() => setFiltersOpen((v) => !v)}
+            aria-expanded={filtersOpen}
+            style={hasAnyFacet(facets) || filtersOpen ? { borderColor: 'var(--ink)' } : undefined}
           >
-            {k.label}
+            Filters{hasAnyFacet(facets) ? ` · ${Object.values(facets).reduce((n, v) => n + v.length, 0)}` : ''}
           </button>
-        ))}
+        )}
+        </div>
       </div>
 
       {uploads.length > 0 && (
@@ -291,18 +308,22 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr)', gap: 24 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '220px minmax(0,1fr)', gap: 24 }}>
+      <div className="files-layout">
           <aside>
-            <Section title="Folders">
-              <FolderLink active={!folder} onClick={() => setFolder('')}>All files</FolderLink>
-              {folders.map((f) => (
-                <FolderLink key={f.name || f} active={folder === (f.name || f)} onClick={() => setFolder(f.name || f)}>
-                  {f.name || f} {f.count != null && <span className="muted">{f.count}</span>}
-                </FolderLink>
-              ))}
-            </Section>
+            <div className="side-folders">
+              <Section title="Folders">
+                <div className="folder-list edge-scroll">
+                  <FolderLink active={!folder} onClick={() => setFolder('')}>All files</FolderLink>
+                  {folders.map((f) => (
+                    <FolderLink key={f.name || f} active={folder === (f.name || f)} onClick={() => setFolder(f.name || f)}>
+                      {f.name || f} {f.count != null && <span className="muted">{f.count}</span>}
+                    </FolderLink>
+                  ))}
+                </div>
+              </Section>
+            </div>
 
+            <div className={`side-facets${filtersOpen ? ' open' : ''}`}>
             {flags.metadata &&
               facetDefs
                 .filter((d) => d.values.length > 0)
@@ -322,6 +343,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
                     ))}
                   </Section>
                 ))}
+            </div>
           </aside>
 
           <section>
@@ -334,7 +356,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
                   : 'No files match those filters.'}
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 16 }}>
+              <div className="files-grid">
                 {visible.map((f) => (
                   <FileCard
                     key={f.id}
@@ -358,7 +380,6 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
             {cursor && <div ref={sentinelRef} style={{ height: 1 }} />}
             {loadingMore && <div className="empty" style={{ padding: 24 }}>Loading more…</div>}
           </section>
-        </div>
       </div>
     </main>
   );
@@ -377,22 +398,7 @@ function Section({ title, children }) {
 
 function FolderLink({ active, onClick, children }) {
   return (
-    <button
-      onClick={onClick}
-      className="small"
-      style={{
-        display: 'flex',
-        width: '100%',
-        gap: 6,
-        padding: '4px 6px',
-        border: 'none',
-        borderRadius: 4,
-        background: active ? 'color-mix(in srgb, var(--ink) 6%, transparent)' : 'transparent',
-        fontWeight: active ? 600 : 400,
-        textAlign: 'left',
-        cursor: 'pointer',
-      }}
-    >
+    <button onClick={onClick} className={`small folder-link${active ? ' active' : ''}`}>
       {children}
     </button>
   );
