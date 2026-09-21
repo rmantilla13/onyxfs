@@ -57,18 +57,30 @@ const section = (t) => console.log(`\n${paint(C.bold, t)}`);
 section('Environment');
 console.log(paint(C.dim, `  ${envFile ? `loaded ${envFile}` : 'no .env.local found — reading the process environment'}`));
 
-const REQUIRED = [
-  ['__CONNECTION__', 'Postgres connection string — DATABASE_URL or POSTGRES_URL'],
-  ['AUTH_SECRET', 'session signing — openssl rand -base64 32'],
-  ['RESEND_API_KEY', 'magic-link sign-in; without it nobody can sign in'],
-];
-const OPTIONAL = [
-  ['NOTIFY_FROM', 'sender for the sign-in email'],
-  ['ADMIN_EMAILS', 'defaults to the bootstrap admin in lib/auth-allowlist.js'],
-  ['CRON_SECRET', '/api/cron/maintenance and /api/health when sign-in is broken'],
-  ['NEXT_PUBLIC_APP_URL', 'used for share links and the magic-link email'],
-  ['BLOB_READ_WRITE_TOKEN', 'fallback store; S3 is configured in Admin → Storage'],
-];
+// The list lives in lib/integrations.js, not here. It used to live in both,
+// and the two drifted: this file never mentioned AUTH_TRUST_HOST (which
+// next-auth reads internally, so no grep finds it), SUPER_ADMIN_EMAILS,
+// ALLOWED_EMAILS or SLACK_WEBHOOK_URL. A doctor that reports a different set
+// of variables from the one the app documents is worse than no doctor.
+const { ENV_VARS, ENV_VARS_RETIRED } = await import('../lib/integrations.js');
+
+// DATABASE_URL has an alternative (POSTGRES_URL), so it is checked by the
+// block below rather than by presence alone.
+const REQUIRED = ENV_VARS
+  .filter((v) => v.requirement === 'required' && !v.alternative)
+  .map((v) => [v.key, v.why]);
+// An unset `recommended` var means something visible is wrong — mail from a
+// spam-bound sender, relative share links — so it warns. An unset `optional`
+// var just means a feature is off, and warning about that produced a screen of
+// yellow in which the one real problem did not stand out. SCHEMA_MANAGED made
+// the point: it was flagged as a warning while its own advice said to leave it
+// unset.
+const RECOMMENDED = ENV_VARS
+  .filter((v) => v.requirement === 'recommended' && !v.alternative)
+  .map((v) => [v.key, v.why]);
+const OPTIONAL = ENV_VARS
+  .filter((v) => v.requirement === 'optional' && !v.alternative)
+  .map((v) => [v.key, v.why]);
 
 // lib/db.js reads DATABASE_URL first and falls back to POSTGRES_URL, which is
 // what the Supabase-Vercel integration injects. Report which one is actually
@@ -77,7 +89,7 @@ const OPTIONAL = [
 const CONNECTION_VAR = process.env.DATABASE_URL ? 'DATABASE_URL'
   : process.env.POSTGRES_URL ? 'POSTGRES_URL' : null;
 
-for (const [key, why] of REQUIRED) {
+for (const [key, why] of [['__CONNECTION__', 'Postgres connection string — DATABASE_URL or POSTGRES_URL'], ...REQUIRED]) {
   if (key === '__CONNECTION__') {
     if (CONNECTION_VAR) {
       ok(`connection string via ${CONNECTION_VAR}`);
@@ -96,8 +108,18 @@ for (const [key, why] of REQUIRED) {
   }
   process.env[key] ? ok(key) : fail(key, why);
 }
-for (const [key, why] of OPTIONAL) {
+for (const [key, why] of RECOMMENDED) {
   process.env[key] ? ok(key) : warn(`${key} unset`, why);
+}
+for (const [key, why] of OPTIONAL) {
+  if (process.env[key]) ok(key);
+  else console.log(`  ${paint(C.dim, '·')} ${paint(C.dim, `${key} unset — ${why}`)}`);
+}
+
+// Silence about a variable that does nothing is how it gets set in the first
+// place. Only complain when one is actually present.
+for (const { key, why } of ENV_VARS_RETIRED) {
+  if (process.env[key]) warn(`${key} is set but has no effect`, why);
 }
 
 if (CONNECTION_VAR) {

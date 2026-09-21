@@ -24,7 +24,24 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 const URL_ = process.env.TEST_DATABASE_URL;
-const describeDb = URL_ ? describe : describe.skip;
+
+// Skip when the database is not merely unconfigured but unreachable. Set and
+// dead produced nine failures that all said "connection refused" and none of
+// which was about the code under test — which is the least useful thing a
+// suite can do, because it buries whatever else broke in the same run.
+async function reachable(url) {
+  if (!url) return false;
+  const { default: postgres } = await import('postgres');
+  const probe = postgres(url, { max: 1, connect_timeout: 3, idle_timeout: 1 });
+  try { await probe`SELECT 1`; return true; }
+  catch { return false; }
+  finally { await probe.end({ timeout: 2 }).catch(() => {}); }
+}
+
+const describeDb = (await reachable(URL_)) ? describe : describe.skip;
+if (URL_ && describeDb === describe.skip) {
+  console.warn(`[test] TEST_DATABASE_URL is set but unreachable — skipping the deadline tests.`);
+}
 
 describeDb('driver-level query deadlines', () => {
   let raw, sql, postgres, withQueryDeadlines;
