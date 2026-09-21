@@ -1,0 +1,82 @@
+# Generated with XcodeGen: `brew install xcodegen && xcodegen generate`
+#
+# The .xcodeproj is NOT checked in. It is a large generated file that conflicts
+# on every merge and hides target settings in a format nobody reads — this file
+# is the source of truth and the project is rebuilt from it.
+name: Onyx
+options:
+  bundleIdPrefix: io.onyxfs
+  deploymentTarget:
+    macOS: "13.0"
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  OnyxKit:
+    path: OnyxKit
+
+# Set DEVELOPMENT_TEAM once here rather than in each target.
+settings:
+  base:
+    DEVELOPMENT_TEAM: ${ONYX_TEAM_ID}
+    SWIFT_VERSION: "5.9"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+
+targets:
+  OnyxMac:
+    type: application
+    platform: macOS
+    sources: [OnyxMac]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.onyxfs.app
+        INFOPLIST_FILE: OnyxMac/Info.plist
+        CODE_SIGN_ENTITLEMENTS: OnyxMac/OnyxMac.entitlements
+        # A menu-bar app: no Dock icon, no window on launch.
+        LSUIElement: YES
+    dependencies:
+      - package: OnyxKit
+      - target: OnyxFileProvider
+        embed: true
+
+  OnyxIOS:
+    type: application
+    platform: iOS
+    sources: [OnyxIOS]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.onyxfs.app
+        INFOPLIST_FILE: OnyxIOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: OnyxIOS/OnyxIOS.entitlements
+    dependencies:
+      - package: OnyxKit
+      - target: OnyxFileProviderIOS
+        embed: true
+
+  # One source directory, built twice. NSFileProviderReplicatedExtension is
+  # the same API on both platforms, which is the whole reason this design
+  # works — but it needs a target per platform.
+  OnyxFileProvider:
+    type: app-extension
+    platform: macOS
+    sources: [OnyxFileProvider]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.onyxfs.app.fileprovider
+        INFOPLIST_FILE: OnyxFileProvider/Info.plist
+        CODE_SIGN_ENTITLEMENTS: OnyxFileProvider/OnyxFileProvider.entitlements
+    dependencies:
+      - package: OnyxKit
+
+  OnyxFileProviderIOS:
+    type: app-extension
+    platform: iOS
+    sources: [OnyxFileProvider]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.onyxfs.app.fileprovider
+        INFOPLIST_FILE: OnyxFileProvider/Info.plist
+        CODE_SIGN_ENTITLEMENTS: OnyxFileProvider/OnyxFileProvider.entitlements
+    dependencies:
+      - package: OnyxKit

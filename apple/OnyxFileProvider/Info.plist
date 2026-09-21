@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDisplayName</key><string>Onyx</string>
+  <key>CFBundlePackageType</key><string>XPC!</string>
+  <key>NSExtension</key>
+  <dict>
+    <key>NSExtensionPointIdentifier</key><string>com.apple.fileprovider-nonui</string>
+    <key>NSExtensionPrincipalClass</key><string>$(PRODUCT_MODULE_NAME).FileProviderExtension</string>
+    <key>NSExtensionFileProviderDocumentGroup</key><string>group.io.onyxfs</string>
+    <!-- Replicated, not the legacy non-replicated extension. This is the
+         switch that selects NSFileProviderReplicatedExtension; without it the
+         system loads the old API and none of the methods above are called. -->
+    <key>NSExtensionFileProviderSupportsEnumeration</key><true/>
+  </dict>
+</dict>
+</plist>

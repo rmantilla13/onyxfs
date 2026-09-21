@@ -28,10 +28,7 @@ export const config = {
   // api/health     Has its own admin-or-CRON_SECRET check, and has to stay
   //                reachable when sign-in itself is broken so it can say why.
   // api/cron       Bearer-token authed.
-  // api/share      Public share resolution; visibility is enforced in the
-  //                handler, which only serves non-expired, non-revoked rows.
   // signin, verify Must be reachable while signed out — that is the point.
-  // s/             Public share links. Same handler-side enforcement.
   // _next, _vercel Framework assets and Vercel's analytics beacons. Without
   //                the _vercel exclusion the `authorized` callback 302s the
   //                analytics script to /signin and nothing is ever recorded.
@@ -42,6 +39,6 @@ export const config = {
   // unauthenticated user opening the desktop hand-off link SHOULD be sent to
   // sign in and bounced back afterwards.
   matcher: [
-    '/((?!api/auth|api/desktop|api/space|api/files/delta|api/health|api/cron|api/share|signin|verify|s/|_next/static|_next/image|_vercel|favicon.ico|icon.png|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
+    '/((?!api/auth|api/desktop|api/space|api/files/delta|api/health|api/cron|signin|verify|_next/static|_next/image|_vercel|favicon.ico|icon.png|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
   ],
 };

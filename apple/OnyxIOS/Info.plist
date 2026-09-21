@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDisplayName</key><string>Onyx</string>
+  <key>UILaunchScreen</key><dict/>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>io.onyxfs.app</string>
+      <!-- The PKCE redirect target. Must match OnyxIdentifiers.urlScheme and
+           the redirect the server sends (onyxfs://callback). -->
+      <key>CFBundleURLSchemes</key><array><string>onyxfs</string></array>
+    </dict>
+  </array>
+</dict>
+</plist>
