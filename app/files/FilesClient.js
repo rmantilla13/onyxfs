@@ -245,12 +245,12 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     const n = selected.size;
     const ok = await confirm({
       title: flags.trash
-        ? `Move ${n} file${n === 1 ? '' : 's'} to trash?`
+        ? `Remove ${n} file${n === 1 ? '' : 's'} from the library?`
         : `Permanently delete ${n} file${n === 1 ? '' : 's'}?`,
       body: flags.trash
-        ? 'Trashed files are kept for 30 days before they are purged.'
+        ? 'The row is hidden and the object is kept, so an admin can restore it from the database. There is no trash screen.'
         : 'This cannot be undone.',
-      confirmLabel: flags.trash ? 'Move to trash' : 'Delete',
+      confirmLabel: 'Remove',
     });
     if (!ok) return;
     // The server decides trash-vs-purge from its own flag state.
@@ -258,8 +258,8 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     const failed = results.filter((r) => !r.ok).length;
     setSelected(new Set());
     load();
-    if (failed) toast.error(`${failed} of ${n} could not be ${flags.trash ? 'trashed' : 'deleted'}.`);
-    else toast.success(`${n} file${n === 1 ? '' : 's'} ${flags.trash ? 'moved to trash' : 'deleted'}.`);
+    if (failed) toast.error(`${failed} of ${n} could not be removed.`);
+    else toast.success(`${n} file${n === 1 ? '' : 's'} removed.`);
   };
 
   const openFile = useCallback((f) => { if (f?.id) router.push(`/files/${f.id}`); }, [router]);
@@ -291,7 +291,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
         <div className="spacer" />
         {selected.size > 0 && (
           <button className="btn btn-danger" onClick={trashSelected}>
-            {flags.trash ? 'Trash' : 'Delete'} {selected.size}
+            Remove {selected.size}
           </button>
         )}
         {canWrite && (
@@ -453,7 +453,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
           <div className="spacer" />
           <button className="btn" onClick={() => setSelected(new Set())}>Clear</button>
           <button className="btn btn-danger" onClick={trashSelected}>
-            {flags.trash ? 'Trash' : 'Delete'}
+            Remove
           </button>
         </div>
       )}
