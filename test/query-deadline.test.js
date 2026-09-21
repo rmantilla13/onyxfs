@@ -132,6 +132,68 @@ describeDb('driver-level query deadlines', () => {
     });
   });
 
+  describe('where the time went', () => {
+    // Once the data is ruled out — production timing out at 15s on a table
+    // holding ONE row — the only question left is whether the query was
+    // executing or waiting, and those look identical in a log without help.
+    //
+    // The three states were established against a real server rather than
+    // assumed, and the first guess was wrong: postgres.js PIPELINES, so a
+    // query behind a slow one is written to the socket immediately. "Queued"
+    // and "sent" are not opposites, and calling that case "the connection went
+    // away" would have sent someone hunting a network fault that is not there.
+    //
+    // These tests get their OWN client. They deliberately wedge a connection
+    // with pg_sleep, and a cancelled sleep keeps tailing off afterwards — on a
+    // shared client everything pipelined behind it inherits that wait, so the
+    // failures land on whichever unrelated test happens to run next.
+    let own;
+    before(async () => {
+      own = postgres(URL_, { prepare: false, max: 1, idle_timeout: 20 });
+      // Warm it. On a cold client the first statement pays for the connect, so
+      // a second one arriving 300ms later has genuinely reached no connection
+      // yet — a true "NEVER REACHED A CONNECTION", and not the head-of-line
+      // case this is trying to produce.
+      await own`SELECT 1`;
+    });
+    after(async () => { await own?.end({ timeout: 5 }).catch(() => {}); });
+
+    test('a query the server is working on says so', async () => {
+      const client = withQueryDeadlines(own, 400);
+      await assert.rejects(
+        () => client`SELECT pg_sleep(30)`,
+        (e) => /executing on the server/.test(e.message),
+      );
+    });
+
+    test('a query behind a slow one reports head-of-line blocking', async () => {
+      // Two proxies over the SAME client, so both contend for the one
+      // connection but the second gives up first. A shared deadline made this
+      // a coin flip: both timers fired in the same tick and the blocker's
+      // cancel could free the connection before the other was judged.
+      const patient = withQueryDeadlines(own, 8000);
+      const impatient = withQueryDeadlines(own, 300);
+
+      const blocker = patient`SELECT pg_sleep(30)`.catch(() => {});
+      await assert.rejects(
+        () => impatient`SELECT 1 AS n`,
+        (e) => /head-of-line/.test(e.message),
+      );
+      await blocker;
+    });
+
+    test('the three states are distinct, so two faults cannot read alike', () => {
+      const states = ['NEVER REACHED A CONNECTION', 'executing on the server', 'head-of-line'];
+      assert.equal(new Set(states).size, states.length);
+    });
+
+    test('the shared client is untouched by all of that', async () => {
+      // The isolation above is the claim; this is the check on it.
+      const rows = await sql`SELECT 3 AS n`;
+      assert.equal(Number(rows[0].n), 3);
+    });
+  });
+
   test('a deadline is per-query, not per-client', async () => {
     await assert.rejects(() => sql`SELECT pg_sleep(30)`);
     for (let i = 0; i < 3; i++) {
