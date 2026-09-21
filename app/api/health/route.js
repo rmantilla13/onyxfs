@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { isAdmin } from '@/lib/auth-allowlist';
-import { sql } from '@/lib/db';
+import { sql, hasConnectionString } from '@/lib/db';
 import { getStorageConfig, storageMode, s3TestConnection } from '@/lib/storage';
 import { allIntegrationStatuses } from '@/lib/integrations';
 import { VERSION } from '@/lib/version';
@@ -42,8 +42,17 @@ export async function GET(req) {
 
   const checks = {};
 
+  // WHICH variable carries the connection, not just whether one does.
+  // lib/db.js falls back from DATABASE_URL to POSTGRES_URL, so a deployment
+  // can be running entirely on the one nobody thinks is in use — and then
+  // "tidying up the redundant variable" is an outage. Until now that answer
+  // was only available from a local `npm run doctor`, which cannot see
+  // production, which is the only place it matters.
+  const conn = hasConnectionString();
   checks.env = {
-    DATABASE_URL: !!process.env.DATABASE_URL || !!process.env.POSTGRES_URL,
+    DATABASE_URL: conn.ok,
+    connectionVia: conn.which,
+    bothConnectionVarsSet: !!process.env.DATABASE_URL && !!process.env.POSTGRES_URL,
     AUTH_SECRET: !!process.env.AUTH_SECRET,
     RESEND_API_KEY: !!process.env.RESEND_API_KEY,
     NOTIFY_FROM: !!process.env.NOTIFY_FROM,

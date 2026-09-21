@@ -28,17 +28,30 @@ let S3;
 let client;
 
 before(async () => {
-  try {
-    const res = await fetch(ENDPOINT, { signal: AbortSignal.timeout(1500) });
-    live = res.status > 0;
-  } catch { live = false; }
-  if (!live) return;
+  // Probe with the SDK, not with fetch(ENDPOINT). moto's dev server does not
+  // answer a bare GET / — the request simply hangs — so the old probe timed
+  // out and the whole file skipped while a perfectly good S3 was listening on
+  // the port. A false skip is worse than a false failure: nothing is red, so
+  // nobody looks, and the tests quietly stop running.
+  //
+  // Creating the bucket IS the probe. It answers the question the tests
+  // actually depend on — can we use S3 here — rather than whether something
+  // is bound to the port.
   S3 = await import('@aws-sdk/client-s3');
   client = new S3.S3Client({
     region: cfg.region, endpoint: cfg.endpoint, forcePathStyle: true,
     credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey },
+    requestHandler: { requestTimeout: 3000, connectionTimeout: 1500 },
+    maxAttempts: 1,
   });
-  try { await client.send(new S3.CreateBucketCommand({ Bucket: BUCKET })); } catch { /* already there */ }
+  try {
+    await client.send(new S3.CreateBucketCommand({ Bucket: BUCKET }));
+    live = true;
+  } catch (e) {
+    // An existing bucket means it is very much alive; anything else means it
+    // is not reachable.
+    live = /BucketAlreadyOwnedByYou|BucketAlreadyExists/i.test(`${e?.name} ${e?.Code} ${e?.message}`);
+  }
 });
 
 const put = (Key, Body) => client.send(new S3.PutObjectCommand({ Bucket: BUCKET, Key, Body }));

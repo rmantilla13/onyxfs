@@ -2,7 +2,7 @@
 
 import { signIn } from '@/auth';
 import { isEmailGrantedAccess } from '@/lib/auth-allowlist';
-import { createOrGetInviteRequest } from '@/lib/db';
+import { createOrGetInviteRequest, hasConnectionString } from '@/lib/db';
 import { notifyAccessRequest } from '@/lib/notify';
 
 /**
@@ -17,6 +17,18 @@ import { notifyAccessRequest } from '@/lib/notify';
 export async function requestMagicLink(_prev, formData) {
   const email = String(formData.get('email') || '').trim().toLowerCase();
   if (!email.includes('@')) return { error: 'Enter a valid email address.' };
+
+  // Before anything touches the database. Without a connection string the
+  // Auth.js adapter throws from getUserByEmail, the catch below turns it into
+  // "Try again in a moment", and that is a lie: retrying cannot help, and it
+  // sends whoever is reading it to look at their inbox and their spam folder
+  // instead of at the one environment variable that is missing. This is the
+  // same treatment RESEND_API_KEY gets immediately below, and for the same
+  // reason — a misconfiguration should name itself.
+  if (!hasConnectionString().ok) {
+    console.error('[signin] no DATABASE_URL (or POSTGRES_URL) — sign-in cannot reach the database. Set it in Vercel → Settings → Environment Variables and redeploy.');
+    return { error: 'Sign-in is not available: this server has no database configured (DATABASE_URL is unset). Set it and redeploy — retrying will not help.' };
+  }
 
   if (!(await isEmailGrantedAccess(email))) {
     return { sent: true };
