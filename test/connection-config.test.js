@@ -186,15 +186,39 @@ describe('describeConnection rejects unresolvable hostnames', () => {
     );
   });
 
-  test('no advice anywhere uses a placeholder that copies as a hostname', () => {
-    // The root cause was documentation, not code: "host …pooler.supabase.com"
-    // reads as prose and pastes as a literal. Every example host in text a
-    // person is meant to act on must work if copied verbatim.
-    const suspect = /(?:…|\.\.\.|<[^>]*>)(?=[A-Za-z0-9-]*\.(?:pooler\.supabase\.com|supabase\.co))/;
-    for (const v of ENV_VARS) {
-      assert.doesNotMatch(v.why, suspect, `${v.key} shows a host with a placeholder glued to it`);
+  test('no advice anywhere uses an ellipsis in a hostname position', () => {
+    // The precise rule, and it is the one that bit us. "…" and "..." read as
+    // prose and paste as characters: the URL parser accepts them, percent-
+    // encodes them, and the failure surfaces much later as ENOTFOUND against
+    // an unreadable "%E2%80%A6pooler.supabase.com".
+    //
+    // Angle brackets are deliberately still allowed. `<region>` is rejected
+    // by the URL parser outright, and describeConnection names it as a copied
+    // placeholder — it fails loudly and immediately, which is the behaviour we
+    // want from something that cannot be a real value.
+    const ellipsisHost = /(?:…|\.\.\.)(?=[A-Za-z0-9-]*\.(?:pooler\.supabase\.com|supabase\.co))/;
+
+    const advice = [
+      ...ENV_VARS.map((v) => [`ENV_VARS.${v.key}`, v.why]),
+      // The runtime warnings are advice too, and are read far more often.
+      ...['postgresql://u:p@db.abc.supabase.co:5432/postgres',
+          'postgresql://u:p@aws-0-us-east-1.pooler.supabase.com:5432/postgres']
+        .map((u) => [`describeConnection(${u})`, describeConn(u).warn || '']),
+    ];
+
+    for (const [where, text] of advice) {
+      assert.doesNotMatch(text, ellipsisHost, `${where} shows a host with an ellipsis glued to it`);
     }
-    const dbWhy = ENV_VARS.find((v) => v.key === 'DATABASE_URL').why;
-    assert.match(dbWhy, /aws-0-[a-z0-9-]+\.pooler\.supabase\.com/, 'show a host that works if copied');
+  });
+
+  test('the direct-connection warning leads with the reason it fails on Vercel', () => {
+    // It used to talk only about connection limits. True, but not what
+    // happens: db.<ref>.supabase.co publishes no A record, so on an IPv4-only
+    // platform the name does not resolve and every query dies at getaddrinfo.
+    // That reads as the database being down rather than as the wrong URL.
+    const { warn } = describeConn('postgresql://u:p@db.abcdefghij.supabase.co:5432/postgres');
+    assert.match(warn, /ENOTFOUND/);
+    assert.match(warn, /IPv4|IPv6/);
+    assert.match(warn, /6543/, 'say what to use instead');
   });
 });
