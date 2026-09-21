@@ -110,3 +110,91 @@ describe('requestMagicLink with no database', () => {
     assert.match(out.error, /valid email/);
   });
 });
+
+// ── A hostname that can never resolve ──────────────────────────────────────
+// describeConnection classified "…pooler.supabase.com" as "Supabase pooler,
+// transaction mode" and returned no warning. The host was the documentation's
+// horizontal ellipsis pasted as a literal character; every request died with
+// ENOTFOUND while the diagnostic said the configuration was correct.
+//
+// The cause was a suffix match: /pooler\.supabase\.com$/ is true of anything
+// ending in those characters, however malformed the rest. Exactly the mistake
+// that let a scheme-less B2 endpoint pass every check in lib/storage.js — the
+// substring matched, and the thing that actually parses disagreed.
+
+const { describeConnection: describeConn } = await import('../lib/db.js');
+const { ENV_VARS } = await import('../lib/integrations.js');
+
+describe('describeConnection rejects unresolvable hostnames', () => {
+  const url = (host) => `postgresql://postgres.abc:pw@${host}:6543/postgres`;
+
+  test('the ellipsis placeholder is caught, not certified', () => {
+    // THE regression.
+    const { label, warn } = describeConn(url('…pooler.supabase.com'));
+    assert.match(label, /INVALID hostname/);
+    assert.doesNotMatch(label, /transaction mode/, 'a broken host was reported as a correct one');
+    assert.ok(warn, 'no warning for a hostname that cannot resolve');
+    assert.match(warn, /ENOTFOUND/);
+  });
+
+  test('it shows the character rather than its percent-encoding', () => {
+    // The raw log said "%E2%80%A6pooler.supabase.com", which hides that the
+    // problem is a single typographic character someone can see and delete.
+    const { warn } = describeConn(url('…pooler.supabase.com'));
+    assert.match(warn, /…/);
+    assert.doesNotMatch(warn, /%E2%80%A6/);
+  });
+
+  test('it names the cause when the host looks like a copied placeholder', () => {
+    const { warn } = describeConn(url('…pooler.supabase.com'));
+    assert.match(warn, /placeholder/i);
+  });
+
+  test('angle-bracket placeholders fail to parse, and that path advises too', () => {
+    // `<region>` is rejected by the URL parser outright, so it never reaches
+    // the hostname check. That branch used to return no warning at all — a
+    // bare "unparseable connection string" with nothing to act on.
+    const { label, warn } = describeConn(url('<region>.pooler.supabase.com'));
+    assert.match(label, /unparseable/);
+    assert.ok(warn, 'an unparseable connection string must still explain itself');
+    assert.match(warn, /placeholder/i);
+    assert.match(warn, /postgresql:\/\//, 'show the shape of a correct value');
+  });
+
+  test('a genuinely malformed string is explained without inventing a cause', () => {
+    const { warn } = describeConn('not a url at all');
+    assert.ok(warn);
+    assert.doesNotMatch(warn, /placeholder/i, 'do not claim a placeholder that is not there');
+  });
+
+  test('a valid pooler host is still classified correctly', () => {
+    const { label, warn } = describeConn(url('aws-0-us-east-1.pooler.supabase.com'));
+    assert.match(label, /transaction mode/);
+    assert.equal(warn, null, 'a correct configuration must not warn');
+  });
+
+  test('the checks that follow are not skipped for a valid host', () => {
+    // Guard against the fix short-circuiting the session-mode and direct
+    // detection it sits in front of.
+    assert.match(
+      describeConn('postgresql://u:p@aws-0-us-east-1.pooler.supabase.com:5432/postgres').label,
+      /SESSION mode/,
+    );
+    assert.match(
+      describeConn('postgresql://u:p@db.abcdefghij.supabase.co:5432/postgres').label,
+      /DIRECT/,
+    );
+  });
+
+  test('no advice anywhere uses a placeholder that copies as a hostname', () => {
+    // The root cause was documentation, not code: "host …pooler.supabase.com"
+    // reads as prose and pastes as a literal. Every example host in text a
+    // person is meant to act on must work if copied verbatim.
+    const suspect = /(?:…|\.\.\.|<[^>]*>)(?=[A-Za-z0-9-]*\.(?:pooler\.supabase\.com|supabase\.co))/;
+    for (const v of ENV_VARS) {
+      assert.doesNotMatch(v.why, suspect, `${v.key} shows a host with a placeholder glued to it`);
+    }
+    const dbWhy = ENV_VARS.find((v) => v.key === 'DATABASE_URL').why;
+    assert.match(dbWhy, /aws-0-[a-z0-9-]+\.pooler\.supabase\.com/, 'show a host that works if copied');
+  });
+});
