@@ -104,18 +104,27 @@ public final class AuthClient: NSObject, @unchecked Sendable {
         // mid-sign-in.
         let provider = PresentationAnchor(anchor)
         let code: String = try await withCheckedThrowingContinuation { continuation in
+            // Resumed exactly once. A session that cannot start calls its
+            // completion handler synchronously AND returns false from start(),
+            // and a checked continuation resumed twice is a crash.
+            var finished = false
+            func finish(_ result: Result<String, Error>) {
+                guard !finished else { return }
+                finished = true
+                continuation.resume(with: result)
+            }
             var session: ASWebAuthenticationSession?
             session = ASWebAuthenticationSession(
                 url: url, callbackURLScheme: OnyxIdentifiers.urlScheme
             ) { callback, error in
                 _ = provider
                 session = nil
-                if let error { continuation.resume(throwing: error); return }
+                if let error { finish(.failure(error)); return }
                 guard let callback, let code = AuthClient.code(from: callback) else {
-                    continuation.resume(throwing: OnyxError.http(status: 0, message: "No code in the callback."))
+                    finish(.failure(OnyxError.http(status: 0, message: "No code in the callback.")))
                     return
                 }
-                continuation.resume(returning: code)
+                finish(.success(code))
             }
             session?.presentationContextProvider = provider
             // The magic-link sign-in needs the browser's existing session; an
@@ -123,7 +132,7 @@ public final class AuthClient: NSObject, @unchecked Sendable {
             session?.prefersEphemeralWebBrowserSession = false
             if session?.start() != true {
                 session = nil
-                continuation.resume(throwing: OnyxError.http(status: 0, message: "The sign-in window could not be opened."))
+                finish(.failure(OnyxError.http(status: 0, message: "The sign-in window could not be opened.")))
             }
         }
         return try await exchange(code: code, verifier: verifier, label: label)

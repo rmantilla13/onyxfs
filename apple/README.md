@@ -25,6 +25,11 @@ scripts/build-mac.sh                     # → build/Onyx.app
 open build/Onyx.app
 ```
 
+If `swift test` fails with "plugin for module 'TestingMacros' not found",
+delete `OnyxKit/.build` and run it again. The Command Line Tools
+sometimes lose the path to Swift Testing's macro plugin in an incremental
+build.
+
 That build is **unsigned**. The window, sign-in and the whole workspace work.
 Finder does not: the app and its extension share the sign-in through an app
 group and its keychain, and macOS grants those only to code signed with a
@@ -157,8 +162,10 @@ decode fails on HTML, with a complaint about the character `<`.
 
 ## What is verified, and how
 
-- **OnyxKit:** 35 tests (`swift test`).
-  - The tree built from delta pages (folders derived from paths, renames, empty folders, deletions).
+- **OnyxKit:** 37 tests (`swift test`).
+  - The tree built from delta pages: folders derived from paths, renames, empty folders, deletions.
+  - Each id is reported once, as what it is now.
+  - No presigned links are kept.
   - Domain identifiers, and server-address parsing.
   - The handoff cookie's scope and lifetime (`__Host-` over https).
   - Update version arithmetic, and the release shape.

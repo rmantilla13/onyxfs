@@ -19,7 +19,7 @@ import Foundation
 /// Pure value type, no FileProvider import: the whole of the tree logic is
 /// testable on its own (ReplicaTests).
 public struct Replica: Codable, Sendable, Equatable {
-    public private(set) var files: [String: FileItem] = [:]
+    public private(set) var files: [String: ReplicaFile] = [:]
     /// The scope's folders as the server last listed them (`folders=1`).
     public private(set) var listedFolders: Set<String> = []
     /// Where the next delta request starts.
@@ -69,15 +69,15 @@ public struct Replica: Codable, Sendable, Equatable {
     }
 
     /// What sits directly in a folder ("" for the root).
-    public func children(of path: String) -> (folders: [String], files: [FileItem]) {
+    public func children(of path: String) -> (folders: [String], files: [ReplicaFile]) {
         let parent = Self.clean(path)
         let subfolders = folders.filter { Self.parentPath($0) == parent }.sorted()
-        let inside = files.values.filter { Self.clean($0.folder) == parent }
+        let inside = files.values.filter { $0.folder == parent }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         return (subfolders, inside)
     }
 
-    public func file(id: String) -> FileItem? { files[id] }
+    public func file(id: String) -> ReplicaFile? { files[id] }
 
     // MARK: - Applying a page
 
@@ -105,10 +105,11 @@ public struct Replica: Codable, Sendable, Equatable {
         let before = folders
         var diff = Diff()
 
-        for file in changed {
-            if file.deletedAt != nil {
-                if files.removeValue(forKey: file.id) != nil { diff.deleted.append(file.id) }
+        for item in changed {
+            if item.deletedAt != nil {
+                if files.removeValue(forKey: item.id) != nil { diff.deleted.append(item.id) }
             } else {
+                let file = ReplicaFile(item)
                 if files[file.id] != file { diff.updated.append(file.id) }
                 files[file.id] = file
             }
@@ -122,6 +123,17 @@ public struct Replica: Codable, Sendable, Equatable {
         diff.updated.append(contentsOf: after.subtracting(before).sorted().map(Self.folderID))
         diff.deleted.append(contentsOf: before.subtracting(after).sorted().map(Self.folderID))
         if let newCursor { cursor = max(cursor, newCursor) }
+        // Net of the whole page: an id is reported once, as what it is now. A
+        // file changed and then hard-deleted in the same page is a deletion,
+        // never both — reporting both would let the system apply them in
+        // either order.
+        let kept = files
+        func present(_ id: String) -> Bool {
+            if let path = Self.folderPath(ofID: id) { return after.contains(path) }
+            return kept[id] != nil
+        }
+        diff.updated = Self.unique(diff.updated.filter(present))
+        diff.deleted = Self.unique(diff.deleted.filter { !present($0) })
         return diff
     }
 
@@ -133,7 +145,44 @@ public struct Replica: Codable, Sendable, Equatable {
         self.scope = scope
     }
 
-    static func clean(_ path: String) -> String {
+    /// A folder path as the replica keys it: no leading, trailing or doubled
+    /// slashes. File parents and folder ids both go through this, so they
+    /// always agree.
+    public static func clean(_ path: String) -> String {
         path.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
+    }
+
+    static func unique(_ ids: [String]) -> [String] {
+        var seen = Set<String>()
+        return ids.filter { seen.insert($0).inserted }
+    }
+}
+
+/// One file as the replica keeps it: what Finder shows and what decides a
+/// re-download, and nothing else. Not the presigned links a delta row
+/// carries — they expire, the item's bytes are fetched through a fresh link
+/// when opened, and at a hundred thousand files they were most of the size.
+public struct ReplicaFile: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public let name: String
+    /// Cleaned (Replica.clean), so it matches the folders' identifiers.
+    public let folder: String
+    public let mime: String?
+    public let size: Int64?
+    public let version: Int
+    public let contentHash: String?
+    public let createdAt: EpochMillis?
+    public let updatedAt: EpochMillis?
+
+    public init(_ item: FileItem) {
+        id = item.id
+        name = item.name
+        folder = Replica.clean(item.folder)
+        mime = item.mime
+        size = item.size
+        version = item.version
+        contentHash = item.contentHash
+        createdAt = item.createdAt
+        updatedAt = item.updatedAt
     }
 }

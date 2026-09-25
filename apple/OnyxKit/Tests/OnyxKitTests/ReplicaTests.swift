@@ -43,6 +43,33 @@ struct ReplicaTests {
         #expect(Set(diff.deleted) == ["folder:Old", "folder:Old/Sub"])
     }
 
+    @Test func anIdIsReportedOnceAsWhatItIsNow() {
+        var r = Replica()
+        r.apply(changed: [file("a", "a.png", in: "F")], deleted: [])
+        // One page: a moves out of F (F empties), then b is created in F.
+        let diff = r.apply(changed: [file("a", "a.png", in: "G"), file("b", "b.png", in: "F")], deleted: [])
+        #expect(!diff.deleted.contains("folder:F"), "F still exists; it must not be deleted and updated at once")
+        // Changed and then hard-deleted within a page: a deletion only.
+        let gone = r.apply(changed: [file("c", "c.png")], deleted: ["c"])
+        #expect(gone.updated.isEmpty, "created and removed within a page is never reported as present")
+        r.apply(changed: [file("d", "d.png")], deleted: [])
+        let d = r.apply(changed: [file("d", "d2.png")], deleted: ["d"])
+        #expect(d.updated.isEmpty && d.deleted == ["d"])
+    }
+
+    @Test func theReplicaKeepsNoLinksAndCleansFolders() {
+        var r = Replica()
+        let withLink = FileItem(id: "a", name: "a.png", folder: "/X//Y/", kind: "image", mime: nil, size: 1,
+                                url: "https://s3.example/a?X-Amz-Signature=secret", storageKey: "k", thumbnailUrl: "https://t",
+                                tags: [], notes: nil, caption: nil, visibility: "org", version: 1, contentHash: nil,
+                                createdBy: nil, createdAt: nil, updatedAt: nil, deletedAt: nil, seq: 1)
+        r.apply(changed: [withLink], deleted: [])
+        #expect(r.file(id: "a")?.folder == "X/Y")
+        let encoded = String(decoding: try! JSONEncoder().encode(r), as: UTF8.self)
+        #expect(!encoded.contains("Signature") && !encoded.contains("https://"))
+        #expect(r.children(of: "X/Y").files.map(\.id) == ["a"])
+    }
+
     @Test func aDeletionOrATrashedRowRemovesTheFileAndAnyFolderLeftEmpty() {
         var r = Replica()
         r.apply(changed: [file("a", "a.png", in: "Only"), file("b", "b.png")], deleted: [])

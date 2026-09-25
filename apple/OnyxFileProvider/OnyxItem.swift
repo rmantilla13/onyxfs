@@ -15,7 +15,7 @@ enum OnyxItem {
 
     static func folder(_ path: String) -> NSFileProviderItem { FolderItem(path: path) }
 
-    static func file(_ file: FileItem) -> NSFileProviderItem { FileNode(file: file) }
+    static func file(_ file: ReplicaFile) -> NSFileProviderItem { FileNode(file: file) }
 
     /// The item for an identifier, from the replica. Nil when it is not there.
     static func item(for id: NSFileProviderItemIdentifier, in replica: Replica, rootName: String) -> NSFileProviderItem? {
@@ -72,8 +72,8 @@ private final class FolderItem: NSObject, NSFileProviderItem {
 /// to `version` only when it does not. Keying content on `version` alone would
 /// make every rename re-download the file.
 private final class FileNode: NSObject, NSFileProviderItem {
-    let file: FileItem
-    init(file: FileItem) { self.file = file }
+    let file: ReplicaFile
+    init(file: ReplicaFile) { self.file = file }
 
     var itemIdentifier: NSFileProviderItemIdentifier { .init(file.id) }
     var parentItemIdentifier: NSFileProviderItemIdentifier { OnyxItem.parent(of: file.folder) }

@@ -119,16 +119,41 @@ final class AppModel: ObservableObject {
     /// issued it, so changing servers signs you out.
     @discardableResult
     func setServer(_ typed: String) async -> Bool {
-        guard let url = OnyxConfig.normalizedServer(typed) else {
+        guard let typedURL = OnyxConfig.normalizedServer(typed) else {
             problem = "That is not a server address. Try something like onyxfs.io or localhost:3000."
             return false
         }
+        let url = await Self.canonical(typedURL)
         guard url != server else { return true }
         if phase == .signedIn { await signOut() }
         settings.serverURL = url == OnyxConfig.production.baseURL ? nil : url
         server = url
         problem = nil
         return true
+    }
+
+    /// Where a typed address really lives. "onyxfs.io" redirects to
+    /// "www.onyxfs.io", and a redirect to another host drops the
+    /// Authorization header — every signed-in request would come back 401 and
+    /// look like a revoked sign-in. So the address is settled once, here, by
+    /// following it. Unreachable: kept as typed.
+    static func canonical(_ url: URL) async -> URL {
+        var request = URLRequest(url: url.appendingPathComponent("signin"))
+        request.timeoutInterval = 8
+        guard let (_, response) = try? await URLSession.shared.data(for: request),
+              let final = response.url, var c = URLComponents(url: final, resolvingAgainstBaseURL: false)
+        else { return url }
+        c.path = ""
+        c.query = nil
+        c.fragment = nil
+        return c.url ?? url
+    }
+
+    /// The server as an editable address: the full origin, never the short
+    /// display label (which drops "www." and would point somewhere else).
+    var serverAddress: String {
+        let s = server.absoluteString
+        return s.hasSuffix("/") ? String(s.dropLast()) : s
     }
 
     /// Called when the server says the token is no good any more.
@@ -154,7 +179,12 @@ final class AppModel: ObservableObject {
             await tokenRejected()
             return
         } catch {
+            // Offline, a 5xx, a captive portal: say so, and leave Finder as
+            // it is. With no listing, every location would look orphaned and
+            // be removed, downloaded copies and all.
             problem = error.localizedDescription
+            inFinder = await FinderLocations.current()
+            return
         }
         inFinder = await FinderLocations.current()
         await removeOrphans()
@@ -172,6 +202,8 @@ final class AppModel: ObservableObject {
         do {
             if on {
                 try await FinderLocations.add(scope, name: name)
+                // A new location lists empty until its first changes; ask now.
+                await FinderLocations.syncAll()
                 appLog.info("finder: added \(id, privacy: .public)")
             } else {
                 try await FinderLocations.remove(id)

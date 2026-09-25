@@ -13,14 +13,17 @@ import os
 /// by the same access rule as the web (/api/files/delta).
 final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     let domain: NSFileProviderDomain
-    let api: OnyxAPI
     let engine: SyncEngine
     let log = Logger(subsystem: OnyxIdentifiers.fileProvider, category: "extension")
 
+    /// Made per use, not kept: the server can change under a running
+    /// extension (Settings), and a kept client would send the new server's
+    /// token to the old one.
+    var api: OnyxAPI { OnyxAPI(config: .current) }
+
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
-        self.api = OnyxAPI()
-        self.engine = SyncEngine(domainIdentifier: domain.identifier.rawValue, api: api)
+        self.engine = SyncEngine(domainIdentifier: domain.identifier.rawValue)
         super.init()
     }
 
@@ -62,6 +65,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 // the web's detail view. Presigned links expire; one kept from
                 // the delta would be dead by the time a file is opened.
                 let link = try await api.contentLink(fileId: file.id)
+                if progress.isCancelled { throw CocoaError(.userCancelled) }
                 let temp = try await download(link.url, into: progress)
                 completionHandler(temp, OnyxItem.file(file), nil)
             } catch {
@@ -83,7 +87,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 if let error { continuation.resume(throwing: error); return }
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 guard let temp, (200..<300).contains(status) else {
-                    continuation.resume(throwing: OnyxError.http(status: status, message: "The storage refused the download."))
+                    continuation.resume(throwing: StorageError(status: status))
                     return
                 }
                 // The session deletes its file when this handler returns, so
@@ -97,6 +101,9 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                 }
             }
             progress.addChild(task.progress, withPendingUnitCount: 100)
+            // Cancelling in Finder cancels the transfer (mapped to
+            // NSUserCancelledError, which is what the system expects).
+            progress.cancellationHandler = { task.cancel() }
             task.resume()
         }
     }
@@ -143,14 +150,15 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
         case .workingSet:
             return WorkingSetEnumerator(engine: engine, rootName: name)
         case .rootContainer:
-            return FolderEnumerator(path: "", engine: engine, rootName: name)
+            return FolderEnumerator(path: "", engine: engine)
         case .trashContainer:
-            return FolderEnumerator(path: "\u{0}trash", engine: engine, rootName: name) // always empty
+            // Trash is the web's to keep (and restore from).
+            throw CocoaError(.featureUnsupported)
         default:
             guard let path = Replica.folderPath(ofID: containerItemIdentifier.rawValue) else {
                 throw NSFileProviderError(.noSuchItem)
             }
-            return FolderEnumerator(path: path, engine: engine, rootName: name)
+            return FolderEnumerator(path: path, engine: engine)
         }
     }
 }

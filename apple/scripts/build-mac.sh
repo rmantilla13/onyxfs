@@ -112,6 +112,14 @@ if [[ -n "${ONYX_SIGN_IDENTITY:-}" ]]; then
   if [[ -n "${ONYX_APP_PROFILE:-}" && -n "${ONYX_EXT_PROFILE:-}" ]]; then
     render OnyxFileProvider/OnyxFileProvider.entitlements "$WORK/ext.entitlements"
     render OnyxMac/OnyxMac.entitlements "$WORK/app.entitlements"
+    # What Xcode adds on its own when it signs with a profile: the App ID and
+    # team, which must match the embedded profile for the restricted
+    # entitlements above to be honoured.
+    for pair in "app.entitlements:io.onyxfs.app" "ext.entitlements:io.onyxfs.app.fileprovider"; do
+      f="$WORK/${pair%%:*}"; id="${pair#*:}"
+      /usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string $ONYX_TEAM_ID.$id" "$f"
+      /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string $ONYX_TEAM_ID" "$f"
+    done
     cp "$ONYX_EXT_PROFILE" "$EXT/Contents/embedded.provisionprofile"
     cp "$ONYX_APP_PROFILE" "$APP/Contents/embedded.provisionprofile"
     "${SIGN[@]}" --entitlements "$WORK/ext.entitlements" "$EXT"

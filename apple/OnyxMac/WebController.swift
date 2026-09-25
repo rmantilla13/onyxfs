@@ -158,9 +158,16 @@ extension WebController: WKNavigationDelegate {
             return (.cancel, preferences)
         }
 
+        // The web's download links answer with a redirect to the storage
+        // host. WebKit reports that redirect as a clicked link to another
+        // site, which the rule below would send to the browser — so the
+        // download is taken as one from the start, and follows the redirect
+        // itself.
+        if isOnServer(url), url.path.range(of: #"^/api/files/[^/]+/download$"#, options: .regularExpression) != nil {
+            return (.download, preferences)
+        }
+
         // A link to somewhere else, clicked: the default browser, not here.
-        // (Not redirects or subresources — a download that bounces through
-        // the storage's own host must still happen in the view.)
         let mainFrame = action.targetFrame?.isMainFrame ?? true
         if mainFrame, action.navigationType == .linkActivated, !isOnServer(url) {
             NSWorkspace.shared.open(url)

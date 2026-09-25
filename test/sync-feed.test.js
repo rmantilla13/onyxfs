@@ -92,8 +92,11 @@ describe('the scope fingerprint', () => {
       accessFingerprint(granted, all),
       accessFingerprint({ ...member, isAdmin: true }, all),
       accessFingerprint(member, [...all, 'new-drive/%']),
+      // Someone else with exactly the same memberships: their own files and
+      // direct shares differ, so a device must not keep the first person's.
+      accessFingerprint({ ...member, email: 'other@example.com' }, all),
     ]);
-    assert.equal(seen.size, 6);
+    assert.equal(seen.size, 7);
   });
 });
 

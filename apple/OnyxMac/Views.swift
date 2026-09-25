@@ -160,7 +160,7 @@ struct SignInView: View {
             Spacer()
             HStack(spacing: 4) {
                 Text("Server:").foregroundStyle(.secondary)
-                Button(model.serverLabel) { form.serverText = model.serverLabel; form.editingServer = true }
+                Button(model.serverLabel) { form.serverText = model.serverAddress; form.editingServer = true }
                     .buttonStyle(.link)
             }
             .font(.caption)
@@ -368,7 +368,7 @@ struct AccountSettings: View {
                         .frame(width: 200)
                         .onSubmit { Task { await model.setServer(form.serverText) } }
                     Button("Change") { Task { await model.setServer(form.serverText) } }
-                        .disabled(OnyxConfig.normalizedServer(form.serverText) == model.server)
+                        .disabled(form.serverText == model.serverAddress)
                 }
             }
             if model.phase == .signedIn {
@@ -395,7 +395,7 @@ struct AccountSettings: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { form.serverText = model.serverLabel }
+        .onAppear { form.serverText = model.serverAddress }
     }
 }
 
