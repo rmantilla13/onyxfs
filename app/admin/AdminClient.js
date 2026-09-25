@@ -404,10 +404,20 @@ function FilespaceCard({ fs, onChanged, onDelete }) {
 function AccessTab() {
   const { data, error, reload, setError } = useResource('/api/admin/invites');
   const [email, setEmail] = useState('');
+  const { confirm, confirmElement } = useConfirm();
 
   const act = async (fn) => {
     setError(null);
     try { await fn(); reload(); } catch (e) { setError(e.message); }
+  };
+
+  const revoke = async (r) => {
+    const ok = await confirm({
+      title: `Revoke access for ${r.email}?`,
+      body: 'Their invite is removed and their account deleted, which signs out any open browser session. Desktop tokens stop working on their next request. Files they uploaded stay.',
+      confirmLabel: 'Revoke',
+    });
+    if (ok) act(() => api(`/api/admin/invites?email=${encodeURIComponent(r.email)}`, { method: 'DELETE' }));
   };
 
   return (
@@ -449,7 +459,7 @@ function AccessTab() {
                 <button
                   className="small"
                   style={{ background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', color: 'var(--danger)' }}
-                  onClick={() => confirm(`Revoke access for ${r.email}?`) && act(() => api(`/api/admin/invites?email=${encodeURIComponent(r.email)}`, { method: 'DELETE' }))}
+                  onClick={() => revoke(r)}
                 >
                   revoke
                 </button>
@@ -459,6 +469,7 @@ function AccessTab() {
         </tbody>
       </table>
       <Status error={error} />
+      {confirmElement}
     </Panel>
   );
 }

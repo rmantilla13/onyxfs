@@ -126,6 +126,9 @@ export default function FileCard({
       className="card filecard"
       role="option"
       aria-selected={selected}
+      // Lets the library find which file a right-click or the menu key was on
+      // without threading a handler through every card.
+      data-file-id={file.id}
       tabIndex={tabIndex}
       ref={innerRef}
       onKeyDown={onKeyDown}
