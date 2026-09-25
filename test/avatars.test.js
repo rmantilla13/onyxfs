@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sniffImageType, avatarPath, avatarFileProblem, AVATAR_MAX_BYTES } from '../lib/avatars.js';
+import { sniffImageType, avatarPath, avatarFileProblem, AVATAR_MAX_BYTES, AVATAR_PICK_MAX_BYTES } from '../lib/avatars.js';
 
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
@@ -34,7 +34,11 @@ test('a picture\'s URL names nobody, and changes with each new picture', () => {
 
 test('the browser turns away what the server would', () => {
   assert.equal(avatarFileProblem({ size: 1000, type: 'image/png' }), null);
-  assert.match(avatarFileProblem({ size: AVATAR_MAX_BYTES + 1, type: 'image/png' }), /8 MB/);
+  assert.match(avatarFileProblem({ size: AVATAR_PICK_MAX_BYTES + 1, type: 'image/png' }), /40 MB/);
+  // Over what the server takes, but the browser shrinks it before sending.
+  assert.equal(avatarFileProblem({ size: AVATAR_MAX_BYTES + 1, type: 'image/png' }), null);
+  // Under Vercel's 4.5 MB request-body limit, or it answers with its own bare 413.
+  assert.ok(AVATAR_MAX_BYTES < 4.5 * 1024 * 1024);
   assert.match(avatarFileProblem({ size: 1000, type: 'image/svg+xml' }), /JPEG, PNG/);
   assert.match(avatarFileProblem(null), /Choose/);
 });

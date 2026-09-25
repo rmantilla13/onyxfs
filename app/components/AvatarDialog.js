@@ -3,7 +3,31 @@
 import { useEffect, useRef, useState } from 'react';
 import Dialog from '@/app/components/ui/Dialog';
 import { initialsFor } from '@/lib/account';
-import { avatarFileProblem } from '@/lib/avatars';
+import { AVATAR_MAX_BYTES, AVATAR_UPLOAD_EDGE, avatarFileProblem } from '@/lib/avatars';
+
+/**
+ * The picture as it will be sent: a file over the server's limit, or larger
+ * than AVATAR_UPLOAD_EDGE on a side, is drawn smaller here first. It ends up
+ * 256px on the server either way, so nothing that shows is lost. Anything
+ * the browser cannot draw goes as it is, and the server has the last word.
+ */
+async function forUpload(file) {
+  let bitmap;
+  try { bitmap = await createImageBitmap(file); } catch { return file; }
+  try {
+    const scale = Math.min(1, AVATAR_UPLOAD_EDGE / Math.max(bitmap.width, bitmap.height));
+    if (scale === 1 && file.size <= AVATAR_MAX_BYTES) return file;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    // WebP where the browser can encode it; toBlob falls back to PNG where not.
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.9));
+    return blob || file;
+  } finally {
+    bitmap.close?.();
+  }
+}
 
 /**
  * Choose, change or remove your profile picture.
@@ -40,11 +64,14 @@ export default function AvatarDialog({ open, onClose, email, current, onSaved })
     if (!file || busy) return;
     setBusy('save'); setError(null);
     try {
-      const r = await fetch('/api/me/avatar', { method: 'PUT', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file });
+      const upload = await forUpload(file);
+      const r = await fetch('/api/me/avatar', { method: 'PUT', headers: { 'content-type': upload.type || 'application/octet-stream' }, body: upload });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) { setError(body.error || `Could not save the picture (HTTP ${r.status}).`); return; }
       onSaved?.(body.url);
       onClose?.();
+    } catch {
+      setError('Could not reach the server. Check your connection and try again.');
     } finally {
       setBusy(null);
     }
@@ -58,6 +85,8 @@ export default function AvatarDialog({ open, onClose, email, current, onSaved })
       if (!r.ok) { setError(`Could not remove the picture (HTTP ${r.status}).`); return; }
       onSaved?.(null);
       onClose?.();
+    } catch {
+      setError('Could not reach the server. Check your connection and try again.');
     } finally {
       setBusy(null);
     }
@@ -90,7 +119,7 @@ export default function AvatarDialog({ open, onClose, email, current, onSaved })
         </span>
         <div className="stack" style={{ gap: 'var(--s2)', minWidth: 0 }}>
           <p className="small muted" style={{ margin: 0 }}>
-            Shown in the top bar. JPEG, PNG, WebP or GIF, up to 8 MB — it is cropped to a circle around what matters in it.
+            Shown in the top bar. JPEG, PNG, WebP or GIF — it is cropped to a circle around what matters in it.
           </p>
           <div className="row" style={{ gap: 'var(--s2)' }}>
             <button type="button" className="btn" onClick={() => input.current?.click()} disabled={!!busy}>

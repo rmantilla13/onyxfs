@@ -35,16 +35,24 @@ export async function PUT(req) {
   const email = await signedIn();
   if (!email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   const declared = Number(req.headers.get('content-length')) || 0;
-  if (declared > AVATAR_MAX_BYTES) return NextResponse.json({ error: 'That picture is over 8 MB.' }, { status: 413 });
+  if (declared > AVATAR_MAX_BYTES) return NextResponse.json({ error: 'That picture is over 4 MB.' }, { status: 413 });
 
   const bytes = Buffer.from(await req.arrayBuffer());
   if (!bytes.length) return NextResponse.json({ error: 'No picture was sent.' }, { status: 400 });
-  if (bytes.length > AVATAR_MAX_BYTES) return NextResponse.json({ error: 'That picture is over 8 MB.' }, { status: 413 });
+  if (bytes.length > AVATAR_MAX_BYTES) return NextResponse.json({ error: 'That picture is over 4 MB.' }, { status: 413 });
   if (!sniffImageType(bytes)) return NextResponse.json({ error: 'Use a JPEG, PNG, WebP or GIF picture.' }, { status: 415 });
 
+  // A missing or broken sharp is the server's fault, not the picture's: say
+  // so, and log it, rather than blaming the file.
+  let sharp;
+  try {
+    sharp = (await import('sharp')).default;
+  } catch (e) {
+    console.error('[avatar] sharp is unavailable', e);
+    return NextResponse.json({ error: 'Pictures cannot be processed on this server right now.' }, { status: 500 });
+  }
   let image;
   try {
-    const sharp = (await import('sharp')).default;
     image = await sharp(bytes, { limitInputPixels: 64_000_000, animated: false })
       .rotate() // honour the camera's orientation, then drop it with the rest of the metadata
       .resize(AVATAR_SIZE, AVATAR_SIZE, { fit: 'cover', position: sharp.strategy.attention })

@@ -31,6 +31,17 @@ export default function useMarquee({ canStart, hitsIn, onSelect, onClear, getSel
   live.current = { canStart, hitsIn, onSelect, onClear, getSelection };
   const drag = useRef(null);
 
+  // Whether a menu was open when a press began. The menus close themselves on
+  // that same press, from their own capture listeners, so by the time it
+  // reaches onPointerDown the menu is gone. A capture listener on window runs
+  // before any on document, while the menu is still there to see.
+  const pressed = useRef(null);
+  useEffect(() => {
+    const note = (ev) => { pressed.current = { ev, menuOpen: !!document.querySelector('.ctx-menu, .menu, .cell-pop') }; };
+    window.addEventListener('pointerdown', note, true);
+    return () => window.removeEventListener('pointerdown', note, true);
+  }, []);
+
   const update = useCallback(() => {
     const d = drag.current;
     if (!d?.active) return;
@@ -43,7 +54,7 @@ export default function useMarquee({ canStart, hitsIn, onSelect, onClear, getSel
       right: doc.right - window.scrollX,
       bottom: doc.bottom - window.scrollY,
     };
-    setBox(view);
+    setBox((prev) => (prev && prev.left === view.left && prev.top === view.top && prev.right === view.right && prev.bottom === view.bottom ? prev : view));
     live.current.onSelect(live.current.hitsIn(view), { base: d.base, additive: d.additive });
   }, []);
 
@@ -79,17 +90,16 @@ export default function useMarquee({ canStart, hitsIn, onSelect, onClear, getSel
       base: null,
       frame: 0,
       // A press that only closes an open menu is not a click on the page.
-      menuOpen: !!document.querySelector('.ctx-menu, .menu'),
+      menuOpen: pressed.current?.ev === e.nativeEvent ? pressed.current.menuOpen : !!document.querySelector('.ctx-menu, .menu, .cell-pop'),
     };
 
-    // Held near an edge, keep scrolling while the pointer stays put.
+    // Held near an edge, keep scrolling while the pointer stays put. The
+    // scroll event redraws the rectangle; at the top or bottom of the page
+    // nothing moves, so there is nothing to redraw.
     const tick = () => {
       if (!drag.current?.active) return;
       const dy = edgeScroll(d.cy, window.innerHeight);
-      if (dy) {
-        window.scrollBy(0, dy);
-        update();
-      }
+      if (dy) window.scrollBy(0, dy);
       d.frame = requestAnimationFrame(tick);
     };
 
@@ -117,7 +127,12 @@ export default function useMarquee({ canStart, hitsIn, onSelect, onClear, getSel
       }
       end();
     };
-    d.onCancel = () => end();
+    // The browser took the pointer back (a pen lifted out of range, a system
+    // gesture): the drag did not finish, so the selection goes back as it was.
+    d.onCancel = () => {
+      if (d.active) live.current.onSelect([], { base: d.base, additive: true });
+      end();
+    };
     d.onKey = (ev) => {
       if (ev.key !== 'Escape' || !d.active) return;
       ev.preventDefault();

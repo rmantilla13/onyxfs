@@ -4,11 +4,16 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
 import { THEME_KEY, readThemePref, setThemePref } from '@/lib/theme';
-import { useRouter } from 'next/navigation';
 import { initialsFor } from '@/lib/account';
 import AvatarDialog from '@/app/components/AvatarDialog';
 
 // ︎ asks for the text glyph, not the emoji, where a platform has both.
+// A picture changed in this tab, until the page is loaded afresh. Another
+// page's TopNav may be rendered from the router's cached payload, older than
+// the change; this keeps it from showing the old picture meanwhile. (A
+// router.refresh() would do that too, but it resets a scrolled file list.)
+let changedHere;
+
 const THEMES = [
   { key: 'light', label: 'Light', icon: '☀︎' },
   { key: 'dark', label: 'Dark', icon: '☾︎' },
@@ -23,12 +28,10 @@ const THEMES = [
  * shows the way in.
  */
 export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts, avatarUrl = null }) {
-  // The picture, kept here too so a new one shows the moment it is saved;
-  // the refresh then brings every server-rendered page up to date.
-  const [avatar, setAvatar] = useState(avatarUrl);
+  // The picture, kept here too so a new one shows the moment it is saved.
+  const [avatar, setAvatar] = useState(() => (changedHere !== undefined ? changedHere : avatarUrl));
   const [editingAvatar, setEditingAvatar] = useState(false);
-  const router = useRouter();
-  useEffect(() => { setAvatar(avatarUrl); }, [avatarUrl]);
+  useEffect(() => { setAvatar(changedHere !== undefined ? changedHere : avatarUrl); }, [avatarUrl]);
 
   // The server cannot see localStorage, so render 'system' and correct it
   // after mount rather than risk a hydration mismatch. The page is already in
@@ -100,7 +103,7 @@ export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts
       onClose={() => setEditingAvatar(false)}
       email={email}
       current={avatar}
-      onSaved={(url) => { setAvatar(url); router.refresh(); }}
+      onSaved={(url) => { changedHere = url; setAvatar(url); }}
     />
     </>
   );
