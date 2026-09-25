@@ -12,6 +12,9 @@ import { fmtDuration } from '@/lib/media';
  *   { type: 'file', file }
  *   { type: 'files', files }
  *   { type: 'folder', path, stats }   stats from folderStats (lib/folder-ops)
+ *   { type: 'drive', drive, usage, canManage, isAdmin }
+ *                                     usage is the server's count, when the
+ *                                     viewer may see it (admins, owners)
  *
  * Read-only, and built from what the page already holds, so it opens at once
  * and says nothing the viewer could not already see in the list.
@@ -83,7 +86,21 @@ const FolderIcon = () => (
   </svg>
 );
 
-export default function InfoDialog({ info, schema, onClose, onOpenFile, onDownload, onOpenFolder }) {
+const DriveIcon = () => (
+  <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden>
+    <rect x="3" y="6" width="18" height="12" rx="2.4" fill="none" stroke="currentColor" strokeWidth="1.5" />
+    <path d="M6.5 14h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <circle cx="17" cy="14" r="1.1" fill="currentColor" />
+  </svg>
+);
+
+const ROLE_LABELS = {
+  owner: 'Owner — can edit, and manage its members',
+  editor: 'Editor — can add, change and remove files',
+  viewer: 'Viewer — can open and download',
+};
+
+export default function InfoDialog({ info, schema, onClose, onOpenFile, onDownload, onOpenFolder, onOpenDrive, onDriveMembers }) {
   if (!info) return null;
   const close = () => onClose?.();
   // Leaving the dialog to go somewhere closes it first, so it is not left
@@ -139,6 +156,41 @@ export default function InfoDialog({ info, schema, onClose, onOpenFile, onDownlo
               : [{ key: 'where', label: 'Where', type: 'text', value: `${s.folders.length} folders` }]),
           ]}
         />
+      </Dialog>
+    );
+  }
+
+  if (info.type === 'drive') {
+    const { drive: d, usage: u } = info;
+    const rows = [
+      { key: 'access', label: 'Your access', type: 'text', value: info.isAdmin ? 'Admin — every drive, in full' : ROLE_LABELS[d.role] || d.role },
+      ...(u ? [
+        { key: 'files', label: 'Files', type: 'text', value: String(u.files) },
+        { key: 'size', label: 'Size', type: 'bytes', value: u.bytes },
+      ] : []),
+      // Where it lives is for the people who look after it.
+      ...(info.canManage && d.prefix ? [{ key: 'where', label: 'Stored in', type: 'text', value: `${d.bucket ? `${d.bucket}/` : ''}${d.prefix}/` }] : []),
+    ];
+    return (
+      <Dialog
+        open
+        onClose={close}
+        title="Info"
+        footer={(
+          <>
+            {info.canManage && onDriveMembers && <button type="button" className="btn" onClick={go(() => onDriveMembers(d))}>Members…</button>}
+            {onOpenDrive && <button type="button" className="btn btn-primary" onClick={go(() => onOpenDrive(d.id))}>Open</button>}
+          </>
+        )}
+      >
+        <div className="info-head">
+          <span className="info-thumb info-folder"><DriveIcon /></span>
+          <div style={{ minWidth: 0 }}>
+            <p className="info-name" title={d.name}>{d.name}</p>
+            <p className="small muted" style={{ margin: 0 }}>Drive{u ? ` · ${fmtSize(u.bytes) || '0 B'}` : ''}</p>
+          </div>
+        </div>
+        <Facts rows={rows} />
       </Dialog>
     );
   }

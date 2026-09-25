@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import { requestMagicLink, requestAccess } from './actions';
 
-export default function SignInClient({ brandName, tagline, markPath, oktaEnabled, linksPrinted, error }) {
+export default function SignInClient({ brandName, tagline, markPath, oktaEnabled, linksPrinted, returnTo, error }) {
   const [mode, setMode] = useState('signin');
   const [linkState, sendLink] = useFormState(requestMagicLink, {});
   const [accessState, askAccess] = useFormState(requestAccess, {});
@@ -39,6 +39,7 @@ export default function SignInClient({ brandName, tagline, markPath, oktaEnabled
             </>
           ) : (
             <form action={sendLink} className="stack">
+              {returnTo && <input type="hidden" name="callbackUrl" value={returnTo} />}
               <input className="input" type="email" name="email" placeholder="you@example.com" required autoFocus autoComplete="email" />
               <Submit idle="Email me a sign-in link" busy="Sending…" />
               {linkState.error && <p className="small" style={{ color: 'var(--danger)' }}>{linkState.error}</p>}

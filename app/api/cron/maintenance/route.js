@@ -3,12 +3,12 @@ import { ensureSchema, listExpiredTrash, deleteFile, listAllFiles, getFileMetada
 import { getStorageConfig, s3DeleteObject, s3AbortMultipartUpload } from '@/lib/storage';
 import { normalizeSchema, expiryState } from '@/lib/dam';
 import { notifyExpiringRights } from '@/lib/notify';
+import { TRASH_RETENTION_DAYS } from '@/lib/storage-report';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const TRASH_RETENTION_DAYS = 30;
 // How long an untouched upload stays resumable before it is treated as
 // abandoned. Generous on purpose — coming back to a half-finished 40 GB
 // transfer the next day should still work.

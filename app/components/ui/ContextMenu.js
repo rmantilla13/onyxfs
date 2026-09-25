@@ -65,10 +65,15 @@ export function useContextMenu() {
     setState({ x: at.x ?? 0, y: at.y ?? 0, anchor, items: items.filter(Boolean), key: Date.now() });
   }, []);
 
+  // A new key per opening remounts the popup, so it measures and focuses
+  // afresh. Passed on its own: React refuses a `key` spread in with props.
   const element = state ? (
     <ContextMenuPopup
       key={state.key}
-      {...state}
+      x={state.x}
+      y={state.y}
+      anchor={state.anchor}
+      items={state.items}
       onClose={close}
     />
   ) : null;

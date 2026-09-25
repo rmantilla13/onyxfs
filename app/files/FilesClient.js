@@ -10,7 +10,10 @@ import FileList from '@/app/components/ui/FileList';
 import FilterPanel, { ActiveFilters, countActive } from '@/app/components/ui/FilterPanel';
 import ColumnPicker, { NewFieldDialog } from '@/app/components/ui/ColumnPicker';
 import InfoDialog from '@/app/components/ui/InfoDialog';
+import ShareDialog from '@/app/components/ShareDialog';
+import { DriveList, NewDriveDialog, DriveMembersDialog } from '@/app/components/Drives';
 import { modKey, isTyping } from '@/lib/keys';
+import { fmtSize } from '@/lib/media';
 import {
   VIEW_STORAGE_KEY, parseView, availableColumns, parseColumns, resolveColumns,
   COLUMNS_STORAGE_KEY, DEFAULT_COLUMNS, METADATA_PREFIX,
@@ -69,7 +72,16 @@ const SORTS = [
 ];
 
 
-export default function FilesClient({ flags, canWrite, schema: initialSchema, filespaceId, isAdmin = false }) {
+/**
+ * `drives` are the filespaces this person may open (listFilespacesForSpace),
+ * with `driveUsage` { [id]: { files, bytes } } for the ones they may manage
+ * and `library` the whole library's totals for an admin. `filespaceId` is
+ * the drive being shown ('' is All files).
+ */
+export default function FilesClient({
+  flags, canWrite, schema: initialSchema, filespaceId, isAdmin = false,
+  drives = [], driveUsage = {}, library = null,
+}) {
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -105,6 +117,14 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
   const [addingField, setAddingField] = useState(false);
   // What "Get info" is showing, if anything (InfoDialog).
   const [info, setInfo] = useState(null);
+  // The file the Share dialog is open for.
+  const [sharing, setSharing] = useState(null);
+  // Drives: the New drive dialog, and the drive whose members are open.
+  const [newDrive, setNewDrive] = useState(false);
+  const [membersOf, setMembersOf] = useState(null);
+  const activeDrive = drives.find((d) => d.id === filespaceId) || null;
+  // The top of whatever is being shown: a drive's name, or the library.
+  const rootName = activeDrive?.name || 'All files';
   const router = useRouter();
   const toast = useToast();
   const { confirm, confirmElement } = useConfirm();
@@ -232,9 +252,9 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
   // Back is history when we put the previous folder there; opened from a link
   // (nothing of ours to go back through), it is the enclosing folder instead.
   const back = nav.depth > 0
-    ? { label: `Back to ${nav.from ? baseName(nav.from) : 'All files'}`, go: () => window.history.back() }
+    ? { label: `Back to ${nav.from ? baseName(nav.from) : rootName}`, go: () => window.history.back() }
     : folder
-      ? { label: `Up to ${parentOf(folder) ? baseName(parentOf(folder)) : 'All files'}`, go: () => navigate(parentOf(folder)) }
+      ? { label: `Up to ${parentOf(folder) ? baseName(parentOf(folder)) : rootName}`, go: () => navigate(parentOf(folder)) }
       : null;
 
   // Drop the selection whenever the result set changes underneath it.
@@ -698,6 +718,9 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
       { label: 'Open', hint: 'Enter', onSelect: () => openFile(f) },
       { label: 'Get info', hint: `${modKey()}I`, onSelect: () => infoForFiles([f.id]) },
       { label: 'Download', onSelect: () => downloadFile(f) },
+      // The flag is the role's (the page computed it); the route checks both
+      // it and write access to this file again.
+      flags.shares && canWrite && { label: 'Share…', onSelect: () => setSharing(f) },
       canWrite && '-',
       canWrite && { label: 'Rename…', onSelect: () => renameFileUI(f) },
       canWrite && { label: 'Move…', onSelect: () => moveFilesUI([f.id]) },
@@ -723,7 +746,7 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
   // folder or a field. `at` is the folder it acts on: the open one, or the
   // root when it came from the "All files" crumb or tree row.
   const blankMenu = (at = folder) => [
-    { heading: at || 'All files' },
+    { heading: at || rootName },
     canWrite && { label: 'New folder…', onSelect: () => newFolder(at) },
     canWrite && { label: 'Upload files…', onSelect: () => inputRef.current?.click() },
     canWrite && { label: 'Upload folder…', onSelect: () => folderInputRef.current?.click() },
@@ -738,6 +761,109 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
     { label: 'Refresh', onSelect: () => { load(); loadFolders(); } },
   ];
 
+  // ── Drives ────────────────────────────────────────────────────────────────
+  // Each drive is a filespace: its own place in the bucket, its own members,
+  // its own volume on the desktop. Opening one is a page change (the server
+  // scopes the listing to it); making, renaming and deleting are admin
+  // routes, and members are managed by admins and the drive's owners.
+  const openDrive = useCallback((id) => {
+    router.push(id ? `/files?filespace=${encodeURIComponent(id)}` : '/files');
+  }, [router]);
+  const canManageDrive = (d) => isAdmin || d?.role === 'owner';
+
+  const infoForDrive = (d) => setInfo({
+    type: 'drive', drive: d, usage: driveUsage[d.id] || null, canManage: canManageDrive(d), isAdmin,
+  });
+
+  const renameDrive = async (d) => {
+    const renamed = await prompt({
+      title: 'Rename drive',
+      label: 'Name',
+      value: d.name,
+      confirmLabel: 'Rename',
+      validate: (v) => (v.trim() ? null : 'Give the drive a name.'),
+      submit: async (name) => {
+        const r = await fetch('/api/admin/filespaces', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id: d.id, name: name.trim() }),
+        });
+        return r.ok ? null : (await r.json().catch(() => ({}))).error || `Could not rename the drive (HTTP ${r.status}).`;
+      },
+    });
+    if (renamed == null) return;
+    router.refresh();
+    toast.success(`Renamed to “${renamed.trim()}”.`);
+  };
+
+  const deleteDrive = async (d) => {
+    const u = driveUsage[d.id];
+    const ok = await confirm({
+      title: `Delete the drive “${d.name}”?`,
+      body: `Its members lose it, and desktop mounts of it stop within the hour. ${u?.files
+        ? `The ${u.files} file${u.files === 1 ? '' : 's'} in it (${fmtSize(u.bytes) || '0 B'}) are not deleted: they stay in the bucket and in All files.`
+        : 'Nothing in the bucket is deleted.'}`,
+      confirmLabel: 'Delete drive',
+    });
+    if (!ok) return;
+    const r = await fetch(`/api/admin/filespaces?id=${encodeURIComponent(d.id)}`, { method: 'DELETE' });
+    if (!r.ok) {
+      toast.error((await r.json().catch(() => ({}))).error || `Could not delete the drive (HTTP ${r.status}).`);
+      return;
+    }
+    toast.success(`Deleted the drive “${d.name}”.`);
+    if (d.id === filespaceId) openDrive('');
+    router.refresh();
+  };
+
+  const driveMenu = (d) => [
+    { heading: d.name },
+    { label: 'Open', onSelect: () => openDrive(d.id) },
+    { label: 'Get info', onSelect: () => infoForDrive(d) },
+    canManageDrive(d) && '-',
+    canManageDrive(d) && { label: 'Members and permissions…', onSelect: () => setMembersOf(d) },
+    isAdmin && { label: 'Rename…', onSelect: () => renameDrive(d) },
+    isAdmin && { label: 'Bucket and keys…', onSelect: () => router.push('/admin?tab=filespaces') },
+    isAdmin && '-',
+    isAdmin && { label: 'Delete drive…', danger: true, onSelect: () => deleteDrive(d) },
+  ];
+
+  const libraryMenu = () => [
+    { heading: 'All files' },
+    { label: 'Open', onSelect: () => openDrive('') },
+    isAdmin && '-',
+    isAdmin && { label: 'New drive…', onSelect: () => setNewDrive(true) },
+  ];
+
+  // The ⌘K palette's actions for this page arrive as `onyx:command` events
+  // (CommandPalette). Through a ref, like the page keys, so the listener is
+  // added once and still acts on this render's folder and selection.
+  const commands = useRef(null);
+  commands.current = (name) => {
+    if (name === 'new-folder' && canWrite) newFolder();
+    else if (name === 'upload' && canWrite) inputRef.current?.click();
+    else if (name === 'info') (selected.size ? infoForFiles([...selected]) : infoForFolder(folder));
+    else if (name === 'new-drive' && isAdmin) setNewDrive(true);
+  };
+  useEffect(() => {
+    const on = (e) => commands.current?.(e.detail?.name);
+    window.addEventListener('onyx:command', on);
+    return () => window.removeEventListener('onyx:command', on);
+  }, []);
+
+  // /files?new=drive — the palette's New drive from another page. Opens the
+  // dialog once and takes the parameter back off, so a reload does not.
+  useEffect(() => {
+    if (searchParams.get('new') !== 'drive') return;
+    if (isAdmin) setNewDrive(true);
+    const params = new URLSearchParams(window.location.search);
+    params.delete('new');
+    const qs = params.toString();
+    // Our keys only, as in navigate(), so Next brings useSearchParams along.
+    const cur = historyState();
+    window.history.replaceState({ onyxDepth: cur.depth, onyxFrom: cur.from }, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
+  }, [searchParams, isAdmin]);
+
   // Fields, links and open menus keep the browser's own menu — copy, paste,
   // open in a new tab. Everything else on the page gets ours.
   const menuFor = (target) => {
@@ -746,6 +872,11 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
     if (card) {
       const f = files.find((x) => x.id === card.dataset.fileId);
       return f ? { el: card, items: fileMenu(f) } : null;
+    }
+    const disk = target?.closest?.('[data-drive]');
+    if (disk) {
+      const d = drives.find((x) => x.id === disk.dataset.drive);
+      return { el: disk, items: d ? driveMenu(d) : libraryMenu() };
     }
     const dir = target?.closest?.('[data-folder]');
     if (dir) {
@@ -925,19 +1056,24 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
       onKeyDown={onMenuKey}
     >
       <div className="row files-head" style={{ marginBottom: 20 }}>
-        <button
-          type="button"
-          className="btn btn-ghost btn-icon files-back"
-          onClick={back?.go}
-          disabled={!back}
-          aria-label={back?.label || 'Back'}
-          title={back?.label}
-        >
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
-            <path d="M9.5 3.5 5 8l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
-        <Breadcrumbs folder={folder} onOpen={navigate} canWrite={canWrite} onDrop={onTreeDrop} />
+        {/* All files is the top of the tree: nothing to go back up to, so no
+            button — the heading sits flush with the page. Inside a folder,
+            Back is history when there is some and the enclosing folder when
+            there is not. */}
+        {folder && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon files-back"
+            onClick={back?.go}
+            aria-label={back?.label || 'Back'}
+            title={back?.label}
+          >
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
+              <path d="M9.5 3.5 5 8l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
+        <Breadcrumbs folder={folder} rootName={rootName} onOpen={navigate} canWrite={canWrite} onDrop={onTreeDrop} />
         <span className="muted small">
           {visible.length}{visible.length !== files.length ? ` of ${files.length}` : ''}{cursor ? '+' : ''}
         </span>
@@ -1068,11 +1204,20 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
 
       <div className="files-layout">
           <aside>
+            <DriveList
+              drives={drives}
+              usage={driveUsage}
+              library={library}
+              activeId={filespaceId}
+              canCreate={isAdmin}
+              onOpen={openDrive}
+              onNew={() => setNewDrive(true)}
+            />
             <div className="side-folders">
-              <Section title="Folders">
+              <Section title={activeDrive ? `Folders in ${activeDrive.name}` : 'Folders'}>
                 <div className="folder-list edge-scroll">
                   <FolderDrop target="" enabled={canWrite} onDrop={onTreeDrop}>
-                    <FolderLink active={!folder} onClick={() => navigate('')} path="">All files</FolderLink>
+                    <FolderLink active={!folder} onClick={() => navigate('')} path="">{rootName}</FolderLink>
                   </FolderDrop>
                   <FolderTree
                     folders={folders}
@@ -1160,7 +1305,7 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
         <div className="drop-overlay" aria-hidden>
           <div className="stack" style={{ textAlign: 'center', gap: 'var(--s1)' }}>
             <strong>Drop to upload</strong>
-            <span className="small muted">Files and folders go into {folder || 'All files'}</span>
+            <span className="small muted">Files and folders go into {folder || rootName}</span>
           </div>
         </div>
       )}
@@ -1171,6 +1316,20 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
       {isAdmin && flags.metadata && (
         <NewFieldDialog open={addingField} onClose={() => setAddingField(false)} onCreate={createField} />
       )}
+      <ShareDialog file={sharing} open={!!sharing} onClose={() => setSharing(null)} />
+      {isAdmin && (
+        <NewDriveDialog
+          open={newDrive}
+          onClose={() => setNewDrive(false)}
+          onCreated={(d) => {
+            setNewDrive(false);
+            toast.success(`Made the drive “${d.name}”. Add its members from its menu.`);
+            openDrive(d.id);
+            router.refresh();
+          }}
+        />
+      )}
+      <DriveMembersDialog drive={membersOf} open={!!membersOf} onClose={() => setMembersOf(null)} />
       <InfoDialog
         info={info}
         schema={schema}
@@ -1178,6 +1337,8 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
         onOpenFile={openFile}
         onDownload={downloadFile}
         onOpenFolder={navigate}
+        onOpenDrive={openDrive}
+        onDriveMembers={(d) => setMembersOf(d)}
       />
     </main>
   );
@@ -1189,8 +1350,8 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
  * last crumb is the page's heading. Each crumb carries data-folder, so the
  * page's context menu treats it as that folder.
  */
-function Breadcrumbs({ folder, onOpen, canWrite, onDrop }) {
-  const crumbs = crumbsFor(folder);
+function Breadcrumbs({ folder, rootName, onOpen, canWrite, onDrop }) {
+  const crumbs = crumbsFor(folder, rootName);
   const here = crumbs[crumbs.length - 1];
   return (
     <nav className="crumbs" aria-label="Folder path">

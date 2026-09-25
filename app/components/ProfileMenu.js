@@ -14,8 +14,8 @@ const THEMES = [
 ];
 
 /**
- * The account menu at the top right: who is signed in, Admin for admins, the
- * theme, the shortcuts, which build is serving the page, and signing out —
+ * The account menu at the top right: who is signed in, Admin and Storage for
+ * admins, the theme, the shortcuts, which build is serving the page, and signing out —
  * everything that was spread along the nav, in the one place people look for
  * it. Admin access is still decided on the server (ADMIN_EMAILS); this only
  * shows the way in.
@@ -50,7 +50,10 @@ export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts
       </div>
       <MenuSeparator />
       {isAdmin && (
-        <Link href="/admin" role="menuitem" className="menu-item">Admin</Link>
+        <>
+          <Link href="/admin" role="menuitem" className="menu-item">Admin</Link>
+          <Link href="/storage" role="menuitem" className="menu-item">Storage usage</Link>
+        </>
       )}
       {onShortcuts && (
         <MenuItem onClick={onShortcuts}>

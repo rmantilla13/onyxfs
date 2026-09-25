@@ -17,8 +17,8 @@ async function api(url, opts) {
 }
 
 /**
- * Members of one filespace: list, change role, remove, add. Used by the Admin
- * panel and by the files UI's "Members" dialog, against the same route
+ * Members of one filespace (a drive): list, change role, remove, add. Used by
+ * the Admin panel and by the drive menu's "Members and permissions" dialog, against the same route
  * (/api/filespaces/[id]/members), which admits admins and the filespace's
  * owners and enforces the rules — this component only mirrors them so it does
  * not offer a control the server will refuse.
@@ -62,7 +62,7 @@ export default function FilespaceMembers({ filespaceId, onChanged }) {
   const remove = async (m) => {
     const ok = await confirm({
       title: `Remove ${m.email}?`,
-      body: 'They lose this filespace in the switcher and the desktop app. A desktop mount they already have keeps working until its credentials next refresh (within an hour). Files are not affected.',
+      body: 'They lose this drive on the files page and in the desktop app. A desktop mount they already have keeps working until its credentials next refresh (within an hour). Files are not affected.',
       confirmLabel: 'Remove',
     });
     if (ok) change(m.email, { grant: false }, `rm:${m.email}`);
@@ -76,7 +76,7 @@ export default function FilespaceMembers({ filespaceId, onChanged }) {
   return (
     <div className="fs-members">
       {members.length === 0 ? (
-        <p className="small muted" style={{ margin: '0 0 12px' }}>No members yet. Admins reach every filespace without being listed.</p>
+        <p className="small muted" style={{ margin: '0 0 12px' }}>No members yet. Admins reach every drive without being listed.</p>
       ) : (
         <table className="fs-members-table">
           <tbody>

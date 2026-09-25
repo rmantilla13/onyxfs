@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { listFilesForUser, createFile, listFileFoldersForUser, buildPrincipal, getFilespaceForUser } from '@/lib/db';
-import { presignFileUrls } from '@/lib/storage';
+import { driveAccess } from '@/lib/drive-access';
+import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject } from '@/lib/storage';
 import { encodeCursor, decodeCursor } from '@/lib/file-query';
 import { uploadFields } from '@/lib/media';
 
@@ -78,12 +79,54 @@ export async function POST(req) {
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
   if (!body.url) return NextResponse.json({ error: 'A file URL is required.' }, { status: 400 });
+
+  // Recording a file makes its creator able to open it, so where it points is
+  // checked like an upload: not by a platform viewer, not into our own
+  // previews or trash, and not into a drive this person cannot add to.
+  const principal = await buildPrincipal(session.user.email);
+  if (principal.roleId === 'viewer' && !principal.isAdmin) {
+    return NextResponse.json({ error: 'Your role can view files but not add them.' }, { status: 403 });
+  }
+  if (body.storageKey) {
+    const key = String(body.storageKey);
+    if (/^(_thumbs|_trash)\//.test(key)) {
+      return NextResponse.json({ error: 'Not a file key.' }, { status: 400 });
+    }
+    const d = driveAccess(key, principal.isAdmin ? { isAdmin: true } : principal.driveScope);
+    if (d.inDrive && !d.write) {
+      return NextResponse.json({ error: 'That file is in a drive you can view but not add to.' }, { status: 403 });
+    }
+  }
+
   try {
-    const file = await createFile({ ...body, ...uploadFields(body), createdBy: session.user.email });
+    // The bucket's own word on what landed, never the client's: its ETag is
+    // the content hash duplicates are found by, and its length the size the
+    // Storage page adds up. Best-effort — a bucket that will not answer a
+    // HEAD still gets its file recorded, just without a hash.
+    const facts = await objectFacts(session.user.email, body);
+    const file = await createFile({
+      ...body,
+      ...uploadFields(body),
+      ...(facts?.size != null ? { size: facts.size } : {}),
+      contentHash: facts?.etag || null,
+      createdBy: session.user.email,
+    });
     // Presign so the just-uploaded file previews immediately on a private bucket.
     const [signed] = await presignFileUrls([file]);
     return NextResponse.json({ file: signed || file });
   } catch (e) {
     return NextResponse.json({ error: e.message || 'Save failed.' }, { status: 500 });
+  }
+}
+
+async function objectFacts(email, body) {
+  if (body.storage !== 's3' || !body.storageKey) return null;
+  try {
+    const cfg = await getStorageConfig();
+    if (storageMode(cfg) !== 's3') return null;
+    const fs = body.filespace ? await getFilespaceForUser(email, String(body.filespace)) : null;
+    return await s3HeadObject(fs ? cfgForFilespace(cfg, fs) : cfg, String(body.storageKey));
+  } catch {
+    return null;
   }
 }

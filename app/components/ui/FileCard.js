@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { effectiveKind, drawableKind, fmtDuration, GRID_ORIGINAL_MAX_BYTES } from '@/lib/media';
+import { effectiveKind, drawableKind, fmtDuration, fmtSize, GRID_ORIGINAL_MAX_BYTES } from '@/lib/media';
 
 /**
  * One file card, for the library grid and the public share grid — which had
@@ -20,15 +20,8 @@ import { effectiveKind, drawableKind, fmtDuration, GRID_ORIGINAL_MAX_BYTES } fro
  * and does not comes into view; the library passes the backfill queue.
  */
 
-const fmtSize = (n) => {
-  if (!n) return '';
-  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0;
-  let v = Number(n);
-  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
-  return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
-};
-
+// Lives in lib/media.js so server pages can use it too; re-exported here for
+// the components that already import it from this module.
 export { fmtSize };
 
 // Also used, shrunk, by the list view's rows (FileList).

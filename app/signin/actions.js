@@ -5,6 +5,7 @@ import { isEmailGrantedAccess } from '@/lib/auth-allowlist';
 import { createOrGetInviteRequest, hasConnectionString } from '@/lib/db';
 import { notifyAccessRequest } from '@/lib/notify';
 import { printsSignInLinks } from '@/lib/signin-email';
+import { safeReturnPath } from '@/lib/return-path';
 
 /**
  * Send a magic link — but only to an address that is already approved.
@@ -56,7 +57,10 @@ export async function requestMagicLink(_prev, formData) {
     // URL from the page this action was posted from — /signin — so the
     // magic link verified, set the session cookie, and delivered the person
     // straight back to the sign-in form, which did not know they had arrived.
-    await signIn('resend', { email, redirect: false, redirectTo: '/files' });
+    // Where they were going, when the form carries it (a deep link, a
+    // private share link); the library otherwise.
+    const redirectTo = safeReturnPath(formData.get('callbackUrl')) || '/files';
+    await signIn('resend', { email, redirect: false, redirectTo });
     return { sent: true };
   } catch (e) {
     console.error('[signin] magic link failed:', e.message);

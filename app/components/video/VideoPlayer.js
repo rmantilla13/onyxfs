@@ -209,15 +209,6 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
     }
   }, [togglePlay, doShuttle, seek, fps, duration, setIn, setOut, clearRange, toggleFullscreen]);
 
-  const togglePip = async () => {
-    const v = video.current;
-    if (!v?.requestPictureInPicture) return;
-    try {
-      if (document.pictureInPictureElement) await document.exitPictureInPicture();
-      else await v.requestPictureInPicture();
-    } catch { /* refused, e.g. before metadata */ }
-  };
-
   // Scrubbing uses pointer capture so a drag continues outside the bar — which
   // is most drags, because the bar is a few pixels tall.
   const scrubTo = (clientX) => {
@@ -268,6 +259,8 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
           src={src}
           poster={file.thumbnailUrl || undefined}
           playsInline
+          // No picture-in-picture, the player's or the browser's hover button.
+          disablePictureInPicture
           // Nothing is fetched until play is pressed on a master with no
           // proxy: opening a detail page should not cost a gigabyte of egress.
           preload={started || proxy ? 'metadata' : 'none'}
@@ -399,7 +392,6 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
             />
           </label>
 
-          <button className="btn btn-icon" onClick={togglePip} aria-label="Picture in picture"><span aria-hidden="true">⧉</span></button>
           <button className="btn btn-icon" onClick={toggleFullscreen} aria-label="Fullscreen"><span aria-hidden="true">⛶</span></button>
         </div>
       </div>

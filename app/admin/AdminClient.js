@@ -13,7 +13,7 @@ import { fmtSize } from '@/app/components/ui/FileCard';
 // protect.
 const TABS = [
   { key: 'storage', label: 'Storage' },
-  { key: 'filespaces', label: 'Filespaces' },
+  { key: 'filespaces', label: 'Drives' },
   { key: 'access', label: 'Access' },
   { key: 'health', label: 'Health' },
 ];
@@ -260,7 +260,11 @@ function Diagnostics({ result, dirty }) {
   );
 }
 
-// ── Filespaces ──────────────────────────────────────────────────────────────
+// ── Drives (filespaces) ─────────────────────────────────────────────────────
+// The files page calls a filespace a drive: its own place in the bucket, its
+// own members, its own volume on the desktop. This tab is where one's bucket,
+// prefix and keys are set; everyday making, renaming and membership also work
+// from the drive list on the files page.
 
 function FilespacesTab() {
   const { data, error, reload, setError } = useResource('/api/admin/filespaces');
@@ -275,7 +279,7 @@ function FilespacesTab() {
     try {
       const out = await api('/api/admin/filespaces', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft) });
       setDraft({ name: '', bucket: '', prefix: '' });
-      setMsg(`Created ${out.filespace?.name || 'the filespace'}. Add its members below.`);
+      setMsg(`Created ${out.filespace?.name || 'the drive'}. Add its members below.`);
       reload();
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   };
@@ -290,10 +294,10 @@ function FilespacesTab() {
     const files = s.files === 1 ? '1 file' : `${s.files.toLocaleString()} files`;
     const members = s.members === 1 ? '1 member loses' : `${s.members} members lose`;
     const ok = await confirm({
-      title: `Delete filespace "${fs.name}"?`,
+      title: `Delete the drive "${fs.name}"?`,
       body: (
         <>
-          This removes the filespace and its access list: {members} it in the switcher and the desktop app, and existing
+          This removes the drive and its access list: {members} it on the files page and in the desktop app, and existing
           desktop mounts stop when their credentials next refresh (within an hour).
           <br /><br />
           <strong>Nothing in storage is deleted.</strong>{' '}
@@ -301,10 +305,10 @@ function FilespacesTab() {
             ? <>The {files} ({fmtSize(s.bytes) || '0 B'}) under <span className="mono">{where}</span> stay in the bucket and in the library, where admins still find them under All files.</>
             : <>Nothing is catalogued under <span className="mono">{where}</span>.</>}
           {' '}The bucket itself is untouched.
-          {s.ownKeys ? ' The access keys stored for this filespace are forgotten.' : ''}
+          {s.ownKeys ? ' The access keys stored for this drive are forgotten.' : ''}
         </>
       ),
-      confirmLabel: 'Delete filespace',
+      confirmLabel: 'Delete drive',
     });
     if (!ok) return;
     try {
@@ -317,15 +321,15 @@ function FilespacesTab() {
   return (
     <>
       <Panel
-        title="New filespace"
-        hint="A filespace is a named bucket+prefix scope. People are granted access to one, and the desktop app mounts exactly that scope — nothing above it."
+        title="New drive"
+        hint="A drive is a named bucket+prefix scope, like a disk of its own. People are granted access to one, and the desktop app mounts exactly that scope — nothing above it."
       >
         <form onSubmit={create}>
           <Field label="Name"><input className="input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Field>
           <Field label="Bucket" hint="Leave blank to use the Storage bucket.">
             <input className="input" value={draft.bucket} onChange={(e) => setDraft({ ...draft, bucket: e.target.value })} />
           </Field>
-          <Field label="Prefix" hint="The scope. Credentials minted for this filespace can reach nothing outside it.">
+          <Field label="Prefix" hint="The scope. Credentials minted for this drive can reach nothing outside it.">
             <input className="input" value={draft.prefix} onChange={(e) => setDraft({ ...draft, prefix: e.target.value })} placeholder="projects/acme" />
           </Field>
           <button className="btn btn-primary" type="submit" disabled={busy || !draft.name.trim() || !draft.prefix.trim()}>
@@ -335,7 +339,7 @@ function FilespacesTab() {
         <Status error={error} ok={msg} />
       </Panel>
 
-      {data && !(data.filespaces || []).length && <p className="muted small">No filespaces yet.</p>}
+      {data && !(data.filespaces || []).length && <p className="muted small">No drives yet.</p>}
       {(data?.filespaces || []).map((fs) => (
         <FilespaceCard key={fs.id} fs={fs} onChanged={reload} onDelete={() => remove(fs)} />
       ))}
@@ -345,7 +349,7 @@ function FilespacesTab() {
 }
 
 /**
- * One filespace: rename in place, delete, open in Files, and its members.
+ * One drive: rename in place, delete, open in Files, and its members.
  * Rename is metadata only — the prefix, and so every stored object, stays put.
  */
 function FilespaceCard({ fs, onChanged, onDelete }) {
@@ -373,7 +377,7 @@ function FilespaceCard({ fs, onChanged, onDelete }) {
           <form className="row" style={{ gap: 8, flex: '1 1 260px' }} onSubmit={save}>
             <input
               className="input"
-              aria-label="Filespace name"
+              aria-label="Drive name"
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}

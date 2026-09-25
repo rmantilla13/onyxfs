@@ -8,6 +8,7 @@ import TopNav from '@/app/components/TopNav';
 import FileDetail from '@/app/components/file/FileDetail';
 import { buildLabel, buildDetail } from '@/lib/version';
 import { parseTimecode } from '@/lib/video-time';
+import { flagsForUser } from '@/lib/user-flags';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,13 +49,14 @@ export default async function FilePage({ params, searchParams }) {
   // "no such file" confirms the id exists to someone guessing.
   if (!(await canAccessFile(file, principal))) notFound();
 
-  const [brand, signedList, canWrite, filespaces] = await Promise.all([
+  const [brand, signedList, canWrite, filespaces, access] = await Promise.all([
     loadBrand(),
     // Six hours, so a paused video still seeks when it resumes.
     presignFileUrls([file], { expiresIn: 21600 }),
     canModifyFile(file, principal),
     // For the nav's filespace switcher.
     listFilespacesForSpace(email),
+    flagsForUser(email),
   ]);
 
   return (
@@ -70,6 +72,8 @@ export default async function FilePage({ params, searchParams }) {
       <FileDetail
         file={signedList[0]}
         canWrite={canWrite}
+        // Sharing takes the role's flag AND write access; the routes check both again.
+        canShare={canWrite && !!access.flags.shares}
         // Back to the folder the file is in, not the top of the library.
         backHref={file.folder ? `/files?folder=${encodeURIComponent(file.folder)}` : '/files'}
         // ?t= opens the player at a moment, so a timecode can be shared as a

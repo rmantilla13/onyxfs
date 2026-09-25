@@ -10,6 +10,7 @@ import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
 import { fmtSize } from '@/app/components/ui/FileCard';
 import { deriveAuto } from '@/lib/dam';
+import ShareDialog from '@/app/components/ShareDialog';
 
 /**
  * The file detail view: preview on the left, inspector on the right.
@@ -22,8 +23,9 @@ import { deriveAuto } from '@/lib/dam';
  * are hidden rather than rendered into a 403. The server check is still the
  * one that counts.
  */
-export default function FileDetail({ file: initial, canWrite = false, backHref = '/files', startAt = 0 }) {
+export default function FileDetail({ file: initial, canWrite = false, canShare = false, backHref = '/files', startAt = 0 }) {
   const [file, setFile] = useState(initial);
+  const [sharing, setSharing] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(initial.name || '');
   const [busy, setBusy] = useState(false);
@@ -91,6 +93,7 @@ export default function FileDetail({ file: initial, canWrite = false, backHref =
         <a className="btn btn-ghost btn-sm" href={backHref}>← Back</a>
         <h1 className="truncate" style={{ fontSize: 'var(--t-xl)', minWidth: 0 }} title={file.name}>{file.name}</h1>
         <div className="spacer" />
+        {canShare && <button type="button" className="btn" onClick={() => setSharing(true)}>Share</button>}
         <a className="btn" href={`/api/files/${file.id}/download`}>Download</a>
         {canWrite && (
           <Menu label="File actions">
@@ -154,6 +157,7 @@ export default function FileDetail({ file: initial, canWrite = false, backHref =
         </Field>
       </Dialog>
 
+      {canShare && <ShareDialog file={file} open={sharing} onClose={() => setSharing(false)} />}
       {confirmElement}
     </main>
   );

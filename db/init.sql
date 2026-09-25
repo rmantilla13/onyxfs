@@ -9,7 +9,7 @@
 -- GENERATED from the same statements lib/db.js executes, so the two agree by
 -- construction; regenerate it rather than hand-editing.
 --
--- Statements: 74
+-- Statements: 80
 
 CREATE TABLE IF NOT EXISTS "user" (
     id              TEXT PRIMARY KEY,
@@ -182,6 +182,9 @@ CREATE INDEX IF NOT EXISTS files_thumbnail_key_idx ON files (thumbnail_key);
 
 CREATE INDEX IF NOT EXISTS files_live_folder_idx ON files (folder) WHERE deleted_at IS NULL;
 
+-- Duplicates are live rows sharing a content hash and a size.
+CREATE INDEX IF NOT EXISTS files_content_hash_idx ON files (content_hash, size) WHERE deleted_at IS NULL AND content_hash IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS uploads (
     id           TEXT PRIMARY KEY,
     upload_id    TEXT NOT NULL,
@@ -249,6 +252,10 @@ ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS storage_prefix TEXT;
 ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS brief_id TEXT;
 
 ALTER TABLE file_shares ALTER COLUMN file_id DROP NOT NULL;
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS pw_failures INT NOT NULL DEFAULT 0;
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS pw_locked_until BIGINT;
 
 CREATE TABLE IF NOT EXISTS folder_access (
     folder TEXT NOT NULL,

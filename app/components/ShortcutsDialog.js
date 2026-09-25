@@ -4,11 +4,12 @@ import Dialog from '@/app/components/ui/Dialog';
 import { modKey } from '@/lib/keys';
 
 /**
- * Every keyboard shortcut in the app, in one place. Opened from the nav's
- * Shortcuts button or with "?" anywhere that is not a text field.
+ * Every keyboard shortcut in the app, in one place. Opened from the account
+ * menu, from the ⌘K palette, or with "?" anywhere that is not a text field.
  *
- * Each entry mirrors a handler — FileGrid / FileList (moving and selecting),
- * FilesClient (⌘↑, ⌘I, the menu key), FileList's cell editors, VideoPlayer —
+ * Each entry mirrors a handler — CommandPalette (⌘K), FileGrid / FileList
+ * (moving and selecting), FilesClient (⌘↑, ⌘I, the menu key), FileList's
+ * cell editors, VideoPlayer —
  * so a change to one of those belongs here too. The modifier is the viewer's
  * platform's, which is why this renders only when opened, in the browser.
  */
@@ -63,6 +64,8 @@ function groups(mod) {
     {
       title: 'Anywhere',
       keys: [
+        [[`${mod}K`], 'Search files, folders and drives, or run a command'],
+        [['↑', '↓', 'Enter'], 'In search: move, then open or run'],
         [['?'], 'These shortcuts'],
         [['Esc'], 'Close a dialog or menu'],
       ],
