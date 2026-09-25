@@ -35,6 +35,8 @@ scoped to and its own expiry.
 
 ## Getting it running
 
+Node 22.15 or newer is required (`.nvmrc`); `npm test` fails to start on older versions.
+
 ```bash
 npm install
 cp .env.local.example .env.local   # fill in DATABASE_URL, AUTH_SECRET, RESEND_API_KEY
