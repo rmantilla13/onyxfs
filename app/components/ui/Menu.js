@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { menuKeyNav } from './ContextMenu';
+import { menuKeyNav, MENU_ITEMS } from './ContextMenu';
 
 /**
  * A dropdown menu for row and card actions.
@@ -55,7 +55,7 @@ export default function Menu({ label = 'Actions', trigger, children, align = 'ri
 
   // Opening focuses the first item, so the arrow keys work straight away.
   useEffect(() => {
-    if (open) pop.current?.querySelector('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
+    if (open) pop.current?.querySelector(MENU_ITEMS)?.focus({ preventScroll: true });
   }, [open]);
 
   const place = {

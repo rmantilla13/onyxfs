@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import FilespaceSwitcher from '@/app/components/FilespaceSwitcher';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
 import { createThumbnailBackfill } from '@/lib/thumbnail-client';
 import { createUploadQueue, uploadOne, filesFromDrop, filesFromInput, joinFolder } from '@/lib/upload-client';
@@ -10,6 +9,8 @@ import FileGrid from '@/app/components/ui/FileGrid';
 import FileList from '@/app/components/ui/FileList';
 import FilterPanel, { ActiveFilters, countActive } from '@/app/components/ui/FilterPanel';
 import ColumnPicker, { NewFieldDialog } from '@/app/components/ui/ColumnPicker';
+import InfoDialog from '@/app/components/ui/InfoDialog';
+import { modKey, isTyping } from '@/lib/keys';
 import {
   VIEW_STORAGE_KEY, parseView, availableColumns, parseColumns, resolveColumns,
   COLUMNS_STORAGE_KEY, DEFAULT_COLUMNS, METADATA_PREFIX,
@@ -22,7 +23,7 @@ import { useFolderPicker } from '@/app/components/ui/FolderPicker';
 import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
 import { useContextMenu } from '@/app/components/ui/ContextMenu';
 import {
-  folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, crumbsFor,
+  folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, crumbsFor, folderStats,
 } from '@/lib/folder-ops';
 
 const KINDS = [
@@ -68,7 +69,7 @@ const SORTS = [
 ];
 
 
-export default function FilesClient({ flags, canWrite, schema: initialSchema, filespaceId, filespaces, isAdmin = false }) {
+export default function FilesClient({ flags, canWrite, schema: initialSchema, filespaceId, isAdmin = false }) {
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -102,6 +103,8 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
   // The list view's columns, as keys (lib/list-columns.js).
   const [columnKeys, setColumnKeys] = useState(DEFAULT_COLUMNS);
   const [addingField, setAddingField] = useState(false);
+  // What "Get info" is showing, if anything (InfoDialog).
+  const [info, setInfo] = useState(null);
   const router = useRouter();
   const toast = useToast();
   const { confirm, confirmElement } = useConfirm();
@@ -233,28 +236,6 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
     : folder
       ? { label: `Up to ${parentOf(folder) ? baseName(parentOf(folder)) : 'All files'}`, go: () => navigate(parentOf(folder)) }
       : null;
-
-  // ⌘↑ / Ctrl+↑ / Alt+↑: the enclosing folder, as in Finder. Back and Forward
-  // (⌘[ ⌘], Alt+← →) are the browser's own, now that folders are history.
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key !== 'ArrowUp' || !(e.metaKey || e.ctrlKey || e.altKey) || e.shiftKey) return;
-      if (!folder || e.defaultPrevented) return;
-      if (e.target?.closest?.('input, textarea, select, [contenteditable], dialog')) return;
-      e.preventDefault();
-      navigate(parentOf(folder));
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [folder, navigate]);
-
-  // A soft navigation: the page re-renders with the new ?filespace= and the
-  // effects above refetch. The open folder belongs to the old filespace, and
-  // is left behind with the old URL.
-  const switchFilespace = useCallback((id) => {
-    if ((id || '') === (filespaceId || '')) return;
-    router.push(id ? `/files?filespace=${encodeURIComponent(id)}` : '/files');
-  }, [filespaceId, router]);
 
   // Drop the selection whenever the result set changes underneath it.
   // Without this, switching folders with 40 files selected left "Trash 40"
@@ -689,11 +670,23 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
   // links keep the browser's menu, as does anything outside the file area.
   const selectAll = () => setSelected(new Set(visible.map((f) => f.id)));
 
+  // ── Get info ──────────────────────────────────────────────────────────────
+  // From what the page already holds: the loaded rows and the folder tree.
+  const infoForFiles = (ids) => {
+    const list = files.filter((f) => ids.includes(f.id));
+    if (list.length === 1) setInfo({ type: 'file', file: list[0] });
+    else if (list.length) setInfo({ type: 'files', files: list });
+  };
+  const infoForFolder = (path) => setInfo({
+    type: 'folder', path, stats: folderStats(folders, path), canOpen: path !== folder,
+  });
+
   const fileMenu = (f) => {
     const many = selected.has(f.id) && selected.size > 1 ? [...selected] : null;
     if (many) {
       return [
         { heading: `${many.length} files selected` },
+        { label: 'Get info', hint: `${modKey()}I`, onSelect: () => infoForFiles(many) },
         canWrite && { label: `Move ${many.length} files…`, onSelect: () => moveFilesUI(many) },
         { label: 'Clear selection', onSelect: () => setSelected(new Set()) },
         canWrite && '-',
@@ -703,6 +696,7 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
     return [
       { heading: f.name },
       { label: 'Open', hint: 'Enter', onSelect: () => openFile(f) },
+      { label: 'Get info', hint: `${modKey()}I`, onSelect: () => infoForFiles([f.id]) },
       { label: 'Download', onSelect: () => downloadFile(f) },
       canWrite && '-',
       canWrite && { label: 'Rename…', onSelect: () => renameFileUI(f) },
@@ -716,6 +710,7 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
   const folderMenu = (path) => [
     { heading: baseName(path) },
     { label: 'Open', onSelect: () => navigate(path) },
+    { label: 'Get info', onSelect: () => infoForFolder(path) },
     canWrite && '-',
     canWrite && { label: 'New folder inside…', onSelect: () => newFolder(path) },
     canWrite && { label: 'Rename…', onSelect: () => renameFolderUI(path) },
@@ -724,19 +719,29 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
     canWrite && { label: 'Delete folder…', danger: true, onSelect: () => deleteFolderUI(path) },
   ];
 
+  // The menu for empty space — anywhere on the page that is not a file, a
+  // folder or a field. `at` is the folder it acts on: the open one, or the
+  // root when it came from the "All files" crumb or tree row.
   const blankMenu = (at = folder) => [
     { heading: at || 'All files' },
     canWrite && { label: 'New folder…', onSelect: () => newFolder(at) },
     canWrite && { label: 'Upload files…', onSelect: () => inputRef.current?.click() },
     canWrite && { label: 'Upload folder…', onSelect: () => folderInputRef.current?.click() },
     canWrite && '-',
+    { label: 'Get info', hint: at === folder ? `${modKey()}I` : undefined, onSelect: () => infoForFolder(at) },
+    at === folder && at && { label: 'Enclosing folder', hint: `${modKey()}↑`, onSelect: () => navigate(parentOf(at)) },
+    { label: view === 'list' ? 'View as grid' : 'View as list', onSelect: () => changeView(view === 'list' ? 'grid' : 'list') },
+    flags.metadata && { label: filtersOpen ? 'Hide filters' : 'Show filters', onSelect: () => toggleFilters() },
+    '-',
     { label: 'Select all', disabled: !visible.length, onSelect: selectAll },
     selected.size > 0 && { label: 'Clear selection', onSelect: () => setSelected(new Set()) },
     { label: 'Refresh', onSelect: () => { load(); loadFolders(); } },
   ];
 
+  // Fields, links and open menus keep the browser's own menu — copy, paste,
+  // open in a new tab. Everything else on the page gets ours.
   const menuFor = (target) => {
-    if (target?.closest?.('input, textarea, select, [contenteditable], a[href], .files-toolbar, .ctx-menu, dialog')) return null;
+    if (target?.closest?.('input, textarea, select, [contenteditable], a[href], .ctx-menu, .cell-pop, dialog')) return null;
     const card = target?.closest?.('[data-file-id]');
     if (card) {
       const f = files.find((x) => x.id === card.dataset.fileId);
@@ -747,9 +752,40 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
       const path = dir.dataset.folder;
       return { el: dir, items: path ? folderMenu(path) : blankMenu('') };
     }
-    const pane = target?.closest?.('.files-pane');
-    return pane ? { el: pane, items: blankMenu() } : null;
+    return { el: target?.closest?.('.files-pane') || target, items: blankMenu() };
   };
+
+  // Page shortcuts, listed in the nav's Shortcuts dialog:
+  //   ⌘↑ / Ctrl+↑ / Alt+↑  the enclosing folder, as in Finder. Back and
+  //                        Forward (⌘[ ⌘], Alt+← →) are the browser's own,
+  //                        now that folders are history.
+  //   ⌘I / Ctrl+I          Get info: the selection, else the file with
+  //                        focus, else the open folder.
+  // Through a ref, so the listener is added once and still sees this
+  // render's selection and folder.
+  const pageKeys = useRef(null);
+  pageKeys.current = (e) => {
+    if (e.defaultPrevented || isTyping(e) || e.target?.closest?.('dialog')) return;
+    const mod = e.metaKey || e.ctrlKey;
+    if (e.key === 'ArrowUp' && (mod || e.altKey) && !e.shiftKey) {
+      if (!folder) return;
+      e.preventDefault();
+      navigate(parentOf(folder));
+      return;
+    }
+    if (mod && !e.altKey && !e.shiftKey && (e.key === 'i' || e.key === 'I')) {
+      e.preventDefault();
+      const focused = document.activeElement?.closest?.('[data-file-id]')?.dataset.fileId;
+      if (selected.size) infoForFiles([...selected]);
+      else if (focused) infoForFiles([focused]);
+      else infoForFolder(folder);
+    }
+  };
+  useEffect(() => {
+    const onKey = (e) => pageKeys.current?.(e);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // The menu key and Shift+F10 also fire a contextmenu event in most
   // browsers; opening from keydown and ignoring the echo keeps it to one.
@@ -895,7 +931,7 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
           onClick={back?.go}
           disabled={!back}
           aria-label={back?.label || 'Back'}
-          title={back ? `${back.label}${nav.depth > 0 ? '  (⌘[)' : '  (⌘↑)'}` : undefined}
+          title={back?.label}
         >
           <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
             <path d="M9.5 3.5 5 8l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -1032,7 +1068,6 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
 
       <div className="files-layout">
           <aside>
-            <FilespaceSwitcher filespaces={filespaces} activeId={filespaceId} isAdmin={isAdmin} onSwitch={switchFilespace} />
             <div className="side-folders">
               <Section title="Folders">
                 <div className="folder-list edge-scroll">
@@ -1136,6 +1171,14 @@ export default function FilesClient({ flags, canWrite, schema: initialSchema, fi
       {isAdmin && flags.metadata && (
         <NewFieldDialog open={addingField} onClose={() => setAddingField(false)} onCreate={createField} />
       )}
+      <InfoDialog
+        info={info}
+        schema={schema}
+        onClose={() => setInfo(null)}
+        onOpenFile={openFile}
+        onDownload={downloadFile}
+        onOpenFolder={navigate}
+      />
     </main>
   );
 }

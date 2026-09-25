@@ -43,13 +43,13 @@ export default async function FilesPage({ searchParams }) {
         markPath={brand.visual.logo.markPath}
         email={email}
         isAdmin={admin}
+        filespaces={filespaces}
       />
       <FilesClient
         flags={flags}
         canWrite={role.full || role.id !== 'viewer'}
         schema={normalizeSchema(rawSchema)}
         filespaceId={searchParams?.filespace || ''}
-        filespaces={filespaces}
         isAdmin={admin}
       />
     </>

@@ -194,9 +194,6 @@ textarea.input { min-height: 80px; resize: vertical; }
 .muted { color: var(--muted); }
 .small { font-size: var(--t-sm); }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The build stamp in the nav. Small enough to ignore, present enough to
-   answer "is the fix live yet" without opening a dashboard. */
-.nav-build { font-size: var(--t-xs); opacity: 0.65; white-space: pre-line; }
 
 .tag {
   display: inline-block;
@@ -286,6 +283,9 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 .menu-item {
   display: flex; align-items: center; gap: var(--s2);
   width: 100%;
+  /* A dropdown is sized from the button it hangs off, often a small one, so
+     without this an item wraps at the menu's minimum width. */
+  white-space: nowrap;
   padding: var(--s2) var(--s3);
   border: 0; border-radius: var(--radius-sm);
   background: transparent;
@@ -319,6 +319,77 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 .ctx-heading { padding: var(--s1) var(--s3) var(--s2); max-width: 100%; }
 .ctx-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu { max-width: calc(100vw - 16px); }
+
+/* ── Top nav ────────────────────────────────────────────────────────────── */
+/* The mark, the filespace, and on the right the shortcuts and the account
+   menu (TopNav). Everything else that used to sit here is in that menu. */
+.topnav { position: sticky; top: 0; z-index: var(--z-nav); background: var(--surface); border-bottom: 1px solid var(--line); }
+.topnav-row { display: flex; align-items: center; gap: var(--s2); height: 56px; min-width: 0; }
+.topnav-brand { display: flex; align-items: center; gap: var(--s2); flex: none; margin-right: var(--s2); }
+.topnav-name { font-family: var(--font-display); letter-spacing: -0.02em; }
+.topnav-shortcuts { color: var(--muted); }
+.topnav-shortcuts:hover { color: var(--ink); }
+
+.avatar {
+  display: inline-grid; place-items: center;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  color: var(--ink);
+  font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.02em;
+}
+/* Parts of a dropdown that are not items: who is signed in, a group label,
+   the build stamp. */
+.menu-heading { display: flex; flex-direction: column; gap: 2px; padding: var(--s2) var(--s3) var(--s1); max-width: 280px; }
+.menu-heading-email { font-size: var(--t-md); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-label { padding: var(--s1) var(--s3) 2px; }
+.menu-foot { padding: var(--s2) var(--s3) var(--s1); font-size: var(--t-xs); color: var(--muted); white-space: pre-line; }
+a.menu-item { color: inherit; text-decoration: none; }
+
+kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono); font-size: var(--t-xs);
+  line-height: 1.5;
+  text-align: center;
+  color: var(--ink);
+}
+
+/* The filespace switcher in the nav: its name, and the menu under it. */
+.fs-switch.fs-switch-nav { margin: 0; min-width: 0; }
+.fs-switch-nav .menu-wrap > .btn { width: auto; max-width: 240px; gap: var(--s2); }
+.fs-switch-nav .menu { width: max-content; min-width: 220px; max-width: min(320px, calc(100vw - 16px)); }
+.fs-switch-icon { flex: none; color: var(--muted); }
+
+/* ── Keyboard shortcuts ─────────────────────────────────────────────────── */
+.shortcuts { columns: 2 300px; column-gap: var(--s6); }
+.shortcuts-group { break-inside: avoid; margin-bottom: var(--s5); }
+.shortcuts-title { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 0 0 var(--s2); }
+.shortcuts-list { margin: 0; }
+.shortcuts-row { display: grid; grid-template-columns: minmax(96px, auto) 1fr; align-items: baseline; gap: var(--s3); padding: 4px 0; border-top: 1px solid var(--line); }
+.shortcuts-row:first-child { border-top: 0; }
+.shortcuts-row dt { white-space: nowrap; }
+.shortcuts-row dd { margin: 0; }
+
+/* ── Get info ───────────────────────────────────────────────────────────── */
+.info-head { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s4); min-width: 0; }
+.info-thumb { flex: none; width: 72px; border-radius: var(--radius-sm); overflow: hidden; }
+.info-thumb .filecard-badge { display: none; }
+.info-folder { display: grid; place-items: center; height: 56px; color: var(--muted); background: var(--surface-sunken); }
+.info-stack { display: flex; gap: 2px; width: 96px; }
+.info-stack > * { flex: 1; min-width: 0; }
+.info-name { margin: 0 0 2px; font-size: var(--t-lg); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.info-list { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: var(--s2) var(--s3); margin: 0; }
+.info-row { display: contents; }
+.info-row dt { font-size: var(--t-sm); }
+.info-row dd { margin: 0; font-size: var(--t-sm); min-width: 0; overflow-wrap: anywhere; }
+.info-link { padding: 0; border: 0; background: none; color: var(--accent-deep); font: inherit; text-align: left; cursor: pointer; }
+.info-link:hover { text-decoration: underline; }
 
 /* ── Upload tray ────────────────────────────────────────────────────────── */
 
@@ -411,6 +482,9 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 
 /* ── Files page ─────────────────────────────────────────────────────────── */
 
+/* The page reaches the bottom of the window, so a right-click below a short
+   listing still lands on the page's own menu, not the browser's. */
+.files-main { min-height: calc(100dvh - 57px); }
 .files-toolbar { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s4); }
 .files-toolbar .input { max-width: 280px; }
 .kind-strip { display: flex; gap: var(--s2); flex-wrap: wrap; }
@@ -765,7 +839,10 @@ select.input.cell-input { padding-right: 2px; }
 @media (max-width: 720px) {
   .shell { padding: 0 var(--s4); }
   .only-mobile { display: inline-flex; }
-  .nav-email, .nav-build { display: none; }
+  /* A phone has no keyboard to take shortcuts from, and needs the room. */
+  .topnav-shortcuts { display: none; }
+  .fs-switch-nav .menu-wrap > .btn { max-width: 150px; }
+  .shortcuts { columns: 1; }
 
   /* Touch targets. 40px is the floor that stays tappable without looking
      like a form from 2009. */
@@ -892,16 +969,33 @@ select.input.cell-input { padding-right: 2px; }
 .player:focus { outline: none; }
 .player:focus-visible .player-stage { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* The stage takes its size from the clip's aspect ratio (--ratio, set by
+   VideoPlayer), not from the <video> element: before its metadata loads that
+   element is the size of the poster thumbnail, and it jumped to the video's
+   size on play. Full width, as tall as the ratio asks up to 70vh; the video
+   fills it and object-fit contains the poster and the picture alike, so
+   loading and playing are the same box. */
 .player-stage {
   position: relative;
-  display: grid;
-  place-items: center;
+  width: 100%;
+  aspect-ratio: var(--ratio, 16 / 9);
+  max-height: 70vh;
+  min-height: 200px;
   background: #000;               /* Letterboxing is black at every theme. */
   border-radius: var(--radius);
   overflow: hidden;
-  min-height: 240px;
 }
-.player-stage video { max-width: 100%; max-height: 70vh; display: block; }
+.player-stage video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+/* Fullscreen: the stage takes whatever the controls leave. */
+.player:fullscreen { background: #000; padding: var(--s4); justify-content: flex-end; }
+.player:fullscreen .player-stage { flex: 1 1 auto; aspect-ratio: auto; max-height: none; border-radius: 0; }
 
 .player-bigplay {
   position: absolute;
@@ -992,5 +1086,5 @@ select.input.cell-input { padding-right: 2px; }
      controls need to wrap rather than shrink to nothing. */
   .player-hover-frame { display: none; }
   .player-volume { display: none; }
-  .player-stage video { max-height: 50vh; }
+  .player-stage { max-height: 50vh; }
 }

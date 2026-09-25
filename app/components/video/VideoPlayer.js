@@ -62,6 +62,29 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
   // deliberate press. `started` is what flips preload on.
   const [started, setStarted] = useState(false);
 
+  // The picture's shape, which decides the stage's size in every state. The
+  // <video> element has no size of its own until its metadata arrives: with
+  // preload="none" it shows the poster at the POSTER's pixel size — a small
+  // thumbnail — and then jumps to the video's size on play. So the stage is
+  // sized from this ratio instead, and the element fills it (object-fit keeps
+  // both the poster and the picture contained). Known up front for uploads
+  // (width/height are recorded with the thumbnail); otherwise the poster has
+  // the clip's shape; the video's own metadata has the last word.
+  const recorded = Number(file?.metadata?.width) > 0 && Number(file?.metadata?.height) > 0
+    ? Number(file.metadata.width) / Number(file.metadata.height)
+    : null;
+  const [ratio, setRatio] = useState(recorded);
+  useEffect(() => {
+    if (ratio || !file?.thumbnailUrl) return undefined;
+    let live = true;
+    const img = new Image();
+    img.onload = () => {
+      if (live && img.naturalWidth && img.naturalHeight) setRatio((r) => r || img.naturalWidth / img.naturalHeight);
+    };
+    img.src = file.thumbnailUrl;
+    return () => { live = false; };
+  }, [ratio, file?.thumbnailUrl]);
+
   const proxy = file?.proxyUrl || null;
   const src = proxy || file?.url || null;
   const heavy = !proxy && Number(file?.size) > HEAVY_BYTES;
@@ -239,7 +262,7 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
       aria-label={`Video player for ${file.name}`}
       onKeyDown={onKeyDown}
     >
-      <div className="player-stage">
+      <div className="player-stage" style={{ '--ratio': ratio || 16 / 9 }}>
         <video
           ref={video}
           src={src}
@@ -252,6 +275,7 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
           onLoadedMetadata={(e) => {
             setReady(true);
             if (Number.isFinite(e.target.duration) && e.target.duration > 0) setDuration(e.target.duration);
+            if (e.target.videoWidth && e.target.videoHeight) setRatio(e.target.videoWidth / e.target.videoHeight);
             // The ?t= deep link, applied once metadata exists — seeking before
             // that is discarded by every browser.
             if (Number(startAt) > 0) seek(Number(startAt));
