@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
-import { uploadFileMultipart } from '@/lib/multipart-client';
+import { uploadFileMultipart, putToBucket } from '@/lib/multipart-client';
 import FileGrid from '@/app/components/ui/FileGrid';
 import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
@@ -157,8 +157,22 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
       const items = [...fileList];
       if (!items.length) return;
       setUploads(items.map((f) => ({ name: f.name, pct: 0 })));
+      const setPct = (i, pct) => setUploads((u) => u.map((x, j) => (j === i ? { ...x, pct } : x)));
+      const errors = [];
 
-      const cfg = await fetch('/api/files/config').then((r) => r.json()).catch(() => ({ mode: 'blob' }));
+      // Falling back to Blob when this failed sent every upload down a path
+      // the deployment was not configured for, with an error about Blob.
+      let cfg = null;
+      try {
+        const r = await fetch('/api/files/config');
+        cfg = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(cfg.error || `HTTP ${r.status}`);
+      } catch (e) {
+        const message = `Could not read the storage settings (${e.message}). Nothing was uploaded.`;
+        setUploads((u) => u.map((x) => ({ ...x, error: message })));
+        toast.error(message);
+        return;
+      }
 
       for (const [i, file] of items.entries()) {
         try {
@@ -171,15 +185,14 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
             const done = await uploadFileMultipart(file, {
               folder,
               filespaceId: filespaceId || undefined,
-              onProgress: ({ pct }) =>
-                setUploads((u) => u.map((x, j) => (j === i ? { ...x, pct } : x))),
+              onProgress: ({ pct }) => setPct(i, pct),
             });
             url = done.publicUrl;
             storage = 's3';
             storageKey = done.key;
             name = done.name || name;
           } else if (cfg.mode === 's3') {
-            const pre = await fetch('/api/files/presign', {
+            const res = await fetch('/api/files/presign', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({
@@ -188,14 +201,13 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
                 folder,
                 filespaceId: filespaceId || undefined,
               }),
-            }).then((r) => r.json());
-            if (pre.error) throw new Error(pre.error);
-            const put = await fetch(pre.putUrl, {
-              method: 'PUT',
-              body: file,
-              headers: { 'content-type': file.type || 'application/octet-stream' },
             });
-            if (!put.ok) throw new Error(`Upload failed (${put.status})`);
+            const pre = await res.json().catch(() => ({}));
+            if (!res.ok || pre.error) throw new Error(pre.error || `Could not start the upload (HTTP ${res.status}).`);
+            await putToBucket(pre.putUrl, file, {
+              contentType: file.type || 'application/octet-stream',
+              onProgress: (sent, total) => setPct(i, Math.round((sent / total) * 100)),
+            });
             url = pre.publicUrl;
             storage = 's3';
             storageKey = pre.key;
@@ -210,7 +222,9 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
             storage = 'blob';
           }
 
-          await fetch('/api/files', {
+          // The bytes are in the bucket at this point; a file only exists in
+          // the library once this row is written.
+          const saved = await fetch('/api/files', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
@@ -224,20 +238,34 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
               filespace: filespaceId || undefined,
             }),
           });
-          setUploads((u) => u.map((x, j) => (j === i ? { ...x, pct: 100 } : x)));
+          if (!saved.ok) {
+            const body = await saved.json().catch(() => ({}));
+            throw new Error(`Uploaded, but it could not be added to the library: ${body.error || `HTTP ${saved.status}`}`);
+          }
+          setUploads((u) => u.map((x, j) => (j === i ? { ...x, pct: 100, done: true } : x)));
         } catch (e) {
+          errors.push(e.message);
           setUploads((u) => u.map((x, j) => (j === i ? { ...x, error: e.message } : x)));
         }
       }
-      setTimeout(() => setUploads([]), 1500);
+      // Finished rows clear; failed ones stay until dismissed, with the reason.
+      if (errors.length) {
+        toast.error(items.length === 1 ? errors[0] : `${errors.length} of ${items.length} uploads failed. ${errors[0]}`);
+        setTimeout(() => setUploads((u) => u.filter((x) => x.error)), 1500);
+      } else {
+        toast.success(`${items.length} file${items.length === 1 ? '' : 's'} uploaded.`);
+        setTimeout(() => setUploads([]), 1500);
+      }
       load();
     },
-    [folder, filespaceId, load]
+    [folder, filespaceId, load, toast]
   );
 
   const onDrop = (e) => {
     e.preventDefault();
-    if (canWrite && e.dataTransfer?.files?.length) upload(e.dataTransfer.files);
+    if (!e.dataTransfer?.files?.length) return;
+    if (canWrite) upload(e.dataTransfer.files);
+    else toast.error('Your role can view files here but not upload them.');
   };
 
   const trashSelected = async () => {
@@ -360,10 +388,16 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
               <span>{u.name}</span>
               <div className="spacer" />
               <span className={u.error ? '' : 'muted'} style={u.error ? { color: 'var(--danger)' } : undefined}>
-                {u.error || (u.pct === 100 ? 'Done' : u.pct ? `${u.pct}%` : 'Uploading…')}
+                {u.error || (u.done ? 'Done' : u.pct ? `${u.pct}%` : 'Uploading…')}
               </span>
             </div>
           ))}
+          {uploads.every((u) => u.error || u.done) && uploads.some((u) => u.error) && (
+            <div className="row" style={{ marginTop: 8 }}>
+              <div className="spacer" />
+              <button className="btn btn-sm" onClick={() => setUploads([])}>Dismiss</button>
+            </div>
+          )}
         </div>
       )}
 
