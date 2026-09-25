@@ -9,7 +9,7 @@ import { buildLabel, buildDetail } from '@/lib/version';
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Admin' };
 
-export default async function AdminPage() {
+export default async function AdminPage({ searchParams }) {
   const session = await auth();
   const email = session?.user?.email;
   if (!email) redirect('/signin');
@@ -22,7 +22,7 @@ export default async function AdminPage() {
   return (
     <>
       <TopNav brandName={brand.name} markPath={brand.visual.logo.markPath} email={email} isAdmin build={{ label: buildLabel(), detail: buildDetail() }} />
-      <AdminClient superAdmin={isSuperAdmin(email)} />
+      <AdminClient superAdmin={isSuperAdmin(email)} initialTab={searchParams?.tab} />
     </>
   );
 }

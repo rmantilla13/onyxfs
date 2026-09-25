@@ -2,7 +2,7 @@ import { redirect, notFound } from 'next/navigation';
 import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
 import { isAdmin } from '@/lib/auth-allowlist';
-import { getFileById, buildPrincipal, canAccessFile, canModifyFile, listFilespacesForUser } from '@/lib/db';
+import { getFileById, buildPrincipal, canAccessFile, canModifyFile } from '@/lib/db';
 import { presignFileUrls } from '@/lib/storage';
 import TopNav from '@/app/components/TopNav';
 import FileDetail from '@/app/components/file/FileDetail';
@@ -37,9 +37,8 @@ export default async function FilePage({ params }) {
   // "no such file" confirms the id exists to someone guessing.
   if (!(await canAccessFile(file, principal))) notFound();
 
-  const [brand, filespaces, signedList, canWrite] = await Promise.all([
+  const [brand, signedList, canWrite] = await Promise.all([
     loadBrand(),
-    listFilespacesForUser(email),
     // Six hours, so a paused video still seeks when it resumes.
     presignFileUrls([file], { expiresIn: 21600 }),
     canModifyFile(file, principal),
@@ -53,7 +52,6 @@ export default async function FilePage({ params }) {
         markPath={brand.visual.logo.markPath}
         email={email}
         isAdmin={isAdmin(email)}
-        filespaces={filespaces}
       />
       <FileDetail file={signedList[0]} canWrite={canWrite} />
     </>

@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
 import {
   listFilespaces, createFilespace, updateFilespace, deleteFilespace, listFilespaceMembers,
-  listInviteRequests,
+  listInviteRequests, getFilespaceById, countFilesUnderPrefix, filespaceSetupProblem,
 } from '@/lib/db';
 import { isAdmin } from '@/lib/auth-allowlist';
+import { getStorageConfig } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,9 +20,21 @@ export const maxDuration = 30;
  * Filespaces with their members, plus the known-user list for the add-member
  * datalist (signed-in roster + approved invites, best-effort).
  */
-export async function GET() {
+export async function GET(req) {
   const gate = await requireAdmin();
   if (gate.error) return gate.error;
+
+  // ?summary=<id> → what deleting it would leave behind, for the confirm.
+  const summaryId = new URL(req.url).searchParams.get('summary');
+  if (summaryId) {
+    const fs = await getFilespaceById(summaryId);
+    if (!fs) return NextResponse.json({ error: 'Filespace not found' }, { status: 404 });
+    const [counts, members] = await Promise.all([countFilesUnderPrefix(fs.prefix), listFilespaceMembers(fs.id)]);
+    return NextResponse.json({
+      id: fs.id, name: fs.name, bucket: fs.bucket, prefix: fs.prefix,
+      ...counts, members: members.length, ownKeys: !!(fs.accessKeyId && fs.hasSecret),
+    });
+  }
 
   const spaces = await listFilespaces();
   const filespaces = await Promise.all(spaces.map(async (f) => {
@@ -52,13 +65,18 @@ export async function POST(req) {
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
   const name = String(body.name || '').trim();
-  const bucket = String(body.bucket || '').trim();
+  // A blank bucket means the configured Storage bucket, which is what the
+  // form has always said. It used to be rejected instead.
+  let bucket = String(body.bucket || '').trim();
+  if (!bucket && !body.accessKeyId) bucket = String((await getStorageConfig())?.bucket || '').trim();
   // Normalize BEFORE validating so '/' or '///' is rejected rather than silently
   // stored as an empty (bucket-wide, unmountable) prefix.
   const prefix = String(body.prefix || '').replace(/^\/+|\/+$/g, '').trim();
-  if (!name || !bucket || !prefix) {
-    return NextResponse.json({ error: 'name, bucket, and a non-root prefix are required' }, { status: 400 });
+  if (!bucket) {
+    return NextResponse.json({ error: 'No bucket given and no Storage bucket is configured.' }, { status: 400 });
   }
+  const problem = filespaceSetupProblem({ name, bucket, prefix }, await listFilespaces());
+  if (problem) return NextResponse.json({ error: problem.error }, { status: problem.status });
   if (Boolean(body.accessKeyId) !== Boolean(body.secretAccessKey)) {
     return NextResponse.json({ error: 'Provide BOTH an access key and secret, or neither (to use the Storage config keys).' }, { status: 400 });
   }
@@ -95,6 +113,27 @@ export async function PATCH(req) {
   if (body.accessKeyId != null) fields.accessKeyId = String(body.accessKeyId).trim() || null;
   if (body.secretAccessKey != null) fields.secretAccessKey = String(body.secretAccessKey); // blank = keep existing (handled in db)
   if (body.endpoint != null) fields.endpoint = String(body.endpoint).trim() || null;
+
+  const existing = await getFilespaceById(id);
+  if (!existing) return NextResponse.json({ error: 'Filespace not found' }, { status: 404 });
+  const next = { name: existing.name, bucket: existing.bucket, prefix: existing.prefix, ...fields };
+  const others = (await listFilespaces()).filter((f) => f.id !== id);
+  const problem = filespaceSetupProblem(next, others);
+  if (problem) return NextResponse.json({ error: problem.error }, { status: problem.status });
+  // Renaming is metadata. Re-pointing bucket or prefix is not: the catalog's
+  // storage keys stay where they are, so every file would silently drop out of
+  // the filespace. Refuse while there is anything to lose.
+  const moved = (fields.bucket != null && fields.bucket !== existing.bucket)
+    || (fields.prefix != null && fields.prefix !== existing.prefix);
+  if (moved) {
+    const { files } = await countFilesUnderPrefix(existing.prefix);
+    if (files > 0) {
+      return NextResponse.json({
+        error: `${files} file${files === 1 ? ' is' : 's are'} stored under ${existing.bucket}/${existing.prefix}. Changing the bucket or prefix would strand them, so it is only allowed on an empty filespace.`,
+      }, { status: 409 });
+    }
+  }
+
   const filespace = await updateFilespace(id, fields);
   if (!filespace) return NextResponse.json({ error: 'Filespace not found' }, { status: 404 });
   // Never echo the secret back.
@@ -102,12 +141,20 @@ export async function PATCH(req) {
   return NextResponse.json({ filespace: safe });
 }
 
-/** DELETE ?id= → remove a filespace and all its grants. */
+/**
+ * DELETE ?id= → remove a filespace and all its grants. The catalog rows and the
+ * objects under its prefix are NOT touched: they stay in the bucket and in the
+ * library (unscoped). Desktop mounts stop at their next STS refresh (≤1h),
+ * which re-checks that the filespace exists.
+ */
 export async function DELETE(req) {
   const gate = await requireAdmin();
   if (gate.error) return gate.error;
   const id = new URL(req.url).searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  const fs = await getFilespaceById(id);
+  if (!fs) return NextResponse.json({ error: 'Filespace not found' }, { status: 404 });
+  const { files } = await countFilesUnderPrefix(fs.prefix);
   await deleteFilespace(id);
-  return NextResponse.json({ ok: true, id });
+  return NextResponse.json({ ok: true, id, filesKept: files });
 }

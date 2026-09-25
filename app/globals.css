@@ -564,3 +564,27 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   /* Clear the bar so the last row of cards is not sitting underneath it. */
   .files-grid { padding-bottom: 72px; }
 }
+
+/* ── Filespaces ─────────────────────────────────────────────────────────── */
+
+.fs-switch { margin-bottom: var(--s4); }
+.fs-switch-label { margin-bottom: var(--s1); }
+.fs-switch .menu-wrap { display: flex; }
+.fs-switch .menu-wrap > .btn {
+  width: 100%; justify-content: space-between;
+  border: 1px solid var(--line); background: var(--surface);
+}
+.fs-switch-name, .fs-switch-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; text-align: left; }
+.fs-switch .menu { width: 100%; max-height: 60vh; overflow: auto; }
+.fs-switch-check { width: 1em; flex: none; }
+.fs-members-table { width: 100%; font-size: var(--t-sm); border-collapse: collapse; margin-bottom: var(--s3); }
+.fs-members-table td { padding: var(--s1) var(--s2) var(--s1) 0; border-top: 1px solid var(--line); vertical-align: middle; }
+.fs-members-table select.input { width: auto; }
+.fs-members-email { max-width: 0; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-members-add { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.fs-members-add input.input { flex: 1 1 220px; max-width: none; }
+.fs-members-add select.input { width: auto; }
+@media (max-width: 720px) {
+  .fs-switch { margin-bottom: var(--s2); }
+  .fs-switch-label { display: none; }
+}

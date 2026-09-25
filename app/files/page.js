@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
 import { isAdmin } from '@/lib/auth-allowlist';
-import { getFeatureFlags, getRolesConfig, listFilespacesForUser, getFileMetadataSchema } from '@/lib/db';
+import { getFeatureFlags, getRolesConfig, listFilespacesForSpace, getFileMetadataSchema } from '@/lib/db';
 import { resolveRole, effectiveFlags } from '@/lib/roles';
 import { applyBetaAdminFlags } from '@/lib/features';
 import { normalizeSchema } from '@/lib/dam';
@@ -23,7 +23,10 @@ export default async function FilesPage({ searchParams }) {
     loadBrand(),
     getFeatureFlags(),
     getRolesConfig(),
-    listFilespacesForUser(email),
+    // Admins see every filespace (as owner), others their grants. The old
+    // listFilespacesForUser left admins with an empty switcher: env-admins are
+    // never stored as grant rows.
+    listFilespacesForSpace(email),
     getFileMetadataSchema(),
   ]);
 
@@ -40,8 +43,6 @@ export default async function FilesPage({ searchParams }) {
         markPath={brand.visual.logo.markPath}
         email={email}
         isAdmin={admin}
-        filespaces={filespaces}
-        activeFilespace={searchParams?.filespace || ''}
       />
       <FilesClient
         flags={flags}
@@ -49,6 +50,7 @@ export default async function FilesPage({ searchParams }) {
         schema={normalizeSchema(rawSchema)}
         filespaceId={searchParams?.filespace || ''}
         filespaces={filespaces}
+        isAdmin={admin}
       />
     </>
   );
