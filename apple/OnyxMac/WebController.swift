@@ -37,8 +37,15 @@ final class WebController: NSObject, ObservableObject {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         config.applicationNameForUserAgent = "OnyxMac/\(version)"
         config.preferences.isElementFullscreenEnabled = true
+        // window.onyxMac: how the page, inside the app, keeps files offline
+        // and puts drives in Finder. Defined before any page script runs.
+        config.userContentController.addUserScript(WKUserScript(
+            source: Self.bridgeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let relay = MessageRelay()
+        config.userContentController.add(relay, name: "onyx")
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
+        relay.controller = self
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
@@ -124,6 +131,79 @@ final class WebController: NSObject, ObservableObject {
             window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
         """)
     }
+
+    // MARK: - The page's bridge to the app
+
+    /// `window.onyxMac` in the page. Calls post to the app; the app answers by
+    /// pushing its state (`_update`), which fires an `onyxmac:state` event the
+    /// page listens for. Present only in the app, so the web shows its
+    /// offline and Finder actions only here.
+    static let bridgeScript = """
+    (() => {
+      if (window.onyxMac) return;
+      const post = (msg) => window.webkit.messageHandlers.onyx.postMessage(msg);
+      const state = { pinned: [], mounted: [], pinnedFolders: [] };
+      window.onyxMac = {
+        version: 1,
+        get state() { return state; },
+        pinFiles: (ids, drive) => post({ type: 'pinFiles', ids, drive: drive || null, on: true }),
+        unpinFiles: (ids, drive) => post({ type: 'pinFiles', ids, drive: drive || null, on: false }),
+        pinFolder: (path, drive, on = true) => post({ type: 'pinFolder', path, drive: drive || null, on }),
+        showInFinder: (drive, name) => post({ type: 'mount', drive: drive || null, name: name || '', on: true }),
+        _update: (next) => {
+          Object.assign(state, next);
+          window.dispatchEvent(new CustomEvent('onyxmac:state', { detail: state }));
+        },
+      };
+      post({ type: 'ready' });
+    })();
+    """
+
+    /// Tell the page what is pinned and mounted now.
+    func publishOfflineState() {
+        guard let finder = model?.finder else { return }
+        let folders = finder.pinRules.compactMap { rule -> [String: String]? in
+            if case let .folder(path) = rule.target { return ["scope": rule.scope, "path": path] }
+            return nil
+        }
+        let payload: [String: Any] = [
+            "pinned": Array(finder.pinnedFiles),
+            "pinnedFolders": folders,
+            "mounted": finder.wantMounted.sorted(),
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript("window.onyxMac && window.onyxMac._update(\(json))")
+    }
+
+    fileprivate func received(_ body: Any) {
+        guard let msg = body as? [String: Any], let type = msg["type"] as? String, let model else { return }
+        let drive = msg["drive"] as? String
+        let scope = drive.map { SyncDomain.drive(id: $0).identifier } ?? SyncDomain.library.identifier
+        let on = msg["on"] as? Bool ?? true
+        Task { @MainActor in
+            switch type {
+            case "ready":
+                publishOfflineState()
+            case "pinFiles":
+                let ids = (msg["ids"] as? [Any] ?? []).compactMap { $0 as? String }.prefix(5000)
+                await model.finder.pinFiles(Array(ids), scope: drive == nil ? nil : scope, on)
+            case "pinFolder":
+                guard let path = msg["path"] as? String else { return }
+                let rule = PinRule(scope: scope, target: .folder(path: path))
+                if on { await model.finder.pin(rule) } else { await model.finder.unpin(rule) }
+            case "mount":
+                let name = (msg["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                    ?? model.finderDrives.first { SyncDomain.drive(id: $0.id).identifier == scope }?.name ?? "Library"
+                await model.setMounted(SyncDomain(identifier: scope) ?? .library, name: name, true)
+            default:
+                break
+            }
+            publishOfflineState()
+        }
+    }
+
+    fileprivate func acceptsMessages(from url: URL) -> Bool { isOnServer(url) }
 
     private func isOnServer(_ url: URL) -> Bool {
         guard let server else { return false }
@@ -274,6 +354,22 @@ extension WebController: WKUIDelegate {
         alert.addButton(withTitle: action)
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+}
+
+/// WKUserContentController holds its handlers strongly; this breaks the
+/// cycle it would make with the controller that owns the web view.
+private final class MessageRelay: NSObject, WKScriptMessageHandler {
+    weak var controller: WebController?
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        // Only the Onyx page, in the main frame, may ask for anything.
+        guard message.frameInfo.isMainFrame else { return }
+        let body = message.body
+        MainActor.assumeIsolated {
+            guard let controller, let url = message.frameInfo.request.url, controller.acceptsMessages(from: url) else { return }
+            controller.received(body)
+        }
     }
 }
 

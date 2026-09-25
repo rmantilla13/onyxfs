@@ -242,7 +242,7 @@ struct WebViewHost: NSViewRepresentable {
 
 // MARK: - Finder
 
-/// The toolbar's drive menu: which drives appear in Finder, and a way there.
+/// The toolbar's drive menu: which drives are in Finder, and a way there.
 struct FinderMenu: View {
     @EnvironmentObject var model: AppModel
 
@@ -260,12 +260,10 @@ struct FinderMenu: View {
 /// the menu bar item.
 struct FinderItems: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var finder: DriveService
 
     var body: some View {
         Section("Show in Finder") {
-            if !BuildInfo.canUseFinder {
-                Text(BuildInfo.teamID == nil ? "Needs a signed build of Onyx" : "Coming in a later update")
-            }
             if model.finderDrives.isEmpty {
                 Text("No drives yet")
             }
@@ -274,13 +272,14 @@ struct FinderItems: View {
             }
             toggle(.library, name: "Library", detail: "files in no drive")
         }
-        if !model.inFinder.isEmpty {
+        let open = model.finderDrives.filter { model.isMounted(.drive(id: $0.id)) }
+        if !open.isEmpty || model.isMounted(.library) {
             Section("Open in Finder") {
-                ForEach(model.finderDrives.filter { model.isInFinder(.drive(id: $0.id)) }) { drive in
-                    Button(drive.name) { Task { await model.reveal(.drive(id: drive.id)) } }
+                ForEach(open) { drive in
+                    Button(drive.name) { model.reveal(.drive(id: drive.id)) }
                 }
-                if model.isInFinder(.library) {
-                    Button("Library") { Task { await model.reveal(.library) } }
+                if model.isMounted(.library) {
+                    Button("Library") { model.reveal(.library) }
                 }
             }
         }
@@ -290,12 +289,12 @@ struct FinderItems: View {
 
     private func toggle(_ scope: SyncDomain, name: String, detail: String?) -> some View {
         Toggle(isOn: Binding(
-            get: { model.isInFinder(scope) },
-            set: { on in Task { await model.setInFinder(scope, name: name, on) } }
+            get: { finder.wantMounted.contains(scope.identifier) },
+            set: { on in Task { await model.setMounted(scope, name: name, on) } }
         )) {
             Text(name) + Text(detail.map { "  \($0)" } ?? "").foregroundColor(.secondary)
         }
-        .disabled(model.busy.contains(scope.identifier) || !BuildInfo.canUseFinder)
+        .disabled(model.busy.contains(scope.identifier))
     }
 
     private func roleWord(_ role: String?) -> String? {
@@ -310,42 +309,124 @@ struct FinderItems: View {
 
 // MARK: - Menu bar
 
-struct MenuBarContent: View {
+/// What Onyx is doing, at a glance, in the menu bar.
+enum MenuBarStatus: Equatable {
+    case signedOut, idle, mounted(Int), syncing, offline, attention(String)
+
+    var symbol: String {
+        switch self {
+        case .signedOut, .idle: return "externaldrive.connected.to.line.below"
+        case .mounted: return "externaldrive.fill.badge.checkmark"
+        case .syncing: return "arrow.triangle.2.circlepath"
+        case .offline: return "externaldrive.badge.xmark"
+        case .attention: return "externaldrive.badge.exclamationmark"
+        }
+    }
+
+    var line: String {
+        switch self {
+        case .signedOut: return "Not signed in"
+        case .idle: return "Up to date"
+        case let .mounted(n): return n == 1 ? "1 drive in Finder · up to date" : "\(n) drives in Finder · up to date"
+        case .syncing: return "Syncing…"
+        case .offline: return "Offline — Finder shows the last synced state; files kept offline still open"
+        case let .attention(why): return why
+        }
+    }
+
+    @MainActor
+    static func of(_ model: AppModel, _ finder: DriveService) -> MenuBarStatus {
+        guard model.phase == .signedIn else { return .signedOut }
+        if let failed = finder.mounts.states.values.compactMap({ state -> String? in
+            if case let .failed(why) = state { return why }
+            return nil
+        }).first {
+            return .attention(failed)
+        }
+        if let problem = finder.problem { return .attention(problem) }
+        if finder.isOffline { return .offline }
+        if !finder.syncing.isEmpty || finder.downloading > 0 { return .syncing }
+        let mounted = finder.mounts.states.values.filter { if case .mounted = $0 { return true } else { return false } }.count
+        return mounted > 0 ? .mounted(mounted) : .idle
+    }
+}
+
+/// The menu bar icon, which also opens the window when Onyx is reopened from
+/// Finder or Launchpad while it runs in the background — it is the one view
+/// that is always there to do it.
+struct MenuBarIcon: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var finder: DriveService
     @EnvironmentObject var updater: Updater
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        let status = MenuBarStatus.of(model, finder)
+        Image(systemName: updater.available != nil && status == .idle ? "externaldrive.badge.plus" : status.symbol)
+            .accessibilityLabel("Onyx: \(status.line)")
+            .onReceive(NotificationCenter.default.publisher(for: .onyxOpenWindow)) { _ in
+                Background.shared.comeForward()
+                openWindow(id: "main")
+            }
+    }
+}
+
+struct MenuBarContent: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var updater: Updater
+    @EnvironmentObject var finder: DriveService
+    @ObservedObject private var background = Background.shared
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        let status = MenuBarStatus.of(model, finder)
         if model.phase == .signedIn {
             Text(model.email ?? "Signed in")
+            Text(status.line)
+            if finder.pinnedBytes > 0 {
+                Text("Kept offline: \(ByteCountFormatter.string(fromByteCount: finder.pinnedBytes, countStyle: .file))")
+            }
             Divider()
-            Button("Open Onyx") { open() }
+            Button("Open Onyx") { open() }.keyboardShortcut("o")
             FinderItems()
         } else {
+            Text("Not signed in")
             Button("Sign In…") { open() }
         }
-        if let release = updater.available {
-            Divider()
-            Button("Update to Onyx \(release.version)…") { open(); updater.showSheet = true }
-        }
         Divider()
-        SettingsLink { Text("Settings…") }
+        if let release = updater.available {
+            Button("Update to Onyx \(release.version)…") { open(); updater.showSheet = true }
+        } else {
+            Button("Check for Updates…") {
+                open()
+                Task { await updater.check(userInitiated: true) }
+            }
+        }
+        Toggle("Open at Login", isOn: Binding(
+            get: { background.opensAtLogin },
+            set: { background.setOpensAtLogin($0) }
+        ))
+        SettingsLink { Text("Settings…") }.keyboardShortcut(",")
+        Divider()
         Button("Quit Onyx") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 
     private func open() {
+        Background.shared.comeForward()
         openWindow(id: "main")
-        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
 // MARK: - Settings
 
 struct SettingsView: View {
+    @EnvironmentObject var model: AppModel
+
     var body: some View {
         TabView {
             AccountSettings().tabItem { Label("Account", systemImage: "person.crop.circle") }
-            FinderSettings().tabItem { Label("Finder", systemImage: "externaldrive") }
+            FinderSettings(finder: model.finder).tabItem { Label("Finder", systemImage: "externaldrive") }
+            StorageSettings(finder: model.finder).tabItem { Label("Storage", systemImage: "internaldrive") }
         }
         .frame(width: 480, height: 420)
     }
@@ -354,6 +435,7 @@ struct SettingsView: View {
 struct AccountSettings: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var updater: Updater
+    @ObservedObject private var background = Background.shared
     @StateObject private var form = FormState()
 
     var body: some View {
@@ -383,6 +465,18 @@ struct AccountSettings: View {
                 Text("Changing servers signs you out: a sign-in belongs to the server that issued it.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("In the background") {
+                Toggle("Open at login", isOn: Binding(
+                    get: { background.opensAtLogin },
+                    set: { background.setOpensAtLogin($0) }
+                ))
+                if background.needsApproval {
+                    Text("Allow Onyx in System Settings → General → Login Items.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Onyx keeps running in the menu bar when its window is closed, so your drives stay in Finder and offline files stay current. Quit it from the menu bar icon.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Updates") {
                 LabeledContent("Version") {
                     Text(BuildInfo.build.map { "\(BuildInfo.version) (\($0))" } ?? BuildInfo.version)
@@ -401,20 +495,22 @@ struct AccountSettings: View {
 
 struct FinderSettings: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject var finder: DriveService
+    @ObservedObject var mounts: MountManager
+
+    init(finder: DriveService) {
+        _finder = ObservedObject(wrappedValue: finder)
+        _mounts = ObservedObject(wrappedValue: finder.mounts)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Each drive you turn on appears under Locations in Finder's sidebar. Files download when you open them, and stay until macOS needs the space.")
+            Text("Each drive you turn on appears in Finder, in your Onyx folder and under Locations. It is exactly what the web shows you, and files stream as you open them — nothing downloads until something reads it.")
                 .font(.callout).foregroundStyle(.secondary)
-            if !BuildInfo.canUseFinder {
-                Label(BuildInfo.teamID == nil
-                      ? "This copy of Onyx is unsigned, so macOS will not let Finder share its sign-in. Build it signed with your Apple Developer team to put drives in Finder (apple/README.md)."
-                      : "Drives in Finder arrive in a later update of this app. Everything else — your files, search, sharing and uploads — works in the Onyx window.",
-                      systemImage: BuildInfo.teamID == nil ? "exclamationmark.triangle" : "info.circle")
-                    .font(.callout)
-            }
             List {
-                ForEach(model.finderDrives) { drive in row(.drive(id: drive.id), name: drive.name) }
+                ForEach(model.finderDrives) { drive in
+                    row(.drive(id: drive.id), name: drive.name)
+                }
                 row(.library, name: "Library")
             }
             HStack {
@@ -423,23 +519,115 @@ struct FinderSettings: View {
                 Spacer()
                 Button("Sync Now") { Task { await model.syncNow() } }
             }
-            if let problem = model.problem { Text(problem).foregroundStyle(.red).font(.caption) }
+            if let problem = finder.problem ?? model.problem {
+                Text(problem).foregroundStyle(.red).font(.caption)
+            }
         }
         .padding(20)
         .task { await model.refresh() }
     }
 
     private func row(_ scope: SyncDomain, name: String) -> some View {
-        HStack {
+        let pinnedDrive = PinRule(scope: scope.identifier, target: .folder(path: ""))
+        return HStack(spacing: 12) {
             Toggle(name, isOn: Binding(
-                get: { model.isInFinder(scope) },
-                set: { on in Task { await model.setInFinder(scope, name: name, on) } }
+                get: { finder.wantMounted.contains(scope.identifier) },
+                set: { on in Task { await model.setMounted(scope, name: name, on) } }
             ))
-            .disabled(model.busy.contains(scope.identifier) || model.phase != .signedIn || !BuildInfo.canUseFinder)
+            .disabled(model.busy.contains(scope.identifier) || model.phase != .signedIn)
             Spacer()
-            if model.isInFinder(scope) {
-                Button("Show") { Task { await model.reveal(scope) } }.buttonStyle(.link)
+            switch mounts.state(of: scope) {
+            case .mounting?:
+                ProgressView().controlSize(.small)
+            case let .failed(message)?:
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange).help(message)
+            case .mounted?:
+                Button("Show") { model.reveal(scope) }.buttonStyle(.link)
+            case nil:
+                EmptyView()
             }
+            Toggle("Offline", isOn: Binding(
+                get: { finder.pinRules.contains(pinnedDrive) },
+                set: { on in Task { if on { await finder.pin(pinnedDrive) } else { await finder.unpin(pinnedDrive) } } }
+            ))
+            .toggleStyle(.checkbox)
+            .help("Keep every file in this drive on this Mac, to open without a connection")
+            .disabled(model.phase != .signedIn)
+        }
+    }
+}
+
+/// Where streamed and pinned files are kept, and how much streaming may keep.
+struct StorageSettings: View {
+    @ObservedObject var finder: DriveService
+
+    private let limits = [10, 25, 50, 100, 250, 500, 0]
+
+    var body: some View {
+        Form {
+            LabeledContent("Cache location") {
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(finder.cacheRoot.path).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle).frame(maxWidth: 260, alignment: .trailing)
+                    HStack {
+                        Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([finder.cacheRoot]) }
+                        Button("Change…") { choose() }
+                    }
+                }
+            }
+            Picker("Streaming cache", selection: $finder.cacheLimitGB) {
+                ForEach(limits, id: \.self) { gb in
+                    Text(gb == 0 ? "No limit" : "\(gb) GB").tag(gb)
+                }
+            }
+            LabeledContent("In use") {
+                Text("\(size(finder.streamingBytes)) streamed · \(size(finder.pinnedBytes)) kept offline")
+            }
+            Section("Kept offline") {
+                if finder.pinRules.isEmpty {
+                    Text("Nothing yet. In the Onyx window, right-click a file or folder and choose Keep Offline on This Mac, or turn on Offline for a whole drive in Finder settings.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(finder.pinRules, id: \.self) { rule in
+                    HStack {
+                        Text(describe(rule)).lineLimit(1).truncationMode(.middle)
+                        Spacer()
+                        Button("Remove") { Task { await finder.unpin(rule) } }.buttonStyle(.link)
+                    }
+                }
+            }
+            Section {
+                Button("Clear Streaming Cache") { Task { await finder.clearStreamingCache() } }
+                Text("Streamed files download again when opened. Files kept offline stay.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let problem = finder.problem {
+                Text(problem).foregroundStyle(.red).font(.caption)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func choose() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Use This Folder"
+        panel.message = "Choose where Onyx keeps streamed and offline files. An external disk works."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await finder.relocateCache(to: url.appendingPathComponent("Onyx Cache", isDirectory: true)) }
+    }
+
+    private func size(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    private func describe(_ rule: PinRule) -> String {
+        let drive = rule.scope == SyncDomain.library.identifier ? "Library" : "Drive"
+        switch rule.target {
+        case let .file(id): return "\(drive) · file \(id.prefix(8))…"
+        case let .folder(path): return path.isEmpty ? "\(drive) · everything" : "\(drive) · \(path)"
         }
     }
 }

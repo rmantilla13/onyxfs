@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# Build Onyx.app — the Mac app with its Finder extension inside — from source,
-# with the Command Line Tools alone (no Xcode).
+# Build Onyx.app from source with the Command Line Tools alone (no Xcode):
+# the app, and rclone inside it for the Finder mounts.
 #
-#   scripts/build-mac.sh                 unsigned: the window, sign-in, the
-#                                        whole workspace. Finder drives need
-#                                        a team-signed build (below).
-#   ONYX_TEAM_ID=ABCDE12345 \
-#   ONYX_SIGN_IDENTITY="Apple Development: you@example.com (ABCDE12345)" \
-#   ONYX_APP_PROFILE=~/profiles/Onyx.provisionprofile \
-#   ONYX_EXT_PROFILE=~/profiles/OnyxFileProvider.provisionprofile \
-#   scripts/build-mac.sh                 signed with your team: Finder too.
+#   scripts/build-mac.sh          unsigned: everything works on this Mac —
+#                                 the window, sign-in, drives in Finder
+#   ONYX_SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" \
+#   ONYX_TEAM_ID=TEAMID \
+#   scripts/build-mac.sh          signed with your team (release-mac.sh does
+#                                 this, then notarizes)
 #
-# Output: apple/build/Onyx.app. Open it, or copy it to /Applications (File
-# Provider extensions are most reliable from there).
+# With apple/.signing/Onyx.provisionprofile present (or ONYX_APP_PROFILE), a
+# signed build also carries the app group from it. ONYX_FILE_PROVIDER=1 adds
+# the File Provider extension (dormant: Finder uses streaming mounts now) and
+# needs ONYX_EXT_PROFILE (or apple/.signing/OnyxFileProvider.provisionprofile).
+#
+# Output: apple/build/Onyx.app.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -22,30 +24,34 @@ BUILD_NUMBER="${ONYX_BUILD:-$(date +%Y%m%d%H%M)}"
 OUT="${OUT:-build}"
 APP="$OUT/Onyx.app"
 EXT="$APP/Contents/PlugIns/OnyxFileProvider.appex"
+WITH_EXT="${ONYX_FILE_PROVIDER:-0}"
+APP_PROFILE="${ONYX_APP_PROFILE:-$( [[ -f .signing/Onyx.provisionprofile ]] && echo .signing/Onyx.provisionprofile )}"
+EXT_PROFILE="${ONYX_EXT_PROFILE:-$( [[ -f .signing/OnyxFileProvider.provisionprofile ]] && echo .signing/OnyxFileProvider.provisionprofile )}"
+
+products=(OnyxMac)
+[[ "$WITH_EXT" == "1" ]] && products+=(OnyxFileProvider)
 
 # ONYX_UNIVERSAL=1: Apple silicon and Intel in one binary (releases do this).
 if [[ "${ONYX_UNIVERSAL:-0}" == "1" ]]; then
   BIN="$(mktemp -d)"
   for arch in x86_64 arm64; do
-    swift build -c "$CONFIG" --triple "$arch-apple-macosx14.0" --product OnyxMac
-    swift build -c "$CONFIG" --triple "$arch-apple-macosx14.0" --product OnyxFileProvider
+    for p in "${products[@]}"; do swift build -c "$CONFIG" --triple "$arch-apple-macosx14.0" --product "$p"; done
     out="$(swift build -c "$CONFIG" --triple "$arch-apple-macosx14.0" --show-bin-path)"
     mkdir -p "$BIN/$arch"
-    cp "$out/OnyxMac" "$out/OnyxFileProvider" "$BIN/$arch/"
+    for p in "${products[@]}"; do cp "$out/$p" "$BIN/$arch/"; done
   done
-  for exe in OnyxMac OnyxFileProvider; do
-    lipo -create "$BIN/x86_64/$exe" "$BIN/arm64/$exe" -output "$BIN/$exe"
-  done
+  for p in "${products[@]}"; do lipo -create "$BIN/x86_64/$p" "$BIN/arm64/$p" -output "$BIN/$p"; done
 else
-  swift build -c "$CONFIG" --product OnyxMac
-  swift build -c "$CONFIG" --product OnyxFileProvider
+  for p in "${products[@]}"; do swift build -c "$CONFIG" --product "$p"; done
   BIN="$(swift build -c "$CONFIG" --show-bin-path)"
 fi
 
+scripts/fetch-rclone.sh >/dev/null
+
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$EXT/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/OnyxMac" "$APP/Contents/MacOS/Onyx"
-cp "$BIN/OnyxFileProvider" "$EXT/Contents/MacOS/OnyxFileProvider"
+cp vendor/rclone "$APP/Contents/MacOS/rclone"
 cp ../desktop/src-tauri/icons/icon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # The Info.plists are XcodeGen's (project.yml), where Xcode fills in the
@@ -66,27 +72,36 @@ set_key "$P" LSMinimumSystemVersion string 14.0
 set_key "$P" LSApplicationCategoryType string public.app-category.productivity
 set_key "$P" NSHighResolutionCapable bool true
 
-cp OnyxFileProvider/Info.plist "$EXT/Contents/Info.plist"
-P="$EXT/Contents/Info.plist"
-plist "$P" "Set :NSExtension:NSExtensionPrincipalClass OnyxFileProvider.FileProviderExtension"
-set_key "$P" CFBundleIdentifier string io.onyxfs.app.fileprovider
-set_key "$P" CFBundleExecutable string OnyxFileProvider
-set_key "$P" CFBundleName string OnyxFileProvider
-set_key "$P" CFBundleShortVersionString string "$VERSION"
-set_key "$P" CFBundleVersion string "$BUILD_NUMBER"
-set_key "$P" LSMinimumSystemVersion string 14.0
+if [[ "$WITH_EXT" == "1" ]]; then
+  mkdir -p "$EXT/Contents/MacOS"
+  cp "$BIN/OnyxFileProvider" "$EXT/Contents/MacOS/OnyxFileProvider"
+  cp OnyxFileProvider/Info.plist "$EXT/Contents/Info.plist"
+  P="$EXT/Contents/Info.plist"
+  plist "$P" "Set :NSExtension:NSExtensionPrincipalClass OnyxFileProvider.FileProviderExtension"
+  set_key "$P" CFBundleIdentifier string io.onyxfs.app.fileprovider
+  set_key "$P" CFBundleExecutable string OnyxFileProvider
+  set_key "$P" CFBundleName string OnyxFileProvider
+  set_key "$P" CFBundleShortVersionString string "$VERSION"
+  set_key "$P" CFBundleVersion string "$BUILD_NUMBER"
+  set_key "$P" LSMinimumSystemVersion string 14.0
+fi
 
-# Entitlements: $(AppIdentifierPrefix) is the team id and a dot.
-render() { sed "s/\$(AppIdentifierPrefix)/${ONYX_TEAM_ID:-}./g" "$1" > "$2"; }
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# Minimal entitlements: what a build gets when nothing grants it the app group.
-# An app extension must be sandboxed to load at all; the app is not (it
-# replaces itself when it updates). The app group and the keychain group are
-# restricted: signed without a provisioning profile that grants them, macOS
-# refuses to launch the app at all — so without profiles they are left off,
-# and the app runs without Finder (it says so in Settings).
+# Entitlements with $(AppIdentifierPrefix) filled in, plus what Xcode adds on
+# its own when signing with a profile: the App ID and team, which must match
+# the embedded profile for the restricted entitlements to be honoured.
+render() {
+  sed "s/\$(AppIdentifierPrefix)/${ONYX_TEAM_ID:-}./g" "$1" > "$2"
+  /usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string $ONYX_TEAM_ID.$3" "$2"
+  /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string $ONYX_TEAM_ID" "$2"
+}
+
+# Minimal entitlements, for builds with no profile. An app extension must be
+# sandboxed to load at all; the app is not (it replaces itself when it
+# updates, and runs rclone). The app group is restricted: claimed without a
+# profile granting it, macOS refuses to launch the app, so it is left off.
 cat > "$WORK/ext.min.entitlements" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -103,38 +118,37 @@ cat > "$WORK/app.min.entitlements" <<'PLIST'
 </dict></plist>
 PLIST
 
+# Inside out: rclone, then the extension, then the app around them.
 if [[ -n "${ONYX_SIGN_IDENTITY:-}" ]]; then
   : "${ONYX_TEAM_ID:?set ONYX_TEAM_ID with ONYX_SIGN_IDENTITY}"
   # Hardened runtime always (notarization requires it); a secure timestamp
   # for anything that will be notarized.
   SIGN=(codesign --force --options runtime --sign "$ONYX_SIGN_IDENTITY")
   [[ "${ONYX_TIMESTAMP:-0}" == "1" ]] && SIGN+=(--timestamp)
-  if [[ -n "${ONYX_APP_PROFILE:-}" && -n "${ONYX_EXT_PROFILE:-}" ]]; then
-    render OnyxFileProvider/OnyxFileProvider.entitlements "$WORK/ext.entitlements"
-    render OnyxMac/OnyxMac.entitlements "$WORK/app.entitlements"
-    # What Xcode adds on its own when it signs with a profile: the App ID and
-    # team, which must match the embedded profile for the restricted
-    # entitlements above to be honoured.
-    for pair in "app.entitlements:io.onyxfs.app" "ext.entitlements:io.onyxfs.app.fileprovider"; do
-      f="$WORK/${pair%%:*}"; id="${pair#*:}"
-      /usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string $ONYX_TEAM_ID.$id" "$f"
-      /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string $ONYX_TEAM_ID" "$f"
-    done
-    cp "$ONYX_EXT_PROFILE" "$EXT/Contents/embedded.provisionprofile"
-    cp "$ONYX_APP_PROFILE" "$APP/Contents/embedded.provisionprofile"
-    "${SIGN[@]}" --entitlements "$WORK/ext.entitlements" "$EXT"
+  "${SIGN[@]}" "$APP/Contents/MacOS/rclone"
+  if [[ "$WITH_EXT" == "1" ]]; then
+    if [[ -n "$EXT_PROFILE" ]]; then
+      render OnyxFileProvider/OnyxFileProvider.entitlements "$WORK/ext.entitlements" io.onyxfs.app.fileprovider
+      cp "$EXT_PROFILE" "$EXT/Contents/embedded.provisionprofile"
+      "${SIGN[@]}" --entitlements "$WORK/ext.entitlements" "$EXT"
+    else
+      "${SIGN[@]}" --entitlements "$WORK/ext.min.entitlements" "$EXT"
+    fi
+  fi
+  if [[ -n "$APP_PROFILE" ]]; then
+    render OnyxMac/OnyxMac.entitlements "$WORK/app.entitlements" io.onyxfs.app
+    cp "$APP_PROFILE" "$APP/Contents/embedded.provisionprofile"
     "${SIGN[@]}" --entitlements "$WORK/app.entitlements" "$APP"
-    echo "Signed for team $ONYX_TEAM_ID, with the app group: Finder drives are available."
+    echo "Signed for team $ONYX_TEAM_ID, with its provisioning profile."
   else
-    "${SIGN[@]}" --entitlements "$WORK/ext.min.entitlements" "$EXT"
     "${SIGN[@]}" --entitlements "$WORK/app.min.entitlements" "$APP"
-    echo "Signed for team $ONYX_TEAM_ID without provisioning profiles: the app runs and updates itself;"
-    echo "Finder drives need ONYX_APP_PROFILE and ONYX_EXT_PROFILE (apple/README.md)."
+    echo "Signed for team $ONYX_TEAM_ID (no provisioning profile)."
   fi
 else
-  codesign --force --entitlements "$WORK/ext.min.entitlements" --sign - "$EXT"
+  codesign --force --sign - "$APP/Contents/MacOS/rclone"
+  [[ "$WITH_EXT" == "1" ]] && codesign --force --entitlements "$WORK/ext.min.entitlements" --sign - "$EXT"
   codesign --force --sign - "$APP"
-  echo "Unsigned build: the window works; Finder drives need ONYX_SIGN_IDENTITY (see apple/README.md)."
+  echo "Unsigned build: for this Mac."
 fi
 
 codesign --verify --deep --strict "$APP"

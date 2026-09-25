@@ -27,6 +27,7 @@ import { useFolderPicker } from '@/app/components/ui/FolderPicker';
 import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
 import { useContextMenu } from '@/app/components/ui/ContextMenu';
 import useMarquee from '@/app/components/ui/useMarquee';
+import useMacApp from '@/app/components/useMacApp';
 import {
   folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, crumbsFor, folderStats,
 } from '@/lib/folder-ops';
@@ -159,6 +160,8 @@ export default function FilesClient({
   const [view, setView] = useState('grid');
   const [facets, setFacets] = useState({});
   const [selected, setSelected] = useState(new Set());
+  // The Mac app's offline and Finder actions, when running inside it.
+  const mac = useMacApp();
   const [uploadSnap, setUploadSnap] = useState(null);
   const [dragging, setDragging] = useState(false);
   // The facet filters live in a panel under the toolbar, open only while
@@ -874,9 +877,13 @@ export default function FilesClient({
   const fileMenu = (f) => {
     const many = selected.has(f.id) && selected.size > 1 ? [...selected] : null;
     if (many) {
+      const allPinned = many.every((id) => mac.pinned.has(id));
       return [
         { heading: `${many.length} files selected` },
         { label: 'Get info', hint: `${modKey()}I`, onSelect: () => infoForFiles(many) },
+        mac.inApp && (allPinned
+          ? { label: `Remove ${many.length} offline copies`, onSelect: () => mac.unpinFiles(many, filespaceId) }
+          : { label: `Keep ${many.length} files offline on this Mac`, onSelect: () => mac.pinFiles(many, filespaceId) }),
         canWrite && { label: `Move ${many.length} files…`, onSelect: () => moveFilesUI(many) },
         { label: 'Clear selection', onSelect: () => setSelected(new Set()) },
         canWrite && '-',
@@ -888,6 +895,10 @@ export default function FilesClient({
       { label: 'Open', hint: 'Enter', onSelect: () => openFile(f) },
       { label: 'Get info', hint: `${modKey()}I`, onSelect: () => infoForFiles([f.id]) },
       { label: 'Download', onSelect: () => downloadFile(f) },
+      // In the Mac app only: a copy on this Mac that opens without a connection.
+      mac.inApp && (mac.pinned.has(f.id)
+        ? { label: 'Remove offline copy', onSelect: () => mac.unpinFiles([f.id], filespaceId) }
+        : { label: 'Keep offline on this Mac', onSelect: () => mac.pinFiles([f.id], filespaceId) }),
       // The flag is the role's (the page computed it); the route checks both
       // it and write access to this file again.
       flags.shares && canWrite && { label: 'Share…', onSelect: () => setSharing(f) },
@@ -904,6 +915,9 @@ export default function FilesClient({
     { heading: baseName(path) },
     { label: 'Open', onSelect: () => navigate(path) },
     { label: 'Get info', onSelect: () => infoForFolder(path) },
+    mac.inApp && (mac.folderPinned(path, filespaceId)
+      ? { label: 'Remove offline copies', onSelect: () => mac.pinFolder(path, filespaceId, false) }
+      : { label: 'Keep folder offline on this Mac', onSelect: () => mac.pinFolder(path, filespaceId, true) }),
     canWrite && '-',
     canWrite && { label: 'New folder inside…', onSelect: () => newFolder(path) },
     canWrite && { label: 'Rename…', onSelect: () => renameFolderUI(path) },
@@ -990,6 +1004,10 @@ export default function FilesClient({
     { heading: d.name },
     { label: 'Open', onSelect: () => openDrive(d.id) },
     { label: 'Get info', onSelect: () => infoForDrive(d) },
+    mac.inApp && !mac.mounted.has(mac.scopeOf(d.id)) && { label: 'Show in Finder', onSelect: () => mac.showInFinder(d.id, d.name) },
+    mac.inApp && (mac.folderPinned('', d.id)
+      ? { label: 'Remove offline copies', onSelect: () => mac.pinFolder('', d.id, false) }
+      : { label: 'Keep whole drive offline', onSelect: () => mac.pinFolder('', d.id, true) }),
     canManageDrive(d) && '-',
     canManageDrive(d) && { label: 'Members and permissions…', onSelect: () => setMembersOf(d) },
     isAdmin && { label: 'Rename…', onSelect: () => renameDrive(d) },
