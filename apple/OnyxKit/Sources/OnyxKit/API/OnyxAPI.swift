@@ -117,6 +117,18 @@ public actor OnyxAPI {
         return try decode(SpaceCredentials.self, from: data)
     }
 
+    // MARK: - Updates
+
+    /// The newest Mac release this server knows of, or nil when none has been
+    /// published. Needs no sign-in: the app checks before anyone signs in.
+    public func latestMacRelease() async throws -> MacRelease? {
+        do {
+            return try decode(MacRelease.self, from: try await request(config.url("api/desktop/mac/latest"), authenticated: false))
+        } catch OnyxError.http(let status, _) where status == 404 {
+            return nil
+        }
+    }
+
     // MARK: - Identity
 
     public func me() async throws -> String {

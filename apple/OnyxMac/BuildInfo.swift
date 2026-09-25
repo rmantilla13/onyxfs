@@ -4,7 +4,11 @@ import Security
 /// Facts about this build that change what the app can offer.
 enum BuildInfo {
     static var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+    }
+
+    static var build: String? {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
     }
 
     /// The Apple Developer team this copy is signed by, or nil for an unsigned
@@ -26,5 +30,13 @@ enum BuildInfo {
         return (info as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] as? String
     }()
 
-    static var canUseFinder: Bool { teamID != nil }
+    /// Finder needs the shared app group, which a build has only when it was
+    /// signed with a provisioning profile granting it. A team-signed build
+    /// without one still runs (and updates itself); it just cannot share its
+    /// sign-in with the extension.
+    static let canUseFinder: Bool = {
+        guard teamID != nil, let task = SecTaskCreateFromSelf(nil) else { return false }
+        let groups = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil)
+        return ((groups as? [String]) ?? []).contains { $0.hasSuffix("io.onyxfs") }
+    }()
 }

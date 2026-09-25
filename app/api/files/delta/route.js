@@ -59,12 +59,19 @@ export async function GET(req) {
     return NextResponse.json({ changed: [], deleted: [], cursor: await currentChangeCursor(), done: true, scope: tag });
   }
 
-  const page = await listFileChanges({
-    cursor: Number(url.searchParams.get('cursor')) || 0,
-    limit: Number(url.searchParams.get('limit')) || 500,
-    principal,
-    scope,
-  });
+  let page;
+  try {
+    page = await listFileChanges({
+      cursor: Number(url.searchParams.get('cursor')) || 0,
+      limit: Number(url.searchParams.get('limit')) || 500,
+      principal,
+      scope,
+    });
+  } catch {
+    // A retryable failure, so a device tries again rather than believing it
+    // has everything.
+    return NextResponse.json({ error: 'Changes could not be read right now.' }, { status: 503, headers: { 'retry-after': '30' } });
+  }
 
   // Presign only what this page carries. A client streaming a first sync of
   // 100k files pages through in chunks rather than signing them all at once.

@@ -81,9 +81,10 @@ final class WebController: NSObject, ObservableObject {
         do {
             let (secret, challenge) = WebHandoff.makeSecret()
             let link = try await model.api.webSession(challenge: challenge, next: next)
-            guard let cookie = WebHandoff.cookie(secret: secret, server: server) else { return }
+            guard let cookie = WebHandoff.cookie(secret: secret, server: server),
+                  let url = link.resolved(against: server) else { return }
             await webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie)
-            webView.load(URLRequest(url: link.url))
+            webView.load(URLRequest(url: url))
             appLog.info("web: handing off to \(next, privacy: .public)")
         } catch OnyxError.notAuthenticated {
             await model.tokenRejected()

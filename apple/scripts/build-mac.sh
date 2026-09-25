@@ -17,15 +17,30 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG="${CONFIG:-release}"
-VERSION="${ONYX_VERSION:-0.2.0}"
+VERSION="${ONYX_VERSION:-$(tr -d '[:space:]' < VERSION)}"
 BUILD_NUMBER="${ONYX_BUILD:-$(date +%Y%m%d%H%M)}"
 OUT="${OUT:-build}"
 APP="$OUT/Onyx.app"
 EXT="$APP/Contents/PlugIns/OnyxFileProvider.appex"
 
-swift build -c "$CONFIG" --product OnyxMac
-swift build -c "$CONFIG" --product OnyxFileProvider
-BIN="$(swift build -c "$CONFIG" --show-bin-path)"
+# ONYX_UNIVERSAL=1: Apple silicon and Intel in one binary (releases do this).
+if [[ "${ONYX_UNIVERSAL:-0}" == "1" ]]; then
+  BIN="$(mktemp -d)"
+  for arch in x86_64 arm64; do
+    swift build -c "$CONFIG" --triple "$arch-apple-macosx14.0" --product OnyxMac
+    swift build -c "$CONFIG" --triple "$arch-apple-macosx14.0" --product OnyxFileProvider
+    out="$(swift build -c "$CONFIG" --triple "$arch-apple-macosx14.0" --show-bin-path)"
+    mkdir -p "$BIN/$arch"
+    cp "$out/OnyxMac" "$out/OnyxFileProvider" "$BIN/$arch/"
+  done
+  for exe in OnyxMac OnyxFileProvider; do
+    lipo -create "$BIN/x86_64/$exe" "$BIN/arm64/$exe" -output "$BIN/$exe"
+  done
+else
+  swift build -c "$CONFIG" --product OnyxMac
+  swift build -c "$CONFIG" --product OnyxFileProvider
+  BIN="$(swift build -c "$CONFIG" --show-bin-path)"
+fi
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$EXT/Contents/MacOS"
@@ -66,19 +81,13 @@ render() { sed "s/\$(AppIdentifierPrefix)/${ONYX_TEAM_ID:-}./g" "$1" > "$2"; }
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-if [[ -n "${ONYX_SIGN_IDENTITY:-}" ]]; then
-  : "${ONYX_TEAM_ID:?set ONYX_TEAM_ID with ONYX_SIGN_IDENTITY}"
-  render OnyxFileProvider/OnyxFileProvider.entitlements "$WORK/ext.entitlements"
-  render OnyxMac/OnyxMac.entitlements "$WORK/app.entitlements"
-  [[ -n "${ONYX_EXT_PROFILE:-}" ]] && cp "$ONYX_EXT_PROFILE" "$EXT/Contents/embedded.provisionprofile"
-  [[ -n "${ONYX_APP_PROFILE:-}" ]] && cp "$ONYX_APP_PROFILE" "$APP/Contents/embedded.provisionprofile"
-  codesign --force --options runtime --entitlements "$WORK/ext.entitlements" --sign "$ONYX_SIGN_IDENTITY" "$EXT"
-  codesign --force --options runtime --entitlements "$WORK/app.entitlements" --sign "$ONYX_SIGN_IDENTITY" "$APP"
-  echo "Signed for team $ONYX_TEAM_ID."
-else
-  # Unsigned. An app extension must be sandboxed to load at all, so it gets
-  # that much; neither gets the app group, which only a team can hold.
-  cat > "$WORK/ext.entitlements" <<'PLIST'
+# Minimal entitlements: what a build gets when nothing grants it the app group.
+# An app extension must be sandboxed to load at all; the app is not (it
+# replaces itself when it updates). The app group and the keychain group are
+# restricted: signed without a provisioning profile that grants them, macOS
+# refuses to launch the app at all — so without profiles they are left off,
+# and the app runs without Finder (it says so in Settings).
+cat > "$WORK/ext.min.entitlements" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -86,7 +95,36 @@ else
   <key>com.apple.security.network.client</key><true/>
 </dict></plist>
 PLIST
-  codesign --force --entitlements "$WORK/ext.entitlements" --sign - "$EXT"
+cat > "$WORK/app.min.entitlements" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.network.client</key><true/>
+</dict></plist>
+PLIST
+
+if [[ -n "${ONYX_SIGN_IDENTITY:-}" ]]; then
+  : "${ONYX_TEAM_ID:?set ONYX_TEAM_ID with ONYX_SIGN_IDENTITY}"
+  # Hardened runtime always (notarization requires it); a secure timestamp
+  # for anything that will be notarized.
+  SIGN=(codesign --force --options runtime --sign "$ONYX_SIGN_IDENTITY")
+  [[ "${ONYX_TIMESTAMP:-0}" == "1" ]] && SIGN+=(--timestamp)
+  if [[ -n "${ONYX_APP_PROFILE:-}" && -n "${ONYX_EXT_PROFILE:-}" ]]; then
+    render OnyxFileProvider/OnyxFileProvider.entitlements "$WORK/ext.entitlements"
+    render OnyxMac/OnyxMac.entitlements "$WORK/app.entitlements"
+    cp "$ONYX_EXT_PROFILE" "$EXT/Contents/embedded.provisionprofile"
+    cp "$ONYX_APP_PROFILE" "$APP/Contents/embedded.provisionprofile"
+    "${SIGN[@]}" --entitlements "$WORK/ext.entitlements" "$EXT"
+    "${SIGN[@]}" --entitlements "$WORK/app.entitlements" "$APP"
+    echo "Signed for team $ONYX_TEAM_ID, with the app group: Finder drives are available."
+  else
+    "${SIGN[@]}" --entitlements "$WORK/ext.min.entitlements" "$EXT"
+    "${SIGN[@]}" --entitlements "$WORK/app.min.entitlements" "$APP"
+    echo "Signed for team $ONYX_TEAM_ID without provisioning profiles: the app runs and updates itself;"
+    echo "Finder drives need ONYX_APP_PROFILE and ONYX_EXT_PROFILE (apple/README.md)."
+  fi
+else
+  codesign --force --entitlements "$WORK/ext.min.entitlements" --sign - "$EXT"
   codesign --force --sign - "$APP"
   echo "Unsigned build: the window works; Finder drives need ONYX_SIGN_IDENTITY (see apple/README.md)."
 fi

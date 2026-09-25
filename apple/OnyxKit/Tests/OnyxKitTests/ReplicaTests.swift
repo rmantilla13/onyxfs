@@ -107,11 +107,19 @@ struct ServerAddressTests {
 
     @Test func theHandoffCookieIsScopedAndShortLived() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        // https: __Host-, which requires Secure, the exact host and Path=/.
         let c = try #require(WebHandoff.cookie(secret: "s", server: URL(string: "https://www.onyxfs.io")!, now: now))
-        #expect(c.name == "onyx_handoff" && c.domain.hasSuffix("www.onyxfs.io"))
-        #expect(c.path == "/api/desktop/web-session")
+        #expect(c.name == "__Host-onyx_handoff")
+        #expect(c.domain == "www.onyxfs.io", "host-only, never a parent domain")
+        #expect(c.path == "/")
         #expect(c.isSecure)
         #expect(c.expiresDate == now.addingTimeInterval(120))
+        // http (a local server): the plain name, on the handoff's own path.
+        let local = try #require(WebHandoff.cookie(secret: "s", server: URL(string: "http://localhost:3000")!, now: now))
+        #expect(local.name == "onyx_handoff" && local.path == "/api/desktop/web-session" && !local.isSecure)
+        let link = WebSessionLink(url: "/api/desktop/web-session?code=x&next=%2Ffiles", expiresAt: nil)
+        #expect(link.resolved(against: URL(string: "http://127.0.0.1:3000")!)?.absoluteString
+                == "http://127.0.0.1:3000/api/desktop/web-session?code=x&next=%2Ffiles")
         let (secret, challenge) = WebHandoff.makeSecret()
         #expect(PKCE.challenge(for: secret) == challenge && challenge.count == 43)
     }

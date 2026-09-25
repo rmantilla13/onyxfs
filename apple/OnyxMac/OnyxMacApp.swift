@@ -28,6 +28,7 @@ struct OnyxMacApp: App {
         Window("Onyx", id: "main") {
             MainWindow()
                 .environmentObject(model)
+                .environmentObject(model.updater)
                 .task { await Launch.once { await model.handleLaunchArguments() } }
         }
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
@@ -35,12 +36,12 @@ struct OnyxMacApp: App {
         .commands { OnyxCommands(model: model) }
 
         MenuBarExtra("Onyx", systemImage: "externaldrive.connected.to.line.below") {
-            MenuBarContent().environmentObject(model)
+            MenuBarContent().environmentObject(model).environmentObject(model.updater)
         }
         .menuBarExtraStyle(.menu)
 
         Settings {
-            SettingsView().environmentObject(model)
+            SettingsView().environmentObject(model).environmentObject(model.updater)
         }
     }
 }
@@ -65,6 +66,11 @@ struct OnyxCommands: Commands {
     @ObservedObject var model: AppModel
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") {
+                Task { await model.updater.check(userInitiated: true) }
+            }
+        }
         CommandGroup(replacing: .newItem) {}
         CommandGroup(after: .newItem) {
             Button("Sync Drives Now") { Task { await model.syncNow() } }

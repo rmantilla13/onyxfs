@@ -9,6 +9,9 @@ import Foundation
 /// cookie — so the URL, if it leaked, would sign nobody in.
 public enum WebHandoff {
     public static let cookieName = "onyx_handoff"
+    /// Over https: a `__Host-` cookie, which only this exact host can set, so
+    /// no sibling subdomain can plant a secret of its own (lib/web-handoff.js).
+    public static let secureCookieName = "__Host-onyx_handoff"
 
     /// A fresh secret and the challenge to send for it. PKCE's S256, because
     /// the server checks it with the same function the device sign-in uses.
@@ -17,18 +20,21 @@ public enum WebHandoff {
         return (secret, PKCE.challenge(for: secret))
     }
 
-    /// The cookie to put in the web view before loading the handoff URL:
-    /// scoped to the one path that reads it, and gone in two minutes.
+    /// The cookie to put in the web view before loading the handoff URL, gone
+    /// in two minutes. Over https it is `__Host-`: Secure, this host only,
+    /// Path=/ (the prefix requires all three). Over plain http (a local
+    /// server) it is scoped to the one path that reads it.
     public static func cookie(secret: String, server: URL, now: Date = Date()) -> HTTPCookie? {
         guard let host = server.host else { return nil }
+        let secure = server.scheme == "https"
         var props: [HTTPCookiePropertyKey: Any] = [
-            .name: cookieName,
+            .name: secure ? secureCookieName : cookieName,
             .value: secret,
-            .domain: host,
-            .path: "/api/desktop/web-session",
+            .originURL: server,
+            .path: secure ? "/" : "/api/desktop/web-session",
             .expires: now.addingTimeInterval(120),
         ]
-        if server.scheme == "https" { props[.secure] = "TRUE" }
+        if secure { props[.secure] = "TRUE" } else { props[.domain] = host }
         return HTTPCookie(properties: props)
     }
 }

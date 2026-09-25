@@ -27,6 +27,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var server: URL
 
     let web: WebController
+    let updater = Updater()
     private let settings = SharedSettings()
     private var syncTimer: Timer?
 
@@ -37,6 +38,7 @@ final class AppModel: ObservableObject {
         phase = TokenStore().get() == nil ? .signedOut : .signedIn
         web = WebController()
         web.model = self
+        updater.model = self
         if phase == .signedIn { Task { await afterSignIn() } }
         // S3 has no push; this is how the web's changes reach Finder without
         // anyone asking. Cheap: a delta with nothing new is one small query.
@@ -160,6 +162,9 @@ final class AppModel: ObservableObject {
 
     func isInFinder(_ scope: SyncDomain) -> Bool { inFinder.contains(scope.identifier) }
 
+    /// The drives Finder can show: the ones whose files are yours to see.
+    var finderDrives: [Filespace] { drives.filter(\.isMember) }
+
     func setInFinder(_ scope: SyncDomain, name: String, _ on: Bool) async {
         let id = scope.identifier
         busy.insert(id)
@@ -193,7 +198,7 @@ final class AppModel: ObservableObject {
     /// A drive you are no longer in (or that was deleted) should not linger
     /// in Finder as a location that can only ever say "no access".
     private func removeOrphans() async {
-        let live = Set(drives.map { SyncDomain.drive(id: $0.id).identifier } + [SyncDomain.library.identifier])
+        let live = Set(finderDrives.map { SyncDomain.drive(id: $0.id).identifier } + [SyncDomain.library.identifier])
         for id in inFinder where !live.contains(id) && SyncDomain(identifier: id) != nil {
             try? await FinderLocations.remove(id)
             appLog.info("finder: removed \(id, privacy: .public), no longer a drive of yours")
@@ -214,5 +219,8 @@ final class AppModel: ObservableObject {
         }
         if let s = value("--server") { await setServer(s) }
         if let code = value("--pair") { await pair(code: code) }
+        // Where to look for updates, instead of the server — for trying the
+        // updater against a local feed. What it installs is verified the same.
+        updater.start(feed: value("--update-feed").flatMap(URL.init(string:)))
     }
 }

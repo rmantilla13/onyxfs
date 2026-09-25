@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { buildDeltaQuery, buildFileQuery, accessClauses } from '../lib/file-query.js';
 import { drivePatterns } from '../lib/drive-access.js';
 import { accessFingerprint, syncScope } from '../lib/sync-scope.js';
-import { safeNext, sessionCookieName, requestIsSecure, HANDOFF_TTL_MS } from '../lib/web-handoff.js';
+import { safeNext, sessionCookieName, authUsesHttps, handoffSecret, HANDOFF_TTL_MS } from '../lib/web-handoff.js';
 import { pkceChallenge } from '../lib/pkce.js';
 
 const drives = [
@@ -109,17 +109,38 @@ describe('signing the app window in', () => {
     assert.equal(safeNext('/files\n/x'), '/files');
   });
 
-  test('names the session cookie as Auth.js does', () => {
+  test('names the session cookie as Auth.js does, deciding https the way it does', () => {
     assert.equal(sessionCookieName(true), '__Secure-authjs.session-token');
     assert.equal(sessionCookieName(false), 'authjs.session-token');
-    assert.equal(requestIsSecure({ protocol: 'http:', forwardedProto: 'https' }), true);
-    assert.equal(requestIsSecure({ protocol: 'https:' }), true);
-    assert.equal(requestIsSecure({ protocol: 'http:' }), false);
+    // AUTH_URL wins over whatever the proxy says.
+    assert.equal(authUsesHttps({ env: { AUTH_URL: 'https://onyx.example.com' }, forwardedProto: 'http' }), true);
+    assert.equal(authUsesHttps({ env: { NEXTAUTH_URL: 'http://localhost:3000' }, forwardedProto: 'https' }), false);
+    // Then the proxy, then the request, then https.
+    assert.equal(authUsesHttps({ forwardedProto: 'https', protocol: 'http:' }), true);
+    assert.equal(authUsesHttps({ forwardedProto: 'http', protocol: 'https:' }), false);
+    assert.equal(authUsesHttps({ protocol: 'http:' }), false);
+    assert.equal(authUsesHttps({}), true);
+  });
+
+  test('over https only the __Host- secret counts, so a sibling subdomain cannot plant one', () => {
+    const jar = (o) => ({ get: (n) => (n in o ? { value: o[n] } : undefined) });
+    assert.equal(handoffSecret(jar({ onyx_handoff: 'tossed' }), true), '');
+    assert.equal(handoffSecret(jar({ '__Host-onyx_handoff': 'real', onyx_handoff: 'tossed' }), true), 'real');
+    assert.equal(handoffSecret(jar({ onyx_handoff: 'local' }), false), 'local', 'plain http (localhost) uses the plain name');
   });
 
   test('the code is short-lived, and bound by the same S256 the device sign-in uses', async () => {
     assert.ok(HANDOFF_TTL_MS <= 60_000);
     // RFC 7636, Appendix B.
     assert.equal(await pkceChallenge('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'), 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
+  });
+});
+
+describe('names are not patterns', () => {
+  test('a folder or drive prefix with _ or % matches only itself and what is under it', () => {
+    const { params } = buildFileQuery({ opts: { folderPrefix: 'Q1_2024', storagePrefix: '100%_brand' }, principal: { isAdmin: true } });
+    assert.ok(params.includes('Q1\\_2024/%'), 'folder prefix escaped');
+    assert.ok(params.includes('100\\%\\_brand/%'), 'drive prefix escaped');
+    assert.ok(!params.includes('Q1_2024/%') && !params.includes('100%_brand/%'));
   });
 });

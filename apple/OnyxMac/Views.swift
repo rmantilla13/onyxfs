@@ -6,6 +6,7 @@ import OnyxKit
 
 struct MainWindow: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var updater: Updater
 
     var body: some View {
         Group {
@@ -15,6 +16,87 @@ struct MainWindow: View {
             }
         }
         .frame(minWidth: 880, minHeight: 560)
+        .sheet(isPresented: $updater.showSheet) { UpdateSheet() }
+    }
+}
+
+// MARK: - Updates
+
+struct UpdateSheet: View {
+    @EnvironmentObject var updater: Updater
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 14) {
+                Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 56, height: 56)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title).font(.headline)
+                    Text(subtitle).font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let release = updater.available, let notes = release.notes, !notes.isEmpty {
+                ScrollView {
+                    Text(notes).font(.callout).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                }
+                .frame(height: 140)
+                .padding(8)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+            }
+            switch updater.state {
+            case let .downloading(f):
+                ProgressView(value: f) { Text("Downloading…").font(.caption) }
+            case .installing:
+                ProgressView { Text("Installing…").font(.caption) }
+            default:
+                EmptyView()
+            }
+            HStack {
+                if let release = updater.available {
+                    Button("Skip This Version") { updater.skip(release) }
+                    Spacer()
+                    Button("Later") { updater.dismiss() }.keyboardShortcut(.cancelAction)
+                    if updater.canInstall {
+                        Button("Install and Relaunch") { Task { await updater.install(release) } }
+                            .keyboardShortcut(.defaultAction)
+                    } else {
+                        Button("Download") { updater.openDownload(release) }
+                            .keyboardShortcut(.defaultAction)
+                    }
+                } else if case .downloading = updater.state {
+                    Spacer()
+                } else if case .installing = updater.state {
+                    Spacer()
+                } else {
+                    Spacer()
+                    Button("OK") { updater.dismiss() }.keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+        .padding(22)
+        .frame(width: 440)
+    }
+
+    private var title: String {
+        switch updater.state {
+        case let .available(r): return "Onyx \(r.version) is available"
+        case .downloading, .installing: return "Updating Onyx"
+        case .upToDate: return "Onyx is up to date"
+        case .failed: return "The update did not work"
+        default: return "Checking for updates…"
+        }
+    }
+
+    private var subtitle: String {
+        switch updater.state {
+        case .available:
+            return updater.canInstall
+                ? "You have \(BuildInfo.version). It relaunches when it is done."
+                : "You have \(BuildInfo.version). This copy cannot update itself in place, so the download opens in your browser."
+        case .upToDate: return "You have the newest version, \(BuildInfo.version)."
+        case let .failed(message): return message
+        default: return ""
+        }
     }
 }
 
@@ -184,17 +266,17 @@ struct FinderItems: View {
             if !BuildInfo.canUseFinder {
                 Text("Needs a signed build of Onyx")
             }
-            if model.drives.isEmpty {
+            if model.finderDrives.isEmpty {
                 Text("No drives yet")
             }
-            ForEach(model.drives) { drive in
+            ForEach(model.finderDrives) { drive in
                 toggle(.drive(id: drive.id), name: drive.name, detail: roleWord(drive.role))
             }
             toggle(.library, name: "Library", detail: "files in no drive")
         }
         if !model.inFinder.isEmpty {
             Section("Open in Finder") {
-                ForEach(model.drives.filter { model.isInFinder(.drive(id: $0.id)) }) { drive in
+                ForEach(model.finderDrives.filter { model.isInFinder(.drive(id: $0.id)) }) { drive in
                     Button(drive.name) { Task { await model.reveal(.drive(id: drive.id)) } }
                 }
                 if model.isInFinder(.library) {
@@ -230,6 +312,7 @@ struct FinderItems: View {
 
 struct MenuBarContent: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var updater: Updater
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -240,6 +323,10 @@ struct MenuBarContent: View {
             FinderItems()
         } else {
             Button("Sign In…") { open() }
+        }
+        if let release = updater.available {
+            Divider()
+            Button("Update to Onyx \(release.version)…") { open(); updater.showSheet = true }
         }
         Divider()
         SettingsLink { Text("Settings…") }
@@ -260,12 +347,13 @@ struct SettingsView: View {
             AccountSettings().tabItem { Label("Account", systemImage: "person.crop.circle") }
             FinderSettings().tabItem { Label("Finder", systemImage: "externaldrive") }
         }
-        .frame(width: 480, height: 320)
+        .frame(width: 480, height: 420)
     }
 }
 
 struct AccountSettings: View {
     @EnvironmentObject var model: AppModel
+    @EnvironmentObject var updater: Updater
     @StateObject private var form = FormState()
 
     var body: some View {
@@ -295,6 +383,16 @@ struct AccountSettings: View {
                 Text("Changing servers signs you out: a sign-in belongs to the server that issued it.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Updates") {
+                LabeledContent("Version") {
+                    Text(BuildInfo.build.map { "\(BuildInfo.version) (\($0))" } ?? BuildInfo.version)
+                }
+                Toggle("Check for updates automatically", isOn: $updater.automatic)
+                LabeledContent("") {
+                    Button("Check Now") { Task { await updater.check(userInitiated: true) } }
+                        .disabled(updater.state == .checking)
+                }
+            }
         }
         .formStyle(.grouped)
         .onAppear { form.serverText = model.serverLabel }
@@ -314,7 +412,7 @@ struct FinderSettings: View {
                     .font(.callout)
             }
             List {
-                ForEach(model.drives) { drive in row(.drive(id: drive.id), name: drive.name) }
+                ForEach(model.finderDrives) { drive in row(.drive(id: drive.id), name: drive.name) }
                 row(.library, name: "Library")
             }
             HStack {
