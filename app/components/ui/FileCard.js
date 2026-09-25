@@ -31,7 +31,8 @@ const fmtSize = (n) => {
 
 export { fmtSize };
 
-function Thumb({ file, label, onMissingThumb }) {
+// Also used, shrunk, by the list view's rows (FileList).
+export function Thumb({ file, label, onMissingThumb }) {
   const kind = effectiveKind(file);
   const drawable = drawableKind(file);
   // URLs that failed to load in this tile. A broken-image icon is never the

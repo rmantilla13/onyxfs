@@ -7,6 +7,8 @@ import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } 
 import { createThumbnailBackfill } from '@/lib/thumbnail-client';
 import { createUploadQueue, uploadOne, filesFromDrop, filesFromInput, joinFolder } from '@/lib/upload-client';
 import FileGrid from '@/app/components/ui/FileGrid';
+import FileList, { FileListHeader } from '@/app/components/ui/FileList';
+import { VIEW_STORAGE_KEY, parseView } from '@/lib/list-columns';
 import UploadPanel from '@/app/components/ui/UploadPanel';
 import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
@@ -24,19 +26,26 @@ const KINDS = [
   { key: 'other', label: 'Other' },
 ];
 
-// Keys must stay in step with SORTS in lib/file-query.js — an unknown key
-// falls back to `new` on the server, which reads as "sorting is broken"
-// rather than as a typo.
 // Drag payloads for moves inside the library. An OS file drag carries
 // 'Files' instead, which is what tells an upload from a move.
 const DRAG_FILES = 'application/x-onyx-files';
 const DRAG_FOLDER = 'application/x-onyx-folder';
 
+// Keys must stay in step with SORTS in lib/file-query.js — an unknown key
+// falls back to `new` on the server, which reads as "sorting is broken"
+// rather than as a typo. The list view's column headers pick from the same
+// keys (lib/list-columns.js).
 const SORTS = [
   { key: 'new', label: 'Newest' },
   { key: 'old', label: 'Oldest' },
-  { key: 'name', label: 'Name' },
+  { key: 'modified', label: 'Recently modified' },
+  { key: 'modified_old', label: 'Least recently modified' },
+  { key: 'name', label: 'Name A–Z' },
+  { key: 'name_desc', label: 'Name Z–A' },
   { key: 'size', label: 'Largest' },
+  { key: 'small', label: 'Smallest' },
+  { key: 'type', label: 'Type A–Z' },
+  { key: 'type_desc', label: 'Type Z–A' },
 ];
 
 
@@ -52,6 +61,10 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   const [query, setQuery] = useState('');
   const [kinds, setKinds] = useState([]);
   const [sort, setSort] = useState('new');
+  // Grid or list. Starts as grid on the server and in the first client
+  // render, then takes the stored choice after mount — reading localStorage
+  // during render would disagree with the server HTML and fail hydration.
+  const [view, setView] = useState('grid');
   const [facets, setFacets] = useState({});
   const [selected, setSelected] = useState(new Set());
   const [uploadSnap, setUploadSnap] = useState(null);
@@ -125,6 +138,14 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   }, [filespaceId]);
 
   useEffect(() => { loadFolders(); }, [loadFolders]);
+
+  useEffect(() => {
+    try { setView(parseView(localStorage.getItem(VIEW_STORAGE_KEY))); } catch {}
+  }, []);
+  const changeView = (next) => {
+    setView(next);
+    try { localStorage.setItem(VIEW_STORAGE_KEY, next); } catch {}
+  };
 
   // A soft navigation: the page re-renders with the new ?filespace= and the
   // effects above refetch. The open folder belongs to the old filespace.
@@ -668,6 +689,31 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     });
   }, []);
 
+  // What the grid and the list share: the same files, selection and actions,
+  // so switching views never changes what a click or a key does.
+  const gridProps = {
+    files: visible,
+    selected,
+    onSelect: toggleSelect,
+    onOpen: openFile,
+    onDragFile: canWrite ? onDragFile : undefined,
+    onMissingThumb: requestThumb,
+    labelFor: (f) => deriveAuto(f).format || f.kind,
+    badgesFor: (f) => {
+      const e = flags.usageRights ? expiryState(f, schema) : null;
+      if (e === 'expired') return <span className="tag tag-danger">Expired</span>;
+      if (e === 'soon') return <span className="tag tag-warning">Expiring</span>;
+      return null;
+    },
+    emptyState: showTiles && subfolders.length > 0 && files.length === 0 ? null : (
+      <div className="empty">
+        {files.length === 0
+          ? canWrite ? 'Nothing here yet. Drop files anywhere on this page to upload.' : 'Nothing here yet.'
+          : 'No files match those filters.'}
+      </div>
+    ),
+  };
+
   // The bottom padding travels as a custom property because the inline
   // shorthand below outranks any stylesheet rule: the phone selection bar is
   // fixed, so the page has to reserve room for it, and only the stylesheet
@@ -749,6 +795,14 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
             <option key={o.key} value={o.key}>{o.label}</option>
           ))}
         </select>
+        <div className="view-toggle" role="group" aria-label="View">
+          <button type="button" className="btn" aria-pressed={view === 'grid'} aria-label="Grid view" title="Grid view" onClick={() => changeView('grid')}>
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><path d="M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" /></svg>
+          </button>
+          <button type="button" className="btn" aria-pressed={view === 'list'} aria-label="List view" title="List view" onClick={() => changeView('list')}>
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><path d="M2 3.5h12M2 8h12M2 12.5h12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
+          </button>
+        </div>
         <div className="kind-row">
         <div className="kind-strip edge-scroll">
           {KINDS.map((k) => (
@@ -826,7 +880,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
           </aside>
 
           <section className="files-pane">
-            {showTiles && subfolders.length > 0 && (
+            {view === 'grid' && showTiles && subfolders.length > 0 && (
               <FolderTiles
                 folders={subfolders}
                 onOpen={setFolder}
@@ -835,30 +889,21 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
               />
             )}
             {loading ? (
-              <div className="empty">Loading…</div>
-            ) : (
-              <FileGrid
-                files={visible}
-                selected={selected}
-                onSelect={toggleSelect}
-                onOpen={openFile}
-                onDragFile={canWrite ? onDragFile : undefined}
-                onMissingThumb={requestThumb}
-                labelFor={(f) => deriveAuto(f).format || f.kind}
-                badgesFor={(f) => {
-                  const e = flags.usageRights ? expiryState(f, schema) : null;
-                  if (e === 'expired') return <span className="tag tag-danger">Expired</span>;
-                  if (e === 'soon') return <span className="tag tag-warning">Expiring</span>;
-                  return null;
-                }}
-                emptyState={showTiles && subfolders.length > 0 && files.length === 0 ? null : (
-                  <div className="empty">
-                    {files.length === 0
-                      ? canWrite ? 'Nothing here yet. Drop files anywhere on this page to upload.' : 'Nothing here yet.'
-                      : 'No files match those filters.'}
-                  </div>
-                )}
+              <>
+                {view === 'list' && <FileListHeader sort={sort} onSort={changeSort} />}
+                <div className="empty">Loading…</div>
+              </>
+            ) : view === 'list' ? (
+              <FileList
+                {...gridProps}
+                sort={sort}
+                onSort={changeSort}
+                before={showTiles && subfolders.length > 0 ? (
+                  <FolderRows folders={subfolders} onOpen={setFolder} canWrite={canWrite} onDrop={onTreeDrop} />
+                ) : null}
               />
+            ) : (
+              <FileGrid {...gridProps} />
             )}
             {/* Sentinel for infinite scroll. Rendered only while a next page
                 exists, so reaching the end is what stops the observer. */}
@@ -972,6 +1017,50 @@ function FolderTiles({ folders, onOpen, canWrite, onDrop }) {
         <p className="small muted" style={{ margin: 0, alignSelf: 'center' }}>
           and {folders.length - shown.length} more in the sidebar
         </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The list view's version of the folder tiles: the open folder's subfolders
+ * as rows above its files, in the list's columns. Same behaviour as a tile —
+ * click opens, drop target, draggable, data-folder for the context menu.
+ */
+function FolderRows({ folders, onOpen, canWrite, onDrop }) {
+  const shown = folders.slice(0, MAX_TILES);
+  return (
+    <div className="filelist-folders" role="list" aria-label="Folders">
+      {shown.map((f) => (
+        <FolderDrop key={f.folder} target={f.folder} enabled={canWrite} onDrop={onDrop}>
+          <button
+            type="button"
+            role="listitem"
+            className="filelist-row filelist-cols filelist-folder"
+            data-folder={f.folder}
+            title={f.folder}
+            onClick={() => onOpen(f.folder)}
+            draggable={canWrite}
+            onDragStart={canWrite ? (e) => {
+              e.dataTransfer.setData(DRAG_FOLDER, f.folder);
+              e.dataTransfer.setData('text/plain', f.folder);
+              e.dataTransfer.effectAllowed = 'move';
+            } : undefined}
+          >
+            <span className="filelist-thumb filelist-folder-icon" aria-hidden>
+              <svg viewBox="0 0 24 24" width="20" height="20">
+                <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.3l2 2h8.7A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+              </svg>
+            </span>
+            <span className="filelist-name"><span className="truncate">{f.name}</span></span>
+            <span className="filelist-col-size muted">{f.count ? `${f.count} file${f.count === 1 ? '' : 's'}` : '—'}</span>
+            <span className="filelist-col-type muted">Folder</span>
+            <span className="filelist-col-modified muted" />
+          </button>
+        </FolderDrop>
+      ))}
+      {folders.length > shown.length && (
+        <p className="small muted filelist-more">and {folders.length - shown.length} more in the sidebar</p>
       )}
     </div>
   );
