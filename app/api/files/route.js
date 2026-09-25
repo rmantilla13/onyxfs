@@ -68,7 +68,8 @@ export async function GET(req) {
 
 /**
  * POST /api/files — record an uploaded asset.
- * Body: { name, url, mime, size, kind?, folder, storage, storageKey, tags, thumbnailKey?, media? }
+ * Body: { name, url, mime, size, kind?, folder, storage, storageKey, tags, thumbnailKey?,
+ *         media?, filmstripKey?, filmstrip? }
  * `media` is { width, height, duration } read by the browser while it made the thumbnail.
  */
 export async function POST(req) {

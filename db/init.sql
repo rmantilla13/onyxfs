@@ -132,6 +132,10 @@ ALTER TABLE files ADD COLUMN IF NOT EXISTS captioned_at BIGINT;
 ALTER TABLE files ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
 
 ALTER TABLE files ADD COLUMN IF NOT EXISTS thumbnail_key TEXT;
+-- Hover-scrub sprite sheet, made in the browser at upload. A column and not a
+-- metadata field because presignFileUrls signs it; its geometry is in
+-- metadata.filmstrip.
+ALTER TABLE files ADD COLUMN IF NOT EXISTS filmstrip_key TEXT;
 
 ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_at BIGINT;
 

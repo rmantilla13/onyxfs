@@ -36,7 +36,19 @@ export async function POST(req) {
   let filename = body.filename;
   let contentType = body.contentType;
   let cacheControl;
-  if (body.thumb) {
+  if (body.strip) {
+    // A hover-scrub sprite sheet. WebP only: the sheet is 40 tiles, and JPEG
+    // costs roughly three times the bytes for the same result.
+    if (contentType !== 'image/webp') {
+      return NextResponse.json({ error: 'A filmstrip must be WebP.' }, { status: 400 });
+    }
+    scoped = { ...cfg, prefix: '_thumbs' };
+    folder = undefined;
+    // `.strip.webp`, which isThumbKey does not match — so a strip can never be
+    // recorded as a row's thumbnail, or the reverse.
+    filename = `${randomUUID()}.strip.webp`;
+    cacheControl = THUMB_CACHE_CONTROL;
+  } else if (body.thumb) {
     if (contentType !== 'image/webp' && contentType !== 'image/jpeg') {
       return NextResponse.json({ error: 'A thumbnail must be WebP or JPEG.' }, { status: 400 });
     }
