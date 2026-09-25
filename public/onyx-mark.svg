@@ -1,19 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Onyx">
   <title>Onyx</title>
-  <!-- A cut onyx stone: an octagonal brilliant seen face-on. The table is the
-       flat centre; the eight facets around it catch light at different angles,
-       which is what the alternating tones represent. -->
-  <rect width="512" height="512" rx="112" fill="#0C0D0F"/>
-  <g transform="translate(256 256)">
-    <!-- Crown facets -->
-    <path d="M-150 -62 L-62 -150 L62 -150 L150 -62 L150 62 L62 150 L-62 150 L-150 62 Z" fill="#17181C"/>
-    <path d="M-150 -62 L-62 -150 L-62 -62 Z" fill="#2A2C33"/>
-    <path d="M62 -150 L150 -62 L62 -62 Z"   fill="#2A2C33"/>
-    <path d="M150 62 L62 150 L62 62 Z"      fill="#2A2C33"/>
-    <path d="M-62 150 L-150 62 L-62 62 Z"   fill="#2A2C33"/>
-    <!-- Table -->
-    <rect x="-62" y="-62" width="124" height="124" fill="#5B6CFF"/>
-    <!-- Light across the table -->
-    <path d="M-62 62 L62 -62 L62 62 Z" fill="#3D4BD4"/>
-  </g>
+  <!-- The slash from the ONYX/FS wordmark on the wordmark's near-black: the
+       root of a filesystem, and the brand's accent. Used wherever the logo
+       has to be square — the favicon, the sign-in email, the app icon. -->
+  <rect width="512" height="512" rx="112" fill="#090B0E"/>
+  <path transform="translate(187 106) scale(6.1525) translate(-180.318 -5.36363)"
+        d="M202.75 5.36363L189.625 54.125H180.318L193.443 5.36363H202.75Z" fill="#99E314"/>
 </svg>

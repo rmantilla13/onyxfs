@@ -26,7 +26,7 @@ export default async function AuthorizePage({ searchParams }) {
   return (
     <AuthorizeClient
       brandName={brand.desktop.productName}
-      markPath={brand.visual.logo.markPath}
+      logo={brand.visual.logo}
       email={session.user.email}
       challenge={challenge}
       state={state}

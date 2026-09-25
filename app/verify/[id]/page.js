@@ -1,6 +1,7 @@
 import { getMagicLinkRedirect } from '@/lib/db';
 import { loadBrand } from '@/lib/brand-config';
 import VerifyHop from './VerifyHop';
+import BrandLogo from '@/app/components/BrandLogo';
 
 export const dynamic = 'force-dynamic';
 // Vercel's default ceiling is 300s. Nothing here should take anywhere near
@@ -47,7 +48,7 @@ export default async function VerifyPage({ params }) {
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
       <div className="card" style={{ width: '100%', maxWidth: 400, padding: 32 }}>
-        <img src={brand.visual.logo.markPath} alt="" width={40} height={40} style={{ borderRadius: 10, marginBottom: 24 }} />
+        <BrandLogo logo={brand.visual.logo} name={brand.name} height={30} markSize={40} className="auth-logo" />
         {row?.targetUrl ? (
           <VerifyHop targetUrl={row.targetUrl} brandName={brand.name} />
         ) : row?.unavailable ? (

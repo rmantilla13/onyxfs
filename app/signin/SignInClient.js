@@ -4,8 +4,9 @@ import { useState } from 'react';
 // useFormState (react-dom), not useActionState (react) — this is React 18.
 import { useFormState, useFormStatus } from 'react-dom';
 import { requestMagicLink, requestAccess } from './actions';
+import BrandLogo from '@/app/components/BrandLogo';
 
-export default function SignInClient({ brandName, tagline, markPath, oktaEnabled, linksPrinted, returnTo, error }) {
+export default function SignInClient({ brandName, tagline, logo, oktaEnabled, linksPrinted, returnTo, error }) {
   const [mode, setMode] = useState('signin');
   const [linkState, sendLink] = useFormState(requestMagicLink, {});
   const [accessState, askAccess] = useFormState(requestAccess, {});
@@ -13,7 +14,7 @@ export default function SignInClient({ brandName, tagline, markPath, oktaEnabled
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
       <div className="card" style={{ width: '100%', maxWidth: 400, padding: 32 }}>
-        <img src={markPath} alt="" width={40} height={40} style={{ borderRadius: 10, marginBottom: 24 }} />
+        <BrandLogo logo={logo} name={brandName} height={30} markSize={40} className="auth-logo" />
         <h1 style={{ fontSize: 22, marginBottom: 6 }}>
           {mode === 'signin' ? `Sign in to ${brandName}` : 'Request access'}
         </h1>

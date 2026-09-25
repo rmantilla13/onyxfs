@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import ProfileMenu from '@/app/components/ProfileMenu';
+import BrandLogo from '@/app/components/BrandLogo';
 import ShortcutsDialog from '@/app/components/ShortcutsDialog';
 import CommandPalette, { useCommandPaletteShortcut } from '@/app/components/CommandPalette';
 import { isTyping, modKey } from '@/lib/keys';
@@ -19,7 +20,7 @@ import { isTyping, modKey } from '@/lib/keys';
  * `filespaces` comes from the page (listFilespacesForSpace); the palette
  * lists them as drives.
  */
-export default function TopNav({ brandName, markPath, email, isAdmin, build, filespaces = [] }) {
+export default function TopNav({ brandName, logo, email, isAdmin, build, filespaces = [] }) {
   const [palette, setPalette] = useState(false);
   const [shortcuts, setShortcuts] = useState(false);
   // The modifier is the platform's, which the server cannot know: render ⌘
@@ -43,9 +44,8 @@ export default function TopNav({ brandName, markPath, email, isAdmin, build, fil
   return (
     <header className="topnav">
       <div className="shell topnav-row">
-        <Link href="/files" className="topnav-brand">
-          <img src={markPath} alt="" width={24} height={24} style={{ borderRadius: 6 }} />
-          <strong className="topnav-name">{brandName}</strong>
+        <Link href="/files" className="topnav-brand" title="All files">
+          <BrandLogo logo={logo} name={brandName} withName height={22} />
         </Link>
 
         <button type="button" className="topnav-search" onClick={() => setPalette(true)} aria-label="Search and commands" aria-keyshortcuts="Meta+K Control+K">

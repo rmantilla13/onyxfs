@@ -7,6 +7,7 @@ import { kindLabel } from '@/lib/file-info';
 import { fmtSize } from '@/lib/media';
 import FilePreview from '@/app/components/file/FilePreview';
 import UnlockForm from './UnlockForm';
+import BrandLogo from '@/app/components/BrandLogo';
 
 export const dynamic = 'force-dynamic';
 // A shared file is not for search engines, and the title says nothing about
@@ -90,8 +91,7 @@ function Shell({ brand, narrow = false, children }) {
   return (
     <main className={`share-page${narrow ? ' is-narrow' : ''}`}>
       <header className="share-brand">
-        <img src={brand.visual.logo.markPath} alt="" width={24} height={24} style={{ borderRadius: 6 }} />
-        <strong>{brand.name}</strong>
+        <BrandLogo logo={brand.visual.logo} name={brand.name} withName height={22} />
       </header>
       <div className={narrow ? 'card share-card' : 'share-body'}>{children}</div>
     </main>

@@ -16,5 +16,5 @@ export default async function PairPage() {
   const session = await auth();
   if (!session?.user?.email) redirect('/signin');
   const brand = await loadBrand();
-  return <PairClient brandName={brand.desktop.productName} markPath={brand.visual.logo.markPath} />;
+  return <PairClient brandName={brand.desktop.productName} logo={brand.visual.logo} />;
 }

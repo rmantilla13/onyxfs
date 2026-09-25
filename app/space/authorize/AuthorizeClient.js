@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
+import BrandLogo from '@/app/components/BrandLogo';
 
-export default function AuthorizeClient({ brandName, markPath, email, challenge, state }) {
+export default function AuthorizeClient({ brandName, logo, email, challenge, state }) {
   const [status, setStatus] = useState(challenge ? 'ready' : 'missing');
   const [error, setError] = useState(null);
 
@@ -31,7 +32,7 @@ export default function AuthorizeClient({ brandName, markPath, email, challenge,
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
       <div className="card" style={{ width: '100%', maxWidth: 420, padding: 32 }}>
-        <img src={markPath} alt="" width={40} height={40} style={{ borderRadius: 10, marginBottom: 24 }} />
+        <BrandLogo logo={logo} name={brandName} height={30} markSize={40} className="auth-logo" />
 
         {status === 'missing' ? (
           <>

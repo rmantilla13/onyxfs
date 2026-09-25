@@ -24,7 +24,7 @@ export default async function AdminPage({ searchParams }) {
     <>
       <TopNav
         brandName={brand.name}
-        markPath={brand.visual.logo.markPath}
+        logo={brand.visual.logo}
         email={email}
         isAdmin
         filespaces={filespaces}

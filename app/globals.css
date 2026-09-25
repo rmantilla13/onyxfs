@@ -60,6 +60,18 @@
   --dur-1: 120ms;
   --dur-2: 200ms;
   --ease: cubic-bezier(0.2, 0, 0.13, 1);
+
+  /* Glass, for buttons and the search box: a frosted fill the aura shows
+     through, a hairline edge, a lit top edge and a soft drop. Tokens, so the
+     dark scheme and reduced transparency (below) redefine them in one place
+     rather than per control. */
+  --glass-fill: color-mix(in srgb, var(--surface) 58%, transparent);
+  --glass-fill-hover: color-mix(in srgb, var(--surface) 80%, transparent);
+  --glass-sheen: color-mix(in srgb, #fff 55%, transparent);
+  --glass-edge: color-mix(in srgb, var(--ink) 12%, transparent);
+  --glass-hi: color-mix(in srgb, #fff 85%, transparent);
+  --glass-drop: color-mix(in srgb, var(--ink) 9%, transparent);
+  --glass-blur: blur(14px) saturate(170%);
 }
 
 /* In the dark scheme ink is the light colour, so anything that used it as
@@ -69,6 +81,23 @@
   color-scheme: dark;
   --shadow-1: 0 1px 2px color-mix(in srgb, var(--paper) 60%, transparent);
   --shadow-2: 0 8px 30px color-mix(in srgb, var(--paper) 80%, transparent);
+  /* On near-black the frost is thinner and the light edge dimmer: at the
+     light scheme's strength it reads as a white outline, not glass. */
+  --glass-fill: color-mix(in srgb, var(--surface) 46%, transparent);
+  --glass-fill-hover: color-mix(in srgb, var(--surface) 68%, transparent);
+  --glass-sheen: color-mix(in srgb, #fff 7%, transparent);
+  --glass-edge: color-mix(in srgb, var(--ink) 14%, transparent);
+  --glass-hi: color-mix(in srgb, #fff 13%, transparent);
+  --glass-drop: color-mix(in srgb, #000 45%, transparent);
+}
+
+/* Someone who asked for less transparency gets solid controls, and a browser
+   that cannot blur what is behind gets a fill thick enough to read without it. */
+@media (prefers-reduced-transparency: reduce) {
+  :root, :root[data-theme='dark'] { --glass-fill: var(--surface); --glass-fill-hover: var(--surface); --glass-blur: none; }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root, :root[data-theme='dark'] { --glass-fill: color-mix(in srgb, var(--surface) 94%, transparent); }
 }
 
 /* Motion is decoration here — nothing depends on an animation finishing, so
@@ -125,58 +154,114 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   align-items: center;
   gap: var(--s2);
   padding: var(--s2) 14px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-edge);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 1px 0 var(--glass-hi), 0 1px 2px var(--glass-drop), 0 6px 16px -12px var(--glass-drop);
   cursor: pointer;
   font-size: var(--t-md);
   font-weight: 500;
   white-space: nowrap;
-  transition: border-color var(--dur-1), background var(--dur-1), color var(--dur-1);
+  transition:
+    border-color var(--dur-1), background-color var(--dur-1), color var(--dur-1),
+    box-shadow var(--dur-2) var(--ease), transform var(--dur-1) var(--ease), filter var(--dur-1);
 }
 /* Guarded, or the hover state sticks after a tap on a touch screen. */
 @media (hover: hover) {
-  .btn:hover:not(:disabled) { border-color: var(--ink); }
+  .btn:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accent) 38%, var(--glass-edge));
+    background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill-hover);
+    box-shadow:
+      inset 0 1px 0 var(--glass-hi),
+      0 1px 2px var(--glass-drop),
+      0 10px 26px -16px color-mix(in srgb, var(--aura-a) 75%, transparent);
+  }
   .btn-primary:hover:not(:disabled) {
-    border-color: transparent;
+    border-color: color-mix(in srgb, #fff 22%, transparent);
     filter: brightness(1.07) saturate(1.05);
     box-shadow:
+      inset 0 1px 0 color-mix(in srgb, #fff 45%, transparent),
+      inset 0 -1px 0 color-mix(in srgb, #000 18%, transparent),
       0 8px 24px -10px color-mix(in srgb, var(--aura-b) 75%, transparent),
       0 6px 18px -10px color-mix(in srgb, var(--aura-a) 75%, transparent);
   }
-  .btn-ghost:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+  .btn-danger:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+    box-shadow:
+      inset 0 1px 0 var(--glass-hi),
+      0 1px 2px var(--glass-drop),
+      0 10px 24px -16px color-mix(in srgb, var(--danger) 70%, transparent);
+  }
+  /* A ghost button is bare until it is pointed at, then it frosts. */
+  .btn-ghost:hover:not(:disabled) {
+    border-color: var(--glass-edge);
+    background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill-hover);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    box-shadow: inset 0 1px 0 var(--glass-hi);
+  }
+}
+/* Pressed: the glass gives a little, and the light edge moves inside. */
+.btn:active:not(:disabled) {
+  transform: translateY(0.5px) scale(0.99);
+  box-shadow: inset 0 1px 3px var(--glass-drop);
 }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-/* The brand gradient, blue into magenta. --on-aura and the *-deep stops are
-   computed from the palette (auraCssVars) so the label clears AA on both. */
+/* The brand gradient, blue into magenta, glazed: a sheen across the top that
+   stops above the label, and a lit rim. --on-aura and the *-deep stops are
+   computed from the palette (auraCssVars) so the label clears AA on both —
+   which is why the sheen fades out by a third of the height, where the
+   letters start. */
 .btn-primary {
-  background: linear-gradient(120deg, var(--aura-a-deep) 0%, var(--aura-b-deep) 100%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, #fff 20%, transparent) 0%, transparent 34%),
+    linear-gradient(120deg, var(--aura-a-deep) 0%, var(--aura-b-deep) 100%);
   color: var(--on-aura);
-  border-color: transparent;
-  transition: filter var(--dur-1), box-shadow var(--dur-2) var(--ease);
+  border-color: color-mix(in srgb, #fff 16%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #fff 38%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, #000 18%, transparent),
+    0 8px 22px -12px color-mix(in srgb, var(--aura-b) 65%, transparent);
 }
-.btn-danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+.btn-danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 32%, transparent);
+  background:
+    linear-gradient(180deg, var(--glass-sheen), transparent 55%),
+    color-mix(in srgb, var(--danger) 7%, var(--glass-fill));
+}
 
 /* The text button that was hand-rolled inline in six places. */
-.btn-ghost { background: transparent; border-color: transparent; }
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
 .btn-sm { padding: var(--s1) var(--s2); font-size: var(--t-sm); gap: var(--s1); }
 .btn-icon { padding: var(--s2); }
 
 /* One pressed state for every toggle — tabs, kind chips, folder chips — which
    were three copies of the same inline literal. Always paired with
    aria-pressed or aria-selected in the markup: the colour alone says nothing
-   to a screen reader. */
+   to a screen reader. Solid rather than glass: what is on has to read as on
+   at a glance. */
 .is-active,
 .btn[aria-pressed='true'] {
   background: var(--ink);
   color: var(--paper);
   border-color: var(--ink);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--paper) 22%, transparent), 0 6px 16px -12px var(--glass-drop);
 }
 .btn-ghost.is-active,
 .btn-ghost[aria-pressed='true'] {
   background: color-mix(in srgb, var(--ink) 8%, transparent);
   color: inherit;
   border-color: transparent;
+  box-shadow: none;
 }
 
 .input {
@@ -343,7 +428,17 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 .topnav { position: sticky; top: 0; z-index: var(--z-nav); background: var(--surface); border-bottom: 1px solid var(--line); }
 .topnav-row { display: flex; align-items: center; gap: var(--s2); height: 56px; min-width: 0; }
 .topnav-brand { display: flex; align-items: center; gap: var(--s2); flex: none; margin-right: var(--s2); }
-.topnav-name { font-family: var(--font-display); letter-spacing: -0.02em; }
+
+/* The brand's logo (BrandLogo): the wordmark for the current scheme, or the
+   mark and the name. [data-theme] is set before first paint, so only one
+   wordmark is ever drawn. */
+.brand-logo { display: inline-flex; align-items: center; gap: var(--s2); flex: none; }
+.brand-logo img { display: block; width: auto; }
+.brand-logo .brand-logo-dark { display: none; }
+[data-theme='dark'] .brand-logo .brand-logo-light { display: none; }
+[data-theme='dark'] .brand-logo .brand-logo-dark { display: block; }
+.brand-logo-name { font-family: var(--font-display); letter-spacing: -0.02em; }
+.auth-logo { margin-bottom: var(--s5); }
 
 .avatar {
   display: inline-grid; place-items: center;
@@ -381,8 +476,10 @@ kbd {
   flex: 1 1 auto; min-width: 0; max-width: 460px; margin: 0 auto;
   display: flex; align-items: center; gap: var(--s2);
   height: 34px; padding: 0 var(--s1) 0 var(--s3);
-  border: 1px solid var(--line); border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  border: 1px solid var(--glass-edge); border-radius: var(--radius-pill);
+  background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill);
+  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
   color: var(--muted); font-size: var(--t-sm); text-align: left; cursor: pointer;
   transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-2) var(--ease), color var(--dur-1) var(--ease);
 }

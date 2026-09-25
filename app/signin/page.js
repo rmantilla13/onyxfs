@@ -32,7 +32,7 @@ export default async function SignInPage({ searchParams }) {
     <SignInClient
       brandName={brand.name}
       tagline={brand.tagline}
-      markPath={brand.visual.logo.markPath}
+      logo={brand.visual.logo}
       oktaEnabled={process.env.NEXT_PUBLIC_OKTA_ENABLED === 'true'}
       linksPrinted={printsSignInLinks()}
       returnTo={returnTo}

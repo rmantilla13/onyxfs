@@ -48,7 +48,7 @@ export default async function StoragePage() {
     <TopNav
       build={{ label: buildLabel(), detail: buildDetail() }}
       brandName={brand.name}
-      markPath={brand.visual.logo.markPath}
+      logo={brand.visual.logo}
       email={email}
       isAdmin
       filespaces={drives}
