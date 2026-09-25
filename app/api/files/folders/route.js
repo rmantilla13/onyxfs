@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import {
-  listFileFoldersForUser, buildPrincipal, getFilespaceForUser, getFilespaceForWrite, getFeatureFlags,
+  buildPrincipal, getFilespaceForUser, getFilespaceForWrite, getFeatureFlags,
   createFolder, renameFolder, deleteFolderRows, listFolderSubtreeFiles, folderPathInUse,
   canModifyFolder, softDeleteFile, deleteFile, listFolderRowsUnder, folderRowTag,
 } from '@/lib/db';
@@ -12,6 +12,7 @@ import {
 import {
   cleanFolder, folderPathProblem, isWithin, planRename, rebase, mapLimit, settleLimit,
 } from '@/lib/folder-ops';
+import { listFolderTree, storagePrefixFor } from '@/lib/file-listing';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -85,9 +86,8 @@ export async function GET(req) {
     return NextResponse.json({ files: inScope.size, folders: dirs.size, outside: plan.outside.length });
   }
 
-  const fs = filespaceId ? await getFilespaceForUser(session.user.email, filespaceId) : null;
-  const storagePrefix = fs ? String(fs.prefix || '').replace(/^\/+|\/+$/g, '') : undefined;
-  const folders = await listFileFoldersForUser(principal, { storagePrefix, filespace: storagePrefix });
+  const storagePrefix = await storagePrefixFor(session.user.email, filespaceId);
+  const folders = await listFolderTree({ principal, storagePrefix });
   return NextResponse.json({ folders });
 }
 

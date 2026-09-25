@@ -64,6 +64,7 @@ describe('the logo', () => {
     assert.equal(logo.lockupPath, '/onyx-lockup.svg');
     assert.equal(logo.lockupDarkPath, '/onyx-lockup-dark.svg');
     assert.equal(logo.markPath, '/onyx-mark.png', 'the path emails already sent point at');
+    assert.equal(logo.onyxWordmark, true, 'drawn inline, so it can follow the theme and animate');
   });
 
   test('a renamed or re-marked deployment keeps its own mark and name, not our wordmark', () => {
@@ -71,13 +72,14 @@ describe('the logo', () => {
       const { logo } = resolveBrand(saved).visual;
       assert.equal(logo.lockupPath, null, JSON.stringify(saved));
       assert.equal(logo.lockupDarkPath, null, JSON.stringify(saved));
+      assert.equal(logo.onyxWordmark, false, JSON.stringify(saved));
     }
   });
 
   test('a wordmark of its own is used, in both schemes unless it gives a dark one', () => {
     assert.deepEqual(
       resolveBrand({ name: 'Acme Files', lockupUrl: '/acme.svg' }).visual.logo,
-      { markPath: '/onyx-mark.png', lockupPath: '/acme.svg', lockupDarkPath: '/acme.svg' },
+      { markPath: '/onyx-mark.png', lockupPath: '/acme.svg', lockupDarkPath: '/acme.svg', onyxWordmark: false },
     );
     assert.equal(resolveBrand({ lockupUrl: '/acme.svg', lockupDarkUrl: '/acme-dark.svg' }).visual.logo.lockupDarkPath, '/acme-dark.svg');
   });

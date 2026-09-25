@@ -31,6 +31,13 @@ import { rowWindow } from '@/lib/virtual-rows';
 // Rows rendered above and below the viewport, so a fast flick does not show
 // blank space before React catches up.
 const OVERSCAN_ROWS = 4;
+// Before the first measurement — the server render, and the client render
+// that hydrates it — there is no layout to window against. Rather than one
+// card in a box of no height, the first cards render in plain flow, enough
+// to fill a large screen, so a folder's files are in the first paint. The
+// layout effect then measures them and switches to the windowed layout
+// before the browser paints again, and the two look the same.
+const FIRST_PAINT_CARDS = 40;
 
 export default function FileGrid({
   files,
@@ -186,6 +193,33 @@ export default function FileGrid({
 
   if (!files.length) return emptyState || null;
 
+  const card = (f, i, tabbable) => (
+    <FileCard
+      key={f.id}
+      file={f}
+      label={labelFor?.(f)}
+      badges={badgesFor?.(f)}
+      selected={selected?.has(f.id) || false}
+      tabIndex={i === tabbable ? 0 : -1}
+      innerRef={(el) => { cells.current[i] = el; }}
+      onKeyDown={(e) => onKeyDown(e, i)}
+      onSelect={() => { setActive(i); onSelect?.(f); }}
+      onOpen={() => onOpen?.(f)}
+      onDragStart={onDragFile ? (e) => onDragFile(f, e) : undefined}
+      onMissingThumb={onMissingThumb}
+    />
+  );
+
+  if (!metrics.pitch) {
+    return (
+      <div ref={outer}>
+        <div className="files-grid" role="listbox" aria-label={label} aria-multiselectable="true" ref={ref}>
+          {files.slice(0, FIRST_PAINT_CARDS).map((f, i) => card(f, i, active))}
+        </div>
+      </div>
+    );
+  }
+
   const first = range.start * metrics.cols;
   const last = Math.min(files.length, range.end * metrics.cols);
   // The roving tab stop has to be a mounted card, or tabbing skips the grid.
@@ -202,25 +236,7 @@ export default function FileGrid({
         ref={ref}
         style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${range.start * metrics.pitch}px)` }}
       >
-        {files.slice(first, Math.max(last, first + 1)).map((f, n) => {
-          const i = first + n;
-          return (
-            <FileCard
-              key={f.id}
-              file={f}
-              label={labelFor?.(f)}
-              badges={badgesFor?.(f)}
-              selected={selected?.has(f.id) || false}
-              tabIndex={i === tabbable ? 0 : -1}
-              innerRef={(el) => { cells.current[i] = el; }}
-              onKeyDown={(e) => onKeyDown(e, i)}
-              onSelect={() => { setActive(i); onSelect?.(f); }}
-              onOpen={() => onOpen?.(f)}
-              onDragStart={onDragFile ? (e) => onDragFile(f, e) : undefined}
-              onMissingThumb={onMissingThumb}
-            />
-          );
-        })}
+        {files.slice(first, Math.max(last, first + 1)).map((f, n) => card(f, first + n, tabbable))}
       </div>
     </div>
   );

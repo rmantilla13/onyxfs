@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { listFilesForUser, createFile, listFileFoldersForUser, buildPrincipal, getFilespaceForUser } from '@/lib/db';
+import { createFile, buildPrincipal, getFilespaceForUser } from '@/lib/db';
+import { listFilesPage, listFolderTree, storagePrefixFor } from '@/lib/file-listing';
 import { driveAccess } from '@/lib/drive-access';
 import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject } from '@/lib/storage';
-import { encodeCursor, decodeCursor } from '@/lib/file-query';
+import { decodeCursor } from '@/lib/file-query';
 import { uploadFields } from '@/lib/media';
 
 export const runtime = 'nodejs';
@@ -33,9 +34,7 @@ export async function GET(req) {
   const kindParam = url.searchParams.get('kind');
 
   // Filespace scope (Space is filespace-aware): restrict to this filespace's prefix.
-  const filespaceId = url.searchParams.get('filespace');
-  const fs = filespaceId ? await getFilespaceForUser(session.user.email, filespaceId) : null;
-  const storagePrefix = fs ? String(fs.prefix || '').replace(/^\/+|\/+$/g, '') : undefined;
+  const storagePrefix = await storagePrefixFor(session.user.email, url.searchParams.get('filespace'));
 
   const opts = {
     folder: folderParam === null ? undefined : folderParam,
@@ -45,7 +44,6 @@ export async function GET(req) {
     tags: tagsParam ? tagsParam.split(',').filter(Boolean) : undefined,
     tagMode: url.searchParams.get('tagMode') || 'all',
     sort: url.searchParams.get('sort') || 'new',
-    storagePrefix,
     // Keyset paging. The cursor is opaque and round-trips from the previous
     // page; a malformed one reads as "first page" rather than an error.
     cursor: decodeCursor(url.searchParams.get('cursor')),
@@ -55,16 +53,14 @@ export async function GET(req) {
     withTotal: url.searchParams.get('withTotal') === '1',
   };
 
-  // AUTHORIZE → FILTER → PRESIGN. Access and filtering now happen inside the
-  // query, so only the rows on this page reach presignFileUrls — previously
-  // every row in the library was signed on every request.
-  const { files, cursor, total } = await listFilesForUser(opts, principal);
-  const signed = await presignFileUrls(files);
+  // AUTHORIZE → FILTER → PRESIGN, in lib/file-listing.js — shared with the
+  // files page, which renders the first page on the server.
+  const page = await listFilesPage({ principal, opts, storagePrefix });
   // `folders=0` skips the tree; the web library fetches it separately from
   // /api/files/folders. Other callers still get it with the first page.
   const withFolders = !opts.cursor && url.searchParams.get('folders') !== '0';
-  const folders = withFolders ? await listFileFoldersForUser(principal, { storagePrefix, filespace: storagePrefix }) : undefined;
-  return NextResponse.json({ files: signed, cursor: encodeCursor(cursor), total, folders });
+  const folders = withFolders ? await listFolderTree({ principal, storagePrefix }) : undefined;
+  return NextResponse.json({ ...page, folders });
 }
 
 /**

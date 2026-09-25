@@ -14,6 +14,7 @@ import ShareDialog from '@/app/components/ShareDialog';
 import { DriveList, NewDriveDialog, DriveMembersDialog } from '@/app/components/Drives';
 import { modKey, isTyping } from '@/lib/keys';
 import { fmtSize } from '@/lib/media';
+import { listingCache, listingKey } from '@/lib/listing-cache';
 import {
   VIEW_STORAGE_KEY, parseView, availableColumns, parseColumns, resolveColumns,
   COLUMNS_STORAGE_KEY, DEFAULT_COLUMNS, METADATA_PREFIX,
@@ -41,6 +42,11 @@ const KINDS = [
 // 'Files' instead, which is what tells an upload from a move.
 const DRAG_FILES = 'application/x-onyx-files';
 const DRAG_FOLDER = 'application/x-onyx-folder';
+// How many files Select all will load and select in one go. Beyond it, a
+// folder is moved a few thousand at a time.
+const SELECT_ALL_CAP = 5000;
+// Moves in flight at once: each is a copy and a delete in the bucket.
+const MOVE_PARALLEL = 6;
 
 // Whether the filter panel was left open, per browser.
 const FILTERS_STORAGE_KEY = 'onyx.files.filters';
@@ -73,20 +79,57 @@ const SORTS = [
 
 
 /**
- * `drives` are the filespaces this person may open (listFilespacesForSpace),
- * with `driveUsage` { [id]: { files, bytes } } for the ones they may manage
- * and `library` the whole library's totals for an admin. `filespaceId` is
- * the drive being shown ('' is All files).
+ * One page of a listing from GET /api/files: { files, cursor }. The same
+ * request whether it is for the folder on screen or a prefetch.
+ *
+ * A folder lists what is in it, like a disk: its own files, with its
+ * subfolders as tiles — at the top level too, which used to list every file
+ * in the library, so an uploaded folder's files looked as if they had been
+ * poured out beside it. Searching or filtering by kind looks through
+ * everything beneath the folder instead: that is a search, and a search
+ * that stops at one level finds nothing.
+ */
+async function fetchListing({ filespaceId, folder, query, kinds, sort }, after = null) {
+  const p = new URLSearchParams();
+  if (query || kinds.length) {
+    if (folder) p.set('folderPrefix', folder);
+  } else {
+    p.set('folder', folder || '');
+  }
+  if (query) p.set('q', query);
+  if (kinds.length) p.set('kind', kinds.join(','));
+  p.set('sort', sort);
+  if (filespaceId) p.set('filespace', filespaceId);
+  if (after) p.set('cursor', after);
+  p.set('folders', '0');
+  const r = await fetch(`/api/files?${p}`);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Request failed (${r.status})`);
+  const data = await r.json();
+  return { files: data.files || [], cursor: data.cursor || null };
+}
+
+/**
+ * `drives` are the filespaces this person may open (listFilespacesForSpace);
+ * `filespaceId` is the drive being shown ('' is All files).
+ *
+ * `initial` is what the server already rendered (app/files/page.js): the
+ * first page of the folder in the URL and the folder tree, so the directory
+ * is on screen in the first paint. Its `key` (listingKey) says which listing
+ * it answers; a drive switch brings a new one.
  */
 export default function FilesClient({
   flags, canWrite, schema: initialSchema, filespaceId, isAdmin = false,
-  drives = [], driveUsage = {}, library = null,
+  drives = [], initial = null,
 }) {
-  const [files, setFiles] = useState([]);
-  const [folders, setFolders] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [files, setFiles] = useState(() => initial?.files || []);
+  const [folders, setFolders] = useState(() => initial?.folders || []);
+  const [loading, setLoading] = useState(!initial);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [cursor, setCursor] = useState(null);
+  const [cursor, setCursor] = useState(() => initial?.cursor || null);
+  // Drive and library usage for the drive list: asked for after the page is
+  // on screen (/api/filespaces/usage), never while it renders.
+  const [usage, setUsage] = useState({ usage: {}, library: null });
+  const driveUsage = usage.usage;
   const [error, setError] = useState(null);
   // State rather than the prop alone: adding a field from the list's column
   // picker extends it without a reload.
@@ -141,29 +184,26 @@ export default function FilesClient({
   // showing the results of a query the user has already moved past.
   const requestRef = useRef(0);
 
+  // Which listing is on screen, as a key: the cache (lib/listing-cache.js)
+  // and the server-rendered first page are both matched against it.
+  const currentKey = listingKey({ filespaceId, folder, query, kinds, sort });
+
   /**
    * Fetch one page. `after` is the opaque cursor from the previous page; with
    * no cursor this is a fresh query and replaces the grid rather than
    * appending to it. `quiet` keeps the grid up while it refetches, for the
-   * refreshes an upload batch triggers as files land.
+   * refreshes an upload batch triggers as files land. A first page is kept
+   * in the listing cache, so coming back to it is instant.
    */
   const fetchPage = useCallback(async (after = null, quiet = false) => {
     const token = ++requestRef.current;
+    const key = listingKey({ filespaceId, folder, query, kinds, sort });
     if (after) setLoadingMore(true);
     else if (!quiet) setLoading(true);
     setError(null);
     try {
-      const p = new URLSearchParams();
-      if (folder) p.set('folder', folder);
-      if (query) p.set('q', query);
-      if (kinds.length) p.set('kind', kinds.join(','));
-      p.set('sort', sort);
-      if (filespaceId) p.set('filespace', filespaceId);
-      if (after) p.set('cursor', after);
-      p.set('folders', '0');
-      const r = await fetch(`/api/files?${p}`);
-      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Request failed (${r.status})`);
-      const data = await r.json();
+      const data = await fetchListing({ filespaceId, folder, query, kinds, sort }, after);
+      if (!after) listingCache.set(key, data);
       if (token !== requestRef.current) return; // superseded
       setFiles((prev) => (after ? [...prev, ...(data.files || [])] : data.files || []));
       setCursor(data.cursor || null);
@@ -174,23 +214,99 @@ export default function FilesClient({
     }
   }, [folder, query, kinds, sort, filespaceId]);
 
-  const load = useCallback(() => fetchPage(null), [fetchPage]);
-  const refresh = useCallback(() => fetchPage(null, true), [fetchPage]);
+  // After anything that changes files: drop every cached listing (which
+  // folders a move or an upload touched is not worth working out) and fetch.
+  const load = useCallback(() => { listingCache.clear(); return fetchPage(null); }, [fetchPage]);
+  const refresh = useCallback(() => { listingCache.clear(); return fetchPage(null, true); }, [fetchPage]);
+
+  // Opening a folder, changing the sort, searching: from the cache when it
+  // has this listing — at once, and refetched quietly behind it if it is not
+  // fresh — and from the network when it does not.
+  const show = useCallback(() => {
+    const hit = listingCache.get(currentKey);
+    if (!hit) return fetchPage(null);
+    ++requestRef.current; // a slower answer for where we were must not land here
+    setFiles(hit.files || []);
+    setCursor(hit.cursor || null);
+    setLoading(false);
+    setError(null);
+    if (!hit.fresh) fetchPage(null, true);
+    return undefined;
+  }, [currentKey, fetchPage]);
+
+  // Prefetch: pointing at a folder for a moment fetches its first page into
+  // the cache, so the click that follows shows it with no wait. One at a
+  // time, and not for a listing the cache already has fresh.
+  const prefetching = useRef(null);
+  const prefetch = useCallback((path) => {
+    const params = { filespaceId, folder: path, query, kinds, sort };
+    const key = listingKey(params);
+    if (listingCache.isFresh(key) || prefetching.current === key) return;
+    prefetching.current = key;
+    fetchListing(params)
+      .then((data) => listingCache.set(key, data))
+      .catch(() => {})
+      .finally(() => { if (prefetching.current === key) prefetching.current = null; });
+  }, [filespaceId, query, kinds, sort]);
+  const hover = useRef({ path: null, timer: null });
+  const onFolderHover = (e) => {
+    const el = e.target?.closest?.('[data-folder]');
+    const path = el ? cleanFolder(el.dataset.folder || '') : null;
+    if (path === hover.current.path) return;
+    hover.current.path = path;
+    clearTimeout(hover.current.timer);
+    if (path === null || path === folder) return;
+    hover.current.timer = setTimeout(() => prefetch(path), 70);
+  };
+  useEffect(() => () => clearTimeout(hover.current.timer), []);
 
   // The folder tree, loaded once per filespace and again only after an upload
   // or a removal changes what is in a folder. It used to ride along with every
   // first page, so each filter change and search keystroke re-counted the
   // whole library and downloaded a couple of hundred kilobytes of tree.
+  const loadUsage = useCallback(async () => {
+    try {
+      const r = await fetch('/api/filespaces/usage');
+      if (r.ok) setUsage(await r.json());
+    } catch {}
+  }, []);
+
   const loadFolders = useCallback(async () => {
+    loadUsage();
     try {
       const r = await fetch(`/api/files/folders${filespaceId ? `?filespace=${encodeURIComponent(filespaceId)}` : ''}`);
       if (!r.ok) return;
       const data = await r.json();
       setFolders(data.folders || []);
     } catch {}
-  }, [filespaceId]);
+  }, [filespaceId, loadUsage]);
 
-  useEffect(() => { loadFolders(); }, [loadFolders]);
+  // What the server rendered — on first load, and again on each drive switch,
+  // which is a server render too. Its first page goes into the cache (so the
+  // listing effect below finds it and does not fetch), and its tree is the
+  // tree. Declared before the effects that would otherwise fetch both.
+  const treeFor = useRef(null);
+  const keyRef = useRef(currentKey);
+  keyRef.current = currentKey;
+  useEffect(() => {
+    if (!initial) return;
+    listingCache.set(initial.key, { files: initial.files, cursor: initial.cursor });
+    setFolders(initial.folders || []);
+    treeFor.current = initial.filespaceId;
+    // A server render of the listing already on screen (router.refresh) is
+    // fresher than what is showing: take it.
+    if (initial.key === keyRef.current) {
+      ++requestRef.current;
+      setFiles(initial.files || []);
+      setCursor(initial.cursor || null);
+      setLoading(false);
+    }
+  }, [initial]);
+
+  useEffect(() => {
+    if (treeFor.current === filespaceId) { loadUsage(); return; }
+    loadFolders();
+  }, [loadFolders, loadUsage, filespaceId]);
 
   useEffect(() => {
     try { setView(parseView(localStorage.getItem(VIEW_STORAGE_KEY))); } catch {}
@@ -264,9 +380,9 @@ export default function FilesClient({
 
   // Debounce so typing in the search box doesn't fire a request per keystroke.
   useEffect(() => {
-    const t = setTimeout(load, query ? 250 : 0);
+    const t = setTimeout(show, query ? 250 : 0);
     return () => clearTimeout(t);
-  }, [load, query]);
+  }, [show, query]);
 
   // Infinite scroll. Observing a sentinel below the grid costs nothing while
   // it is off screen, and at 100k files a "load more" button would be a lot of
@@ -586,7 +702,12 @@ export default function FilesClient({
     let failed = 0;
     let catalogOnly = 0;
     let firstError = null;
-    await mapLimit(list, 4, async (id) => {
+    // A big move takes a while — each file is a copy and a delete in the
+    // bucket — so it says it is happening rather than looking stuck.
+    const note = list.length > 20
+      ? toast.push(`Moving ${list.length.toLocaleString()} files to ${dest || rootName}…`, { duration: 0 })
+      : null;
+    await mapLimit(list, MOVE_PARALLEL, async (id) => {
       const r = await fetch(`/api/files/${id}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
@@ -596,11 +717,12 @@ export default function FilesClient({
       if (!r.ok) { failed++; firstError ||= body.error || `HTTP ${r.status}`; }
       else if (body.objectMoved === false) catalogOnly++;
     });
+    if (note) toast.dismiss(note);
     setSelected(new Set());
     load();
     loadFolders();
     const n = list.length - failed;
-    const where = dest || 'All files';
+    const where = dest || rootName;
     if (failed) toast.error(`${failed} of ${list.length} could not be moved. ${firstError}`);
     else if (catalogOnly) toast.error(`Moved ${n} to ${where}, but ${catalogOnly} stored file${catalogOnly === 1 ? '' : 's'} could not be moved from here: open its filespace to move it.`);
     else toast.success(`Moved ${n} file${n === 1 ? '' : 's'} to ${where}.`);
@@ -658,12 +780,23 @@ export default function FilesClient({
     a.remove();
   };
 
-  // A card drag carries the whole selection when the card is part of it.
+  // A card drag carries the whole selection when the card is part of it, and
+  // says so: dragging a hundred files under the image of one reads as
+  // dragging one.
   const onDragFile = useCallback((f, e) => {
     const ids = selected.has(f.id) ? [...selected] : [f.id];
     e.dataTransfer.setData(DRAG_FILES, JSON.stringify(ids));
     e.dataTransfer.setData('text/plain', ids.length === 1 ? f.name : `${ids.length} files`);
     e.dataTransfer.effectAllowed = 'move';
+    if (ids.length > 1 && e.dataTransfer.setDragImage) {
+      const badge = document.createElement('div');
+      badge.className = 'drag-badge';
+      badge.textContent = `Moving ${ids.length.toLocaleString()} files`;
+      document.body.appendChild(badge);
+      e.dataTransfer.setDragImage(badge, 18, 18);
+      // The browser snapshots it during this event; it can go right after.
+      setTimeout(() => badge.remove(), 0);
+    }
   }, [selected]);
 
   // Something dropped on a folder in the tree: files or a folder from inside
@@ -688,7 +821,35 @@ export default function FilesClient({
   // (data-file-id on a card, data-folder on a folder), so the grid, the
   // folder tiles and the tree need no menu plumbing of their own. Inputs and
   // links keep the browser's menu, as does anything outside the file area.
-  const selectAll = () => setSelected(new Set(visible.map((f) => f.id)));
+  // Select all means the whole folder, not the hundred rows loaded so far:
+  // the rest are fetched first (up to SELECT_ALL_CAP), so a select-all and a
+  // drag moves everything in it. A filter narrows it as it does the grid.
+  const [selectingAll, setSelectingAll] = useState(false);
+  const selectAll = async () => {
+    let rows = files;
+    let after = cursor;
+    if (after) {
+      const token = requestRef.current;
+      setSelectingAll(true);
+      try {
+        while (after && rows.length < SELECT_ALL_CAP) {
+          const page = await fetchListing({ filespaceId, folder, query, kinds, sort }, after);
+          if (token !== requestRef.current) return; // the listing changed under us
+          rows = [...rows, ...page.files];
+          after = page.cursor;
+        }
+        setFiles(rows);
+        setCursor(after);
+      } catch (e) {
+        toast.error(`Could not load the rest of this folder: ${e.message}`);
+      } finally {
+        setSelectingAll(false);
+      }
+    }
+    const pick = hasAnyFacet(facets) ? rows.filter((f) => fileMatchesFacets(f, facets, schema)) : rows;
+    setSelected(new Set(pick.map((f) => f.id)));
+    if (after) toast.success(`Selected the first ${pick.length.toLocaleString()}. Move them, then select all again for the rest.`);
+  };
 
   // ── Get info ──────────────────────────────────────────────────────────────
   // From what the page already holds: the loaded rows and the folder tree.
@@ -756,7 +917,7 @@ export default function FilesClient({
     { label: view === 'list' ? 'View as grid' : 'View as list', onSelect: () => changeView(view === 'list' ? 'grid' : 'list') },
     flags.metadata && { label: filtersOpen ? 'Hide filters' : 'Show filters', onSelect: () => toggleFilters() },
     '-',
-    { label: 'Select all', disabled: !visible.length, onSelect: selectAll },
+    { label: 'Select all', hint: `${modKey()}A`, disabled: !visible.length, onSelect: selectAll },
     selected.size > 0 && { label: 'Clear selection', onSelect: () => setSelected(new Set()) },
     { label: 'Refresh', onSelect: () => { load(); loadFolders(); } },
   ];
@@ -910,6 +1071,17 @@ export default function FilesClient({
       if (selected.size) infoForFiles([...selected]);
       else if (focused) infoForFiles([focused]);
       else infoForFolder(folder);
+      return;
+    }
+    // ⌘A: every file in the folder, as in Finder — then drag any one of them
+    // to move the lot. Esc lets go of a selection.
+    if (mod && !e.altKey && !e.shiftKey && (e.key === 'a' || e.key === 'A')) {
+      e.preventDefault();
+      selectAll();
+      return;
+    }
+    if (e.key === 'Escape' && selected.size && !e.target?.closest?.('.ctx-menu, .menu')) {
+      setSelected(new Set());
     }
   };
   useEffect(() => {
@@ -1054,6 +1226,8 @@ export default function FilesClient({
       onDrop={onDrop}
       onContextMenu={onContextMenu}
       onKeyDown={onMenuKey}
+      onPointerOver={onFolderHover}
+      onFocus={onFolderHover}
     >
       <div className="row files-head" style={{ marginBottom: 20 }}>
         {/* All files is the top of the tree: nothing to go back up to, so no
@@ -1086,6 +1260,11 @@ export default function FilesClient({
           </Menu>
         )}
         <div className="spacer" />
+        {selected.size > 0 && (selected.size < visible.length || cursor) && (
+          <button className="btn btn-ghost" onClick={selectAll} disabled={selectingAll} title={`Select all (${modKey()}A)`}>
+            {selectingAll ? 'Selecting…' : 'Select all'}
+          </button>
+        )}
         {selected.size > 0 && canWrite && (
           <button className="btn" onClick={moveSelectedUI}>
             Move {selected.size}…
@@ -1207,7 +1386,7 @@ export default function FilesClient({
             <DriveList
               drives={drives}
               usage={driveUsage}
-              library={library}
+              library={usage.library}
               activeId={filespaceId}
               canCreate={isAdmin}
               onOpen={openDrive}

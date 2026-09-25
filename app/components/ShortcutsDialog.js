@@ -22,9 +22,12 @@ function groups(mod) {
         [['←', '→', '↑', '↓'], 'Move between files'],
         [['Home', 'End'], 'First or last file'],
         [['Space'], 'Select or deselect'],
+        [[`${mod}A`], 'Select every file in the folder'],
+        [['Esc'], 'Clear the selection'],
         [['Enter'], 'Open'],
         [[`${mod}I`], 'Get info'],
         [['⇧F10'], 'Menu for the file or folder in focus'],
+        [['Drag'], 'Move the selection onto a folder, in the grid, the sidebar or the path'],
       ],
     },
     {
