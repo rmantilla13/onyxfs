@@ -9,7 +9,7 @@
 -- GENERATED from the same statements lib/db.js executes, so the two agree by
 -- construction; regenerate it rather than hand-editing.
 --
--- Statements: 73
+-- Statements: 74
 
 CREATE TABLE IF NOT EXISTS "user" (
     id              TEXT PRIMARY KEY,
@@ -175,6 +175,8 @@ CREATE INDEX IF NOT EXISTS files_created_id_idx ON files (created_at DESC, id DE
 CREATE INDEX IF NOT EXISTS files_name_id_idx ON files (name ASC, id ASC);
 
 CREATE INDEX IF NOT EXISTS files_thumbnail_key_idx ON files (thumbnail_key);
+
+CREATE INDEX IF NOT EXISTS files_live_folder_idx ON files (folder) WHERE deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS uploads (
     id           TEXT PRIMARY KEY,
