@@ -710,3 +710,118 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   .fs-switch { margin-bottom: var(--s2); }
   .fs-switch-label { display: none; }
 }
+
+/* ── Video player ──────────────────────────────────────────────────────────
+   Replaces <video controls>, which gave no timecode, no frame stepping and a
+   different bar in every browser. The scrub bar is deliberately taller than it
+   looks: .player-scrub has invisible padding so a pointer can grab it, because
+   a 4px hit target is unusable with a trackpad and impossible with a thumb. */
+
+.player { display: flex; flex-direction: column; gap: var(--s2); }
+/* The container takes focus for the keyboard shortcuts. The ring is drawn on
+   the stage rather than the whole column so it frames the picture. */
+.player:focus { outline: none; }
+.player:focus-visible .player-stage { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.player-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  background: #000;               /* Letterboxing is black at every theme. */
+  border-radius: var(--radius);
+  overflow: hidden;
+  min-height: 240px;
+}
+.player-stage video { max-width: 100%; max-height: 70vh; display: block; }
+
+.player-bigplay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font-size: 40px;
+  cursor: pointer;
+  /* No preload until this is pressed, so the whole stage is the target. */
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+}
+.player-bigplay:hover { background: rgba(0, 0, 0, 0.15); }
+
+.player-error { color: var(--danger); margin: 0; }
+.player-note, .player-empty { margin: 0; }
+
+.player-bar { display: flex; flex-direction: column; gap: var(--s2); }
+
+.player-scrub {
+  position: relative;
+  height: 6px;
+  margin: 10px 0;                 /* The invisible hit area, top and bottom. */
+  background: var(--surface-sunken);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  touch-action: none;             /* Or a drag scrolls the page on a phone. */
+}
+.player-scrub > span { position: absolute; top: 0; height: 100%; pointer-events: none; }
+.player-buffered { background: color-mix(in srgb, var(--ink) 18%, transparent); border-radius: var(--radius-pill); }
+.player-range { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+.player-played { left: 0; background: var(--accent); border-radius: var(--radius-pill); }
+
+.player-head {
+  width: 12px; height: 12px; top: -3px;
+  margin-left: -6px;              /* Centred on the time, not leading it. */
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: var(--shadow-1);
+}
+.player-mark { width: 2px; top: -4px; height: 14px; margin-left: -1px; background: var(--ink); }
+.player-mark.in { border-radius: 1px 0 0 1px; }
+.player-mark.out { border-radius: 0 1px 1px 0; }
+
+/* The hover preview. Centred on the pointer and lifted clear of the bar. */
+.player-hover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;           /* Never eat the pointer mid-scrub. */
+  z-index: var(--z-menu);
+}
+.player-hover-frame {
+  background-color: #000;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-2);
+}
+.player-hover-time {
+  background: var(--ink);
+  color: var(--paper);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  font-size: var(--t-xs);
+  white-space: nowrap;
+}
+
+.player-controls { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.player-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.player-select { width: auto; padding: 2px 6px; font-size: var(--t-xs); }
+.player-volume input { width: 80px; }
+
+/* Screen-reader-only label, for the controls whose icon carries the meaning. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+@media (max-width: 720px) {
+  /* On a phone the frame preview is wider than the viewport is useful, and the
+     controls need to wrap rather than shrink to nothing. */
+  .player-hover-frame { display: none; }
+  .player-volume { display: none; }
+  .player-stage video { max-height: 50vh; }
+}

@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { effectiveKind, drawableKind } from '@/lib/media';
+import VideoPlayer from '@/app/components/video/VideoPlayer';
 
 /**
  * The preview pane of the detail view.
@@ -25,12 +26,7 @@ import { effectiveKind, drawableKind } from '@/lib/media';
  * broken image or a player that never starts.
  */
 
-// Above this, streaming a master straight from object storage is slow enough
-// that saying so beats letting someone watch a spinner. ROADMAP 2.8 (HLS
-// proxies) is the real fix.
-const HEAVY_BYTES = 500 * 1024 * 1024;
-
-export default function FilePreview({ file }) {
+export default function FilePreview({ file, startAt = 0 }) {
   const kind = effectiveKind(file);
   const [failed, setFailed] = useState(false);
   const box = {
@@ -52,26 +48,12 @@ export default function FilePreview({ file }) {
   }
 
   if (kind === 'video' && !failed) {
-    return (
-      <div className="stack" style={{ gap: 'var(--s2)' }}>
-        <div style={box}>
-          <video
-            src={file.url}
-            poster={file.thumbnailUrl || undefined}
-            controls
-            playsInline
-            preload="metadata"
-            onError={() => setFailed(true)}
-            style={fill}
-          />
-        </div>
-        {file.size > HEAVY_BYTES && (
-          <p className="small muted" style={{ margin: 0 }}>
-            Large file — playback may buffer while it streams. Downloading is faster if you need to scrub.
-          </p>
-        )}
-      </div>
-    );
+    // VideoPlayer owns the heavy-file notice, the preload decision and the
+    // failure message now, so none of them are duplicated here. It falls back
+    // to this component's placeholder only if it has no source at all — a
+    // format the browser cannot decode is reported by the player itself, which
+    // is the only thing that knows the decode failed.
+    return <VideoPlayer file={file} startAt={startAt} />;
   }
 
   if (kind === 'audio') {

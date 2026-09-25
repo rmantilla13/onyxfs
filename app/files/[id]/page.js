@@ -7,6 +7,7 @@ import { presignFileUrls } from '@/lib/storage';
 import TopNav from '@/app/components/TopNav';
 import FileDetail from '@/app/components/file/FileDetail';
 import { buildLabel, buildDetail } from '@/lib/version';
+import { parseTimecode } from '@/lib/video-time';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +25,17 @@ export async function generateMetadata({ params }) {
  * routes misbehave there is already a working, shareable detail view rather
  * than a half-finished one.
  */
-export default async function FilePage({ params }) {
+/**
+ * Seconds from `?t=`. Accepts plain seconds ("90"), clock time ("1:30") and
+ * SMPTE ("00:01:23:12"), and refuses anything else rather than passing NaN to
+ * the player — where it would set currentTime and throw.
+ */
+function startAtFrom(value) {
+  const seconds = parseTimecode(Array.isArray(value) ? value[0] : value);
+  return seconds != null && seconds >= 0 ? seconds : 0;
+}
+
+export default async function FilePage({ params, searchParams }) {
   const session = await auth();
   const email = session?.user?.email;
   if (!email) redirect('/signin');
@@ -53,7 +64,14 @@ export default async function FilePage({ params }) {
         email={email}
         isAdmin={isAdmin(email)}
       />
-      <FileDetail file={signedList[0]} canWrite={canWrite} />
+      <FileDetail
+        file={signedList[0]}
+        canWrite={canWrite}
+        // ?t= opens the player at a moment, so a timecode can be shared as a
+        // link. Parsed here rather than in the client so a malformed value is
+        // simply absent instead of reaching the player as NaN.
+        startAt={startAtFrom(searchParams?.t)}
+      />
     </>
   );
 }

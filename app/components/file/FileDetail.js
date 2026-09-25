@@ -22,7 +22,7 @@ import { deriveAuto } from '@/lib/dam';
  * are hidden rather than rendered into a 403. The server check is still the
  * one that counts.
  */
-export default function FileDetail({ file: initial, canWrite = false, backHref = '/files' }) {
+export default function FileDetail({ file: initial, canWrite = false, backHref = '/files', startAt = 0 }) {
   const [file, setFile] = useState(initial);
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(initial.name || '');
@@ -103,7 +103,7 @@ export default function FileDetail({ file: initial, canWrite = false, backHref =
 
       <div className="file-detail-body">
         <div style={{ minWidth: 0 }}>
-          <FilePreview file={file} />
+          <FilePreview file={file} startAt={startAt} />
         </div>
 
         <aside style={{ minWidth: 0 }}>
