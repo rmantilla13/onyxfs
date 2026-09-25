@@ -28,3 +28,7 @@ apple/build/
 apple/*.xcodeproj
 apple/.swiftpm/
 apple/OnyxKit/.swiftpm/
+
+# Provisioning profiles for signed builds (apple/README.md, Releasing)
+apple/.signing/
+apple/vendor/

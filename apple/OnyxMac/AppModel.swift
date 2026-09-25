@@ -18,9 +18,7 @@ final class AppModel: ObservableObject {
     /// Whether the server treats this account as an admin; only decides
     /// which menu items are offered — the server enforces it either way.
     @Published private(set) var isAdmin = false
-    /// Domain identifiers currently in Finder.
-    @Published private(set) var inFinder: Set<String> = []
-    /// Locations being added or removed right now.
+    /// Drives being mounted or unmounted right now.
     @Published private(set) var busy: Set<String> = []
     /// The last thing that went wrong, for the window to say.
     @Published var problem: String?
@@ -28,8 +26,9 @@ final class AppModel: ObservableObject {
 
     let web: WebController
     let updater = Updater()
+    /// Drives in Finder (streaming mounts) and files kept offline.
+    let finder = DriveService()
     private let settings = SharedSettings()
-    private var syncTimer: Timer?
 
     init() {
         let settings = SharedSettings()
@@ -40,10 +39,10 @@ final class AppModel: ObservableObject {
         web.model = self
         updater.model = self
         if phase == .signedIn { Task { await afterSignIn() } }
-        // S3 has no push; this is how the web's changes reach Finder without
-        // anyone asking. Cheap: a delta with nothing new is one small query.
-        syncTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
-            Task { await FinderLocations.syncAll() }
+        // Quitting unmounts every drive, so none is left for the system to reap.
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
+                                               object: nil, queue: .main) { [finder] _ in
+            MainActor.assumeIsolated { finder.quit() }
         }
     }
 
@@ -99,6 +98,7 @@ final class AppModel: ObservableObject {
     private func afterSignIn() async {
         web.signIn()
         await refresh()
+        await finder.start(model: self)
     }
 
     func signOut() async {
@@ -108,6 +108,7 @@ final class AppModel: ObservableObject {
         drives = []
         isAdmin = false
         phase = .signedOut
+        finder.stop()
         await web.signOut()
         // Finder locations stay: removing one deletes its downloaded copies,
         // and signing back in is far commoner than wanting them gone. The
@@ -164,6 +165,7 @@ final class AppModel: ObservableObject {
         email = nil
         phase = .signedOut
         problem = "Your sign-in on this Mac has expired or was revoked. Sign in again."
+        finder.stop()
         await web.signOut()
     }
 
@@ -179,63 +181,27 @@ final class AppModel: ObservableObject {
             await tokenRejected()
             return
         } catch {
-            // Offline, a 5xx, a captive portal: say so, and leave Finder as
-            // it is. With no listing, every location would look orphaned and
-            // be removed, downloaded copies and all.
             problem = error.localizedDescription
-            inFinder = await FinderLocations.current()
-            return
         }
-        inFinder = await FinderLocations.current()
-        await removeOrphans()
     }
-
-    func isInFinder(_ scope: SyncDomain) -> Bool { inFinder.contains(scope.identifier) }
 
     /// The drives Finder can show: the ones whose files are yours to see.
     var finderDrives: [Filespace] { drives.filter(\.isMember) }
 
-    func setInFinder(_ scope: SyncDomain, name: String, _ on: Bool) async {
-        let id = scope.identifier
-        busy.insert(id)
-        defer { busy.remove(id) }
-        do {
-            if on {
-                try await FinderLocations.add(scope, name: name)
-                // A new location lists empty until its first changes; ask now.
-                await FinderLocations.syncAll()
-                appLog.info("finder: added \(id, privacy: .public)")
-            } else {
-                try await FinderLocations.remove(id)
-                appLog.info("finder: removed \(id, privacy: .public)")
-            }
-            problem = nil
-        } catch {
-            appLog.error("finder: \(id, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
-            problem = error.localizedDescription
-        }
-        inFinder = await FinderLocations.current()
+    func isMounted(_ scope: SyncDomain) -> Bool { finder.isMounted(scope) }
+
+    func setMounted(_ scope: SyncDomain, name: String, _ on: Bool) async {
+        busy.insert(scope.identifier)
+        defer { busy.remove(scope.identifier) }
+        await finder.setMounted(scope, name: name, on)
+        if on, let reveal = finder.mounts.state(of: scope), case .mounted = reveal { finder.reveal(scope) }
     }
 
-    func reveal(_ scope: SyncDomain) async {
-        do { try await FinderLocations.reveal(scope.identifier) }
-        catch { problem = error.localizedDescription }
-    }
+    func reveal(_ scope: SyncDomain) { finder.reveal(scope) }
 
     func syncNow() async {
-        await FinderLocations.syncAll()
         await refresh()
-    }
-
-    /// A drive you are no longer in (or that was deleted) should not linger
-    /// in Finder as a location that can only ever say "no access".
-    private func removeOrphans() async {
-        let live = Set(finderDrives.map { SyncDomain.drive(id: $0.id).identifier } + [SyncDomain.library.identifier])
-        for id in inFinder where !live.contains(id) && SyncDomain(identifier: id) != nil {
-            try? await FinderLocations.remove(id)
-            appLog.info("finder: removed \(id, privacy: .public), no longer a drive of yours")
-        }
-        inFinder = await FinderLocations.current()
+        await finder.syncNow()
     }
 
     // MARK: - Launch arguments, for scripted testing

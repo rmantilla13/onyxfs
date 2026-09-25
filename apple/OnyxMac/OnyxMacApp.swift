@@ -29,19 +29,22 @@ struct OnyxMacApp: App {
             MainWindow()
                 .environmentObject(model)
                 .environmentObject(model.updater)
+                .environmentObject(model.finder)
                 .task { await Launch.once { await model.handleLaunchArguments() } }
         }
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .defaultSize(width: 1280, height: 820)
         .commands { OnyxCommands(model: model) }
 
-        MenuBarExtra("Onyx", systemImage: "externaldrive.connected.to.line.below") {
-            MenuBarContent().environmentObject(model).environmentObject(model.updater)
+        MenuBarExtra {
+            MenuBarContent().environmentObject(model).environmentObject(model.updater).environmentObject(model.finder)
+        } label: {
+            MenuBarIcon().environmentObject(model).environmentObject(model.finder).environmentObject(model.updater)
         }
         .menuBarExtraStyle(.menu)
 
         Settings {
-            SettingsView().environmentObject(model).environmentObject(model.updater)
+            SettingsView().environmentObject(model).environmentObject(model.updater).environmentObject(model.finder)
         }
     }
 }
@@ -49,6 +52,37 @@ struct OnyxMacApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Closing the window leaves Onyx in the menu bar, keeping Finder in sync.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            let background = Background.shared
+            background.registerOnFirstRun()
+            // Opened at login: no window, no Dock icon — just the menu bar.
+            if Background.launchedAtLogin {
+                DispatchQueue.main.async {
+                    for window in NSApp.windows where window.canBecomeMain { window.close() }
+                    NSApp.setActivationPolicy(.accessory)
+                }
+            }
+            for name in [NSWindow.willCloseNotification, NSWindow.didBecomeKeyNotification] {
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                    // After the window has actually gone.
+                    DispatchQueue.main.async { MainActor.assumeIsolated { background.windowsChanged() } }
+                }
+            }
+        }
+    }
+
+    /// Clicking Onyx in Finder or Launchpad while it runs in the menu bar
+    /// opens its window, as any app would.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { NotificationCenter.default.post(name: .onyxOpenWindow, object: nil) }
+        return true
+    }
+}
+
+extension Notification.Name {
+    static let onyxOpenWindow = Notification.Name("io.onyxfs.openWindow")
 }
 
 /// Launch arguments are for the first window only, not every reopen.

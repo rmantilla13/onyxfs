@@ -5,10 +5,13 @@ One Swift codebase. On the Mac it is **Onyx.app**:
 - **A window with the whole workspace.** Browse, search, preview, upload, share
   and manage drives, as on the web, in a window of its own. It signs itself in
   from the Mac's device token, so no second email link and no browser tab.
-- **Drives in Finder.** Each drive you turn on appears under *Locations* in
-  Finder's sidebar, backed by a File Provider extension. Files download when
-  opened and are evicted when macOS needs the space. What you see follows the
-  web's own rules: the drive's members, grants, and files shared with you.
+- **Drives in Finder, streaming.** Each drive you turn on mounts in Finder
+  under `~/Onyx` and *Locations*. It shows exactly what the web shows you,
+  because it lists from the same access-checked feed. Files stream as apps
+  read them, a range at a time, straight from storage.
+- **Offline copies.** Pin a file, a folder or a whole drive from the Onyx
+  window, and it is kept on this Mac to open with no connection. The cache
+  can live in any folder, including an external disk (Settings → Storage).
 - **A menu bar item** that keeps Finder in sync while the window is closed.
 
 The iOS app (`OnyxIOS/`) shares OnyxKit and the extension source; it is not
@@ -145,7 +148,7 @@ open build/Onyx.app --args --server localhost:3000 --pair ABCD1234EFGH
 |---|---|
 | Sign-in | PKCE in `ASWebAuthenticationSession` (`/space/authorize` → `/api/desktop/token`), or a pairing code. The token is kept in the Keychain. |
 | The window | `WKWebView` on the web app. `POST /api/desktop/web-session` returns a one-time code, bound to a secret the app sets as a cookie in its own web view, so a leaked link signs nobody in (`lib/web-handoff.js`). |
-| Finder | One File Provider domain per drive (`SyncDomain`: `drive.<id>`, or `library`). The extension syncs `GET /api/files/delta?drive=` into a `Replica` and fetches bytes via `GET /api/space/files/<id>`. |
+| Finder | One rclone NFS mount per drive, using macOS's own NFS client (no macFUSE). It mounts a WebDAV bridge inside the app (`DAVServer` + `DAVResponder`) on 127.0.0.1, which needs a per-launch bearer token. The bridge lists from a `DriveMirror`: `GET /api/files/delta?drive=` synced every 15 s into a `Replica`. Reads are 302s to the file's presigned URL (`GET /api/space/files/<id>`), so rclone fetches byte ranges straight from storage, or they are served from a pinned copy (`PinStore`). rclone's VFS cache keeps what was read. |
 | Access | The delta uses the listing's own access rule. A row you may not see arrives as a bare id and is dropped. A change of drive membership, which writes no file row, shows up as a new `scope` fingerprint, and the replica starts over. |
 
 Only these paths are reachable without a browser cookie; `middleware.js`
@@ -185,10 +188,11 @@ decode fails on HTML, with a complaint about the character `<`.
   - Pairing, the web-view handoff (at `localhost` and `127.0.0.1`), the workspace, Settings and sign-out all work.
 - **The updater:** a 0.2.0 build found 0.2.1 on a local feed, downloaded and verified it, quit, swapped the bundle and reopened as 0.2.1. With a tampered checksum it refused and left 0.2.0 in place.
 
-**Not yet exercised: the extension running under Finder.** That needs the
-signed build above. The code compiles and links as an app extension, and the
-logic it runs is the tested OnyxKit. Its first run on a signed build is where
-anything left will surface.
+**The File Provider extension** (`OnyxFileProvider/`) is kept but no longer
+built into the app by default (`ONYX_FILE_PROVIDER=1` adds it). File Provider
+downloads a whole file before any app can read it, so it cannot stream; the
+mounts replaced it for Finder. It is where the iOS app's Files integration will
+come from.
 
 ## Identifiers
 
@@ -202,17 +206,16 @@ and `SyncDomain.swift`:
 | Extension | `io.onyxfs.app.fileprovider` |
 | App group, keychain group | `group.io.onyxfs` |
 | URL scheme | `onyxfs` |
-| Finder domains | `drive.<filespace id>`, `library` |
+| Drive scopes | `drive.<filespace id>`, `library` (mounts, mirrors, pins) |
 
 The Tauri app in `desktop/` uses the same bundle identifier, so install one
-or the other on a Mac, not both.
+or the other on a Mac, not both. On Windows it stays the desktop client.
 
 ## Next
 
-- **Writes from Finder** (ROADMAP 5.4), after the conflict policy (5.5) is
-  written down. Until then every item is read-only in its capabilities, so
-  Finder refuses a drop up front rather than accepting a file it would lose.
-- **Editing in place.** The rclone mount in `desktop/` stays for opening
-  multi-gigabyte masters without downloading them first, and for Windows.
+- **Saving from Finder** (ROADMAP 5.4), after the conflict policy (5.5) is
+  written down. The mounts are read-only until then. Writes will go through
+  Onyx, not straight to the bucket, so what is saved in Finder shows on the
+  web too.
 - **Distribution:** Developer ID, notarization, and Sparkle for updates
   (5.8).
