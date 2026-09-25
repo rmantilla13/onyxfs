@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
+import { printsSignInLinks } from '@/lib/signin-email';
 import SignInClient from './SignInClient';
 
 export const dynamic = 'force-dynamic';
@@ -29,6 +30,7 @@ export default async function SignInPage({ searchParams }) {
       tagline={brand.tagline}
       markPath={brand.visual.logo.markPath}
       oktaEnabled={process.env.NEXT_PUBLIC_OKTA_ENABLED === 'true'}
+      linksPrinted={printsSignInLinks()}
       error={code ? ERRORS[code] || 'Sign-in failed. Try again.' : null}
     />
   );

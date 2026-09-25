@@ -1,4 +1,5 @@
 import { loadBrand } from '@/lib/brand-config';
+import { printsSignInLinks } from '@/lib/signin-email';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Check your email' };
@@ -13,6 +14,11 @@ export default async function CheckEmail() {
         <p className="muted small" style={{ margin: 0 }}>
           A sign-in link is on its way. It expires in 24 hours and can only be used once.
         </p>
+        {printsSignInLinks() && (
+          <p className="muted small" style={{ margin: '16px 0 0' }}>
+            Local development: nothing is emailed. The link is printed in the terminal running the dev server.
+          </p>
+        )}
       </div>
     </main>
   );

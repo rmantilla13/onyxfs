@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import { requestMagicLink, requestAccess } from './actions';
 
-export default function SignInClient({ brandName, tagline, markPath, oktaEnabled, error }) {
+export default function SignInClient({ brandName, tagline, markPath, oktaEnabled, linksPrinted, error }) {
   const [mode, setMode] = useState('signin');
   const [linkState, sendLink] = useFormState(requestMagicLink, {});
   const [accessState, askAccess] = useFormState(requestAccess, {});
@@ -27,9 +27,16 @@ export default function SignInClient({ brandName, tagline, markPath, oktaEnabled
 
         {mode === 'signin' ? (
           linkState.sent ? (
-            <p className="small">
-              If that address is approved, a sign-in link is on its way. It expires in 24 hours.
-            </p>
+            <>
+              <p className="small">
+                If that address is approved, a sign-in link is on its way. It expires in 24 hours.
+              </p>
+              {linksPrinted && (
+                <p className="muted small" style={{ margin: '12px 0 0' }}>
+                  Local development: nothing is emailed. The link is printed in the terminal running the dev server.
+                </p>
+              )}
+            </>
           ) : (
             <form action={sendLink} className="stack">
               <input className="input" type="email" name="email" placeholder="you@example.com" required autoFocus autoComplete="email" />

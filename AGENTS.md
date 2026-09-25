@@ -52,6 +52,7 @@ source only. `sanitizeStorageConfig()` strips the secret key. Keep it that way.
 ## Checks
 
 ```bash
+npm run dev:local                  # the app on local Postgres + S3; sign-in links print to the terminal
 npm test                           # unit tests, no database needed
 npm run build                      # web — the real check; JSX errors surface here
 npm run doctor                     # creates the schema and verifies a live database
