@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import FilespaceSwitcher from '@/app/components/FilespaceSwitcher';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
 import { createThumbnailBackfill } from '@/lib/thumbnail-client';
 import { createUploadQueue, uploadOne, filesFromDrop, filesFromInput, joinFolder } from '@/lib/upload-client';
@@ -29,7 +30,7 @@ const SORTS = [
 ];
 
 
-export default function FilesClient({ flags, canWrite, schema, filespaceId, filespaces }) {
+export default function FilesClient({ flags, canWrite, schema, filespaceId, filespaces, isAdmin = false }) {
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -111,6 +112,14 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   }, [filespaceId]);
 
   useEffect(() => { loadFolders(); }, [loadFolders]);
+
+  // A soft navigation: the page re-renders with the new ?filespace= and the
+  // effects above refetch. The open folder belongs to the old filespace.
+  const switchFilespace = useCallback((id) => {
+    if ((id || '') === (filespaceId || '')) return;
+    setFolder('');
+    router.push(id ? `/files?filespace=${encodeURIComponent(id)}` : '/files');
+  }, [filespaceId, router]);
 
   // Drop the selection whenever the result set changes underneath it.
   // Without this, switching folders with 40 files selected left "Trash 40"
@@ -388,6 +397,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
 
       <div className="files-layout">
           <aside>
+            <FilespaceSwitcher filespaces={filespaces} activeId={filespaceId} isAdmin={isAdmin} onSwitch={switchFilespace} />
             <div className="side-folders">
               <Section title="Folders">
                 <div className="folder-list edge-scroll">

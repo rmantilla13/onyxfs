@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { STORAGE_PRESETS, presetById, detectPreset, applyPreset, summarizeChecks } from '@/lib/storage-presets';
+import FilespaceMembers from '@/app/components/FilespaceMembers';
+import { useConfirm } from '@/app/components/ui/Confirm';
+import { fmtSize } from '@/app/components/ui/FileCard';
 
 // Features, Brand and Keys were editors for settings that are now compiled
 // defaults. Their routes are gone; the defaults they used to override live in
@@ -22,8 +25,9 @@ async function api(url, opts) {
   return body;
 }
 
-export default function AdminClient({ superAdmin }) {
-  const [tab, setTab] = useState('storage');
+export default function AdminClient({ superAdmin, initialTab }) {
+  // ?tab= lets the files UI's "Manage filespaces…" land on the right tab.
+  const [tab, setTab] = useState(TABS.some((t) => t.key === initialTab) ? initialTab : 'storage');
   const tabs = TABS.filter((t) => !t.superOnly || superAdmin);
 
   return (
@@ -260,31 +264,54 @@ function Diagnostics({ result, dirty }) {
 
 function FilespacesTab() {
   const { data, error, reload, setError } = useResource('/api/admin/filespaces');
-  const [draft, setDraft] = useState({ name: '', bucket: '', prefix: '', region: '' });
-  const [grant, setGrant] = useState({});
+  const [draft, setDraft] = useState({ name: '', bucket: '', prefix: '' });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const { confirm, confirmElement } = useConfirm();
 
-  const create = async () => {
-    setError(null);
+  const create = async (e) => {
+    e.preventDefault();
+    setError(null); setMsg(null); setBusy(true);
     try {
-      await api('/api/admin/filespaces', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft) });
-      setDraft({ name: '', bucket: '', prefix: '', region: '' });
+      const out = await api('/api/admin/filespaces', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft) });
+      setDraft({ name: '', bucket: '', prefix: '' });
+      setMsg(`Created ${out.filespace?.name || 'the filespace'}. Add its members below.`);
       reload();
-    } catch (e) { setError(e.message); }
+    } catch (err) { setError(err.message); } finally { setBusy(false); }
   };
 
-  const addAccess = async (id) => {
-    const g = grant[id] || {};
-    if (!g.email) return;
-    setError(null);
+  const remove = async (fs) => {
+    setError(null); setMsg(null);
+    let s;
     try {
-      await api(`/api/admin/filespaces/${id}/access`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email: g.email, role: g.role || 'viewer' }),
-      });
-      setGrant({ ...grant, [id]: {} });
+      s = await api(`/api/admin/filespaces?summary=${encodeURIComponent(fs.id)}`);
+    } catch (err) { setError(err.message); return; }
+    const where = `${s.bucket}/${s.prefix}`;
+    const files = s.files === 1 ? '1 file' : `${s.files.toLocaleString()} files`;
+    const members = s.members === 1 ? '1 member loses' : `${s.members} members lose`;
+    const ok = await confirm({
+      title: `Delete filespace "${fs.name}"?`,
+      body: (
+        <>
+          This removes the filespace and its access list: {members} it in the switcher and the desktop app, and existing
+          desktop mounts stop when their credentials next refresh (within an hour).
+          <br /><br />
+          <strong>Nothing in storage is deleted.</strong>{' '}
+          {s.files > 0
+            ? <>The {files} ({fmtSize(s.bytes) || '0 B'}) under <span className="mono">{where}</span> stay in the bucket and in the library, where admins still find them under All files.</>
+            : <>Nothing is catalogued under <span className="mono">{where}</span>.</>}
+          {' '}The bucket itself is untouched.
+          {s.ownKeys ? ' The access keys stored for this filespace are forgotten.' : ''}
+        </>
+      ),
+      confirmLabel: 'Delete filespace',
+    });
+    if (!ok) return;
+    try {
+      await api(`/api/admin/filespaces?id=${encodeURIComponent(fs.id)}`, { method: 'DELETE' });
+      setMsg(`Deleted ${fs.name}. ${files} kept in storage.`);
       reload();
-    } catch (e) { setError(e.message); }
+    } catch (err) { setError(err.message); }
   };
 
   return (
@@ -293,68 +320,82 @@ function FilespacesTab() {
         title="New filespace"
         hint="A filespace is a named bucket+prefix scope. People are granted access to one, and the desktop app mounts exactly that scope — nothing above it."
       >
-        <Field label="Name"><input className="input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Field>
-        <Field label="Bucket" hint="Leave blank to inherit the configured bucket.">
-          <input className="input" value={draft.bucket} onChange={(e) => setDraft({ ...draft, bucket: e.target.value })} />
-        </Field>
-        <Field label="Prefix" hint="The scope. Credentials minted for this filespace can reach nothing outside it.">
-          <input className="input" value={draft.prefix} onChange={(e) => setDraft({ ...draft, prefix: e.target.value })} placeholder="projects/acme" />
-        </Field>
-        <button className="btn btn-primary" onClick={create} disabled={!draft.name}>Create</button>
-        <Status error={error} />
+        <form onSubmit={create}>
+          <Field label="Name"><input className="input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Field>
+          <Field label="Bucket" hint="Leave blank to use the Storage bucket.">
+            <input className="input" value={draft.bucket} onChange={(e) => setDraft({ ...draft, bucket: e.target.value })} />
+          </Field>
+          <Field label="Prefix" hint="The scope. Credentials minted for this filespace can reach nothing outside it.">
+            <input className="input" value={draft.prefix} onChange={(e) => setDraft({ ...draft, prefix: e.target.value })} placeholder="projects/acme" />
+          </Field>
+          <button className="btn btn-primary" type="submit" disabled={busy || !draft.name.trim() || !draft.prefix.trim()}>
+            {busy ? 'Creating…' : 'Create'}
+          </button>
+        </form>
+        <Status error={error} ok={msg} />
       </Panel>
 
+      {data && !(data.filespaces || []).length && <p className="muted small">No filespaces yet.</p>}
       {(data?.filespaces || []).map((fs) => (
-        <Panel key={fs.id} title={fs.name} hint={`${fs.bucket || '(default bucket)'} / ${fs.prefix || ''}`}>
-          <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
-            <tbody>
-              {(fs.members || []).map((m) => (
-                <tr key={m.email}>
-                  <td style={{ padding: '4px 0' }}>{m.email}</td>
-                  <td className="muted">{m.role}</td>
-                  <td style={{ textAlign: 'right' }}>
-                    <button
-                      className="small muted"
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
-                      onClick={async () => {
-                        await fetch(`/api/admin/filespaces/${fs.id}/access`, {
-                          method: 'PATCH',
-                          headers: { 'content-type': 'application/json' },
-                          body: JSON.stringify({ email: m.email, grant: false }),
-                        });
-                        reload();
-                      }}
-                    >
-                      revoke
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="row" style={{ marginTop: 12 }}>
+        <FilespaceCard key={fs.id} fs={fs} onChanged={reload} onDelete={() => remove(fs)} />
+      ))}
+      {confirmElement}
+    </>
+  );
+}
+
+/**
+ * One filespace: rename in place, delete, open in Files, and its members.
+ * Rename is metadata only — the prefix, and so every stored object, stays put.
+ */
+function FilespaceCard({ fs, onChanged, onDelete }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(fs.name);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const save = async (e) => {
+    e.preventDefault();
+    const next = name.trim();
+    if (!next || next === fs.name) { setEditing(false); setName(fs.name); return; }
+    setBusy(true); setError(null);
+    try {
+      await api('/api/admin/filespaces', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: fs.id, name: next }) });
+      setEditing(false);
+      onChanged();
+    } catch (err) { setError(err.message); } finally { setBusy(false); }
+  };
+
+  return (
+    <section className="card" style={{ padding: 20, marginBottom: 16 }}>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+        {editing ? (
+          <form className="row" style={{ gap: 8, flex: '1 1 260px' }} onSubmit={save}>
             <input
               className="input"
-              style={{ maxWidth: 240 }}
-              placeholder="someone@example.com"
-              value={grant[fs.id]?.email || ''}
-              onChange={(e) => setGrant({ ...grant, [fs.id]: { ...grant[fs.id], email: e.target.value } })}
+              aria-label="Filespace name"
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Escape') { setEditing(false); setName(fs.name); setError(null); } }}
             />
-            <select
-              className="input"
-              style={{ width: 'auto' }}
-              value={grant[fs.id]?.role || 'viewer'}
-              onChange={(e) => setGrant({ ...grant, [fs.id]: { ...grant[fs.id], role: e.target.value } })}
-            >
-              <option value="viewer">viewer</option>
-              <option value="editor">editor</option>
-              <option value="owner">owner</option>
-            </select>
-            <button className="btn" onClick={() => addAccess(fs.id)}>Grant</button>
-          </div>
-        </Panel>
-      ))}
-    </>
+            <button className="btn btn-primary btn-sm" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
+            <button className="btn btn-sm" type="button" onClick={() => { setEditing(false); setName(fs.name); setError(null); }}>Cancel</button>
+          </form>
+        ) : (
+          <>
+            <h2 style={{ fontSize: 16, margin: 0 }}>{fs.name}</h2>
+            <div className="spacer" />
+            <a className="btn btn-ghost btn-sm" href={`/files?filespace=${encodeURIComponent(fs.id)}`}>Open in Files</a>
+            <button className="btn btn-ghost btn-sm" onClick={() => setEditing(true)}>Rename</button>
+            <button className="btn btn-ghost btn-sm" style={{ color: 'var(--danger)' }} onClick={onDelete}>Delete…</button>
+          </>
+        )}
+      </div>
+      <p className="muted small mono" style={{ margin: '0 0 14px' }}>{fs.bucket || '(default bucket)'} / {fs.prefix || ''}</p>
+      {error && <p className="small" role="alert" style={{ color: 'var(--danger)', margin: '0 0 12px' }}>{error}</p>}
+      <FilespaceMembers filespaceId={fs.id} onChanged={onChanged} />
+    </section>
   );
 }
 

@@ -3,7 +3,7 @@
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 
-export default function TopNav({ brandName, markPath, email, isAdmin, filespaces = [], activeFilespace, build }) {
+export default function TopNav({ brandName, markPath, email, isAdmin, build }) {
   const pathname = usePathname();
   const is = (href) => pathname === href || pathname.startsWith(`${href}/`);
 
@@ -21,23 +21,6 @@ export default function TopNav({ brandName, markPath, email, isAdmin, filespaces
         </nav>
 
         <div className="spacer" />
-
-        {filespaces.length > 0 && (
-          <select
-            className="input"
-            style={{ width: 'auto', maxWidth: 220 }}
-            value={activeFilespace || ''}
-            onChange={(e) => {
-              const v = e.target.value;
-              window.location.href = v ? `/files?filespace=${encodeURIComponent(v)}` : '/files';
-            }}
-          >
-            <option value="">All files</option>
-            {filespaces.map((f) => (
-              <option key={f.id} value={f.id}>{f.name}</option>
-            ))}
-          </select>
-        )}
 
         {/* Which build is serving this page. The first question when
             something looks wrong in production is whether the fix is even
