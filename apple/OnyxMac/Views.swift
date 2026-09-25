@@ -264,7 +264,7 @@ struct FinderItems: View {
     var body: some View {
         Section("Show in Finder") {
             if !BuildInfo.canUseFinder {
-                Text("Needs a signed build of Onyx")
+                Text(BuildInfo.teamID == nil ? "Needs a signed build of Onyx" : "Coming in a later update")
             }
             if model.finderDrives.isEmpty {
                 Text("No drives yet")
@@ -407,8 +407,10 @@ struct FinderSettings: View {
             Text("Each drive you turn on appears under Locations in Finder's sidebar. Files download when you open them, and stay until macOS needs the space.")
                 .font(.callout).foregroundStyle(.secondary)
             if !BuildInfo.canUseFinder {
-                Label("This copy of Onyx is unsigned, so macOS will not let Finder share its sign-in. Build it signed with your Apple Developer team to put drives in Finder (apple/README.md).",
-                      systemImage: "exclamationmark.triangle")
+                Label(BuildInfo.teamID == nil
+                      ? "This copy of Onyx is unsigned, so macOS will not let Finder share its sign-in. Build it signed with your Apple Developer team to put drives in Finder (apple/README.md)."
+                      : "Drives in Finder arrive in a later update of this app. Everything else — your files, search, sharing and uploads — works in the Onyx window.",
+                      systemImage: BuildInfo.teamID == nil ? "exclamationmark.triangle" : "info.circle")
                     .font(.callout)
             }
             List {
