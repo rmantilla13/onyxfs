@@ -79,12 +79,12 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
       p.set('sort', sort);
       if (filespaceId) p.set('filespace', filespaceId);
       if (after) p.set('cursor', after);
+      p.set('folders', '0');
       const r = await fetch(`/api/files?${p}`);
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Request failed (${r.status})`);
       const data = await r.json();
       if (token !== requestRef.current) return; // superseded
       setFiles((prev) => (after ? [...prev, ...(data.files || [])] : data.files || []));
-      if (!after) setFolders(data.folders || []);
       setCursor(data.cursor || null);
     } catch (e) {
       if (token === requestRef.current) setError(e.message);
@@ -94,6 +94,21 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   }, [folder, query, kinds, sort, filespaceId]);
 
   const load = useCallback(() => fetchPage(null), [fetchPage]);
+
+  // The folder tree, loaded once per filespace and again only after an upload
+  // or a removal changes what is in a folder. It used to ride along with every
+  // first page, so each filter change and search keystroke re-counted the
+  // whole library and downloaded a couple of hundred kilobytes of tree.
+  const loadFolders = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/files/folders${filespaceId ? `?filespace=${encodeURIComponent(filespaceId)}` : ''}`);
+      if (!r.ok) return;
+      const data = await r.json();
+      setFolders(data.folders || []);
+    } catch {}
+  }, [filespaceId]);
+
+  useEffect(() => { loadFolders(); }, [loadFolders]);
 
   // Drop the selection whenever the result set changes underneath it.
   // Without this, switching folders with 40 files selected left "Trash 40"
@@ -264,8 +279,9 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
         setTimeout(() => setUploads([]), 1500);
       }
       load();
+      loadFolders();
     },
-    [folder, filespaceId, load, toast]
+    [folder, filespaceId, load, loadFolders, toast]
   );
 
   const onDrop = (e) => {
@@ -293,6 +309,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     const failed = results.filter((r) => !r.ok).length;
     setSelected(new Set());
     load();
+    loadFolders();
     if (failed) toast.error(`${failed} of ${n} could not be removed.`);
     else toast.success(`${n} file${n === 1 ? '' : 's'} removed.`);
   };

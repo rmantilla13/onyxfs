@@ -14,10 +14,11 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
 /**
- * GET /api/files?folder=&folderPrefix=&q=&kind=&tags=&tagMode=&sort=&cursor= → { files, cursor, folders }
+ * GET /api/files?folder=&folderPrefix=&q=&kind=&tags=&tagMode=&sort=&cursor=&folders= → { files, cursor, folders }
  *
- * `folders` (the sidebar tree) comes with the first page only. It does not
- * depend on the page, and building it counts every file in the library.
+ * `folders` (the sidebar tree) comes with the first page only, and not at all
+ * with `folders=0`. It does not depend on the page or the filters, and
+ * building it counts every file in the library.
  */
 export async function GET(req) {
   const session = await auth();
@@ -58,7 +59,10 @@ export async function GET(req) {
   // every row in the library was signed on every request.
   const { files, cursor, total } = await listFilesForUser(opts, principal);
   const signed = await presignFileUrls(files);
-  const folders = opts.cursor ? undefined : await listFileFoldersForUser(principal, { storagePrefix, filespace: storagePrefix });
+  // `folders=0` skips the tree; the web library fetches it separately from
+  // /api/files/folders. Other callers still get it with the first page.
+  const withFolders = !opts.cursor && url.searchParams.get('folders') !== '0';
+  const folders = withFolders ? await listFileFoldersForUser(principal, { storagePrefix, filespace: storagePrefix }) : undefined;
   return NextResponse.json({ files: signed, cursor: encodeCursor(cursor), total, folders });
 }
 
