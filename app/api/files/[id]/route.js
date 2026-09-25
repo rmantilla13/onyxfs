@@ -7,10 +7,10 @@ import {
 } from '@/lib/db';
 import {
   getStorageConfig, storageMode, s3MoveObject, s3DeleteObject, presignFileUrls,
-  cfgForFilespace, folderToKeyPath, s3UniqueKey,
+  cfgForFilespace, folderToKeyPath, s3UniqueKey, s3ObjectExists, safeObjectName,
 } from '@/lib/storage';
 import { normalizeSchema, validateMetadataPatch } from '@/lib/dam';
-import { keyFor } from '@/lib/folder-ops';
+import { keyFor, fileNameProblem } from '@/lib/folder-ops';
 
 export const runtime = 'nodejs';
 
@@ -120,6 +120,52 @@ export async function PATCH(req, { params }) {
   // the bucket to move); set to false only when the catalog moved without the
   // bytes, which is the one case a UI has to surface.
   let objectMoved;
+
+  // A rename on its own. The object's key ends in its name, so renaming only
+  // the row would leave a mounted drive showing the old one; the key follows
+  // when the object sits where this scope's uploads put it.
+  if (body.name !== undefined) {
+    const problem = fileNameProblem(body.name);
+    if (problem) return NextResponse.json({ error: problem }, { status: 400 });
+    body.name = String(body.name).trim();
+  }
+  const renamingTo = movingTo === null && body.name !== undefined && body.name !== existing.name ? body.name : null;
+  if (renamingTo !== null && existing.storage === 's3' && existing.storageKey) {
+    const base = await getStorageConfig();
+    if (storageMode(base) === 's3') {
+      const filespaceId = body.filespaceId || new URL(req.url).searchParams.get('filespace') || null;
+      const fs = filespaceId ? await getFilespaceForUser(session.user.email, filespaceId) : null;
+      const cfg = fs ? cfgForFilespace(base, fs) : base;
+      const root = (fs ? String(fs.prefix || '') : String(base.prefix || 'files')).replace(/^\/+|\/+$/g, '');
+      const dir = existing.storageKey.slice(0, existing.storageKey.lastIndexOf('/') + 1);
+      if (root && existing.storageKey.startsWith(`${root}/`)) {
+        const newKey = `${dir}${safeObjectName(renamingTo)}`;
+        if (newKey !== existing.storageKey) {
+          // Refuse rather than rename to "name (2)": the person asked for this
+          // name, and silently getting another is worse than being told.
+          if (await s3ObjectExists(cfg, newKey).catch(() => false)) {
+            return NextResponse.json({ error: `A file called “${renamingTo}” is already stored in this folder.` }, { status: 409 });
+          }
+          try {
+            await s3MoveObject(cfg, existing.storageKey, newKey);
+          } catch (e) {
+            return NextResponse.json({ error: `Could not rename the stored object: ${e.message}` }, { status: 500 });
+          }
+          try {
+            await setFileStorageKey(id, newKey);
+          } catch (e) {
+            return NextResponse.json({
+              error: `The object was renamed but its new key could not be recorded (${e.message}). It is now at ${newKey}.`,
+            }, { status: 500 });
+          }
+        }
+        objectMoved = true;
+      } else {
+        // Another filespace's object, seen from here: rename the row only.
+        objectMoved = false;
+      }
+    }
+  }
 
   try {
     if (movingTo !== null && existing.storage === 's3' && existing.storageKey) {

@@ -13,7 +13,8 @@ import { useConfirm } from '@/app/components/ui/Confirm';
 import { usePrompt } from '@/app/components/ui/Prompt';
 import { useFolderPicker } from '@/app/components/ui/FolderPicker';
 import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
-import { folderNameProblem, parentOf, baseName, isWithin, rebase, mapLimit } from '@/lib/folder-ops';
+import { useContextMenu } from '@/app/components/ui/ContextMenu';
+import { folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit } from '@/lib/folder-ops';
 
 const KINDS = [
   { key: 'image', label: 'Images' },
@@ -63,6 +64,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   const { confirm, confirmElement } = useConfirm();
   const { prompt, promptElement } = usePrompt();
   const { pick, pickerElement } = useFolderPicker();
+  const { openMenu, contextMenuElement } = useContextMenu();
 
   const inputRef = useRef(null);
   const folderInputRef = useRef(null);
@@ -164,6 +166,16 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     () => (hasAnyFacet(facets) ? files.filter((f) => fileMatchesFacets(f, facets, schema)) : files),
     [files, facets, schema]
   );
+
+  // The open folder's own subfolders, shown as tiles above its files so a
+  // folder can be opened, dropped on and right-clicked from the main pane,
+  // not only from the tree. Hidden while searching or filtering: results are
+  // a flat list across folders.
+  const showTiles = !query && !kinds.length && !hasAnyFacet(facets);
+  const subfolders = useMemo(() => {
+    const paths = new Set(folders.map((f) => f.folder));
+    return folders.filter((f) => (paths.has(f.parent) ? f.parent : '') === folder);
+  }, [folders, folder]);
 
   const toggleFacet = (key, value) => {
     setFacets((prev) => {
@@ -283,13 +295,17 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     filesFromDrop(e.dataTransfer).then(enqueue, (err) => toast.error(`Could not read the dropped files: ${err.message}`));
   };
 
-  const trashSelected = async () => {
-    if (!selected.size) return;
-    const n = selected.size;
+  const trashSelected = () => removeFiles([...selected]);
+
+  // Remove files by id: the selection, or one file from its context menu.
+  const removeFiles = async (ids) => {
+    if (!ids.length) return;
+    const n = ids.length;
+    const one = n === 1 ? files.find((f) => f.id === ids[0]) : null;
     const ok = await confirm({
       title: flags.trash
-        ? `Remove ${n} file${n === 1 ? '' : 's'} from the library?`
-        : `Permanently delete ${n} file${n === 1 ? '' : 's'}?`,
+        ? `Remove ${one ? `“${one.name}”` : `${n} files`} from the library?`
+        : `Permanently delete ${one ? `“${one.name}”` : `${n} files`}?`,
       body: flags.trash
         ? 'The row is hidden and the object is kept, so an admin can restore it from the database. There is no trash screen.'
         : 'This cannot be undone.',
@@ -297,9 +313,9 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     });
     if (!ok) return;
     // The server decides trash-vs-purge from its own flag state.
-    const results = await Promise.all([...selected].map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' })));
+    const results = await Promise.all(ids.map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' })));
     const failed = results.filter((r) => !r.ok).length;
-    setSelected(new Set());
+    setSelected((s) => { const next = new Set(s); ids.forEach((id) => next.delete(id)); return next; });
     load();
     loadFolders();
     if (failed) toast.error(`${failed} of ${n} could not be removed.`);
@@ -314,10 +330,10 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   const fsBody = filespaceId || undefined;
   const fsQuery = filespaceId ? `&filespace=${encodeURIComponent(filespaceId)}` : '';
 
-  const newFolder = async () => {
+  const newFolder = async (parent = folder) => {
     const created = await prompt({
       title: 'New folder',
-      label: folder ? `Name (inside ${folder})` : 'Name',
+      label: parent ? `Name (inside ${parent})` : 'Name',
       placeholder: 'Untitled folder',
       confirmLabel: 'Create',
       validate: folderNameProblem,
@@ -325,14 +341,14 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
         const r = await fetch('/api/files/folders', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ name: joinFolder(folder, name), filespaceId: fsBody }),
+          body: JSON.stringify({ name: joinFolder(parent, name), filespaceId: fsBody }),
         });
         return r.ok ? null : (await r.json().catch(() => ({}))).error || `Could not create the folder (HTTP ${r.status}).`;
       },
     });
     if (created == null) return;
     await loadFolders();
-    setFolder(joinFolder(folder, created));
+    setFolder(joinFolder(parent, created));
     toast.success(`Folder “${created}” created.`);
   };
 
@@ -467,11 +483,56 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     else toast.success(`Moved ${n} file${n === 1 ? '' : 's'} to ${where}.`);
   };
 
-  const moveSelectedUI = async () => {
-    const n = selected.size;
+  const moveSelectedUI = () => moveFilesUI([...selected]);
+
+  const moveFilesUI = async (ids) => {
+    const n = ids.length;
     if (!n) return;
-    const dest = await pick({ title: `Move ${n} file${n === 1 ? '' : 's'}`, folders, current: folder || '' });
-    if (dest != null) await moveFiles([...selected], dest);
+    const one = n === 1 ? files.find((f) => f.id === ids[0]) : null;
+    const dest = await pick({ title: one ? `Move “${one.name}”` : `Move ${n} files`, folders, current: one ? one.folder || '' : folder || '' });
+    if (dest != null) await moveFiles(ids, dest);
+  };
+
+  // Renames the stored object too when it can (PATCH moves the key), so a
+  // mounted drive shows the same name as the web.
+  const renameFileUI = async (f) => {
+    let saved = null;
+    const name = await prompt({
+      title: 'Rename file',
+      label: 'Name',
+      value: f.name,
+      selectStem: true,
+      confirmLabel: 'Rename',
+      validate: fileNameProblem,
+      submit: async (next) => {
+        if (next === f.name) return null;
+        const r = await fetch(`/api/files/${f.id}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name: next, filespaceId: fsBody }),
+        });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) return body.error === 'No access' ? 'You can view this file but not rename it.' : body.error || `Could not rename the file (HTTP ${r.status}).`;
+        saved = body;
+        return null;
+      },
+    });
+    if (name == null || !saved) return;
+    // Keep the signed URLs the grid already has; the PATCH row is unsigned.
+    setFiles((prev) => prev.map((x) => (x.id === f.id ? { ...x, name: saved.file?.name || name, storageKey: saved.file?.storageKey ?? x.storageKey } : x)));
+    if (saved.objectMoved === false) toast.error(`Renamed to “${name}” here; the stored file keeps its old name. Open its filespace to rename it there too.`);
+    else toast.success(`Renamed to “${name}”.`);
+  };
+
+  // Same-origin, so the route's redirect to a signed attachment URL saves the
+  // file instead of opening it.
+  const downloadFile = (f) => {
+    const a = document.createElement('a');
+    a.href = `/api/files/${f.id}/download`;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   };
 
   // A card drag carries the whole selection when the card is part of it.
@@ -497,6 +558,96 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     } else if (types.includes('Files') && dt.files?.length) {
       filesFromDrop(dt).then((entries) => enqueue(entries, target), (err) => toast.error(`Could not read the dropped files: ${err.message}`));
     }
+  };
+
+  // ── Context menus ─────────────────────────────────────────────────────────
+  // One handler for the whole page: the target is found from data attributes
+  // (data-file-id on a card, data-folder on a folder), so the grid, the
+  // folder tiles and the tree need no menu plumbing of their own. Inputs and
+  // links keep the browser's menu, as does anything outside the file area.
+  const selectAll = () => setSelected(new Set(visible.map((f) => f.id)));
+
+  const fileMenu = (f) => {
+    const many = selected.has(f.id) && selected.size > 1 ? [...selected] : null;
+    if (many) {
+      return [
+        { heading: `${many.length} files selected` },
+        canWrite && { label: `Move ${many.length} files…`, onSelect: () => moveFilesUI(many) },
+        { label: 'Clear selection', onSelect: () => setSelected(new Set()) },
+        canWrite && '-',
+        canWrite && { label: `Delete ${many.length} files…`, danger: true, onSelect: () => removeFiles(many) },
+      ];
+    }
+    return [
+      { heading: f.name },
+      { label: 'Open', hint: 'Enter', onSelect: () => openFile(f) },
+      { label: 'Download', onSelect: () => downloadFile(f) },
+      canWrite && '-',
+      canWrite && { label: 'Rename…', onSelect: () => renameFileUI(f) },
+      canWrite && { label: 'Move…', onSelect: () => moveFilesUI([f.id]) },
+      { label: selected.has(f.id) ? 'Deselect' : 'Select', hint: 'Space', onSelect: () => toggleSelect(f) },
+      canWrite && '-',
+      canWrite && { label: 'Delete…', danger: true, onSelect: () => removeFiles([f.id]) },
+    ];
+  };
+
+  const folderMenu = (path) => [
+    { heading: baseName(path) },
+    { label: 'Open', onSelect: () => setFolder(path) },
+    canWrite && '-',
+    canWrite && { label: 'New folder inside…', onSelect: () => newFolder(path) },
+    canWrite && { label: 'Rename…', onSelect: () => renameFolderUI(path) },
+    canWrite && { label: 'Move…', onSelect: () => moveFolderUI(path) },
+    canWrite && '-',
+    canWrite && { label: 'Delete folder…', danger: true, onSelect: () => deleteFolderUI(path) },
+  ];
+
+  const blankMenu = (at = folder) => [
+    { heading: at || 'All files' },
+    canWrite && { label: 'New folder…', onSelect: () => newFolder(at) },
+    canWrite && { label: 'Upload files…', onSelect: () => inputRef.current?.click() },
+    canWrite && { label: 'Upload folder…', onSelect: () => folderInputRef.current?.click() },
+    canWrite && '-',
+    { label: 'Select all', disabled: !visible.length, onSelect: selectAll },
+    selected.size > 0 && { label: 'Clear selection', onSelect: () => setSelected(new Set()) },
+    { label: 'Refresh', onSelect: () => { load(); loadFolders(); } },
+  ];
+
+  const menuFor = (target) => {
+    if (target?.closest?.('input, textarea, select, [contenteditable], a[href], .files-toolbar, .ctx-menu, dialog')) return null;
+    const card = target?.closest?.('[data-file-id]');
+    if (card) {
+      const f = files.find((x) => x.id === card.dataset.fileId);
+      return f ? { el: card, items: fileMenu(f) } : null;
+    }
+    const dir = target?.closest?.('[data-folder]');
+    if (dir) {
+      const path = dir.dataset.folder;
+      return { el: dir, items: path ? folderMenu(path) : blankMenu('') };
+    }
+    const pane = target?.closest?.('.files-pane');
+    return pane ? { el: pane, items: blankMenu() } : null;
+  };
+
+  // The menu key and Shift+F10 also fire a contextmenu event in most
+  // browsers; opening from keydown and ignoring the echo keeps it to one.
+  const keyOpened = useRef(0);
+  const onContextMenu = (e) => {
+    if (Date.now() - keyOpened.current < 400) { e.preventDefault(); return; }
+    const m = menuFor(e.target);
+    if (!m) return;
+    e.preventDefault();
+    // A keyboard-generated event carries no pointer position.
+    if (!e.clientX && !e.clientY) openMenu({ anchor: m.el, returnFocus: document.activeElement }, m.items);
+    else openMenu({ x: e.clientX, y: e.clientY }, m.items);
+  };
+  const onMenuKey = (e) => {
+    if (!(e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) return;
+    const m = menuFor(e.target);
+    if (!m) return;
+    e.preventDefault();
+    keyOpened.current = Date.now();
+    openMenu({ anchor: m.el, returnFocus: e.target }, m.items);
   };
 
   // Files from before thumbnails were made at upload get one when their tile
@@ -529,6 +680,8 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
+      onContextMenu={onContextMenu}
+      onKeyDown={onMenuKey}
     >
       <div className="row files-head" style={{ marginBottom: 20 }}>
         <h1 className="files-title" style={{ fontSize: 24, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{folder || 'All files'}</h1>
@@ -570,7 +723,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
               hidden
               onChange={(e) => { enqueue(filesFromInput(e.target.files)); e.target.value = ''; }}
             />
-            <button className="btn" onClick={newFolder}>New folder</button>
+            <button className="btn" onClick={() => newFolder()}>New folder</button>
             <button className="btn" onClick={() => folderInputRef.current?.click()}>Upload folder</button>
             <button className="btn btn-primary" onClick={() => inputRef.current?.click()}>Upload</button>
           </>
@@ -635,7 +788,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
               <Section title="Folders">
                 <div className="folder-list edge-scroll">
                   <FolderDrop target="" enabled={canWrite} onDrop={onTreeDrop}>
-                    <FolderLink active={!folder} onClick={() => setFolder('')}>All files</FolderLink>
+                    <FolderLink active={!folder} onClick={() => setFolder('')} path="">All files</FolderLink>
                   </FolderDrop>
                   <FolderTree
                     folders={folders}
@@ -672,7 +825,15 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
             </div>
           </aside>
 
-          <section>
+          <section className="files-pane">
+            {showTiles && subfolders.length > 0 && (
+              <FolderTiles
+                folders={subfolders}
+                onOpen={setFolder}
+                canWrite={canWrite}
+                onDrop={onTreeDrop}
+              />
+            )}
             {loading ? (
               <div className="empty">Loading…</div>
             ) : (
@@ -690,7 +851,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
                   if (e === 'soon') return <span className="tag tag-warning">Expiring</span>;
                   return null;
                 }}
-                emptyState={(
+                emptyState={showTiles && subfolders.length > 0 && files.length === 0 ? null : (
                   <div className="empty">
                     {files.length === 0
                       ? canWrite ? 'Nothing here yet. Drop files anywhere on this page to upload.' : 'Nothing here yet.'
@@ -739,6 +900,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
       {confirmElement}
       {promptElement}
       {pickerElement}
+      {contextMenuElement}
     </main>
   );
 }
@@ -754,10 +916,11 @@ function Section({ title, children }) {
   );
 }
 
-function FolderLink({ active, onClick, children, draggable = false, onDragStart }) {
+function FolderLink({ active, onClick, children, draggable = false, onDragStart, path }) {
   return (
     <button
       onClick={onClick}
+      data-folder={path}
       className={`small folder-link${active ? ' active' : ''}`}
       aria-current={active ? 'true' : undefined}
       draggable={draggable}
@@ -765,6 +928,52 @@ function FolderLink({ active, onClick, children, draggable = false, onDragStart 
     >
       {children}
     </button>
+  );
+}
+
+// Past this many subfolders the tree is the better way in; the tiles are not
+// virtualized.
+const MAX_TILES = 300;
+
+/**
+ * The open folder's subfolders as tiles above its files. Click opens; each is
+ * a drop target for moves and uploads, draggable onto another folder, and
+ * carries data-folder so the page's context menu finds it.
+ */
+function FolderTiles({ folders, onOpen, canWrite, onDrop }) {
+  const shown = folders.slice(0, MAX_TILES);
+  return (
+    <div className="folder-tiles" role="list" aria-label="Folders">
+      {shown.map((f) => (
+        <FolderDrop key={f.folder} target={f.folder} enabled={canWrite} onDrop={onDrop} className="folder-tile-wrap">
+          <button
+            type="button"
+            role="listitem"
+            className="folder-tile"
+            data-folder={f.folder}
+            title={f.folder}
+            onClick={() => onOpen(f.folder)}
+            draggable={canWrite}
+            onDragStart={canWrite ? (e) => {
+              e.dataTransfer.setData(DRAG_FOLDER, f.folder);
+              e.dataTransfer.setData('text/plain', f.folder);
+              e.dataTransfer.effectAllowed = 'move';
+            } : undefined}
+          >
+            <svg className="folder-tile-icon" viewBox="0 0 24 24" width="20" height="20" aria-hidden>
+              <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.3l2 2h8.7A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+            </svg>
+            <span className="folder-tile-name truncate">{f.name}</span>
+            {f.count != null && <span className="small muted">{f.count}</span>}
+          </button>
+        </FolderDrop>
+      ))}
+      {folders.length > shown.length && (
+        <p className="small muted" style={{ margin: 0, alignSelf: 'center' }}>
+          and {folders.length - shown.length} more in the sidebar
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -918,6 +1127,7 @@ function FolderTree({ folders, selected, onSelect, canWrite, onDrop, storageKey 
           <span className="folder-toggle" aria-hidden />
         )}
         <FolderLink
+          path={f.folder}
           active={selected === f.folder}
           onClick={() => onSelect(f.folder)}
           draggable={canWrite}
