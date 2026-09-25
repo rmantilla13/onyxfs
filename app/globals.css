@@ -277,6 +277,65 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 .menu-item.danger { color: var(--danger); }
 .menu-sep { height: 1px; margin: var(--s1) 0; background: var(--line); }
 
+/* ── Upload tray ────────────────────────────────────────────────────────── */
+
+.upload-panel {
+  position: fixed;
+  z-index: var(--z-menu);
+  left: var(--s5); bottom: var(--s5);
+  width: min(380px, calc(100vw - var(--s5) * 2));
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+  animation: upload-in var(--dur-2) var(--ease);
+}
+.upload-head { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s4) var(--s2); }
+.upload-list { list-style: none; margin: 0; padding: var(--s1) 0; max-height: 320px; overflow-y: auto; border-top: 1px solid var(--line); }
+.upload-row { display: grid; gap: 4px; padding: var(--s2) var(--s4); transition: background-color var(--dur-2) var(--ease); }
+.upload-row.is-error { background: color-mix(in srgb, var(--danger) 6%, transparent); }
+.upload-row.is-canceled, .upload-row.is-queued { opacity: 0.7; }
+.upload-error { color: var(--danger); }
+.upload-check { width: 14px; flex: 0 0 14px; color: var(--accent); text-align: center; }
+.upload-row.is-done .upload-check { animation: upload-pop var(--dur-2) var(--ease); }
+.upload-action { flex: 0 0 auto; border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font: inherit; }
+.upload-action:hover { color: var(--ink); }
+
+.upbar { position: relative; height: 3px; overflow: hidden; background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.upload-row .upbar { border-radius: var(--radius-pill); }
+.upbar-fill {
+  position: absolute; inset: 0;
+  transform-origin: left center;
+  background: var(--accent);
+  transition: transform 240ms linear, background-color var(--dur-2) var(--ease);
+}
+/* A slow sheen while bytes are moving, so a large file that creeps a percent
+   at a time still visibly works. */
+.upbar-uploading .upbar-fill {
+  background: linear-gradient(90deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 55%, var(--paper)) 50%, var(--accent) 100%);
+  background-size: 200% 100%;
+  animation: upload-sheen 1.6s linear infinite;
+}
+.upbar-error .upbar-fill { background: var(--danger); }
+.upbar-done .upbar-fill { background: var(--accent-deep); }
+
+@keyframes upload-in { from { opacity: 0; transform: translateY(var(--s2)); } to { opacity: 1; transform: none; } }
+@keyframes upload-pop { 0% { transform: scale(0.4); opacity: 0; } 70% { transform: scale(1.2); } 100% { transform: none; opacity: 1; } }
+@keyframes upload-sheen { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+/* Shown while files are dragged over the library. */
+.drop-overlay {
+  position: fixed; inset: var(--s3);
+  z-index: var(--z-dialog);
+  display: grid; place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--paper) 82%, transparent);
+  pointer-events: none;
+  animation: upload-in var(--dur-1) var(--ease);
+}
+
 /* ── Toasts ─────────────────────────────────────────────────────────────── */
 
 .toast-stack {
@@ -446,6 +505,7 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   .dialog-foot { padding: var(--s3) var(--s4) var(--s4); }
 
   .toast-stack { left: var(--s4); right: var(--s4); bottom: calc(var(--s4) + env(safe-area-inset-bottom)); max-width: none; }
+  .upload-panel { left: var(--s3); right: var(--s3); width: auto; bottom: calc(var(--s3) + env(safe-area-inset-bottom)); }
 
   .files-selbar {
     display: flex;
