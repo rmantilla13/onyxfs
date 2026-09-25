@@ -207,7 +207,9 @@ const warmers = [
   ['settings', () => db.listSettings('')],
   ['files + acl', () => db.listFilesForUser({ limit: 1 }, { isAdmin: true })],
   ['folders', () => db.listFileFolders()],
-  ['tombstones', () => db.listFileChanges({ cursor: 0, limit: 1 })],
+  // As an admin: the feed now requires a principal, and an admin's reads
+  // every table the delta touches (files, tombstones, file_acl).
+  ['tombstones', () => db.listFileChanges({ cursor: 0, limit: 1, principal: { isAdmin: true } })],
   ['uploads', () => db.listUploads('doctor@example.com')],
   ['shares', () => db.getShareByToken('__doctor__')],
   ['filespaces', () => db.listFilespaces()],
