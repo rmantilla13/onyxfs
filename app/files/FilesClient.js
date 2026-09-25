@@ -379,11 +379,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
               <Section title="Folders">
                 <div className="folder-list edge-scroll">
                   <FolderLink active={!folder} onClick={() => setFolder('')}>All files</FolderLink>
-                  {folders.map((f) => (
-                    <FolderLink key={f.name || f} active={folder === (f.name || f)} onClick={() => setFolder(f.name || f)}>
-                      {f.name || f} {f.count != null && <span className="muted">{f.count}</span>}
-                    </FolderLink>
-                  ))}
+                  <FolderTree folders={folders} selected={folder} onSelect={setFolder} />
                 </div>
               </Section>
             </div>
@@ -479,4 +475,75 @@ function FolderLink({ active, onClick, children }) {
       {children}
     </button>
   );
+}
+
+/**
+ * The sidebar's folders as a tree. The API sends every folder path, ancestors
+ * included, with its parent. Top-level folders show; a folder's children show
+ * once it is opened. Selecting a folder opens it and everything above it, so
+ * the row just chosen is on screen rather than inside a collapsed branch.
+ */
+function FolderTree({ folders, selected, onSelect }) {
+  const [open, setOpen] = useState(() => new Set());
+
+  const children = useMemo(() => {
+    const paths = new Set(folders.map((f) => f.folder));
+    const byParent = new Map();
+    for (const f of folders) {
+      // A folder shared on its own arrives without its parent. Show it at the
+      // top level rather than under a branch that never renders.
+      const parent = paths.has(f.parent) ? f.parent : '';
+      if (!byParent.has(parent)) byParent.set(parent, []);
+      byParent.get(parent).push(f);
+    }
+    return byParent;
+  }, [folders]);
+
+  useEffect(() => {
+    if (!selected) return;
+    setOpen((prev) => {
+      const next = new Set(prev);
+      for (let p = selected; p; p = p.slice(0, Math.max(p.lastIndexOf('/'), 0))) next.add(p);
+      return next;
+    });
+  }, [selected]);
+
+  const toggle = (path) => setOpen((prev) => {
+    const next = new Set(prev);
+    if (next.has(path)) next.delete(path);
+    else next.add(path);
+    return next;
+  });
+
+  const rows = [];
+  const walk = (parent, depth) => {
+    for (const f of children.get(parent) || []) {
+      rows.push({ f, depth });
+      if (open.has(f.folder)) walk(f.folder, depth + 1);
+    }
+  };
+  walk('', 0);
+
+  return rows.map(({ f, depth }) => {
+    const isOpen = open.has(f.folder);
+    return (
+      <div key={f.folder} className="folder-row" style={{ '--depth': depth }}>
+        {children.has(f.folder) ? (
+          <button
+            className="folder-toggle"
+            onClick={() => toggle(f.folder)}
+            aria-expanded={isOpen}
+            aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${f.folder}`}
+          >
+            <span aria-hidden>{isOpen ? '▾' : '▸'}</span>
+          </button>
+        ) : (
+          <span className="folder-toggle" aria-hidden />
+        )}
+        <FolderLink active={selected === f.folder} onClick={() => onSelect(f.folder)}>
+          {f.name} {f.count != null && <span className="muted">{f.count}</span>}
+        </FolderLink>
+      </div>
+    );
+  });
 }

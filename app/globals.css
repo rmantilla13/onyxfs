@@ -329,6 +329,17 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   cursor: pointer;
 }
 .folder-link.active { background: color-mix(in srgb, var(--ink) 6%, transparent); font-weight: 600; }
+.folder-row { display: flex; align-items: center; padding-left: calc(var(--depth, 0) * var(--s3)); }
+.folder-toggle {
+  flex: 0 0 16px;
+  align-self: stretch;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  cursor: pointer;
+}
 .kind-row { display: flex; align-items: center; gap: var(--s2); min-width: 0; flex: 1 1 auto; }
 .kind-row .kind-strip { min-width: 0; }
 .only-mobile { display: none; }
@@ -396,6 +407,8 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
     font-weight: 400;
   }
   .folder-list .folder-link.active { background: var(--ink); color: var(--paper); border-color: var(--ink); font-weight: 500; }
+  .folder-list .folder-row { flex: 0 0 auto; padding-left: 0; }
+  .folder-list span.folder-toggle { display: none; }
   .folder-list .folder-link .muted { color: inherit; opacity: 0.6; }
   .kind-row { flex: 1 1 100%; }
   .kind-row .only-mobile { flex: 0 0 auto; }
