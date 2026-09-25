@@ -1,5 +1,6 @@
 import './globals.css';
-import { loadBrand, brandCssVars } from '@/lib/brand-config';
+import { loadBrand, brandCssVars, brandDarkCssVars, darkPalette } from '@/lib/brand-config';
+import { THEME_SCRIPT } from '@/lib/theme';
 import { ToastProvider } from '@/app/components/ui/Toast';
 
 export const dynamic = 'force-dynamic';
@@ -19,7 +20,8 @@ export async function generateMetadata() {
  * Viewport lives beside metadata rather than in it (Next 14 splits them).
  * viewportFit: cover lets the page paint under the iPhone's home indicator;
  * themeColor tints Safari's chrome to the brand's paper so the sign-in card
- * and the browser bar read as one surface.
+ * and the browser bar read as one surface. It follows the OS scheme, not the
+ * in-app toggle: a meta tag cannot see data-theme.
  */
 export async function generateViewport() {
   const brand = await loadBrand();
@@ -27,7 +29,10 @@ export async function generateViewport() {
     width: 'device-width',
     initialScale: 1,
     viewportFit: 'cover',
-    themeColor: brand.visual.palette.paper,
+    themeColor: [
+      { media: '(prefers-color-scheme: light)', color: brand.visual.palette.paper },
+      { media: '(prefers-color-scheme: dark)', color: darkPalette(brand.visual.palette).paper },
+    ],
   };
 }
 
@@ -35,8 +40,13 @@ export default async function RootLayout({ children }) {
   const brand = await loadBrand();
   const fonts = [brand.visual.fonts.display.url, brand.visual.fonts.body.url].filter(Boolean);
   return (
-    <html lang="en">
+    // suppressHydrationWarning: THEME_SCRIPT sets data-theme on this element
+    // before React hydrates, so the server's <html> never matches exactly.
+    // It only silences this element's own attributes, not its children.
+    <html lang="en" suppressHydrationWarning>
       <head>
+        {/* First in <head>, so data-theme is set before anything paints. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
         {fonts.map((href) => (
           <link key={href} rel="stylesheet" href={href} />
         ))}
@@ -50,7 +60,15 @@ export default async function RootLayout({ children }) {
             therefore invalid CSS, and the client, which does not escape,
             produced different text and failed hydration for the whole root.
             The value is sanitized in brandCssVars. */}
-        <style dangerouslySetInnerHTML={{ __html: `:root,::backdrop{${brandCssVars(brand)}}` }} />
+        <style
+          dangerouslySetInnerHTML={{
+            __html:
+              `:root,::backdrop{${brandCssVars(brand)}}` +
+              // The dark colours, derived from the same brand. The attribute
+              // selector outranks :root, so source order does not matter.
+              `:root[data-theme='dark'],[data-theme='dark'] ::backdrop{${brandDarkCssVars(brand)}}`,
+          }}
+        />
       </head>
       <body>
         {/* One provider for the whole app. children stays a server component

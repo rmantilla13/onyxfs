@@ -90,6 +90,15 @@ which layers an admin-edited config over the defaults in `lib/brand.js`. The
 root layout emits the result as CSS custom properties and `globals.css` reads
 only those — so renaming and recoloring Onyx is a settings write, not a deploy.
 
+Dark mode comes from the same palette. `darkPalette()` turns the brand's ink
+into the page and its paper into the text, then lifts every text colour until
+it clears WCAG AA; the layout emits that under `[data-theme='dark']`. An inline
+script in `<head>` (`lib/theme.js`) sets `data-theme` before first paint from
+the Light / Dark / System choice in the nav, which lives in `localStorage` and
+defaults to the OS. A component styled only from the custom properties
+(`--paper`, `--surface`, `--line`, `--ink`, `--muted`, `--accent`, `--danger`…)
+needs nothing else to support it.
+
 The one exception is the desktop URL scheme. It is compiled into the app bundle
 and registered with the OS at install time, so `/admin` shows it read-only.
 

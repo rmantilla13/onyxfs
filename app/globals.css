@@ -8,9 +8,20 @@
  * Everything below in :root is the part the brand does NOT decide — spacing,
  * type sizes, elevation, stacking and motion — which used to be a magic number
  * at every call site.
+ *
+ * Dark mode is the same colour properties with different values: the root
+ * layout also emits a [data-theme='dark'] block derived from the brand, and
+ * an inline script sets data-theme before first paint (lib/theme.js). So a
+ * rule that reads var(--paper), var(--surface), var(--line), var(--ink),
+ * var(--muted), var(--accent), var(--danger)… is themed for free, and a new
+ * component should need no dark-mode CSS of its own. What does need it —
+ * anything built on the assumption that ink is dark — is in the block below.
  */
 
 :root {
+  /* Native controls, form fields and scrollbars follow the scheme. */
+  color-scheme: light;
+
   /* Spacing. Six steps is enough for this app; a seventh always turns out to
      be a layout that wanted a different structure. */
   --s1: 4px;
@@ -49,6 +60,15 @@
   --dur-1: 120ms;
   --dur-2: 200ms;
   --ease: cubic-bezier(0.2, 0, 0.13, 1);
+}
+
+/* In the dark scheme ink is the light colour, so anything that used it as
+   "the dark one" — a shadow, a scrim over the page or over a thumbnail —
+   takes paper, which is now the dark one, instead. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --shadow-1: 0 1px 2px color-mix(in srgb, var(--paper) 60%, transparent);
+  --shadow-2: 0 8px 30px color-mix(in srgb, var(--paper) 80%, transparent);
 }
 
 /* Motion is decoration here — nothing depends on an animation finishing, so
@@ -233,6 +253,7 @@ dialog.dialog {
    unset rather than falling back to an earlier declaration — so without that
    the scrim is simply invisible and the modal floats on the live page. */
 dialog.dialog::backdrop { background: color-mix(in srgb, var(--ink) 45%, transparent); }
+[data-theme='dark'] dialog.dialog::backdrop { background: color-mix(in srgb, var(--paper) 70%, transparent); }
 dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 
 .dialog-head {
@@ -387,6 +408,8 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+/* Sits on a thumbnail, so it stays a dark chip in either scheme. */
+[data-theme='dark'] .filecard-badge { background: color-mix(in srgb, var(--paper) 72%, transparent); color: var(--ink); }
 .folder-link {
   display: flex;
   width: 100%;

@@ -39,7 +39,8 @@ reference case: it reads the `trash` flag itself rather than taking a parameter.
 
 **Never render `BRAND` directly.** Go through `resolveBrand()` / `loadBrand()`,
 and style from the CSS custom properties the root layout emits. Hardcoding a
-colour or the name "Onyx" in a component breaks the white-label layer.
+colour or the name "Onyx" in a component breaks the white-label layer — and
+dark mode, which swaps those same properties under `[data-theme='dark']`.
 
 **Roles subtract, never add.** `effectiveFlags()` narrows the global flag map;
 a role must not be able to enable something the platform has off. Admin access
