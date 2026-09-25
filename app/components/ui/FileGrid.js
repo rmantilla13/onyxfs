@@ -30,6 +30,7 @@ export default function FileGrid({
   labelFor,
   emptyState,
   label = 'Files',
+  onMissingThumb,
 }) {
   const ref = useRef(null);
   const cells = useRef([]);
@@ -107,6 +108,7 @@ export default function FileGrid({
           onKeyDown={(e) => onKeyDown(e, i)}
           onSelect={() => { setActive(i); onSelect?.(f); }}
           onOpen={() => onOpen?.(f)}
+          onMissingThumb={onMissingThumb}
         />
       ))}
     </div>

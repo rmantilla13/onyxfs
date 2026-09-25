@@ -317,6 +317,17 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 .files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--s4); }
 .filecard { display: block; overflow: hidden; cursor: pointer; text-align: left; }
 .filecard:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.filecard-badge {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ink) 72%, transparent);
+  color: var(--paper);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
 .folder-link {
   display: flex;
   width: 100%;
