@@ -83,7 +83,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
       const data = await r.json();
       if (token !== requestRef.current) return; // superseded
       setFiles((prev) => (after ? [...prev, ...(data.files || [])] : data.files || []));
-      setFolders(data.folders || []);
+      if (!after) setFolders(data.folders || []);
       setCursor(data.cursor || null);
     } catch (e) {
       if (token === requestRef.current) setError(e.message);

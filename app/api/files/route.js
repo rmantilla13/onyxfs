@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { listFilesForUser, createFile, listFileFoldersForUser, listAllTags, buildPrincipal, getFilespaceForUser } from '@/lib/db';
+import { listFilesForUser, createFile, listFileFoldersForUser, buildPrincipal, getFilespaceForUser } from '@/lib/db';
 import { presignFileUrls } from '@/lib/storage';
 import { encodeCursor, decodeCursor } from '@/lib/file-query';
 
@@ -12,7 +12,12 @@ export const dynamic = 'force-dynamic';
 // invocation — which is what the gateway timeouts on this route looked like.
 export const maxDuration = 30;
 
-/** GET /api/files?folder=&folderPrefix=&q=&kind=&tags=&tagMode=&sort= → { files, folders, tags } */
+/**
+ * GET /api/files?folder=&folderPrefix=&q=&kind=&tags=&tagMode=&sort=&cursor= → { files, cursor, folders }
+ *
+ * `folders` (the sidebar tree) comes with the first page only. It does not
+ * depend on the page, and building it counts every file in the library.
+ */
 export async function GET(req) {
   const session = await auth();
   if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
@@ -52,11 +57,8 @@ export async function GET(req) {
   // every row in the library was signed on every request.
   const { files, cursor, total } = await listFilesForUser(opts, principal);
   const signed = await presignFileUrls(files);
-  const [folders, tags] = await Promise.all([
-    listFileFoldersForUser(principal, { storagePrefix, filespace: storagePrefix }),
-    listAllTags(principal),
-  ]);
-  return NextResponse.json({ files: signed, cursor: encodeCursor(cursor), total, folders, tags });
+  const folders = opts.cursor ? undefined : await listFileFoldersForUser(principal, { storagePrefix, filespace: storagePrefix });
+  return NextResponse.json({ files: signed, cursor: encodeCursor(cursor), total, folders });
 }
 
 /** POST /api/files — record an uploaded asset. Body: { name, url, mime, size, kind, folder, storage, storageKey, tags } */
