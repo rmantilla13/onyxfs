@@ -3,16 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
-import { uploadFileMultipart, putToBucket } from '@/lib/multipart-client';
-import { thumbnailForUpload, createThumbnailBackfill } from '@/lib/thumbnail-client';
+import { createThumbnailBackfill } from '@/lib/thumbnail-client';
+import { createUploadQueue, uploadOne, filesFromDrop, filesFromInput, joinFolder } from '@/lib/upload-client';
 import FileGrid from '@/app/components/ui/FileGrid';
+import UploadPanel from '@/app/components/ui/UploadPanel';
 import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
-
-// Above this, a single presigned PUT is a bad bet: S3 refuses past 5 GB, and
-// well before that a dropped connection costs the whole transfer. Multipart
-// parts are independently retryable and the upload survives a reload.
-const MULTIPART_THRESHOLD = 32 * 1024 * 1024;
 
 const KINDS = [
   { key: 'image', label: 'Images' },
@@ -47,7 +43,8 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   const [sort, setSort] = useState('new');
   const [facets, setFacets] = useState({});
   const [selected, setSelected] = useState(new Set());
-  const [uploads, setUploads] = useState([]);
+  const [uploadSnap, setUploadSnap] = useState(null);
+  const [dragging, setDragging] = useState(false);
   // Phone only: facets live behind a toggle. On desktop the sidebar is always
   // there and this is ignored by the stylesheet.
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -56,6 +53,8 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   const { confirm, confirmElement } = useConfirm();
 
   const inputRef = useRef(null);
+  const folderInputRef = useRef(null);
+  const dragDepth = useRef(0);
   const sentinelRef = useRef(null);
   // Guards against a stale response from a superseded filter overwriting the
   // results of a newer one — without this, fast typing can leave the grid
@@ -65,11 +64,13 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   /**
    * Fetch one page. `after` is the opaque cursor from the previous page; with
    * no cursor this is a fresh query and replaces the grid rather than
-   * appending to it.
+   * appending to it. `quiet` keeps the grid up while it refetches, for the
+   * refreshes an upload batch triggers as files land.
    */
-  const fetchPage = useCallback(async (after = null) => {
+  const fetchPage = useCallback(async (after = null, quiet = false) => {
     const token = ++requestRef.current;
-    after ? setLoadingMore(true) : setLoading(true);
+    if (after) setLoadingMore(true);
+    else if (!quiet) setLoading(true);
     setError(null);
     try {
       const p = new URLSearchParams();
@@ -94,6 +95,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   }, [folder, query, kinds, sort, filespaceId]);
 
   const load = useCallback(() => fetchPage(null), [fetchPage]);
+  const refresh = useCallback(() => fetchPage(null, true), [fetchPage]);
 
   // The folder tree, loaded once per filespace and again only after an upload
   // or a removal changes what is in a folder. It used to ride along with every
@@ -164,131 +166,86 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     setKinds((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
 
   // ── Upload ────────────────────────────────────────────────────────────────
-  // Two paths, chosen by what the server says is configured: a presigned PUT
-  // straight to S3 (the browser never proxies bytes through the app), or a
-  // Vercel Blob client upload. Both then POST the resulting URL back to record
-  // the row — the catalog entry is always written by us, never by the storage.
-  const upload = useCallback(
-    async (fileList) => {
-      const items = [...fileList];
-      if (!items.length) return;
-      setUploads(items.map((f) => ({ name: f.name, pct: 0 })));
-      const setPct = (i, pct) => setUploads((u) => u.map((x, j) => (j === i ? { ...x, pct } : x)));
-      const errors = [];
-
-      // Falling back to Blob when this failed sent every upload down a path
-      // the deployment was not configured for, with an error about Blob.
-      let cfg = null;
-      try {
-        const r = await fetch('/api/files/config');
-        cfg = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(cfg.error || `HTTP ${r.status}`);
-      } catch (e) {
-        const message = `Could not read the storage settings (${e.message}). Nothing was uploaded.`;
-        setUploads((u) => u.map((x) => ({ ...x, error: message })));
-        toast.error(message);
-        return;
-      }
-
-      for (const [i, file] of items.entries()) {
-        // Drawn while the original uploads, and recorded with it, so the tile
-        // has its preview the moment the grid refreshes.
-        const thumb = cfg.mode === 's3' ? thumbnailForUpload(file) : Promise.resolve(null);
-        try {
-          let url;
-          let storage;
-          let storageKey;
-          let name = file.name;
-
-          if (cfg.mode === 's3' && file.size > MULTIPART_THRESHOLD) {
-            const done = await uploadFileMultipart(file, {
-              folder,
-              filespaceId: filespaceId || undefined,
-              onProgress: ({ pct }) => setPct(i, pct),
-            });
-            url = done.publicUrl;
-            storage = 's3';
-            storageKey = done.key;
-            name = done.name || name;
-          } else if (cfg.mode === 's3') {
-            const res = await fetch('/api/files/presign', {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({
-                filename: file.name,
-                contentType: file.type || 'application/octet-stream',
-                folder,
-                filespaceId: filespaceId || undefined,
-              }),
-            });
-            const pre = await res.json().catch(() => ({}));
-            if (!res.ok || pre.error) throw new Error(pre.error || `Could not start the upload (HTTP ${res.status}).`);
-            await putToBucket(pre.putUrl, file, {
-              contentType: file.type || 'application/octet-stream',
-              onProgress: (sent, total) => setPct(i, Math.round((sent / total) * 100)),
-            });
-            url = pre.publicUrl;
-            storage = 's3';
-            storageKey = pre.key;
-            name = pre.name || name;
-          } else {
-            const { upload: blobUpload } = await import('@vercel/blob/client');
-            const blob = await blobUpload(file.name, file, {
-              access: 'public',
-              handleUploadUrl: '/api/files/upload',
-            });
-            url = blob.url;
-            storage = 'blob';
-          }
-
-          // The bytes are in the bucket at this point; a file only exists in
-          // the library once this row is written.
-          const preview = await thumb;
-          const saved = await fetch('/api/files', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              name,
-              url,
-              mime: file.type,
-              size: file.size,
-              folder,
-              storage,
-              storageKey,
-              filespace: filespaceId || undefined,
-              thumbnailKey: preview?.key,
-              media: preview?.media,
-            }),
-          });
-          if (!saved.ok) {
-            const body = await saved.json().catch(() => ({}));
-            throw new Error(`Uploaded, but it could not be added to the library: ${body.error || `HTTP ${saved.status}`}`);
-          }
-          setUploads((u) => u.map((x, j) => (j === i ? { ...x, pct: 100, done: true } : x)));
-        } catch (e) {
-          errors.push(e.message);
-          setUploads((u) => u.map((x, j) => (j === i ? { ...x, error: e.message } : x)));
-        }
-      }
-      // Finished rows clear; failed ones stay until dismissed, with the reason.
-      if (errors.length) {
-        toast.error(items.length === 1 ? errors[0] : `${errors.length} of ${items.length} uploads failed. ${errors[0]}`);
-        setTimeout(() => setUploads((u) => u.filter((x) => x.error)), 1500);
-      } else {
-        toast.success(`${items.length} file${items.length === 1 ? '' : 's'} uploaded.`);
-        setTimeout(() => setUploads([]), 1500);
-      }
-      load();
-      loadFolders();
+  // A queue, a few files at a time (lib/upload-client.js). Each file goes
+  // straight to the bucket with a presigned PUT or a multipart upload, then is
+  // recorded; the grid refreshes as files land and once more when the queue
+  // is empty, along with the folder tree a folder upload may have grown.
+  const live = useRef({});
+  live.current = { filespaceId, refresh, loadFolders, toast };
+  const settled = useRef({ done: 0, error: 0 });
+  const refreshTimer = useRef(null);
+  const [queue] = useState(() => createUploadQueue({
+    run: async (item, opts) => {
+      const row = await uploadOne(item.file, {
+        folder: item.folder,
+        filespaceId: live.current.filespaceId,
+        resumeId: item.resumeId,
+        ...opts,
+      });
+      // New tiles appear while the rest of the batch is still going, a
+      // refresh every second or so rather than one per file.
+      refreshTimer.current ||= setTimeout(() => { refreshTimer.current = null; live.current.refresh(); }, 1200);
+      return row;
     },
-    [folder, filespaceId, load, loadFolders, toast]
-  );
+    onChange: setUploadSnap,
+    onSettled: (snap) => {
+      const { refresh: reload, loadFolders: reloadFolders, toast: t } = live.current;
+      // Counts since the last time the queue went quiet; a retry that fails
+      // again moves nothing.
+      const done = Math.max(0, snap.counts.done - settled.current.done);
+      const failed = Math.max(0, snap.counts.error - settled.current.error);
+      settled.current = { done: snap.counts.done, error: snap.counts.error };
+      if (!done && !failed) return;
+      clearTimeout(refreshTimer.current);
+      refreshTimer.current = null;
+      reload();
+      reloadFolders();
+      if (failed > 0) {
+        const first = snap.items.find((i) => i.status === 'error')?.error;
+        t.error(failed === 1 && !done ? first : `${failed} of ${done + failed} uploads failed. ${first}`);
+      } else {
+        t.success(`${done} file${done === 1 ? '' : 's'} uploaded.`);
+      }
+    },
+  }));
+
+  // Leaving mid-upload loses the rest of the queue; say so.
+  useEffect(() => {
+    if (!uploadSnap?.running) return;
+    const warn = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [uploadSnap?.running]);
+
+  // `entries` are [{ file, dir }]; `dir` is relative to the current folder, so
+  // a dropped folder keeps its structure beneath wherever it was dropped.
+  const enqueue = useCallback((entries) => {
+    if (!entries.length) return;
+    queue.add(entries.map(({ file, dir }) => ({ file, folder: joinFolder(folder, dir) })));
+  }, [queue, folder]);
+
+  const isFileDrag = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+
+  const onDragEnter = (e) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragging(true);
+  };
+  const onDragLeave = (e) => {
+    if (!isFileDrag(e)) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (!dragDepth.current) setDragging(false);
+  };
 
   const onDrop = (e) => {
     e.preventDefault();
+    dragDepth.current = 0;
+    setDragging(false);
     if (!e.dataTransfer?.files?.length) return;
-    if (canWrite) upload(e.dataTransfer.files);
-    else toast.error('Your role can view files here but not upload them.');
+    if (!canWrite) { toast.error('Your role can view files here but not upload them.'); return; }
+    // Taken synchronously: the DataTransfer is emptied once this returns.
+    filesFromDrop(e.dataTransfer).then(enqueue, (err) => toast.error(`Could not read the dropped files: ${err.message}`));
   };
 
   const trashSelected = async () => {
@@ -341,6 +298,8 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
       className={`shell files-main${selected.size ? ' is-selecting' : ''}`}
       style={{ padding: '24px 24px var(--files-pad-b, 64px)' }}
       onDragOver={(e) => e.preventDefault()}
+      onDragEnter={onDragEnter}
+      onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
       <div className="row" style={{ marginBottom: 20 }}>
@@ -361,8 +320,16 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
               type="file"
               multiple
               hidden
-              onChange={(e) => { upload(e.target.files); e.target.value = ''; }}
+              onChange={(e) => { enqueue(filesFromInput(e.target.files)); e.target.value = ''; }}
             />
+            <input
+              ref={folderInputRef}
+              type="file"
+              webkitdirectory=""
+              hidden
+              onChange={(e) => { enqueue(filesFromInput(e.target.files)); e.target.value = ''; }}
+            />
+            <button className="btn" onClick={() => folderInputRef.current?.click()}>Upload folder</button>
             <button className="btn btn-primary" onClick={() => inputRef.current?.click()}>Upload</button>
           </>
         )}
@@ -412,26 +379,6 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
         )}
         </div>
       </div>
-
-      {uploads.length > 0 && (
-        <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-          {uploads.map((u, i) => (
-            <div key={i} className="row small">
-              <span>{u.name}</span>
-              <div className="spacer" />
-              <span className={u.error ? '' : 'muted'} style={u.error ? { color: 'var(--danger)' } : undefined}>
-                {u.error || (u.done ? 'Done' : u.pct ? `${u.pct}%` : 'Uploading…')}
-              </span>
-            </div>
-          ))}
-          {uploads.every((u) => u.error || u.done) && uploads.some((u) => u.error) && (
-            <div className="row" style={{ marginTop: 8 }}>
-              <div className="spacer" />
-              <button className="btn btn-sm" onClick={() => setUploads([])}>Dismiss</button>
-            </div>
-          )}
-        </div>
-      )}
 
       {error && (
         <div className="card" style={{ padding: 16, marginBottom: 16, borderColor: 'var(--danger)' }}>
@@ -518,6 +465,21 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
           <button className="btn btn-danger" onClick={trashSelected}>
             Remove
           </button>
+        </div>
+      )}
+      <UploadPanel
+        snapshot={uploadSnap}
+        onCancel={queue.cancel}
+        onRetry={queue.retry}
+        onRetryFailed={() => uploadSnap?.items.filter((i) => i.status === 'error').forEach((i) => queue.retry(i.id))}
+        onClear={() => { queue.clear(); settled.current = { done: 0, error: 0 }; }}
+      />
+      {dragging && canWrite && (
+        <div className="drop-overlay" aria-hidden>
+          <div className="stack" style={{ textAlign: 'center', gap: 'var(--s1)' }}>
+            <strong>Drop to upload</strong>
+            <span className="small muted">Files and folders go into {folder || 'All files'}</span>
+          </div>
         </div>
       )}
       {confirmElement}
