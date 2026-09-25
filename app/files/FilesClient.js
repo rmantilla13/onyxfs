@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
 import { uploadFileMultipart, putToBucket } from '@/lib/multipart-client';
+import { thumbnailForUpload, createThumbnailBackfill } from '@/lib/thumbnail-client';
 import FileGrid from '@/app/components/ui/FileGrid';
 import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
@@ -175,6 +176,9 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
       }
 
       for (const [i, file] of items.entries()) {
+        // Drawn while the original uploads, and recorded with it, so the tile
+        // has its preview the moment the grid refreshes.
+        const thumb = cfg.mode === 's3' ? thumbnailForUpload(file) : Promise.resolve(null);
         try {
           let url;
           let storage;
@@ -224,6 +228,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
 
           // The bytes are in the bucket at this point; a file only exists in
           // the library once this row is written.
+          const preview = await thumb;
           const saved = await fetch('/api/files', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -236,6 +241,8 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
               storage,
               storageKey,
               filespace: filespaceId || undefined,
+              thumbnailKey: preview?.key,
+              media: preview?.media,
             }),
           });
           if (!saved.ok) {
@@ -289,6 +296,14 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     if (failed) toast.error(`${failed} of ${n} could not be removed.`);
     else toast.success(`${n} file${n === 1 ? '' : 's'} removed.`);
   };
+
+  // Files from before thumbnails were made at upload get one when their tile
+  // is seen by someone who may edit them. See lib/thumbnail-client.js.
+  const requestThumb = useMemo(() => (canWrite
+    ? createThumbnailBackfill((f) => setFiles((prev) => prev.map((x) => (x.id === f.id
+      ? { ...x, thumbnailUrl: f.thumbnailUrl, thumbnailKey: f.thumbnailKey, metadata: f.metadata }
+      : x))))
+    : null), [canWrite]);
 
   const openFile = useCallback((f) => { if (f?.id) router.push(`/files/${f.id}`); }, [router]);
 
@@ -450,6 +465,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
                 selected={selected}
                 onSelect={toggleSelect}
                 onOpen={openFile}
+                onMissingThumb={requestThumb}
                 labelFor={(f) => deriveAuto(f).format || f.kind}
                 badgesFor={(f) => {
                   const e = flags.usageRights ? expiryState(f, schema) : null;

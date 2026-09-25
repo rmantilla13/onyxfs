@@ -1,5 +1,8 @@
 'use client';
 
+import { useState } from 'react';
+import { effectiveKind, drawableKind } from '@/lib/media';
+
 /**
  * The preview pane of the detail view.
  *
@@ -15,6 +18,11 @@
  *
  * A PDF is deliberately not iframed: a cross-origin presigned PDF does not
  * render in iOS Safari, so the fallback is more honest than a blank frame.
+ *
+ * Kind comes from effectiveKind, not the stored column: web uploads were all
+ * recorded as 'other', which hid the player for every uploaded video. A format
+ * the browser cannot draw (TIFF, HEIC, ProRes) says so instead of showing a
+ * broken image or a player that never starts.
  */
 
 // Above this, streaming a master straight from object storage is slow enough
@@ -23,6 +31,8 @@
 const HEAVY_BYTES = 500 * 1024 * 1024;
 
 export default function FilePreview({ file }) {
+  const kind = effectiveKind(file);
+  const [failed, setFailed] = useState(false);
   const box = {
     display: 'grid',
     placeItems: 'center',
@@ -33,15 +43,15 @@ export default function FilePreview({ file }) {
   };
   const fill = { maxWidth: '100%', maxHeight: '70vh', display: 'block' };
 
-  if (file.kind === 'image') {
+  if (kind === 'image' && drawableKind(file) && !failed) {
     return (
       <div style={box}>
-        <img src={file.url} alt={file.name} style={{ ...fill, objectFit: 'contain' }} />
+        <img src={file.url} alt={file.name} style={{ ...fill, objectFit: 'contain' }} onError={() => setFailed(true)} />
       </div>
     );
   }
 
-  if (file.kind === 'video') {
+  if (kind === 'video' && !failed) {
     return (
       <div className="stack" style={{ gap: 'var(--s2)' }}>
         <div style={box}>
@@ -51,6 +61,7 @@ export default function FilePreview({ file }) {
             controls
             playsInline
             preload="metadata"
+            onError={() => setFailed(true)}
             style={fill}
           />
         </div>
@@ -63,7 +74,7 @@ export default function FilePreview({ file }) {
     );
   }
 
-  if (file.kind === 'audio') {
+  if (kind === 'audio') {
     return (
       <div style={{ ...box, minHeight: 120, padding: 'var(--s5)' }}>
         <audio src={file.url} controls preload="metadata" style={{ width: '100%' }} />
@@ -73,7 +84,12 @@ export default function FilePreview({ file }) {
 
   return (
     <div style={box}>
-      <span className="muted mono">{(file.mime || file.kind || 'file').toUpperCase()}</span>
+      <div className="stack" style={{ gap: 'var(--s2)', textAlign: 'center', padding: 'var(--s5)' }}>
+        <span className="muted mono">{(file.mime || kind || 'file').toUpperCase()}</span>
+        {(kind === 'image' || kind === 'video') && (
+          <span className="small muted">This browser cannot preview this format. Download it to view.</span>
+        )}
+      </div>
     </div>
   );
 }

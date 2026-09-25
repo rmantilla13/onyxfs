@@ -3,6 +3,7 @@ import { auth } from '@/auth';
 import { listFilesForUser, createFile, listFileFoldersForUser, buildPrincipal, getFilespaceForUser } from '@/lib/db';
 import { presignFileUrls } from '@/lib/storage';
 import { encodeCursor, decodeCursor } from '@/lib/file-query';
+import { uploadFields } from '@/lib/media';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -61,7 +62,11 @@ export async function GET(req) {
   return NextResponse.json({ files: signed, cursor: encodeCursor(cursor), total, folders });
 }
 
-/** POST /api/files — record an uploaded asset. Body: { name, url, mime, size, kind, folder, storage, storageKey, tags } */
+/**
+ * POST /api/files — record an uploaded asset.
+ * Body: { name, url, mime, size, kind?, folder, storage, storageKey, tags, thumbnailKey?, media? }
+ * `media` is { width, height, duration } read by the browser while it made the thumbnail.
+ */
 export async function POST(req) {
   const session = await auth();
   if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
@@ -69,7 +74,7 @@ export async function POST(req) {
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
   if (!body.url) return NextResponse.json({ error: 'A file URL is required.' }, { status: 400 });
   try {
-    const file = await createFile({ ...body, createdBy: session.user.email });
+    const file = await createFile({ ...body, ...uploadFields(body), createdBy: session.user.email });
     // Presign so the just-uploaded file previews immediately on a private bucket.
     const [signed] = await presignFileUrls([file]);
     return NextResponse.json({ file: signed || file });
