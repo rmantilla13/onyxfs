@@ -20,7 +20,7 @@ import { isTyping, modKey } from '@/lib/keys';
  * `filespaces` comes from the page (listFilespacesForSpace); the palette
  * lists them as drives.
  */
-export default function TopNav({ brandName, logo, email, isAdmin, build, filespaces = [] }) {
+export default function TopNav({ brandName, logo, email, isAdmin, build, filespaces = [], avatarUrl = null }) {
   const [palette, setPalette] = useState(false);
   const [shortcuts, setShortcuts] = useState(false);
   // The modifier is the platform's, which the server cannot know: render ⌘
@@ -57,7 +57,7 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
           <kbd className="topnav-search-kbd">{mod}K</kbd>
         </button>
 
-        <ProfileMenu email={email} isAdmin={isAdmin} build={build} onShortcuts={() => setShortcuts(true)} />
+        <ProfileMenu email={email} isAdmin={isAdmin} build={build} avatarUrl={avatarUrl} onShortcuts={() => setShortcuts(true)} />
       </div>
       <CommandPalette
         open={palette}

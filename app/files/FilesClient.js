@@ -26,6 +26,7 @@ import { usePrompt } from '@/app/components/ui/Prompt';
 import { useFolderPicker } from '@/app/components/ui/FolderPicker';
 import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
 import { useContextMenu } from '@/app/components/ui/ContextMenu';
+import useMarquee from '@/app/components/ui/useMarquee';
 import {
   folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, crumbsFor, folderStats,
 } from '@/lib/folder-ops';
@@ -42,6 +43,14 @@ const KINDS = [
 // 'Files' instead, which is what tells an upload from a move.
 const DRAG_FILES = 'application/x-onyx-files';
 const DRAG_FOLDER = 'application/x-onyx-folder';
+// What a drag-to-select may not start on: anything with a press of its own.
+const MARQUEE_SKIP = [
+  '[data-file-id]', '[data-folder]', '[data-drive]', 'a', 'button', 'input', 'textarea', 'select', 'label',
+  '[contenteditable]', '[role="button"]', '.filelist-head', '.ctx-menu', '.menu', '.cell-pop', 'dialog',
+].join(', ');
+
+const sameSet = (a, b) => a.size === b.size && [...a].every((x) => b.has(x));
+
 // How many files Select all will load and select in one go. Beyond it, a
 // folder is moved a few thousand at a time.
 const SELECT_ALL_CAP = 5000;
@@ -1187,9 +1196,45 @@ export default function FilesClient({
     return null;
   }, [columnKeys, changeColumns, toast]);
 
+  // ── Drag to select ────────────────────────────────────────────────────────
+  // A press on empty space in the listing — the gaps between cards, the room
+  // around and below them — and a drag draws a selection rectangle
+  // (useMarquee). Cards, rows, folders and controls keep their own presses:
+  // dragging a card still moves it. The grid or list says which of its items
+  // the rectangle touches (marqueeTarget), from its layout.
+  const paneRef = useRef(null);
+  const marqueeTarget = useRef(null);
+  const marquee = useMarquee({
+    canStart: (e) => {
+      const t = e.target;
+      if (!(t instanceof Element) || t.closest(MARQUEE_SKIP)) return false;
+      const pane = paneRef.current;
+      if (!pane) return false;
+      if (pane.contains(t)) return true;
+      // The page itself below or beside the listing counts too — the gutter
+      // between the sidebar and the first card included — as long as it is
+      // level with the pane and clear of the sidebar.
+      if (t === e.currentTarget || t.classList.contains('files-layout')) {
+        const b = pane.getBoundingClientRect();
+        const side = e.currentTarget.querySelector('.files-layout > aside')?.getBoundingClientRect();
+        return e.clientY >= b.top && e.clientX > (side && side.width ? side.right : b.left - 1);
+      }
+      return false;
+    },
+    hitsIn: (rect) => marqueeTarget.current?.hitsIn(rect) || [],
+    getSelection: () => selected,
+    onSelect: (indices, { base, additive }) => {
+      const next = new Set(additive ? base : []);
+      for (const i of indices) if (visible[i]) next.add(visible[i].id);
+      setSelected((prev) => (sameSet(prev, next) ? prev : next));
+    },
+    onClear: () => setSelected((prev) => (prev.size ? new Set() : prev)),
+  });
+
   // What the grid and the list share: the same files, selection and actions,
   // so switching views never changes what a click or a key does.
   const gridProps = {
+    marqueeRef: marqueeTarget,
     files: visible,
     selected,
     onSelect: toggleSelect,
@@ -1228,6 +1273,7 @@ export default function FilesClient({
       onKeyDown={onMenuKey}
       onPointerOver={onFolderHover}
       onFocus={onFolderHover}
+      onPointerDown={marquee.onPointerDown}
     >
       <div className="row files-head" style={{ marginBottom: 20 }}>
         {/* All files is the top of the tree: nothing to go back up to, so no
@@ -1411,7 +1457,7 @@ export default function FilesClient({
             </div>
           </aside>
 
-          <section className="files-pane">
+          <section className="files-pane" ref={paneRef}>
             {view === 'grid' && showTiles && subfolders.length > 0 && (
               <FolderTiles
                 folders={subfolders}
@@ -1487,6 +1533,18 @@ export default function FilesClient({
             <span className="small muted">Files and folders go into {folder || rootName}</span>
           </div>
         </div>
+      )}
+      {marquee.box && (
+        <div
+          className="marquee"
+          aria-hidden
+          style={{
+            left: marquee.box.left,
+            top: marquee.box.top,
+            width: marquee.box.right - marquee.box.left,
+            height: marquee.box.bottom - marquee.box.top,
+          }}
+        />
       )}
       {confirmElement}
       {promptElement}

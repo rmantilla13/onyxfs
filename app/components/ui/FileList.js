@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Thumb, fmtSize } from './FileCard';
 import { rowWindow } from '@/lib/virtual-rows';
+import { listHits, overlaps } from '@/lib/marquee';
 import { LIST_COLUMNS, columnOf, nextSortFor, columnTemplate, fitColumns } from '@/lib/list-columns';
 import { deriveAuto } from '@/lib/dam';
 
@@ -133,6 +134,7 @@ export default function FileList({
   suggestionsFor,
   onOpenFolder,
   usageRights = false,
+  marqueeRef,
 }) {
   const outer = useRef(null);
   const ref = useRef(null);
@@ -278,6 +280,25 @@ export default function FileList({
         <div className="empty">Loading…</div>
       </div>
     );
+  }
+
+  // Drag-to-select (useMarquee): which rows a viewport rectangle touches,
+  // from the fixed row pitch — rows scrolled out of the window are not in
+  // the DOM to be asked.
+  if (marqueeRef) {
+    marqueeRef.current = {
+      hitsIn: (rect) => {
+        const el = outer.current;
+        if (!el) return [];
+        if (!pitch) {
+          const out = [];
+          cells.current.forEach((c, i) => { if (c && i < files.length && overlaps(c.getBoundingClientRect(), rect)) out.push(i); });
+          return out;
+        }
+        const b = el.getBoundingClientRect();
+        return listHits({ rect, box: { left: b.left, top: b.top, right: b.right, bottom: b.bottom }, pitch, count: files.length });
+      },
+    };
   }
 
   const beforeEl = typeof before === 'function' ? before(shown) : before;

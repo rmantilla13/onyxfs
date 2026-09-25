@@ -2,7 +2,7 @@ import { redirect, notFound } from 'next/navigation';
 import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
 import { isAdmin } from '@/lib/auth-allowlist';
-import { getFileById, buildPrincipal, canAccessFile, canModifyFile, listFilespacesForSpace } from '@/lib/db';
+import { getFileById, buildPrincipal, canAccessFile, canModifyFile, listFilespacesForSpace, getAvatarUrl } from '@/lib/db';
 import { presignFileUrls } from '@/lib/storage';
 import TopNav from '@/app/components/TopNav';
 import FileDetail from '@/app/components/file/FileDetail';
@@ -40,6 +40,8 @@ export default async function FilePage({ params, searchParams }) {
   const session = await auth();
   const email = session?.user?.email;
   if (!email) redirect('/signin');
+  // The account menu's picture, or null for initials; never throws.
+  const avatarUrl = await getAvatarUrl(email);
 
   const file = await getFileById(params.id);
   if (!file) notFound();
@@ -66,6 +68,7 @@ export default async function FilePage({ params, searchParams }) {
         brandName={brand.name}
         logo={brand.visual.logo}
         email={email}
+        avatarUrl={avatarUrl}
         isAdmin={isAdmin(email)}
         filespaces={filespaces}
       />

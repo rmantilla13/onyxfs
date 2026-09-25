@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import FileCard from './FileCard';
 import { rowWindow } from '@/lib/virtual-rows';
+import { gridHits, overlaps } from '@/lib/marquee';
 
 /**
  * The library grid, with the keyboard behaviour the old one had none of.
@@ -50,6 +51,10 @@ export default function FileGrid({
   label = 'Files',
   onMissingThumb,
   onDragFile,
+  // Filled in with { hitsIn(rect) } for drag-to-select (useMarquee): which
+  // cards a viewport rectangle touches, from the layout — cards scrolled out
+  // of the window are not in the DOM to be asked.
+  marqueeRef,
 }) {
   const outer = useRef(null);
   const ref = useRef(null);
@@ -190,6 +195,30 @@ export default function FileGrid({
       onSelect?.(files[index]);
     }
   }, [metrics.cols, files, focusCell, onOpen, onSelect]);
+
+  if (marqueeRef) {
+    marqueeRef.current = {
+      hitsIn: (rect) => {
+        const el = outer.current;
+        if (!el) return [];
+        if (!metrics.pitch) {
+          // Before the first measurement the cards are in plain flow: ask them.
+          const out = [];
+          cells.current.forEach((c, i) => { if (c && i < files.length && overlaps(c.getBoundingClientRect(), rect)) out.push(i); });
+          return out;
+        }
+        const b = el.getBoundingClientRect();
+        return gridHits({
+          rect,
+          box: { left: b.left, top: b.top, right: b.right, bottom: b.bottom },
+          cols: metrics.cols,
+          pitch: metrics.pitch,
+          gap: metrics.gap,
+          count: files.length,
+        });
+      },
+    };
+  }
 
   if (!files.length) return emptyState || null;
 

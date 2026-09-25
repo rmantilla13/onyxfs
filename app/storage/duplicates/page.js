@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { auth } from '@/auth';
 import { isAdmin } from '@/lib/auth-allowlist';
 import { loadBrand } from '@/lib/brand-config';
-import { listFilespacesForSpace, listDuplicateFiles, duplicateSummary, getFeatureFlags } from '@/lib/db';
+import { listFilespacesForSpace, listDuplicateFiles, duplicateSummary, getFeatureFlags, getAvatarUrl } from '@/lib/db';
 import { presignFileUrls, getStorageConfig, storageMode } from '@/lib/storage';
 import { groupDuplicates, TRASH_RETENTION_DAYS } from '@/lib/storage-report';
 import { buildLabel, buildDetail } from '@/lib/version';
@@ -23,6 +23,8 @@ export default async function DuplicatesPage() {
   const email = session?.user?.email;
   if (!email) redirect('/signin?callbackUrl=/storage/duplicates');
   if (!isAdmin(email)) redirect('/files');
+  // The account menu's picture, or null for initials; never throws.
+  const avatarUrl = await getAvatarUrl(email);
 
   const [brand, drives, flags, rows, summary, cfg] = await Promise.all([
     loadBrand(),
@@ -41,6 +43,7 @@ export default async function DuplicatesPage() {
         brandName={brand.name}
         logo={brand.visual.logo}
         email={email}
+        avatarUrl={avatarUrl}
         isAdmin
         filespaces={drives}
       />

@@ -1339,6 +1339,18 @@ select.input.cell-input { padding-right: 2px; }
   .player-stage { max-height: 50vh; }
 }
 
+/* Drag-to-select (useMarquee): the rectangle, in the accent, above the
+   cards and never in the way of the pointer; and no text selection or
+   I-beam anywhere while it is drawn. */
+.marquee {
+  position: fixed; z-index: var(--z-menu); pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 75%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+body.is-marqueeing { -webkit-user-select: none; user-select: none; cursor: default; }
+body.is-marqueeing * { cursor: default !important; }
+
 /* The picture under the pointer while a selection is dragged: how many are
    going, rather than the image of the one card that was grabbed. Drawn off
    screen for the moment the browser snapshots it. */
@@ -1498,6 +1510,13 @@ body::before {
 }
 
 .avatar { background: linear-gradient(135deg, var(--aura-a-deep), var(--aura-b-deep)); color: var(--on-aura); }
+/* A profile picture fills the circle instead of the initials. */
+.avatar { overflow: hidden; flex: none; }
+.avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.avatar.has-image { background: var(--surface-sunken); }
+.avatar-lg { width: 88px; height: 88px; font-size: var(--t-2xl); }
+.avatar-edit { display: flex; align-items: center; gap: var(--s4); }
+@media (max-width: 720px) { .avatar-edit { flex-direction: column; align-items: flex-start; } }
 .count-badge { background: linear-gradient(120deg, var(--aura-a-deep), var(--aura-b-deep)); color: var(--on-aura); }
 
 /* Where you are, and what you picked: a tint that leans from blue to magenta. */
