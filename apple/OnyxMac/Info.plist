@@ -3,8 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key><string>Onyx</string>
-  <!-- Menu-bar only: no Dock icon, no window at launch. -->
-  <key>LSUIElement</key><true/>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>

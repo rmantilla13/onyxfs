@@ -2,28 +2,28 @@ import FileProvider
 import OnyxKit
 import os
 
-/// The replicated File Provider extension, shared by macOS and iOS.
+/// The replicated File Provider extension, shared by macOS and iOS: one
+/// instance per Finder location (a drive, or the library).
 ///
-/// This is milestone 5.2: READ-ONLY enumeration and materialise-on-open. It
-/// deliberately does not implement item creation or modification yet — the
-/// enumeration contract is the hardest thing to change after devices are
-/// syncing against it, so it goes first and alone.
+/// Milestone 5.2 — read-only: the location's tree, and each file's bytes
+/// downloaded when it is opened. Writes wait for the conflict policy (5.5).
 ///
-/// Note what this is NOT for on macOS: editing straight off the drive. A File
-/// Provider materialises a file when it is opened, which would stall a 4K
-/// timeline mid-scrub. The rclone mount stays the editing path; this exists
-/// for Finder and Files.app browsing, on-demand download, and iOS — none of
-/// which FUSE can do.
+/// Each instance knows its drive only from its domain's identifier
+/// (SyncDomain), and asks the server for that drive's changes alone, judged
+/// by the same access rule as the web (/api/files/delta).
 final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     let domain: NSFileProviderDomain
-    let api: OnyxAPI
-    let cursors: CursorStore
+    let engine: SyncEngine
     let log = Logger(subsystem: OnyxIdentifiers.fileProvider, category: "extension")
+
+    /// Made per use, not kept: the server can change under a running
+    /// extension (Settings), and a kept client would send the new server's
+    /// token to the old one.
+    var api: OnyxAPI { OnyxAPI(config: .current) }
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
-        self.api = OnyxAPI()
-        self.cursors = CursorStore()
+        self.engine = SyncEngine(domainIdentifier: domain.identifier.rawValue)
         super.init()
     }
 
@@ -34,17 +34,16 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
     func item(for identifier: NSFileProviderItemIdentifier,
               request: NSFileProviderRequest,
               completionHandler: @escaping (NSFileProviderItem?, Error?) -> Void) -> Progress {
-        if identifier == .rootContainer {
-            completionHandler(OnyxItem.root, nil)
-            return Progress()
-        }
-        // Served from the local mirror rather than the network: the system
-        // asks for items constantly, and a round trip per stat is exactly
-        // what a File Provider exists to avoid.
-        if let item = ItemStore.shared.item(id: identifier.rawValue) {
-            completionHandler(item, nil)
-        } else {
-            completionHandler(nil, NSFileProviderError(.noSuchItem))
+        let rootName = domain.displayName
+        Task {
+            // Served from the replica: the system asks for items constantly,
+            // and a round trip per stat is what a File Provider avoids.
+            let replica = await engine.replica
+            if let item = OnyxItem.item(for: identifier, in: replica, rootName: rootName) {
+                completionHandler(item, nil)
+            } else {
+                completionHandler(nil, NSFileProviderError(.noSuchItem))
+            }
         }
         return Progress()
     }
@@ -56,56 +55,71 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                        request: NSFileProviderRequest,
                        completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void) -> Progress {
         let progress = Progress(totalUnitCount: 100)
-        guard let item = ItemStore.shared.item(id: identifier.rawValue),
-              let key = item.storageKey else {
-            completionHandler(nil, nil, NSFileProviderError(.noSuchItem))
-            return progress
-        }
-
         Task {
+            guard let file = await engine.replica.file(id: identifier.rawValue) else {
+                completionHandler(nil, nil, NSFileProviderError(.noSuchItem))
+                return
+            }
             do {
-                // Credentials are minted per filespace and cached until they
-                // are near expiry; a static key reports no expiry at all and
-                // is simply reused (see SpaceCredentials.isExpired).
-                let creds = try await CredentialCache.shared.credentials(for: item.filespaceId, api: api)
-                guard let host = creds.host else {
-                    throw OnyxError.storageUnavailable("This filespace has no S3 endpoint configured.")
-                }
-                guard let url = SigV4.presignedGET(
-                    host: host, path: "/\(creds.bucket)/\(key)",
-                    region: creds.region ?? "auto", credentials: creds.sigV4, expiresIn: 3600
-                ) else {
-                    throw OnyxError.storageUnavailable("Could not sign a URL for this object.")
-                }
-
-                // Downloaded to a temporary file, not into memory. The
-                // extension has roughly a 50 MB ceiling and this library is
-                // full of multi-gigabyte masters; buffering one is not a
-                // performance question, it is a crash.
-                let (temp, response) = try await URLSession.shared.download(from: url)
-                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                guard (200..<300).contains(status) else {
-                    throw OnyxError.http(status: status, message: "The object store refused the download.")
-                }
-                completionHandler(temp, item, nil)
+                // A fresh link for each open, checked against the same rule as
+                // the web's detail view. Presigned links expire; one kept from
+                // the delta would be dead by the time a file is opened.
+                let link = try await api.contentLink(fileId: file.id)
+                if progress.isCancelled { throw CocoaError(.userCancelled) }
+                let temp = try await download(link.url, into: progress)
+                completionHandler(temp, OnyxItem.file(file), nil)
             } catch {
-                log.error("fetchContents failed for \(identifier.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                completionHandler(nil, nil, error)
+                log.error("fetch failed for \(identifier.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                completionHandler(nil, nil, mapped(error))
             }
         }
         return progress
     }
 
+    /// To a file, never into memory: the extension runs under a tight memory
+    /// ceiling and this library is full of multi-gigabyte masters. The task's
+    /// own progress is attached, so Finder shows the download as it goes.
+    private func download(_ url: URL, into progress: Progress) async throws -> URL {
+        let dir = (try? NSFileProviderManager(for: domain)?.temporaryDirectoryURL())
+            ?? FileManager.default.temporaryDirectory
+        return try await withCheckedThrowingContinuation { continuation in
+            let task = URLSession.shared.downloadTask(with: url) { temp, response, error in
+                if let error { continuation.resume(throwing: error); return }
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard let temp, (200..<300).contains(status) else {
+                    continuation.resume(throwing: StorageError(status: status))
+                    return
+                }
+                // The session deletes its file when this handler returns, so
+                // it is moved somewhere the system can take it from.
+                let kept = dir.appendingPathComponent(UUID().uuidString)
+                do {
+                    try FileManager.default.moveItem(at: temp, to: kept)
+                    continuation.resume(returning: kept)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+            progress.addChild(task.progress, withPendingUnitCount: 100)
+            // Cancelling in Finder cancels the transfer (mapped to
+            // NSUserCancelledError, which is what the system expects).
+            progress.cancellationHandler = { task.cancel() }
+            task.resume()
+        }
+    }
+
     // MARK: - Writes (not yet)
+
+    // Every item is read-only in its capabilities, so Finder does not offer
+    // these. If the system asks anyway, the answer is "no permission": it
+    // stops there, rather than retrying or treating the file as handed over.
+    private var readOnly: Error { CocoaError(.fileWriteNoPermission) }
 
     func createItem(basedOn itemTemplate: NSFileProviderItem, fields: NSFileProviderItemFields,
                     contents url: URL?, options: NSFileProviderCreateItemOptions,
                     request: NSFileProviderRequest,
                     completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
-        // Refused explicitly rather than silently accepted. A File Provider
-        // that accepts a write it cannot perform loses the file: the system
-        // considers it handed over and removes its copy.
-        completionHandler(nil, [], false, NSFileProviderError(.notAuthenticated))
+        completionHandler(nil, [], false, readOnly)
         return Progress()
     }
 
@@ -113,14 +127,14 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
                     changedFields: NSFileProviderItemFields, contents newContents: URL?,
                     options: NSFileProviderModifyItemOptions, request: NSFileProviderRequest,
                     completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
-        completionHandler(nil, [], false, NSFileProviderError(.notAuthenticated))
+        completionHandler(nil, [], false, readOnly)
         return Progress()
     }
 
     func deleteItem(identifier: NSFileProviderItemIdentifier, baseVersion version: NSFileProviderItemVersion,
                     options: NSFileProviderDeleteItemOptions, request: NSFileProviderRequest,
                     completionHandler: @escaping (Error?) -> Void) -> Progress {
-        completionHandler(NSFileProviderError(.notAuthenticated))
+        completionHandler(readOnly)
         return Progress()
     }
 
@@ -128,7 +142,23 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension {
 
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier,
                     request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
+        // No token: say so, which Finder shows as "Sign in", rather than
+        // present an empty drive, which reads as "my files are gone".
         guard api.hasCredentials else { throw NSFileProviderError(.notAuthenticated) }
-        return FileProviderEnumerator(container: containerItemIdentifier, api: api, cursors: cursors)
+        let name = domain.displayName
+        switch containerItemIdentifier {
+        case .workingSet:
+            return WorkingSetEnumerator(engine: engine, rootName: name)
+        case .rootContainer:
+            return FolderEnumerator(path: "", engine: engine)
+        case .trashContainer:
+            // Trash is the web's to keep (and restore from).
+            throw CocoaError(.featureUnsupported)
+        default:
+            guard let path = Replica.folderPath(ofID: containerItemIdentifier.rawValue) else {
+                throw NSFileProviderError(.noSuchItem)
+            }
+            return FolderEnumerator(path: path, engine: engine)
+        }
     }
 }

@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <!-- Required: an app extension that is not sandboxed is never loaded. -->
+  <key>com.apple.security.app-sandbox</key><true/>
   <key>com.apple.security.application-groups</key>
   <array><string>group.io.onyxfs</string></array>
   <!-- Must match the app's. The extension reads the token the app wrote; if

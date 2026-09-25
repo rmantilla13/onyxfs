@@ -9,8 +9,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildFileQuery, nextCursor, sortSpec, encodeCursor, decodeCursor, SORT_KEYS,
+  buildFileQuery, buildFolderCountQuery, artifactClauses, nextCursor, sortSpec, encodeCursor, decodeCursor, SORT_KEYS,
 } from '../lib/file-query.js';
+import { drivePatterns } from '../lib/drive-access.js';
 
 const admin = { isAdmin: true };
 const viewer = { isAdmin: false, email: 'someone@example.com', roleId: 'member', folderGrants: [] };
@@ -102,8 +103,11 @@ describe('access control', () => {
     });
     // The predicate must anchor on a separator. `folder LIKE gf || '%'` would
     // let a grant on "Clients" also expose "ClientsPrivate".
-    assert.ok(text.includes("f.folder LIKE gf || '/%'"), 'descendant match must anchor on /');
+    assert.ok(text.includes("starts_with(f.folder, gf || '/')"), 'descendant match must anchor on /');
     assert.ok(text.includes('f.folder = gf'), 'exact folder match missing');
+    // And it must not be LIKE at all: folder names hold `_` and `%`, which
+    // LIKE reads as wildcards, so a grant on "Q1_2024" reached "Q1-2024/…".
+    assert.ok(!/f\.folder LIKE gf/.test(text), 'a grant is a name, not a pattern');
   });
 
   test("a grant on '' means the whole library", () => {
@@ -193,6 +197,60 @@ describe('filters', () => {
   });
 });
 
+describe('artifact hints', () => {
+  // Each artifact regex runs only for keys that first match one of its LIKE
+  // hints (artifactClauses). A hint that missed a key its regex matches would
+  // let that thumbnail or .DS_Store into every listing, so the rule is checked
+  // with the patterns the SQL actually binds.
+  const bound = [];
+  const pairs = artifactClauses((v) => `$${bound.push(v)}`)
+    .filter((clause) => clause.includes('!~'))
+    .map((clause) => {
+      const values = placeholders(clause).map((n) => bound[n - 1]);
+      return { clause, hints: values.slice(0, -1), re: values.at(-1) };
+    });
+
+  /** A LIKE pattern as an anchored RegExp: % is any run, _ any one character. */
+  const like = (p) => new RegExp(`^${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*').replace(/_/g, '.')}$`, 's');
+  const hinted = (hints, key) => hints.some((h) => like(h).test(key));
+
+  const dirs = ['', 'a/', 'files/Clients/Acme/', 'brand/2026/'];
+  const names = [
+    // artifacts
+    '_thumbs/0f8f.webp', 'IMG-thumb-1.jpg', 'x-thumb-y.jpeg', 'x-thumb-y.png', 'x-thumb-.webp',
+    '.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini', '._IMG_0001.JPG', '._',
+    // near misses
+    'x-thumb-y.gif', 'thumbnail.png', 'my_thumbs/a.jpg', 'Xthumbs/a.jpg', 'X-THUMB-Y.PNG',
+    'Thumbs.db.bak', 'xdesktop.ini', 'my.DS_Store.mov', '.hidden/ok.txt', 'a.txt', '',
+  ];
+  const keys = dirs.flatMap((d) => names.map((n) => d + n));
+
+  test('one hinted regex for thumbnails and one for OS junk, the hint tried first', () => {
+    assert.equal(pairs.length, 2);
+    for (const { clause, hints, re } of pairs) {
+      assert.ok(hints.length && hints.every((h) => typeof h === 'string') && typeof re === 'string', clause);
+      assert.ok(clause.indexOf('NOT LIKE') < clause.indexOf('!~'), 'the hints must come before the regex');
+    }
+  });
+
+  test('every key a regex matches, one of its hints matches too', () => {
+    let artifacts = 0;
+    for (const { hints, re } of pairs) {
+      for (const key of keys.filter((k) => new RegExp(re).test(k))) {
+        artifacts += 1;
+        assert.ok(hinted(hints, key), `${key} matches ${re} but none of ${JSON.stringify(hints)}`);
+      }
+    }
+    assert.equal(artifacts, 44, 'every artifact in the fixture was checked');
+  });
+
+  test('an ordinary key matches no hint, so it never pays for a regex', () => {
+    for (const key of ['files/Clients/Acme/hero.jpg', 'brand/2026/Deck final v3.pdf', 'a.txt']) {
+      for (const { hints } of pairs) assert.ok(!hinted(hints, key), `${key} matches ${JSON.stringify(hints)}`);
+    }
+  });
+});
+
 describe('pagination', () => {
   test('the default sort is newest first, with id as a tiebreaker', () => {
     const { text } = buildFileQuery({ opts: {}, principal: admin });
@@ -269,6 +327,73 @@ describe('pagination', () => {
       principal: admin,
     });
     assert.ok(!countText.includes('f.id) <'), 'count must not be narrowed by the cursor');
+  });
+});
+
+describe('the folder tree query', () => {
+  // The sidebar tree used to be derived from one default page of the listing,
+  // so past 100 visible files the folders of older ones dropped out of it.
+  const drives = [{ id: 'brand', prefix: 'brand' }, { id: 'acme', prefix: 'clients/acme' }];
+  const member = {
+    ...viewer,
+    folderGrants: ['Clients'],
+    drivePatterns: { all: drivePatterns(drives), mine: drivePatterns(drives.slice(0, 1)) },
+  };
+  const opts = { storagePrefix: 'files' };
+
+  /** The top-level WHERE and its conditions, without what follows them. */
+  const whereOf = (text) => text.slice(text.indexOf('\nWHERE ')).replace(/\nGROUP BY[\s\S]*$/, '');
+
+  test('one row per folder, with its count, and no page to cut it short', () => {
+    const { text } = buildFolderCountQuery({ opts, principal: member });
+    assert.match(text, /^SELECT f\.folder, count\(\*\)::int AS n\nFROM files f\n/);
+    assert.match(text, /\nGROUP BY f\.folder$/);
+    assert.ok(!/LIMIT/.test(text), 'the tree must not be limited to a page');
+    assert.ok(!/ORDER BY/.test(text));
+  });
+
+  test('the listing’s paging changes nothing', () => {
+    const paged = buildFolderCountQuery({
+      opts: { ...opts, limit: 5, sort: 'name', cursor: { value: 'a', id: 'x' } },
+      principal: member,
+    });
+    assert.deepEqual(paged, buildFolderCountQuery({ opts, principal: member }));
+    assert.ok(!/f\.id\) [<>]/.test(paged.text), 'a cursor must not narrow the tree');
+  });
+
+  test('it filters exactly as the listing does, drive boundary included', () => {
+    // A difference either way is a folder the listing will not open, or one
+    // it would open that the tree hides.
+    const tree = buildFolderCountQuery({ opts, principal: member });
+    const listing = buildFileQuery({ opts, principal: member });
+    assert.equal(whereOf(tree.text), whereOf(listing.countText));
+    assert.deepEqual(tree.params, listing.countParams);
+    // …and what they share is the restrictive predicate, not an empty one.
+    assert.ok(tree.text.includes('file_acl') && tree.text.includes("f.visibility = 'org'"), 'access predicate missing');
+    assert.match(tree.text, /NOT \(coalesce\(f\.storage_key, ''\) LIKE ANY\(\$\d+::text\[\]\)\)/, 'drive boundary missing');
+    assert.ok(tree.params.some((p) => Array.isArray(p) && p.includes('clients/acme/%')), 'drive patterns unbound');
+    assert.ok(tree.params.some((p) => Array.isArray(p) && p.includes('Clients')), 'folder grants unbound');
+  });
+
+  test('every placeholder has a parameter, and every parameter is used', () => {
+    const { text, params } = buildFolderCountQuery({ opts, principal: member });
+    const used = new Set(placeholders(text));
+    assert.equal(Math.max(...used), params.length);
+    for (let i = 1; i <= params.length; i++) {
+      assert.ok(used.has(i), `param $${i} is bound but never referenced`);
+    }
+  });
+
+  test('scoped to the filespace, and to live files that are not artifacts', () => {
+    const { text, params } = buildFolderCountQuery({ opts: { storagePrefix: '/clients/acme/' }, principal: viewer });
+    assert.ok(params.includes('clients/acme') && params.includes('clients/acme/%'));
+    assert.ok(text.includes('f.deleted_at IS NULL'));
+    assert.ok(text.includes('NOT EXISTS (SELECT 1 FROM files t'), 'legacy thumbnails would count as files');
+  });
+
+  test('an absent principal is untrusted, not an admin', () => {
+    assert.ok(buildFolderCountQuery({}).text.includes('file_acl'));
+    assert.ok(!buildFolderCountQuery({ principal: admin }).text.includes('file_acl'));
   });
 });
 

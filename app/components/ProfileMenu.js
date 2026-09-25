@@ -27,7 +27,7 @@ const THEMES = [
  * it. Admin access is still decided on the server (ADMIN_EMAILS); this only
  * shows the way in.
  */
-export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts, avatarUrl = null }) {
+export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts, avatarUrl = null, inApp = false }) {
   // The picture, kept here too so a new one shows the moment it is saved.
   const [avatar, setAvatar] = useState(() => (changedHere !== undefined ? changedHere : avatarUrl));
   const [editingAvatar, setEditingAvatar] = useState(false);
@@ -71,6 +71,7 @@ export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts
           <Link href="/storage" role="menuitem" className="menu-item">Storage usage</Link>
         </>
       )}
+      {!inApp && <Link href="/download" role="menuitem" className="menu-item">Download for Mac</Link>}
       {onShortcuts && (
         <MenuItem onClick={onShortcuts}>
           Keyboard shortcuts<span className="spacer" /><kbd>?</kbd>

@@ -1,54 +1,86 @@
 import { NextResponse } from 'next/server';
-import { listFileChanges, currentChangeCursor } from '@/lib/db';
+import {
+  listFileChanges, currentChangeCursor, buildPrincipal, getFilespaceForUser, listFilespaces, listSyncFolders,
+} from '@/lib/db';
 import { resolveActor } from '@/lib/desktop-guard';
 import { presignFileUrls } from '@/lib/storage';
+import { drivePatterns } from '@/lib/drive-access';
+import { accessFingerprint, syncScope } from '@/lib/sync-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * GET /api/files/delta?cursor=<n>&limit=<n> — what changed since `cursor`.
+ * GET /api/files/delta?cursor=<n>&limit=<n>&drive=<id|library>&folders=1
  *
- * This is the endpoint a sync client enumerates against: the iOS File
- * Provider's enumerateChanges(from: anchor), and eventually the desktop app.
- * Cursor 0 means "everything", so first sync and incremental catch-up share
- * one code path.
+ * What changed since `cursor`: the endpoint a sync client enumerates against —
+ * the File Provider behind Onyx in Finder and in Files.app. Cursor 0 means
+ * "everything", so first sync and incremental catch-up share one code path.
+ * Dual-guarded (cookie or bearer), because the browser and the native clients
+ * both read it.
  *
- * Dual-guarded (cookie or bearer) because both the browser and the native
- * clients read it.
+ * AUTHORIZE → FILTER → PRESIGN, as everywhere else: the rows come out of the
+ * same access rule as the library listing (buildDeltaQuery), only what the
+ * caller may see is presigned, and anything else that changed comes back as a
+ * bare id in `deleted` — gone, as far as this caller is concerned.
  *
- * Deliberately NOT access-filtered per row yet: it currently serves the single
- * owner of a workspace. Before this is exposed to a multi-user deployment it
- * needs the same principal narrowing the listing has — and the tombstone side
- * needs thought, since "this file was deleted" and "you lost access to this
- * file" look identical to a client and must not be conflated.
+ *   drive=<filespaceId>  that drive only; you must be able to open it
+ *   drive=library        files in no drive
+ *   (none)               everything you may see
+ *
+ * `scope` fingerprints the access the page was computed under. When it
+ * differs from the last one a client saw, the client re-syncs from cursor 0
+ * (lib/sync-scope.js says why). `folders=1` adds the scope's folders, whole,
+ * so empty ones appear too.
  */
 export async function GET(req) {
   const actor = await resolveActor(req);
   if (actor.error) return actor.error;
 
   const url = new URL(req.url);
+  const principal = await buildPrincipal(actor.email);
+  const allDrives = await listFilespaces();
+
+  const driveParam = (url.searchParams.get('drive') || '').trim();
+  let drive = null;
+  if (driveParam && driveParam !== 'library') {
+    drive = await getFilespaceForUser(actor.email, driveParam);
+    if (!drive) return NextResponse.json({ error: 'No access to this drive' }, { status: 404 });
+  }
+  const scope = syncScope({ drive, library: driveParam === 'library', allDrives });
+  if (!scope) return NextResponse.json({ error: 'This drive has no folder in the bucket to sync' }, { status: 400 });
+
+  const tag = accessFingerprint(principal, drivePatterns(allDrives));
 
   // `?cursor=now` hands back the current high-water mark without any payload,
   // for a client that wants to start watching from this moment rather than
   // replay history it does not want.
   if (url.searchParams.get('cursor') === 'now') {
-    return NextResponse.json({ changed: [], deleted: [], cursor: await currentChangeCursor(), done: true });
+    return NextResponse.json({ changed: [], deleted: [], cursor: await currentChangeCursor(), done: true, scope: tag });
   }
 
-  const cursor = Number(url.searchParams.get('cursor')) || 0;
-  const limit = Number(url.searchParams.get('limit')) || 500;
-
-  const page = await listFileChanges({ cursor, limit });
+  let page;
+  try {
+    page = await listFileChanges({
+      cursor: Number(url.searchParams.get('cursor')) || 0,
+      limit: Number(url.searchParams.get('limit')) || 500,
+      principal,
+      scope,
+    });
+  } catch {
+    // A retryable failure, so a device tries again rather than believing it
+    // has everything.
+    return NextResponse.json({ error: 'Changes could not be read right now.' }, { status: 503, headers: { 'retry-after': '30' } });
+  }
 
   // Presign only what this page carries. A client streaming a first sync of
   // 100k files pages through in chunks rather than signing them all at once.
   const changed = await presignFileUrls(page.changed);
 
-  return NextResponse.json({
-    changed,
-    deleted: page.deleted,
-    cursor: page.cursor,
-    done: page.done,
-  });
+  const body = { changed, deleted: page.deleted, cursor: page.cursor, done: page.done, scope: tag };
+  if (url.searchParams.get('folders') === '1') {
+    const storagePrefix = drive ? String(drive.prefix || '').replace(/^\/+|\/+$/g, '') : undefined;
+    body.folders = driveParam ? await listSyncFolders(principal, { storagePrefix }) : [];
+  }
+  return NextResponse.json(body);
 }

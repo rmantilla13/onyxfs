@@ -23,7 +23,7 @@ public final class AuthClient: NSObject, @unchecked Sendable {
     let tokens: TokenStore
     let session: URLSession
 
-    public init(config: OnyxConfig = .production,
+    public init(config: OnyxConfig = .current,
                 tokens: TokenStore = TokenStore(),
                 session: URLSession = .shared) {
         self.config = config
@@ -51,15 +51,29 @@ public final class AuthClient: NSObject, @unchecked Sendable {
     /// Exchange the code for a bearer token and store it in the Keychain.
     @discardableResult
     public func exchange(code: String, verifier: String, label: String) async throws -> DesktopToken {
-        var req = URLRequest(url: config.url("api/desktop/token"))
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: [
+        try await redeem([
             "grant_type": "authorization_code",
             "code": code,
             "code_verifier": verifier,
             "label": label,
         ])
+    }
+
+    /// Sign in with a pairing code from the web's "Pair Onyx" page — for when
+    /// the browser the web is signed in on is not the one this Mac opens (a
+    /// different profile, or another computer). The code was bound to an
+    /// account when the signed-in page made it, so no verifier is needed.
+    @discardableResult
+    public func pair(code: String, label: String) async throws -> DesktopToken {
+        let cleaned = code.uppercased().filter { $0.isLetter || $0.isNumber }
+        return try await redeem(["grant_type": "pairing_code", "code": cleaned, "label": label])
+    }
+
+    private func redeem(_ body: [String: String]) async throws -> DesktopToken {
+        var req = URLRequest(url: config.url("api/desktop/token"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await session.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
@@ -71,6 +85,7 @@ public final class AuthClient: NSObject, @unchecked Sendable {
         // person signed in until the process dies, which is a confusing bug to
         // report and an easy one to avoid here.
         try tokens.set(token.token)
+        SharedSettings().email = token.email
         return token
     }
 
@@ -82,22 +97,43 @@ public final class AuthClient: NSObject, @unchecked Sendable {
     @MainActor
     public func signIn(label: String, anchor: ASPresentationAnchor) async throws -> DesktopToken {
         let (url, verifier) = authorizeURL(label: label)
+        // Both are held by the completion handler until it runs. The session's
+        // presentationContextProvider is WEAK: handed a fresh object inline,
+        // it is freed on the spot and the session refuses to start with no
+        // window to show in. And a session nothing retains can be torn down
+        // mid-sign-in.
+        let provider = PresentationAnchor(anchor)
         let code: String = try await withCheckedThrowingContinuation { continuation in
-            let session = ASWebAuthenticationSession(
+            // Resumed exactly once. A session that cannot start calls its
+            // completion handler synchronously AND returns false from start(),
+            // and a checked continuation resumed twice is a crash.
+            var finished = false
+            func finish(_ result: Result<String, Error>) {
+                guard !finished else { return }
+                finished = true
+                continuation.resume(with: result)
+            }
+            var session: ASWebAuthenticationSession?
+            session = ASWebAuthenticationSession(
                 url: url, callbackURLScheme: OnyxIdentifiers.urlScheme
             ) { callback, error in
-                if let error { continuation.resume(throwing: error); return }
+                _ = provider
+                session = nil
+                if let error { finish(.failure(error)); return }
                 guard let callback, let code = AuthClient.code(from: callback) else {
-                    continuation.resume(throwing: OnyxError.http(status: 0, message: "No code in the callback."))
+                    finish(.failure(OnyxError.http(status: 0, message: "No code in the callback.")))
                     return
                 }
-                continuation.resume(returning: code)
+                finish(.success(code))
             }
-            session.presentationContextProvider = PresentationAnchor(anchor)
+            session?.presentationContextProvider = provider
             // The magic-link sign-in needs the browser's existing session; an
             // ephemeral one would force a fresh sign-in on every device add.
-            session.prefersEphemeralWebBrowserSession = false
-            session.start()
+            session?.prefersEphemeralWebBrowserSession = false
+            if session?.start() != true {
+                session = nil
+                finish(.failure(OnyxError.http(status: 0, message: "The sign-in window could not be opened.")))
+            }
         }
         return try await exchange(code: code, verifier: verifier, label: label)
     }

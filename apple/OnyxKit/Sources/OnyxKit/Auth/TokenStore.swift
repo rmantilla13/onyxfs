@@ -1,8 +1,15 @@
 import Foundation
 import Security
 
-/// The bearer token, in the Keychain, in an access group both the app and the
-/// File Provider extension can read.
+/// The bearer token, in the Keychain, where both the app and its Finder
+/// extension can read it.
+///
+/// Shared through the app group, in the data-protection keychain. That needs
+/// the build to be signed with the team's entitlements; an unsigned
+/// development build has none, and the shared keychain refuses it with
+/// -34018. Rather than fail to sign in at all, such a build falls back to the
+/// app's own login-keychain item — the app window works, and only Finder,
+/// which cannot work unsigned anyway, goes without.
 ///
 /// `kSecAttrAccessibleAfterFirstUnlock` rather than `WhenUnlocked`: a File
 /// Provider is asked to enumerate while the device is locked, and a token it
@@ -18,34 +25,49 @@ public struct TokenStore: Sendable {
         self.accessGroup = accessGroup
     }
 
-    private func baseQuery(_ account: String) -> [String: Any] {
+    private func query(_ account: String, shared: Bool) -> [String: Any] {
         var q: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        if let accessGroup { q[kSecAttrAccessGroup as String] = accessGroup }
+        if shared {
+            q[kSecUseDataProtectionKeychain as String] = true
+            if let accessGroup { q[kSecAttrAccessGroup as String] = accessGroup }
+        }
         return q
     }
 
     public func set(_ value: String?, for account: String = "bearer") throws {
-        var q = baseQuery(account)
-        SecItemDelete(q as CFDictionary)
+        SecItemDelete(query(account, shared: true) as CFDictionary)
+        SecItemDelete(query(account, shared: false) as CFDictionary)
         guard let value else { return }
+
+        var q = query(account, shared: true)
         q[kSecValueData as String] = Data(value.utf8)
         q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        let status = SecItemAdd(q as CFDictionary, nil)
+        var status = SecItemAdd(q as CFDictionary, nil)
+        if status == errSecMissingEntitlement {
+            var local = query(account, shared: false)
+            local[kSecValueData as String] = Data(value.utf8)
+            local[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            status = SecItemAdd(local as CFDictionary, nil)
+        }
         guard status == errSecSuccess else { throw keychainError(status) }
     }
 
     public func get(_ account: String = "bearer") -> String? {
-        var q = baseQuery(account)
-        q[kSecReturnData as String] = true
-        q[kSecMatchLimit as String] = kSecMatchLimitOne
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
-              let data = out as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        for shared in [true, false] {
+            var q = query(account, shared: shared)
+            q[kSecReturnData as String] = true
+            q[kSecMatchLimit as String] = kSecMatchLimitOne
+            var out: CFTypeRef?
+            if SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+               let data = out as? Data, let s = String(data: data, encoding: .utf8) {
+                return s
+            }
+        }
+        return nil
     }
 
     public func clear(_ account: String = "bearer") { try? set(nil, for: account) }

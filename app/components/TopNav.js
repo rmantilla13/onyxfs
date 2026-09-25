@@ -27,6 +27,18 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
   // and correct it after mount.
   const [mod, setMod] = useState('⌘');
   useEffect(() => { setMod(modKey()); }, []);
+
+  // The Mac app's download, offered on a Mac browser — and never inside the
+  // app itself, which says "OnyxMac" in its user agent. Decided after mount:
+  // the server cannot see the platform, and guessing would flash on hydrate.
+  const [offerMacApp, setOfferMacApp] = useState(false);
+  const [inApp, setInApp] = useState(false);
+  useEffect(() => {
+    const ua = navigator.userAgent || '';
+    const app = /OnyxMac\//.test(ua);
+    setInApp(app);
+    setOfferMacApp(!app && /Macintosh|Mac OS X/.test(ua) && !/iPhone|iPad/.test(ua) && navigator.maxTouchPoints < 2);
+  }, []);
   useCommandPaletteShortcut(setPalette);
 
   // "?" anywhere that is not a text field or an open dialog.
@@ -57,7 +69,15 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
           <kbd className="topnav-search-kbd">{mod}K</kbd>
         </button>
 
-        <ProfileMenu email={email} isAdmin={isAdmin} build={build} avatarUrl={avatarUrl} onShortcuts={() => setShortcuts(true)} />
+        {offerMacApp && (
+          <Link href="/download" className="btn btn-sm topnav-get-app" title="Download the Mac app">
+            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10" />
+            </svg>
+            Mac app
+          </Link>
+        )}
+        <ProfileMenu email={email} isAdmin={isAdmin} build={build} avatarUrl={avatarUrl} onShortcuts={() => setShortcuts(true)} inApp={inApp} />
       </div>
       <CommandPalette
         open={palette}

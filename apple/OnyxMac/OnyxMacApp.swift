@@ -1,115 +1,100 @@
 import SwiftUI
-import FileProvider
-import OnyxKit
-import AuthenticationServices
-#if canImport(AppKit)
 import AppKit
-#endif
+import OnyxKit
 
-/// The macOS menu-bar app.
+/// Onyx for macOS: the whole workspace in a window of its own, your drives in
+/// Finder's sidebar, and a menu bar item that keeps them in sync while the
+/// window is closed.
 ///
-/// Its job is narrow on purpose: sign in, register the File Provider domain,
-/// and say what state things are in. It does NOT mount the drive for editing —
-/// the rclone/FUSE mount in desktop/ keeps that job, because a File Provider
-/// materialises a file when it is opened and that would stall a 4K timeline
-/// mid-scrub. The two coexist: FUSE for editing, File Provider for Finder
-/// browsing and on-demand download.
+///   window       the web workspace, signed in from this Mac's device token
+///                (WebController) — everything Onyx does, without a browser
+///   Finder       each drive you choose as a location of its own, through the
+///                File Provider extension: on-demand download, eviction, and
+///                the same access rules as the web (/api/files/delta)
+///   menu bar     sync status, the drive list, and "open Onyx"
+///
+/// Everything here goes through the server, which is the difference from the
+/// Tauri app's rclone mount (desktop/): that one talks to the bucket directly,
+/// so a file dropped into it never reaches the web's library, and a drive's
+/// membership is only as good as an IAM policy. The mount stays for what a
+/// File Provider cannot do — editing straight off the bucket, where opening a
+/// 4K master must not wait for it to download — and for Windows.
 @main
 struct OnyxMacApp: App {
-    @StateObject private var model = MacModel()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @StateObject private var model = AppModel()
 
     var body: some Scene {
+        Window("Onyx", id: "main") {
+            MainWindow()
+                .environmentObject(model)
+                .environmentObject(model.updater)
+                .task { await Launch.once { await model.handleLaunchArguments() } }
+        }
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
+        .defaultSize(width: 1280, height: 820)
+        .commands { OnyxCommands(model: model) }
+
         MenuBarExtra("Onyx", systemImage: "externaldrive.connected.to.line.below") {
-            if model.isSignedIn {
-                Text(model.email ?? "Signed in").font(.caption)
-                Divider()
-                Button(model.domainRegistered ? "Showing in Finder" : "Show in Finder") {
-                    Task { await model.registerDomain() }
-                }
-                .disabled(model.domainRegistered)
-                Button("Sync now") { Task { await model.syncNow() } }
-                if let status = model.status { Text(status).font(.caption) }
-                Divider()
-                Button("Sign out") { Task { await model.signOut() } }
-            } else {
-                Button("Sign in…") { Task { await model.signIn() } }
-            }
-            Divider()
-            Button("Quit Onyx") { NSApplication.shared.terminate(nil) }
+            MenuBarContent().environmentObject(model).environmentObject(model.updater)
         }
         .menuBarExtraStyle(.menu)
+
+        Settings {
+            SettingsView().environmentObject(model).environmentObject(model.updater)
+        }
     }
 }
 
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Closing the window leaves Onyx in the menu bar, keeping Finder in sync.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+}
+
+/// Launch arguments are for the first window only, not every reopen.
 @MainActor
-final class MacModel: ObservableObject {
-    @Published var email: String?
-    @Published var status: String?
-    @Published var domainRegistered = false
-
-    private let api = OnyxAPI()
-    private let auth = AuthClient()
-    private let cursors = CursorStore()
-
-    var isSignedIn: Bool { auth.isSignedIn }
-
-    init() {
-        Task { domainRegistered = await Self.domainExists() }
+enum Launch {
+    private static var done = false
+    static func once(_ run: () async -> Void) async {
+        guard !done else { return }
+        done = true
+        await run()
     }
+}
 
-    func signIn() async {
-        do {
-            let anchor = NSApplication.shared.keyWindow ?? ASPresentationAnchor()
-            let token = try await auth.signIn(label: Host.current().localizedName ?? "Mac", anchor: anchor)
-            email = token.email
-            await registerDomain()
-        } catch {
-            if (error as NSError).code != ASWebAuthenticationSessionError.canceledLogin.rawValue {
-                status = error.localizedDescription
+struct OnyxCommands: Commands {
+    @ObservedObject var model: AppModel
+
+    var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") {
+                Task { await model.updater.check(userInitiated: true) }
             }
         }
-    }
-
-    func registerDomain() async {
-        let domain = NSFileProviderDomain(identifier: .init(rawValue: "io.onyxfs.default"),
-                                          displayName: "Onyx")
-        do {
-            try await NSFileProviderManager.add(domain)
-            domainRegistered = true
-            status = nil
-        } catch {
-            status = "Could not add the Finder drive: \(error.localizedDescription)"
+        CommandGroup(replacing: .newItem) {}
+        CommandGroup(after: .newItem) {
+            Button("Sync Drives Now") { Task { await model.syncNow() } }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .disabled(model.phase != .signedIn)
         }
-    }
-
-    /// Ask the system to re-enumerate. The extension does the work; this is
-    /// only the nudge, so a person who just uploaded on the web does not have
-    /// to wait for the next scheduled pass.
-    func syncNow() async {
-        let identifier = NSFileProviderDomainIdentifier(rawValue: "io.onyxfs.default")
-        guard let domain = try? await NSFileProviderManager.domains().first(where: { $0.identifier == identifier }),
-              let manager = NSFileProviderManager(for: domain) else {
-            status = "The Finder drive is not registered yet."
-            return
+        CommandMenu("Go") {
+            Button("Back") { model.web.back() }.keyboardShortcut("[")
+            Button("Forward") { model.web.forward() }.keyboardShortcut("]")
+            Divider()
+            Button("All Files") { model.web.go("/files") }.keyboardShortcut("f", modifiers: [.command, .shift])
+            Button("Search…") { model.web.openSearch() }.keyboardShortcut("k")
+            // Admin pages, for admins, as the web's own account menu has them.
+            if model.isAdmin {
+                Button("Storage") { model.web.go("/storage") }
+                Button("Admin") { model.web.go("/admin") }
+            }
+            Divider()
+            Button("Reload") { model.web.reload() }.keyboardShortcut("r")
         }
-        do {
-            try await manager.signalEnumerator(for: .rootContainer)
-            status = "Syncing…"
-        } catch {
-            status = error.localizedDescription
+        CommandGroup(before: .systemServices) {
+            Button("Sign Out") { Task { await model.signOut() } }
+                .disabled(model.phase != .signedIn)
+            Divider()
         }
-    }
-
-    func signOut() async {
-        try? await api.signOut()
-        email = nil
-        // Leave the domain registered: removing it deletes the local mirror,
-        // and signing back in is far commoner than wanting the drive gone.
-        status = nil
-    }
-
-    private static func domainExists() async -> Bool {
-        ((try? await NSFileProviderManager.domains()) ?? [])
-            .contains { $0.identifier.rawValue == "io.onyxfs.default" }
     }
 }

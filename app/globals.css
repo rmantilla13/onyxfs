@@ -1567,3 +1567,13 @@ dialog.dialog {
     radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--aura-a) 14%, transparent), transparent 70%),
     color-mix(in srgb, var(--paper) 82%, transparent);
 }
+
+/* ─── Download for Mac (/download) ─────────────────────────────────────── */
+.download-card { width: 100%; max-width: 460px; padding: 32px; }
+.download-button { width: 100%; justify-content: center; gap: var(--s2); padding-block: 12px; font-size: 15px; }
+.download-points { margin: 20px 0 0; padding: 16px 0 0 18px; border-top: 1px solid var(--line); display: grid; gap: 8px; color: var(--muted); }
+.download-points a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+
+/* The nav's "Mac app" button: shown on a Mac browser, never inside the app. */
+.topnav-get-app { white-space: nowrap; }
+@media (max-width: 720px) { .topnav-get-app { display: none; } }

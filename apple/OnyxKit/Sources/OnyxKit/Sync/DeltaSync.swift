@@ -20,14 +20,23 @@ public actor DeltaSync {
         public let deleted: [Tombstone]
         public let cursor: Int64
         public let done: Bool
+        public let scope: String?
+        /// Only on the first page of a pass (the list is whole every time).
+        public let folders: [String]?
     }
 
     let api: OnyxAPI
+    let domain: SyncDomain?
     public private(set) var cursor: Int64
+    /// The access fingerprint of the last page read (DeltaPage.scope).
+    public private(set) var scope: String?
+    /// The scope's folders, from the first page of a pass.
+    public private(set) var folders: [String]?
 
-    public init(api: OnyxAPI, cursor: Int64 = 0) {
+    public init(api: OnyxAPI, cursor: Int64 = 0, domain: SyncDomain? = nil) {
         self.api = api
         self.cursor = cursor
+        self.domain = domain
     }
 
     /// Walk from the current cursor to the present, handing each page to
@@ -42,13 +51,16 @@ public actor DeltaSync {
                       apply: @Sendable (Page) async throws -> Void) async throws -> Int64 {
         var pages = 0
         while pages < maxPages {
-            let response = try await api.delta(cursor: cursor)
+            let response = try await api.delta(cursor: cursor, domain: domain, folders: pages == 0)
             let page = Page(changed: response.changed, deleted: response.deleted,
-                            cursor: response.cursor, done: response.done)
+                            cursor: response.cursor, done: response.done,
+                            scope: response.scope, folders: response.folders)
+            scope = response.scope ?? scope
+            if let listed = response.folders { folders = listed }
 
             // An empty page that does not advance is the end. Without this the
             // loop spins against a server that keeps answering "nothing new".
-            if page.changed.isEmpty && page.deleted.isEmpty && page.cursor <= cursor { return cursor }
+            if page.changed.isEmpty && page.deleted.isEmpty && page.cursor <= cursor && page.folders == nil { return cursor }
 
             try await apply(page)
 
@@ -75,7 +87,8 @@ public actor DeltaSync {
 /// In the shared app group, so the app and its File Provider extension agree:
 /// two separate cursors would each re-enumerate the other's work and the
 /// drive would never settle.
-public struct CursorStore: Sendable {
+public struct CursorStore: @unchecked Sendable {
+    // UserDefaults is thread-safe; it just predates Sendable.
     let defaults: UserDefaults?
     let key: String
 

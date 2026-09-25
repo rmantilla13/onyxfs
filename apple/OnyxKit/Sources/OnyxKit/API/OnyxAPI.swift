@@ -6,8 +6,8 @@ import Foundation
 /// excludes them from the cookie gate precisely so a bearer request gets a
 /// clean 401 instead of a 302 to a sign-in page an extension cannot render:
 ///
-///     /api/desktop/*      device auth (PKCE)
-///     /api/space/*        filespaces and credential minting
+///     /api/desktop/*      device auth (PKCE), and signing the app's web view in
+///     /api/space/*        drives, credentials, and one file's download link
 ///     /api/files/delta    sync enumeration
 ///
 /// Anything else needs a cookie. If a new endpoint is added for this client,
@@ -18,7 +18,7 @@ public actor OnyxAPI {
     let tokens: TokenStore
     let session: URLSession
 
-    public init(config: OnyxConfig = .production,
+    public init(config: OnyxConfig = .current,
                 tokens: TokenStore = TokenStore(),
                 session: URLSession = .shared) {
         self.config = config
@@ -58,14 +58,18 @@ public actor OnyxAPI {
 
     // MARK: - Sync
 
-    /// One page of changes since `cursor`. Cursor 0 means everything, so first
-    /// sync and incremental catch-up are the same code path.
-    public func delta(cursor: Int64, limit: Int = 500) async throws -> DeltaPage {
-        let url = config.url("api/files/delta", query: [
+    /// One page of changes since `cursor`, within one Finder location's scope
+    /// (nil: everything this account may see). Cursor 0 means everything, so
+    /// first sync and incremental catch-up are the same code path.
+    public func delta(cursor: Int64, limit: Int = 500, domain: SyncDomain? = nil,
+                      folders: Bool = false) async throws -> DeltaPage {
+        var query: [URLQueryItem] = [
             .init(name: "cursor", value: String(cursor)),
             .init(name: "limit", value: String(limit)),
-        ])
-        return try decode(DeltaPage.self, from: try await request(url))
+        ]
+        if let domain { query.append(.init(name: "drive", value: domain.deltaParameter)) }
+        if folders { query.append(.init(name: "folders", value: "1")) }
+        return try decode(DeltaPage.self, from: try await request(config.url("api/files/delta", query: query)))
     }
 
     /// The current high-water mark, with no payload — for a client that wants
@@ -75,18 +79,54 @@ public actor OnyxAPI {
         return try decode(DeltaPage.self, from: try await request(url)).cursor
     }
 
+    /// Where to download one file's bytes from, now. Checked against the same
+    /// rule as the web's detail view; a file you may not see is a 404.
+    public func contentLink(fileId: String) async throws -> ContentLink {
+        let id = fileId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? fileId
+        return try decode(ContentLink.self, from: try await request(config.url("api/space/files/\(id)")))
+    }
+
+    // MARK: - The app's web view
+
+    /// A one-time URL that signs a web view in as this device's account. It
+    /// works only in a web view holding `secret` as the `onyx_handoff` cookie
+    /// (WebHandoff), so it is useless to anyone who sees it.
+    public func webSession(challenge: String, next: String = "/files") async throws -> WebSessionLink {
+        let data = try await request(config.url("api/desktop/web-session"), method: "POST",
+                                     json: ["challenge": challenge, "next": next])
+        return try decode(WebSessionLink.self, from: data)
+    }
+
     // MARK: - Filespaces and credentials
 
     public func filespaces() async throws -> [Filespace] {
-        struct Wrapper: Decodable { let filespaces: [Filespace] }
+        try await drives().drives
+    }
+
+    /// The drives this account may open, and whether it is an admin.
+    public func drives() async throws -> (drives: [Filespace], isAdmin: Bool) {
+        struct Wrapper: Decodable { let filespaces: [Filespace]; let isAdmin: Bool? }
         let data = try await request(config.url("api/space/filespaces"))
-        return try decode(Wrapper.self, from: data).filespaces
+        let w = try decode(Wrapper.self, from: data)
+        return (w.filespaces, w.isAdmin ?? false)
     }
 
     public func credentials(filespaceId: String) async throws -> SpaceCredentials {
         let data = try await request(config.url("api/space/sts"), method: "POST",
                                      json: ["filespaceId": filespaceId])
         return try decode(SpaceCredentials.self, from: data)
+    }
+
+    // MARK: - Updates
+
+    /// The newest Mac release this server knows of, or nil when none has been
+    /// published. Needs no sign-in: the app checks before anyone signs in.
+    public func latestMacRelease() async throws -> MacRelease? {
+        do {
+            return try decode(MacRelease.self, from: try await request(config.url("api/desktop/mac/latest"), authenticated: false))
+        } catch OnyxError.http(let status, _) where status == 404 {
+            return nil
+        }
     }
 
     // MARK: - Identity
