@@ -2,13 +2,14 @@
 
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
+import ThemeToggle from '@/app/components/ThemeToggle';
 
 export default function TopNav({ brandName, markPath, email, isAdmin, build }) {
   const pathname = usePathname();
   const is = (href) => pathname === href || pathname.startsWith(`${href}/`);
 
   return (
-    <header style={{ borderBottom: '1px solid var(--line)', background: '#fff', position: 'sticky', top: 0, zIndex: 10 }}>
+    <header style={{ borderBottom: '1px solid var(--line)', background: 'var(--surface)', position: 'sticky', top: 0, zIndex: 10 }}>
       <div className="shell row" style={{ height: 56, flexWrap: 'nowrap', minWidth: 0 }}>
         <Link href="/files" className="row" style={{ gap: 8 }}>
           <img src={markPath} alt="" width={24} height={24} style={{ borderRadius: 6 }} />
@@ -30,6 +31,7 @@ export default function TopNav({ brandName, markPath, email, isAdmin, build }) {
           <span className="small muted nav-build mono" title={build.detail || build.label}>{build.label}</span>
         )}
         <span className="small muted nav-email" title={email}>{email}</span>
+        <ThemeToggle />
         <a className="small muted" href="/api/auth/signout" style={{ whiteSpace: 'nowrap' }}>Sign out</a>
       </div>
     </header>

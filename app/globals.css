@@ -8,9 +8,20 @@
  * Everything below in :root is the part the brand does NOT decide — spacing,
  * type sizes, elevation, stacking and motion — which used to be a magic number
  * at every call site.
+ *
+ * Dark mode is the same colour properties with different values: the root
+ * layout also emits a [data-theme='dark'] block derived from the brand, and
+ * an inline script sets data-theme before first paint (lib/theme.js). So a
+ * rule that reads var(--paper), var(--surface), var(--line), var(--ink),
+ * var(--muted), var(--accent), var(--danger)… is themed for free, and a new
+ * component should need no dark-mode CSS of its own. What does need it —
+ * anything built on the assumption that ink is dark — is in the block below.
  */
 
 :root {
+  /* Native controls, form fields and scrollbars follow the scheme. */
+  color-scheme: light;
+
   /* Spacing. Six steps is enough for this app; a seventh always turns out to
      be a layout that wanted a different structure. */
   --s1: 4px;
@@ -49,6 +60,15 @@
   --dur-1: 120ms;
   --dur-2: 200ms;
   --ease: cubic-bezier(0.2, 0, 0.13, 1);
+}
+
+/* In the dark scheme ink is the light colour, so anything that used it as
+   "the dark one" — a shadow, a scrim over the page or over a thumbnail —
+   takes paper, which is now the dark one, instead. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --shadow-1: 0 1px 2px color-mix(in srgb, var(--paper) 60%, transparent);
+  --shadow-2: 0 8px 30px color-mix(in srgb, var(--paper) 80%, transparent);
 }
 
 /* Motion is decoration here — nothing depends on an animation finishing, so
@@ -233,6 +253,7 @@ dialog.dialog {
    unset rather than falling back to an earlier declaration — so without that
    the scrim is simply invisible and the modal floats on the live page. */
 dialog.dialog::backdrop { background: color-mix(in srgb, var(--ink) 45%, transparent); }
+[data-theme='dark'] dialog.dialog::backdrop { background: color-mix(in srgb, var(--paper) 70%, transparent); }
 dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 
 .dialog-head {
@@ -387,6 +408,8 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+/* Sits on a thumbnail, so it stays a dark chip in either scheme. */
+[data-theme='dark'] .filecard-badge { background: color-mix(in srgb, var(--paper) 72%, transparent); color: var(--ink); }
 .folder-link {
   display: flex;
   width: 100%;
@@ -410,6 +433,18 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   font-size: var(--t-xs);
   cursor: pointer;
 }
+/* A tree row with something droppable over it. */
+.folder-drop { border-radius: var(--radius-sm); transition: background-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
+.folder-drop.is-over { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
+.folder-link[draggable="true"] { cursor: pointer; }
+
+/* The folder picker (Move dialog). */
+.picker-list { max-height: min(50vh, 360px); overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s1); }
+.picker-row { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--s1); text-align: left; border: 0; background: none; color: inherit; font: inherit; padding: 6px var(--s2); border-radius: var(--radius-sm); cursor: pointer; }
+.picker-row:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.picker-row.active { background: color-mix(in srgb, var(--accent) 14%, transparent); font-weight: 600; }
+.picker-row:disabled { cursor: default; opacity: 0.6; }
+
 .kind-row { display: flex; align-items: center; gap: var(--s2); min-width: 0; flex: 1 1 auto; }
 .kind-row .kind-strip { min-width: 0; }
 .only-mobile { display: none; }
@@ -459,6 +494,10 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   .btn-sm { min-height: 32px; }
 
   .files-title { font-size: var(--t-xl); }
+  /* The title keeps its line; the actions wrap beneath it rather than
+     squeezing it to nothing. */
+  .files-head { flex-wrap: wrap; row-gap: var(--s2); }
+  .files-head > .spacer { flex: 1 0 100%; height: 0; }
   .files-toolbar .input { max-width: none; flex: 1 1 100%; }
   .files-layout { grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
 
