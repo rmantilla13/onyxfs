@@ -23,6 +23,7 @@ function groups(mod) {
         [['Home', 'End'], 'First or last file'],
         [['Space'], 'Select or deselect'],
         [[`${mod}A`], 'Select every file in the folder'],
+        [['Drag'], 'On empty space: select the files the rectangle touches (⇧ or ' + mod + ' adds to the selection)'],
         [['Esc'], 'Clear the selection'],
         [['Enter'], 'Open'],
         [[`${mod}I`], 'Get info'],

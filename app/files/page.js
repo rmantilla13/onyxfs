@@ -3,7 +3,7 @@ import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
 import { isAdmin } from '@/lib/auth-allowlist';
 import {
-  getFeatureFlags, getRolesConfig, listFilespacesForSpace, getFileMetadataSchema, buildPrincipal,
+  getFeatureFlags, getRolesConfig, listFilespacesForSpace, getFileMetadataSchema, buildPrincipal, getAvatarUrl,
 } from '@/lib/db';
 import { listFilesPage, listFolderTree } from '@/lib/file-listing';
 import { listingKey } from '@/lib/listing-cache';
@@ -23,6 +23,8 @@ export default async function FilesPage({ searchParams }) {
   const session = await auth();
   const email = session?.user?.email;
   if (!email) redirect('/signin');
+  // The account menu's picture, or null for initials; never throws.
+  const avatarUrl = await getAvatarUrl(email);
 
   const admin = isAdmin(email);
   const [brand, globalFlags, rolesConfig, filespaces, rawSchema] = await Promise.all([
@@ -83,6 +85,7 @@ export default async function FilesPage({ searchParams }) {
         brandName={brand.name}
         logo={brand.visual.logo}
         email={email}
+        avatarUrl={avatarUrl}
         isAdmin={admin}
         filespaces={filespaces}
       />

@@ -5,8 +5,15 @@ import Link from 'next/link';
 import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
 import { THEME_KEY, readThemePref, setThemePref } from '@/lib/theme';
 import { initialsFor } from '@/lib/account';
+import AvatarDialog from '@/app/components/AvatarDialog';
 
 // ︎ asks for the text glyph, not the emoji, where a platform has both.
+// A picture changed in this tab, until the page is loaded afresh. Another
+// page's TopNav may be rendered from the router's cached payload, older than
+// the change; this keeps it from showing the old picture meanwhile. (A
+// router.refresh() would do that too, but it resets a scrolled file list.)
+let changedHere;
+
 const THEMES = [
   { key: 'light', label: 'Light', icon: '☀︎' },
   { key: 'dark', label: 'Dark', icon: '☾︎' },
@@ -20,7 +27,12 @@ const THEMES = [
  * it. Admin access is still decided on the server (ADMIN_EMAILS); this only
  * shows the way in.
  */
-export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts }) {
+export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts, avatarUrl = null }) {
+  // The picture, kept here too so a new one shows the moment it is saved.
+  const [avatar, setAvatar] = useState(() => (changedHere !== undefined ? changedHere : avatarUrl));
+  const [editingAvatar, setEditingAvatar] = useState(false);
+  useEffect(() => { setAvatar(changedHere !== undefined ? changedHere : avatarUrl); }, [avatarUrl]);
+
   // The server cannot see localStorage, so render 'system' and correct it
   // after mount rather than risk a hydration mismatch. The page is already in
   // the right scheme before this mounts (THEME_SCRIPT in the root layout).
@@ -34,11 +46,14 @@ export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts
   }, []);
 
   return (
+    <>
     <Menu
       label="Account"
       trigger={(
         <>
-          <span className="avatar" aria-hidden>{initialsFor(email)}</span>
+          <span className={`avatar${avatar ? ' has-image' : ''}`} aria-hidden>
+            {avatar ? <img src={avatar} alt="" /> : initialsFor(email)}
+          </span>
           <span className="sr-only">Account menu for {email}</span>
           <span aria-hidden className="muted small">▾</span>
         </>
@@ -49,6 +64,7 @@ export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts
         <span className="menu-heading-email" title={email}>{email}</span>
       </div>
       <MenuSeparator />
+      <MenuItem onClick={() => setEditingAvatar(true)}>Profile picture…</MenuItem>
       {isAdmin && (
         <>
           <Link href="/admin" role="menuitem" className="menu-item">Admin</Link>
@@ -82,5 +98,13 @@ export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts
           looks wrong in production is whether the fix is even live yet. */}
       {build && <div className="menu-foot mono" title={build.detail || build.label}>{build.label}</div>}
     </Menu>
+    <AvatarDialog
+      open={editingAvatar}
+      onClose={() => setEditingAvatar(false)}
+      email={email}
+      current={avatar}
+      onSaved={(url) => { changedHere = url; setAvatar(url); }}
+    />
+    </>
   );
 }

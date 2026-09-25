@@ -9,7 +9,7 @@
 -- GENERATED from the same statements lib/db.js executes, so the two agree by
 -- construction; regenerate it rather than hand-editing.
 --
--- Statements: 88
+-- Statements: 89
 
 CREATE TABLE IF NOT EXISTS "user" (
     id              TEXT PRIMARY KEY,
@@ -360,3 +360,14 @@ CREATE TABLE IF NOT EXISTS desktop_tokens (
   );
 
 CREATE INDEX IF NOT EXISTS desktop_tokens_email_idx ON desktop_tokens (email);
+
+-- Profile pictures (ensureAvatarsTable): a re-encoded 256px WebP per person,
+-- served from /api/avatars/<id>, where id is a hash of the address.
+CREATE TABLE IF NOT EXISTS user_avatars (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    image BYTEA NOT NULL,
+    type TEXT NOT NULL,
+    version BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+  );

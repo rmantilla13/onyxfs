@@ -4,7 +4,7 @@ import { auth } from '@/auth';
 import { isAdmin } from '@/lib/auth-allowlist';
 import { loadBrand } from '@/lib/brand-config';
 import {
-  listFilespacesForSpace, storageReport, countFilesUnderPrefix, duplicateSummary, getFeatureFlags,
+  listFilespacesForSpace, storageReport, countFilesUnderPrefix, duplicateSummary, getFeatureFlags, getAvatarUrl,
 } from '@/lib/db';
 import { presignFileUrls } from '@/lib/storage';
 import { fmtSize } from '@/lib/media';
@@ -36,6 +36,8 @@ export default async function StoragePage() {
   const email = session?.user?.email;
   if (!email) redirect('/signin?callbackUrl=/storage');
   if (!isAdmin(email)) redirect('/files');
+  // The account menu's picture, or null for initials; never throws.
+  const avatarUrl = await getAvatarUrl(email);
 
   const [brand, drives, flags] = await Promise.all([loadBrand(), listFilespacesForSpace(email), getFeatureFlags()]);
   const [report, dups, driveRows] = await Promise.all([
@@ -50,6 +52,7 @@ export default async function StoragePage() {
       brandName={brand.name}
       logo={brand.visual.logo}
       email={email}
+      avatarUrl={avatarUrl}
       isAdmin
       filespaces={drives}
     />
