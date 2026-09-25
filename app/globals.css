@@ -486,6 +486,70 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 .folder-tile-name { flex: 1; min-width: 0; }
 .folder-tile-wrap.is-over .folder-tile { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
 
+/* Grid / list switch in the toolbar: two icon buttons joined into one. */
+/* Pressed uses the shared .btn[aria-pressed] state. */
+.view-toggle { display: inline-flex; align-self: stretch; }
+.view-toggle .btn { padding: 0 10px; justify-content: center; }
+.view-toggle .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.view-toggle .btn:last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
+
+/* The list view. Header, folder rows and file rows share one column
+   template, so everything lines up without a table. */
+.filelist { --filelist-cols: 44px minmax(0, 1fr) 92px 110px 190px; }
+.filelist-cols {
+  display: grid;
+  grid-template-columns: var(--filelist-cols);
+  align-items: center;
+  gap: var(--s3);
+}
+/* Not sticky: the top nav already sticks at top 0 with a height the
+   stylesheet does not know, so a sticky header would slide under it. */
+.filelist-head {
+  padding: var(--s1) var(--s2);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--t-sm);
+}
+.filelist-sort {
+  display: inline-flex; align-items: center; gap: 4px;
+  min-width: 0; padding: var(--s1) 0;
+  border: 0; background: none; color: var(--muted);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.filelist-sort:hover, .filelist-sort.active { color: var(--ink); }
+.filelist-sort.active { font-weight: 600; }
+.filelist-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.filelist-arrow { display: inline-block; width: 1em; }
+.filelist-row {
+  width: 100%;
+  height: 48px;
+  padding: 0 var(--s2);
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  color: var(--ink);
+  font: inherit; font-size: var(--t-md);
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+.filelist-row:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.filelist-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.filelist-row.is-selected { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.filelist-row.is-selected:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.filelist-thumb { display: block; width: 44px; border-radius: var(--radius-sm); overflow: hidden; }
+.filelist-thumb .filecard-badge { display: none; }
+.filelist-thumb .filecard-thumb > span { font-size: 9px; line-height: 1; overflow: hidden; }
+.filelist-folder-icon { display: grid; place-items: center; height: 33px; color: var(--muted); background: var(--surface-sunken); }
+.filelist-name { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+.filelist-name .truncate { min-width: 0; }
+.filelist-col-size { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.filelist-col-modified { white-space: nowrap; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
+.filelist-col-size, .filelist-col-type, .filelist-col-modified { font-size: var(--t-sm); }
+.filelist-head .filelist-sort { font-size: var(--t-sm); }
+.filelist-folders .folder-drop { border-radius: 0; }
+.filelist-folders .folder-drop.is-over .filelist-row { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
+.filelist-more { margin: 0; padding: var(--s2); }
+
 /* The folder picker (Move dialog). */
 .picker-list { max-height: min(50vh, 360px); overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s1); }
 .picker-row { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--s1); text-align: left; border: 0; background: none; color: inherit; font: inherit; padding: 6px var(--s2); border-radius: var(--radius-sm); cursor: pointer; }
@@ -611,6 +675,16 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   }
   /* Clear the bar so the last row of cards is not sitting underneath it. */
   .files-grid { padding-bottom: 72px; }
+  .filelist-body { margin-bottom: 72px; }
+
+  /* The list on a phone: thumbnail, name, size, date. Type goes, and the
+     date loses its time. */
+  .filelist { --filelist-cols: 40px minmax(0, 1fr) 64px 84px; }
+  .filelist-cols { gap: var(--s2); }
+  .filelist-thumb { width: 40px; }
+  .filelist-col-type, .filelist-time { display: none; }
+  .filelist-row { height: 52px; }
+  .files-toolbar select.input { flex: 1 1 auto; }
 }
 
 /* ── Filespaces ─────────────────────────────────────────────────────────── */

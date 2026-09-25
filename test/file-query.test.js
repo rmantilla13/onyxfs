@@ -9,7 +9,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildFileQuery, nextCursor, sortSpec, encodeCursor, decodeCursor,
+  buildFileQuery, nextCursor, sortSpec, encodeCursor, decodeCursor, SORT_KEYS,
 } from '../lib/file-query.js';
 
 const admin = { isAdmin: true };
@@ -224,6 +224,38 @@ describe('pagination', () => {
     assert.ok(!text.includes('(f.created_at, f.id) <'), 'an id-less cursor cannot be ordered against');
   });
 
+  test('every sort key orders on a known column with id as the tiebreaker', () => {
+    for (const key of SORT_KEYS) {
+      const { text } = buildFileQuery({ opts: { sort: key }, principal: admin });
+      assert.match(text, /ORDER BY (f\.(created_at|name|updated_at)|coalesce\(f\.(size|mime), [^)]+\)) (ASC|DESC), f\.id (ASC|DESC)/, key);
+    }
+    // Object prototype names are not sorts.
+    assert.equal(sortSpec('constructor').column, 'created_at');
+    assert.equal(sortSpec('__proto__').column, 'created_at');
+  });
+
+  test('nullable columns order and page on the same NULL-free expression', () => {
+    // A keyset comparison with a NULL is NULL, which ended paging early on
+    // any page whose last row had no size.
+    const size = buildFileQuery({ opts: { sort: 'size', cursor: { value: null, id: 'x' } }, principal: admin });
+    assert.ok(size.text.includes('ORDER BY coalesce(f.size, -1) DESC, f.id DESC'));
+    assert.ok(size.text.includes('(coalesce(f.size, -1), f.id) < ($'));
+    assert.ok(size.params.includes(-1), 'a NULL cursor value becomes the stand-in');
+
+    const type = buildFileQuery({ opts: { sort: 'type', cursor: { value: 'image/png', id: 'x' } }, principal: admin });
+    assert.ok(type.text.includes("ORDER BY coalesce(f.mime, '') ASC, f.id ASC"));
+    assert.ok(type.text.includes("(coalesce(f.mime, ''), f.id) > ($"));
+
+    const small = buildFileQuery({ opts: { sort: 'small' }, principal: admin });
+    assert.ok(small.text.includes('ORDER BY coalesce(f.size, -1) ASC'));
+  });
+
+  test('non-null columns are ordered bare, so their indexes still apply', () => {
+    assert.ok(buildFileQuery({ opts: { sort: 'name_desc' }, principal: admin }).text.includes('ORDER BY f.name DESC, f.id DESC'));
+    assert.ok(buildFileQuery({ opts: { sort: 'modified' }, principal: admin }).text.includes('ORDER BY f.updated_at DESC, f.id DESC'));
+    assert.ok(buildFileQuery({ opts: { sort: 'modified_old' }, principal: admin }).text.includes('ORDER BY f.updated_at ASC, f.id ASC'));
+  });
+
   test('limit is clamped to a sane range', () => {
     assert.equal(buildFileQuery({ opts: { limit: 100000 }, principal: admin }).limit, 500);
     assert.equal(buildFileQuery({ opts: { limit: 0 }, principal: admin }).limit, 100);
@@ -249,6 +281,12 @@ describe('cursors', () => {
   test('nextCursor points at the last row of a full page', () => {
     const rows = [{ created_at: 3, id: 'a' }, { created_at: 2, id: 'b' }];
     assert.deepEqual(nextCursor(rows, { column: 'created_at' }, 2), { value: 2, id: 'b' });
+  });
+
+  test('nextCursor replaces a NULL sort value with the sort\'s stand-in', () => {
+    const rows = [{ size: 5, id: 'a' }, { size: null, id: 'b' }];
+    assert.deepEqual(nextCursor(rows, sortSpec('size'), 2), { value: -1, id: 'b' });
+    assert.deepEqual(nextCursor([{ mime: null, id: 'c' }], sortSpec('type'), 1), { value: '', id: 'c' });
   });
 
   test('nextCursor tolerates a non-array', () => {
