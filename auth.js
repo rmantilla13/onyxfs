@@ -7,7 +7,7 @@ import { getDb, isDbConfigured, ensureAuthTables, createMagicLinkRedirect } from
 import { unconfiguredAdapter, wrapAdapter } from '@/lib/auth-adapter';
 import { isEmailGrantedAccess } from '@/lib/auth-allowlist';
 import { loadBrand } from '@/lib/brand-config';
-import { signInEmail } from '@/lib/signin-email';
+import { signInEmail, printsSignInLinks } from '@/lib/signin-email';
 import { authConfig } from '@/auth.config';
 
 /**
@@ -40,10 +40,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       // kept in sync with it so the two can never disagree about the sender.
       from: process.env.NOTIFY_FROM || 'Onyx <onboarding@resend.dev>',
       async sendVerificationRequest({ identifier: email, url }) {
-        if (!process.env.RESEND_API_KEY) {
+        const printOnly = printsSignInLinks();
+        if (!process.env.RESEND_API_KEY && !printOnly) {
           throw new Error('RESEND_API_KEY is not set — sign-in email cannot be sent. Add it in Vercel → Settings → Environment Variables and redeploy.');
         }
-        const client = new ResendClient(process.env.RESEND_API_KEY);
         const brand = await loadBrand();
 
         // Derive the origin from the magic link itself, so this works on
@@ -76,6 +76,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           console.warn('[auth] magic-link redirect mint failed, using raw URL:', e.message);
         }
 
+        // `next dev` with no key: print the same /verify link the email would
+        // carry, in the terminal the developer is already watching.
+        if (printOnly) {
+          console.log(`\n[auth] Sign-in link for ${email} (development: printed, not emailed)\n\n    ${linkUrl}\n`);
+          return;
+        }
+
+        const client = new ResendClient(process.env.RESEND_API_KEY);
         const from = process.env.NOTIFY_FROM || `${brand.name} <onboarding@resend.dev>`;
         const { html, text, subject } = signInEmail({ brand, linkUrl, email, host, origin });
 

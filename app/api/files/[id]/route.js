@@ -3,7 +3,7 @@ import { auth } from '@/auth';
 import {
   updateFile, softDeleteFile, deleteFile, getFileById, getFileMetadataSchema,
   getFeatureFlags, buildPrincipal, canModifyFile, canAccessFile,
-  setFileStorageKey, getFilespaceForUser,
+  setFileStorageKey, getFilespaceForWrite,
 } from '@/lib/db';
 import {
   getStorageConfig, storageMode, s3MoveObject, s3DeleteObject, presignFileUrls,
@@ -104,9 +104,11 @@ export async function PATCH(req, { params }) {
   }
 
   // Sanitize the metadata object against the field schema (drop unknown keys /
-  // coerce types) so only valid fields are stored.
+  // coerce types) so only valid fields are stored. Read fresh: the settings
+  // cache is per instance, and a field an admin added a moment ago on another
+  // instance would otherwise be an "unknown key" here and silently dropped.
   if (body.metadata !== undefined) {
-    const schema = normalizeSchema(await getFileMetadataSchema());
+    const schema = normalizeSchema(await getFileMetadataSchema({ fresh: true }));
     body.metadata = validateMetadataPatch(body.metadata, schema);
   }
 
@@ -134,7 +136,9 @@ export async function PATCH(req, { params }) {
     const base = await getStorageConfig();
     if (storageMode(base) === 's3') {
       const filespaceId = body.filespaceId || new URL(req.url).searchParams.get('filespace') || null;
-      const fs = filespaceId ? await getFilespaceForUser(session.user.email, filespaceId) : null;
+      // Writing under a drive's prefix takes an editor of it.
+      const fs = filespaceId ? await getFilespaceForWrite(session.user.email, filespaceId) : null;
+      if (filespaceId && !fs) return NextResponse.json({ error: 'You can view this drive but not change it.' }, { status: 403 });
       const cfg = fs ? cfgForFilespace(base, fs) : base;
       const root = (fs ? String(fs.prefix || '') : String(base.prefix || 'files')).replace(/^\/+|\/+$/g, '');
       const dir = existing.storageKey.slice(0, existing.storageKey.lastIndexOf('/') + 1);
@@ -174,7 +178,9 @@ export async function PATCH(req, { params }) {
       // the same thing ?filespace=, so accept either rather than silently
       // downgrading a scoped move to a catalog-only one.
       const filespaceId = body.filespaceId || new URL(req.url).searchParams.get('filespace') || null;
-      const fs = filespaceId ? await getFilespaceForUser(session.user.email, filespaceId) : null;
+      // Writing under a drive's prefix takes an editor of it.
+      const fs = filespaceId ? await getFilespaceForWrite(session.user.email, filespaceId) : null;
+      if (filespaceId && !fs) return NextResponse.json({ error: 'You can view this drive but not change it.' }, { status: 403 });
       // Unscoped, the file is movable when its key sits where an unscoped
       // upload would have put it (`<base prefix>/<folder>/<name>`); a key in
       // some filespace's prefix is not, since which bucket and prefix to

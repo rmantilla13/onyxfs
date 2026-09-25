@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import {
-  listFileFoldersForUser, buildPrincipal, getFilespaceForUser, getFeatureFlags,
+  buildPrincipal, getFilespaceForUser, getFilespaceForWrite, getFeatureFlags,
   createFolder, renameFolder, deleteFolderRows, listFolderSubtreeFiles, folderPathInUse,
   canModifyFolder, softDeleteFile, deleteFile, listFolderRowsUnder, folderRowTag,
 } from '@/lib/db';
@@ -12,6 +12,7 @@ import {
 import {
   cleanFolder, folderPathProblem, isWithin, planRename, rebase, mapLimit, settleLimit,
 } from '@/lib/folder-ops';
+import { listFolderTree, storagePrefixFor } from '@/lib/file-listing';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,13 +35,14 @@ const bad = (msg, status = 400) => NextResponse.json({ error: msg }, { status })
 /**
  * Where a folder's files live: a filespace's bucket and prefix, or the base
  * storage config for the unscoped library. `tag` is what folders.filespace
- * holds for this scope. Null when the filespace is not the caller's.
+ * holds for this scope. Null when the filespace is not the caller's — or,
+ * with `write`, when they may open it but not change it (a drive's viewer).
  */
-async function scopeFor(email, filespaceId) {
+async function scopeFor(email, filespaceId, { write = false } = {}) {
   const base = await getStorageConfig();
   const s3 = storageMode(base) === 's3';
   if (filespaceId) {
-    const fs = await getFilespaceForUser(email, filespaceId);
+    const fs = write ? await getFilespaceForWrite(email, filespaceId) : await getFilespaceForUser(email, filespaceId);
     if (!fs) return null;
     const prefix = cleanFolder(fs.prefix);
     return { scoped: true, tag: prefix, prefix, cfg: s3 ? cfgForFilespace(base, fs) : null, s3 };
@@ -84,9 +86,8 @@ export async function GET(req) {
     return NextResponse.json({ files: inScope.size, folders: dirs.size, outside: plan.outside.length });
   }
 
-  const fs = filespaceId ? await getFilespaceForUser(session.user.email, filespaceId) : null;
-  const storagePrefix = fs ? String(fs.prefix || '').replace(/^\/+|\/+$/g, '') : undefined;
-  const folders = await listFileFoldersForUser(principal, { storagePrefix, filespace: storagePrefix });
+  const storagePrefix = await storagePrefixFor(session.user.email, filespaceId);
+  const folders = await listFolderTree({ principal, storagePrefix });
   return NextResponse.json({ folders });
 }
 
@@ -107,8 +108,8 @@ export async function POST(req) {
   const problem = folderPathProblem(body.name);
   if (problem) return bad(problem);
   const name = cleanFolder(body.name);
-  const scope = await scopeFor(session.user.email, body.filespaceId);
-  if (!scope) return forbidden('No access to that filespace.');
+  const scope = await scopeFor(session.user.email, body.filespaceId, { write: true });
+  if (!scope) return forbidden('You can view this drive but not change it.');
   // folders.name is the whole primary key, so a path another filespace
   // already has cannot get a row of its own here. Say so rather than answering
   // 201 for a folder that will not show up.
@@ -166,8 +167,8 @@ export async function PATCH(req) {
   const principal = await buildPrincipal(session.user.email);
   if (!(await canModifyFolder(from, principal))) return forbidden();
   if (!(await canModifyFolder(to, principal))) return forbidden('No access to the destination folder.');
-  const scope = await scopeFor(session.user.email, body.filespaceId);
-  if (!scope) return forbidden('No access to that filespace.');
+  const scope = await scopeFor(session.user.email, body.filespaceId, { write: true });
+  if (!scope) return forbidden('You can view this drive but not change it.');
   if (await folderPathInUse(to)) {
     return bad(`“${to}” already exists${scope.scoped ? ' (here or in another filespace)' : ''}. Choose another name, or move the files into it instead.`, 409);
   }
@@ -250,8 +251,8 @@ export async function DELETE(req) {
   if (!name) return bad('Folder required.');
   const principal = await buildPrincipal(session.user.email);
   if (!(await canModifyFolder(name, principal))) return forbidden();
-  const scope = await scopeFor(session.user.email, url.searchParams.get('filespace'));
-  if (!scope) return forbidden('No access to that filespace.');
+  const scope = await scopeFor(session.user.email, url.searchParams.get('filespace'), { write: true });
+  if (!scope) return forbidden('You can view this drive but not change it.');
 
   const flags = await getFeatureFlags();
   const files = await listFolderSubtreeFiles(name);

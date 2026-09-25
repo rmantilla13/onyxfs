@@ -9,9 +9,14 @@ import { placeMenu } from '@/lib/menu-place';
  * context menu and the dropdown Menu so both answer the keys the same way.
  * Returns true when it handled the key.
  */
+// Radio and checkbox items are menu items too — the theme choice in the
+// account menu is a set of radios, and was unreachable by arrow key.
+export const MENU_ITEMS = ['menuitem', 'menuitemradio', 'menuitemcheckbox']
+  .map((r) => `[role="${r}"]:not(:disabled)`).join(', ');
+
 export function menuKeyNav(e, container) {
   if (!container) return false;
-  const items = [...container.querySelectorAll('[role="menuitem"]:not(:disabled)')];
+  const items = [...container.querySelectorAll(MENU_ITEMS)];
   if (!items.length) return false;
   const at = items.indexOf(document.activeElement);
   let next = null;
@@ -60,10 +65,15 @@ export function useContextMenu() {
     setState({ x: at.x ?? 0, y: at.y ?? 0, anchor, items: items.filter(Boolean), key: Date.now() });
   }, []);
 
+  // A new key per opening remounts the popup, so it measures and focuses
+  // afresh. Passed on its own: React refuses a `key` spread in with props.
   const element = state ? (
     <ContextMenuPopup
       key={state.key}
-      {...state}
+      x={state.x}
+      y={state.y}
+      anchor={state.anchor}
+      items={state.items}
       onClose={close}
     />
   ) : null;
@@ -85,7 +95,7 @@ function ContextMenuPopup({ x, y, anchor, items, onClose }) {
   // Focus the first item once placed, so the keyboard is in the menu.
   useEffect(() => {
     if (!pos) return;
-    ref.current?.querySelector('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true });
+    ref.current?.querySelector(MENU_ITEMS)?.focus({ preventScroll: true });
   }, [pos]);
 
   useEffect(() => {

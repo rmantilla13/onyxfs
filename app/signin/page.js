@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation';
 import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
+import { printsSignInLinks } from '@/lib/signin-email';
+import { safeReturnPath } from '@/lib/return-path';
 import SignInClient from './SignInClient';
 
 export const dynamic = 'force-dynamic';
@@ -17,9 +19,12 @@ export default async function SignInPage({ searchParams }) {
   // that has to notice an already signed-in visitor — including the one the
   // magic-link callback just delivered here — and send them to the library.
   const code = searchParams?.error;
+  // Where they were going: a deep link the middleware bounced here, or a
+  // private share link. Only ever a path on this site.
+  const returnTo = safeReturnPath(searchParams?.callbackUrl);
   if (!code) {
     const session = await auth();
-    if (session?.user) redirect('/files');
+    if (session?.user) redirect(returnTo || '/files');
   }
 
   const brand = await loadBrand();
@@ -27,8 +32,10 @@ export default async function SignInPage({ searchParams }) {
     <SignInClient
       brandName={brand.name}
       tagline={brand.tagline}
-      markPath={brand.visual.logo.markPath}
+      logo={brand.visual.logo}
       oktaEnabled={process.env.NEXT_PUBLIC_OKTA_ENABLED === 'true'}
+      linksPrinted={printsSignInLinks()}
+      returnTo={returnTo}
       error={code ? ERRORS[code] || 'Sign-in failed. Try again.' : null}
     />
   );

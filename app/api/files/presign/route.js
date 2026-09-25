@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { getStorageConfig, s3PresignPut, storageMode, cfgForFilespace } from '@/lib/storage';
-import { getFilespaceForUser } from '@/lib/db';
+import { getStorageConfig, s3PresignPut, storageMode, cfgForFilespace, buildObjectKey } from '@/lib/storage';
+import { getFilespaceForWrite, driveScopeFor } from '@/lib/db';
+import { driveAccess } from '@/lib/drive-access';
 
 export const runtime = 'nodejs';
 
@@ -59,9 +60,24 @@ export async function POST(req) {
     cacheControl = THUMB_CACHE_CONTROL;
   } else if (body.filespaceId) {
     // Scope the upload to a filespace's bucket prefix when one is selected, so the
-    // object lands exactly where the desktop app mounts it.
-    const fs = await getFilespaceForUser(session.user.email, body.filespaceId);
-    if (fs) scoped = cfgForFilespace(cfg, fs);
+    // object lands exactly where the desktop app mounts it. Adding to a drive
+    // takes an editor or owner of it (lib/drive-access.js).
+    const fs = await getFilespaceForWrite(session.user.email, body.filespaceId);
+    if (!fs) {
+      return NextResponse.json({ error: 'You can view this drive but not add to it. Ask one of its owners for editor access.' }, { status: 403 });
+    }
+    scoped = cfgForFilespace(cfg, fs);
+  }
+
+  // Wherever it was aimed from, a file that would land inside a drive takes
+  // an editor of that drive — an upload to All files included, should a
+  // drive's prefix sit inside the library's. Previews are exempt: _thumbs/
+  // is no drive's.
+  if (!body.thumb && !body.strip) {
+    const d = driveAccess(buildObjectKey(scoped, filename, folder), await driveScopeFor(session.user.email));
+    if (d.inDrive && !d.write) {
+      return NextResponse.json({ error: 'That folder is in a drive you can view but not add to.' }, { status: 403 });
+    }
   }
 
   try {

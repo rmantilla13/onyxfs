@@ -5,6 +5,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:local": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/dev-local.mjs",
+    "dev:stop": "node scripts/dev-local.mjs stop",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -32,5 +34,8 @@
     "@types/react": "^18.3.12",
     "eslint": "^8.57.1",
     "eslint-config-next": "^14.2.35"
+  },
+  "allowScripts": {
+    "ffmpeg-static@5.3.0": true
   }
 }

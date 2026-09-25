@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
+import BrandLogo from '@/app/components/BrandLogo';
 
-export default function PairClient({ brandName, markPath }) {
+export default function PairClient({ brandName, logo }) {
   const [code, setCode] = useState(null);
   const [expires, setExpires] = useState(null);
   const [error, setError] = useState(null);
@@ -31,7 +32,7 @@ export default function PairClient({ brandName, markPath }) {
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
       <div className="card" style={{ width: '100%', maxWidth: 420, padding: 32 }}>
-        <img src={markPath} alt="" width={40} height={40} style={{ borderRadius: 10, marginBottom: 24 }} />
+        <BrandLogo logo={logo} name={brandName} height={30} markSize={40} className="auth-logo" />
         <h1 style={{ fontSize: 22, marginBottom: 8 }}>Pair {brandName}</h1>
         <p className="muted small" style={{ marginBottom: 20 }}>
           Type this code into the desktop app. It works once and expires in five minutes.

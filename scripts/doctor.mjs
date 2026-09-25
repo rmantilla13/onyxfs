@@ -89,6 +89,18 @@ const OPTIONAL = ENV_VARS
 const CONNECTION_VAR = process.env.DATABASE_URL ? 'DATABASE_URL'
   : process.env.POSTGRES_URL ? 'POSTGRES_URL' : null;
 
+// A database on this machine means a local development setup, where `next
+// dev` prints sign-in links to its terminal instead of emailing them (see
+// printsSignInLinks in lib/signin-email.js). Anywhere else a missing
+// RESEND_API_KEY means nobody can sign in, and it fails below as before.
+const LOCAL_DATABASE = (() => {
+  try {
+    return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(process.env[CONNECTION_VAR]).hostname);
+  } catch {
+    return false;
+  }
+})();
+
 for (const [key, why] of [['__CONNECTION__', 'Postgres connection string — DATABASE_URL or POSTGRES_URL'], ...REQUIRED]) {
   if (key === '__CONNECTION__') {
     if (CONNECTION_VAR) {
@@ -104,6 +116,10 @@ for (const [key, why] of [['__CONNECTION__', 'Postgres connection string — DAT
     } else {
       fail('no connection string', why);
     }
+    continue;
+  }
+  if (key === 'RESEND_API_KEY' && !process.env[key] && LOCAL_DATABASE) {
+    console.log(`  ${paint(C.dim, '·')} ${paint(C.dim, `${key} unset — local database, so \`next dev\` prints sign-in links to its terminal`)}`);
     continue;
   }
   process.env[key] ? ok(key) : fail(key, why);
@@ -190,7 +206,7 @@ for (const r of await ensureSchema()) {
 const warmers = [
   ['settings', () => db.listSettings('')],
   ['files + acl', () => db.listFilesForUser({ limit: 1 }, { isAdmin: true })],
-  ['folders', () => db.listFolderNames()],
+  ['folders', () => db.listFileFolders()],
   ['tombstones', () => db.listFileChanges({ cursor: 0, limit: 1 })],
   ['uploads', () => db.listUploads('doctor@example.com')],
   ['shares', () => db.getShareByToken('__doctor__')],

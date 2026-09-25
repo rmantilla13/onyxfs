@@ -1,56 +1,72 @@
 'use client';
 
-import { usePathname } from 'next/navigation';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import ThemeToggle from '@/app/components/ThemeToggle';
+import ProfileMenu from '@/app/components/ProfileMenu';
+import BrandLogo from '@/app/components/BrandLogo';
+import ShortcutsDialog from '@/app/components/ShortcutsDialog';
+import CommandPalette, { useCommandPaletteShortcut } from '@/app/components/CommandPalette';
+import { isTyping, modKey } from '@/lib/keys';
 
-export default function TopNav({ brandName, markPath, email, isAdmin, build }) {
-  const pathname = usePathname();
-  const is = (href) => pathname === href || pathname.startsWith(`${href}/`);
+/**
+ * The bar across the top: the mark, one search box, and the account menu.
+ *
+ * The search box is the command palette (⌘K): files across the whole
+ * library, folders, drives and every action, including the keyboard
+ * shortcuts — which is why there is no separate Shortcuts button, and why
+ * the drives are not repeated here (they live in the files sidebar, and in
+ * the palette on every page).
+ *
+ * `filespaces` comes from the page (listFilespacesForSpace); the palette
+ * lists them as drives.
+ */
+export default function TopNav({ brandName, logo, email, isAdmin, build, filespaces = [] }) {
+  const [palette, setPalette] = useState(false);
+  const [shortcuts, setShortcuts] = useState(false);
+  // The modifier is the platform's, which the server cannot know: render ⌘
+  // and correct it after mount.
+  const [mod, setMod] = useState('⌘');
+  useEffect(() => { setMod(modKey()); }, []);
+  useCommandPaletteShortcut(setPalette);
+
+  // "?" anywhere that is not a text field or an open dialog.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== '?' || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.defaultPrevented || isTyping(e) || e.target?.closest?.('dialog')) return;
+      e.preventDefault();
+      setShortcuts(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   return (
-    <header style={{ borderBottom: '1px solid var(--line)', background: 'var(--surface)', position: 'sticky', top: 0, zIndex: 10 }}>
-      <div className="shell row" style={{ height: 56, flexWrap: 'nowrap', minWidth: 0 }}>
-        <Link href="/files" className="row" style={{ gap: 8 }}>
-          <img src={markPath} alt="" width={24} height={24} style={{ borderRadius: 6 }} />
-          <strong style={{ fontFamily: 'var(--font-display)', letterSpacing: '-0.02em' }}>{brandName}</strong>
+    <header className="topnav">
+      <div className="shell topnav-row">
+        <Link href="/files" className="topnav-brand" title="All files">
+          <BrandLogo logo={logo} name={brandName} withName height={22} />
         </Link>
 
-        <nav className="row" style={{ gap: 4, marginLeft: 12 }}>
-          <NavLink href="/files" active={is('/files')}>Files</NavLink>
-          {isAdmin && <NavLink href="/admin" active={is('/admin')}>Admin</NavLink>}
-        </nav>
+        <button type="button" className="topnav-search" onClick={() => setPalette(true)} aria-label="Search and commands" aria-keyshortcuts="Meta+K Control+K">
+          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden>
+            <circle cx="7" cy="7" r="4.75" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            <path d="m10.5 10.5 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+          <span className="topnav-search-text">Search files, folders, drives…</span>
+          <kbd className="topnav-search-kbd">{mod}K</kbd>
+        </button>
 
-        <div className="spacer" />
-
-        {/* Which build is serving this page. The first question when
-            something looks wrong in production is whether the fix is even
-            live yet, and a version alone does not answer it. Hidden on a
-            phone, where the space is worth more than the answer. */}
-        {build && (
-          <span className="small muted nav-build mono" title={build.detail || build.label}>{build.label}</span>
-        )}
-        <span className="small muted nav-email" title={email}>{email}</span>
-        <ThemeToggle />
-        <a className="small muted" href="/api/auth/signout" style={{ whiteSpace: 'nowrap' }}>Sign out</a>
+        <ProfileMenu email={email} isAdmin={isAdmin} build={build} onShortcuts={() => setShortcuts(true)} />
       </div>
+      <CommandPalette
+        open={palette}
+        onClose={() => setPalette(false)}
+        drives={filespaces}
+        isAdmin={isAdmin}
+        onShortcuts={() => setShortcuts(true)}
+      />
+      <ShortcutsDialog open={shortcuts} onClose={() => setShortcuts(false)} />
     </header>
-  );
-}
-
-function NavLink({ href, active, children }) {
-  return (
-    <Link
-      href={href}
-      style={{
-        padding: '6px 10px',
-        borderRadius: 'var(--radius)',
-        fontSize: 14,
-        fontWeight: active ? 600 : 400,
-        background: active ? 'color-mix(in srgb, var(--ink) 6%, transparent)' : 'transparent',
-      }}
-    >
-      {children}
-    </Link>
   );
 }

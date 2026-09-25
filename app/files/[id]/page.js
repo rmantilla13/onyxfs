@@ -2,12 +2,13 @@ import { redirect, notFound } from 'next/navigation';
 import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
 import { isAdmin } from '@/lib/auth-allowlist';
-import { getFileById, buildPrincipal, canAccessFile, canModifyFile } from '@/lib/db';
+import { getFileById, buildPrincipal, canAccessFile, canModifyFile, listFilespacesForSpace } from '@/lib/db';
 import { presignFileUrls } from '@/lib/storage';
 import TopNav from '@/app/components/TopNav';
 import FileDetail from '@/app/components/file/FileDetail';
 import { buildLabel, buildDetail } from '@/lib/version';
 import { parseTimecode } from '@/lib/video-time';
+import { flagsForUser } from '@/lib/user-flags';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,11 +49,14 @@ export default async function FilePage({ params, searchParams }) {
   // "no such file" confirms the id exists to someone guessing.
   if (!(await canAccessFile(file, principal))) notFound();
 
-  const [brand, signedList, canWrite] = await Promise.all([
+  const [brand, signedList, canWrite, filespaces, access] = await Promise.all([
     loadBrand(),
     // Six hours, so a paused video still seeks when it resumes.
     presignFileUrls([file], { expiresIn: 21600 }),
     canModifyFile(file, principal),
+    // For the nav's filespace switcher.
+    listFilespacesForSpace(email),
+    flagsForUser(email),
   ]);
 
   return (
@@ -60,13 +64,18 @@ export default async function FilePage({ params, searchParams }) {
       <TopNav
         build={{ label: buildLabel(), detail: buildDetail() }}
         brandName={brand.name}
-        markPath={brand.visual.logo.markPath}
+        logo={brand.visual.logo}
         email={email}
         isAdmin={isAdmin(email)}
+        filespaces={filespaces}
       />
       <FileDetail
         file={signedList[0]}
         canWrite={canWrite}
+        // Sharing takes the role's flag AND write access; the routes check both again.
+        canShare={canWrite && !!access.flags.shares}
+        // Back to the folder the file is in, not the top of the library.
+        backHref={file.folder ? `/files?folder=${encodeURIComponent(file.folder)}` : '/files'}
         // ?t= opens the player at a moment, so a timecode can be shared as a
         // link. Parsed here rather than in the client so a malformed value is
         // simply absent instead of reaching the player as NaN.

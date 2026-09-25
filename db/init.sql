@@ -9,7 +9,7 @@
 -- GENERATED from the same statements lib/db.js executes, so the two agree by
 -- construction; regenerate it rather than hand-editing.
 --
--- Statements: 74
+-- Statements: 88
 
 CREATE TABLE IF NOT EXISTS "user" (
     id              TEXT PRIMARY KEY,
@@ -182,6 +182,31 @@ CREATE INDEX IF NOT EXISTS files_thumbnail_key_idx ON files (thumbnail_key);
 
 CREATE INDEX IF NOT EXISTS files_live_folder_idx ON files (folder) WHERE deleted_at IS NULL;
 
+-- Duplicates are live rows sharing a content hash and a size.
+CREATE INDEX IF NOT EXISTS files_content_hash_idx ON files (content_hash, size) WHERE deleted_at IS NULL AND content_hash IS NOT NULL;
+
+-- Indexes for large libraries (ensureFileIndexes). The app builds these
+-- CONCURRENTLY; here, on a fresh database, the plain form is instant.
+-- Opening a folder in each sort order, led by the folder:
+CREATE INDEX IF NOT EXISTS files_folder_created_idx ON files (folder, created_at, id) WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS files_folder_name_idx ON files (folder, name, id) WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS files_folder_size_idx ON files (folder, (coalesce(size, -1)), id) WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS files_folder_updated_idx ON files (folder, updated_at, id) WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS files_folder_mime_idx ON files (folder, (coalesce(mime, '')), id) WHERE deleted_at IS NULL;
+
+-- A drive's files and its usage, without visiting the table:
+CREATE INDEX IF NOT EXISTS files_live_key_idx ON files (storage_key text_pattern_ops) INCLUDE (size) WHERE deleted_at IS NULL;
+
+-- Name search by fragment (ILIKE '%…%'). Skip both if pg_trgm is unavailable:
+-- search still works, by scanning.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE INDEX IF NOT EXISTS files_name_trgm_idx ON files USING GIN (name gin_trgm_ops) WHERE deleted_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS uploads (
     id           TEXT PRIMARY KEY,
     upload_id    TEXT NOT NULL,
@@ -249,6 +274,10 @@ ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS storage_prefix TEXT;
 ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS brief_id TEXT;
 
 ALTER TABLE file_shares ALTER COLUMN file_id DROP NOT NULL;
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS pw_failures INT NOT NULL DEFAULT 0;
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS pw_locked_until BIGINT;
 
 CREATE TABLE IF NOT EXISTS folder_access (
     folder TEXT NOT NULL,

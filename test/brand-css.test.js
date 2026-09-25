@@ -20,7 +20,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { brandCssVars, resolveBrand } = await import('../lib/brand-config.js');
+const { brandCssVars, resolveBrand, sanitizeBrandSubmission } = await import('../lib/brand-config.js');
 
 describe('brandCssVars', () => {
   test('emits font families unescaped', () => {
@@ -52,5 +52,44 @@ describe('brandCssVars', () => {
     for (const decl of css.split(';')) {
       assert.match(decl, /^--[a-z-]+:.+$/, `malformed declaration: ${decl}`);
     }
+  });
+});
+
+// The logo is a wordmark that spells our name, in two versions: dark letters
+// for paper and light ones for the dark scheme. A deployment that is no
+// longer ours must not go on wearing it.
+describe('the logo', () => {
+  test('ours by default: the wordmark, and a light-lettered one for the dark scheme', () => {
+    const { logo } = resolveBrand(null).visual;
+    assert.equal(logo.lockupPath, '/onyx-lockup.svg');
+    assert.equal(logo.lockupDarkPath, '/onyx-lockup-dark.svg');
+    assert.equal(logo.markPath, '/onyx-mark.png', 'the path emails already sent point at');
+    assert.equal(logo.onyxWordmark, true, 'drawn inline, so it can follow the theme and animate');
+  });
+
+  test('a renamed or re-marked deployment keeps its own mark and name, not our wordmark', () => {
+    for (const saved of [{ name: 'Acme Files' }, { markUrl: 'https://acme.example/mark.png' }]) {
+      const { logo } = resolveBrand(saved).visual;
+      assert.equal(logo.lockupPath, null, JSON.stringify(saved));
+      assert.equal(logo.lockupDarkPath, null, JSON.stringify(saved));
+      assert.equal(logo.onyxWordmark, false, JSON.stringify(saved));
+    }
+  });
+
+  test('a wordmark of its own is used, in both schemes unless it gives a dark one', () => {
+    assert.deepEqual(
+      resolveBrand({ name: 'Acme Files', lockupUrl: '/acme.svg' }).visual.logo,
+      { markPath: '/onyx-mark.png', lockupPath: '/acme.svg', lockupDarkPath: '/acme.svg', onyxWordmark: false },
+    );
+    assert.equal(resolveBrand({ lockupUrl: '/acme.svg', lockupDarkUrl: '/acme-dark.svg' }).visual.logo.lockupDarkPath, '/acme-dark.svg');
+  });
+
+  test('saving our own defaults back does not count as a change', () => {
+    const { logo } = resolveBrand({ name: 'Onyx', markUrl: '/onyx-mark.png', lockupUrl: '/onyx-lockup.svg' }).visual;
+    assert.equal(logo.lockupDarkPath, '/onyx-lockup-dark.svg', 'the light wordmark must never stand in for the dark one');
+  });
+
+  test('the dark wordmark can be set from the admin form', () => {
+    assert.deepEqual(sanitizeBrandSubmission({ lockupDarkUrl: '/x.svg' }), { lockupDarkUrl: '/x.svg' });
   });
 });

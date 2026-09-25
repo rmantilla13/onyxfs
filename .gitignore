@@ -9,6 +9,9 @@ dist
 .DS_Store
 *.log
 
+# Local development: Postgres cluster + S3 bucket (scripts/dev-local.mjs)
+.dev
+
 # Tauri build output
 desktop/src-tauri/target
 desktop/src-tauri/binaries

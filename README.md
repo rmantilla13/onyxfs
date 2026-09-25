@@ -37,6 +37,42 @@ scoped to and its own expiry.
 
 Node 22.15 or newer is required (`.nvmrc`); `npm test` fails to start on older versions.
 
+### Entirely on this machine
+
+No cloud account and no mail provider:
+
+```bash
+brew install postgresql@17 versitygw
+npm install
+npm run dev:local
+```
+
+The first run writes `.env.local`, creates a Postgres cluster and an S3 bucket
+under `.dev/`, applies the schema, and points Admin → Storage at the bucket.
+Every run starts whichever of the two is not already up, then `next dev`. Sign
+in with an address from `ADMIN_EMAILS`: with `RESEND_API_KEY` unset, `next dev`
+prints the magic link to the terminal instead of emailing it.
+
+| | |
+|---|---|
+| Postgres | `postgresql://postgres@127.0.0.1:55432/onyx` |
+| S3 | `http://127.0.0.1:59000`, bucket `onyx` — every object is a plain file under `.dev/s3/onyx/` |
+
+Both keep running when you stop the app. `npm run dev:stop` stops them, and
+`npm run dev:stop && rm -rf .dev` resets everything. The bucket is versitygw
+rather than MinIO because MinIO's community builds are unmaintained and its
+last Homebrew binary crashes at startup on macOS 27.
+
+`dev:local` refuses to start when the `DATABASE_URL` that `next dev` would see
+points anywhere but its own cluster, so a Supabase string left in `.env.local`
+never gets a local session run on top of it.
+
+npm 12 skips dependency install scripts that `allowScripts` in `package.json`
+does not approve. ffmpeg-static's is approved there: it downloads the binary
+that server-side video thumbnails need.
+
+### Against a hosted database
+
 ```bash
 npm install
 cp .env.local.example .env.local   # fill in DATABASE_URL, AUTH_SECRET, RESEND_API_KEY

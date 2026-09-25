@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { listFilesForUser, createFile, listFileFoldersForUser, buildPrincipal, getFilespaceForUser } from '@/lib/db';
-import { presignFileUrls } from '@/lib/storage';
-import { encodeCursor, decodeCursor } from '@/lib/file-query';
+import { createFile, buildPrincipal, getFilespaceForUser } from '@/lib/db';
+import { listFilesPage, listFolderTree, storagePrefixFor } from '@/lib/file-listing';
+import { driveAccess } from '@/lib/drive-access';
+import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject } from '@/lib/storage';
+import { decodeCursor } from '@/lib/file-query';
 import { uploadFields } from '@/lib/media';
 
 export const runtime = 'nodejs';
@@ -32,9 +34,7 @@ export async function GET(req) {
   const kindParam = url.searchParams.get('kind');
 
   // Filespace scope (Space is filespace-aware): restrict to this filespace's prefix.
-  const filespaceId = url.searchParams.get('filespace');
-  const fs = filespaceId ? await getFilespaceForUser(session.user.email, filespaceId) : null;
-  const storagePrefix = fs ? String(fs.prefix || '').replace(/^\/+|\/+$/g, '') : undefined;
+  const storagePrefix = await storagePrefixFor(session.user.email, url.searchParams.get('filespace'));
 
   const opts = {
     folder: folderParam === null ? undefined : folderParam,
@@ -44,7 +44,6 @@ export async function GET(req) {
     tags: tagsParam ? tagsParam.split(',').filter(Boolean) : undefined,
     tagMode: url.searchParams.get('tagMode') || 'all',
     sort: url.searchParams.get('sort') || 'new',
-    storagePrefix,
     // Keyset paging. The cursor is opaque and round-trips from the previous
     // page; a malformed one reads as "first page" rather than an error.
     cursor: decodeCursor(url.searchParams.get('cursor')),
@@ -54,16 +53,14 @@ export async function GET(req) {
     withTotal: url.searchParams.get('withTotal') === '1',
   };
 
-  // AUTHORIZE → FILTER → PRESIGN. Access and filtering now happen inside the
-  // query, so only the rows on this page reach presignFileUrls — previously
-  // every row in the library was signed on every request.
-  const { files, cursor, total } = await listFilesForUser(opts, principal);
-  const signed = await presignFileUrls(files);
+  // AUTHORIZE → FILTER → PRESIGN, in lib/file-listing.js — shared with the
+  // files page, which renders the first page on the server.
+  const page = await listFilesPage({ principal, opts, storagePrefix });
   // `folders=0` skips the tree; the web library fetches it separately from
   // /api/files/folders. Other callers still get it with the first page.
   const withFolders = !opts.cursor && url.searchParams.get('folders') !== '0';
-  const folders = withFolders ? await listFileFoldersForUser(principal, { storagePrefix, filespace: storagePrefix }) : undefined;
-  return NextResponse.json({ files: signed, cursor: encodeCursor(cursor), total, folders });
+  const folders = withFolders ? await listFolderTree({ principal, storagePrefix }) : undefined;
+  return NextResponse.json({ ...page, folders });
 }
 
 /**
@@ -78,12 +75,54 @@ export async function POST(req) {
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
   if (!body.url) return NextResponse.json({ error: 'A file URL is required.' }, { status: 400 });
+
+  // Recording a file makes its creator able to open it, so where it points is
+  // checked like an upload: not by a platform viewer, not into our own
+  // previews or trash, and not into a drive this person cannot add to.
+  const principal = await buildPrincipal(session.user.email);
+  if (principal.roleId === 'viewer' && !principal.isAdmin) {
+    return NextResponse.json({ error: 'Your role can view files but not add them.' }, { status: 403 });
+  }
+  if (body.storageKey) {
+    const key = String(body.storageKey);
+    if (/^(_thumbs|_trash)\//.test(key)) {
+      return NextResponse.json({ error: 'Not a file key.' }, { status: 400 });
+    }
+    const d = driveAccess(key, principal.isAdmin ? { isAdmin: true } : principal.driveScope);
+    if (d.inDrive && !d.write) {
+      return NextResponse.json({ error: 'That file is in a drive you can view but not add to.' }, { status: 403 });
+    }
+  }
+
   try {
-    const file = await createFile({ ...body, ...uploadFields(body), createdBy: session.user.email });
+    // The bucket's own word on what landed, never the client's: its ETag is
+    // the content hash duplicates are found by, and its length the size the
+    // Storage page adds up. Best-effort — a bucket that will not answer a
+    // HEAD still gets its file recorded, just without a hash.
+    const facts = await objectFacts(session.user.email, body);
+    const file = await createFile({
+      ...body,
+      ...uploadFields(body),
+      ...(facts?.size != null ? { size: facts.size } : {}),
+      contentHash: facts?.etag || null,
+      createdBy: session.user.email,
+    });
     // Presign so the just-uploaded file previews immediately on a private bucket.
     const [signed] = await presignFileUrls([file]);
     return NextResponse.json({ file: signed || file });
   } catch (e) {
     return NextResponse.json({ error: e.message || 'Save failed.' }, { status: 500 });
+  }
+}
+
+async function objectFacts(email, body) {
+  if (body.storage !== 's3' || !body.storageKey) return null;
+  try {
+    const cfg = await getStorageConfig();
+    if (storageMode(cfg) !== 's3') return null;
+    const fs = body.filespace ? await getFilespaceForUser(email, String(body.filespace)) : null;
+    return await s3HeadObject(fs ? cfgForFilespace(cfg, fs) : cfg, String(body.storageKey));
+  } catch {
+    return null;
   }
 }

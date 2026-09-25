@@ -33,6 +33,13 @@ real Drizzle objects. Do not query app tables through it.
 **Read paths go authorize → filter → presign, in that order.** Never presign
 before filtering; that mints a URL for a row the caller may not be entitled to.
 
+**Drives are boundaries.** A file stored under a filespace's prefix belongs to
+that drive's members (`lib/drive-access.js`): members read, editors and owners
+write, everyone else sees nothing but a file shared with them directly. The
+listing query, `canAccessFile`, `modifiableFileIds` and every route that writes
+under a prefix (`getFilespaceForWrite`) apply it — a new read or write path
+must too.
+
 **Enforce feature flags on the server.** A flag that changes behaviour must be
 read server-side, not passed in by the client. `DELETE /api/files/[id]` is the
 reference case: it reads the `trash` flag itself rather than taking a parameter.
@@ -52,6 +59,7 @@ source only. `sanitizeStorageConfig()` strips the secret key. Keep it that way.
 ## Checks
 
 ```bash
+npm run dev:local                  # the app on local Postgres + S3; sign-in links print to the terminal
 npm test                           # unit tests, no database needed
 npm run build                      # web — the real check; JSX errors surface here
 npm run doctor                     # creates the schema and verifies a live database

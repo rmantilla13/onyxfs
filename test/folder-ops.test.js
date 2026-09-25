@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cleanFolder, folderNameProblem, folderPathProblem, isWithin, rebase, escapeLike,
-  keyFor, planRename, mapLimit, settleLimit, parentOf, baseName,
+  keyFor, planRename, mapLimit, settleLimit, parentOf, baseName, crumbsFor,
 } from '../lib/folder-ops.js';
 
 test('folder names: one segment, not reserved, not blank', () => {
@@ -93,4 +93,17 @@ test('mapLimit keeps to its limit and reports the first failure after the rest s
 
   const settled = await settleLimit([1, 2], 2, async (n) => { if (n === 2) throw new Error('no'); return n; });
   assert.deepEqual(settled.map((r) => r.ok), [true, false]);
+});
+
+test('breadcrumbs: the root, every ancestor, then the folder itself', () => {
+  assert.deepEqual(crumbsFor(''), [{ path: '', name: 'All files' }]);
+  assert.deepEqual(crumbsFor('Campaigns/2026/Spring'), [
+    { path: '', name: 'All files' },
+    { path: 'Campaigns', name: 'Campaigns' },
+    { path: 'Campaigns/2026', name: '2026' },
+    { path: 'Campaigns/2026/Spring', name: 'Spring' },
+  ]);
+  // Paths arrive from the URL, so an untidy one still yields real folders.
+  assert.deepEqual(crumbsFor('/a//b/').map((c) => c.path), ['', 'a', 'a/b']);
+  assert.equal(crumbsFor('x', 'Library')[0].name, 'Library');
 });

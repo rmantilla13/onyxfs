@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import {
-  createUpload, getUpload, deleteUpload, touchUpload, listUploads, getFilespaceForUser,
+  createUpload, getUpload, deleteUpload, touchUpload, listUploads, getFilespaceForUser, getFilespaceForWrite,
+  driveScopeFor,
 } from '@/lib/db';
+import { driveAccess } from '@/lib/drive-access';
 import {
-  getStorageConfig, storageMode, cfgForFilespace, choosePartSize, partCount,
+  getStorageConfig, storageMode, cfgForFilespace, choosePartSize, partCount, buildObjectKey,
   s3CreateMultipartUpload, s3PresignUploadParts, s3ListParts,
   s3CompleteMultipartUpload, s3AbortMultipartUpload,
 } from '@/lib/storage';
@@ -31,14 +33,26 @@ export const dynamic = 'force-dynamic';
  * ownership is re-proved on each call rather than assumed from the first one.
  */
 
-/** Resolve the storage config for this upload, honouring its filespace scope. */
-async function configFor(upload, email) {
+/**
+ * Resolve the storage config for this upload, honouring its filespace (drive)
+ * scope. Writing into a drive takes an editor or owner of it, checked on
+ * every call — someone made a viewer mid-upload cannot finish it — while
+ * reading its parts or abandoning it only takes membership.
+ * → { cfg } | { denied: true }
+ */
+async function configFor(upload, email, { write = true } = {}) {
   const base = await getStorageConfig();
-  if (storageMode(base) !== 's3') return null;
-  if (!upload?.filespaceId) return base;
-  const fs = await getFilespaceForUser(email, upload.filespaceId);
-  return fs ? cfgForFilespace(base, fs) : base;
+  if (storageMode(base) !== 's3') return { cfg: null };
+  if (!upload?.filespaceId) return { cfg: base };
+  const fs = write
+    ? await getFilespaceForWrite(email, upload.filespaceId)
+    : await getFilespaceForUser(email, upload.filespaceId);
+  if (!fs) return write ? { denied: true } : { cfg: base };
+  return { cfg: cfgForFilespace(base, fs) };
 }
+
+const readOnly = new Set(['status', 'abort']);
+const noWrite = () => NextResponse.json({ error: 'You can view this drive but not add to it. Ask one of its owners for editor access.' }, { status: 403 });
 
 /** GET → this user's resumable uploads, for a "pick up where you left off" UI. */
 export async function GET() {
@@ -73,8 +87,9 @@ export async function POST(req) {
       // app mounts it, not at the bucket root.
       let scoped = cfg;
       if (body.filespaceId) {
-        const fs = await getFilespaceForUser(email, body.filespaceId);
-        if (fs) scoped = cfgForFilespace(cfg, fs);
+        const fs = await getFilespaceForWrite(email, body.filespaceId);
+        if (!fs) return noWrite();
+        scoped = cfgForFilespace(cfg, fs);
       }
 
       // choosePartSize throws above the provider's single-object ceiling —
@@ -83,6 +98,10 @@ export async function POST(req) {
       // the ceiling from the config the upload will actually use, so a
       // filespace on a different provider gets that provider's limit.
       const partSize = choosePartSize(size, scoped);
+
+      // As in the presign route: landing inside a drive takes its editor.
+      const d = driveAccess(buildObjectKey(scoped, body.filename, body.folder), await driveScopeFor(email));
+      if (d.inDrive && !d.write) return noWrite();
 
       const { uploadId, key, name } = await s3CreateMultipartUpload(scoped, {
         filename: body.filename,
@@ -104,7 +123,8 @@ export async function POST(req) {
 
     const upload = await getUpload(body.id, email);
     if (!upload) return NextResponse.json({ error: 'Upload not found' }, { status: 404 });
-    const scoped = await configFor(upload, email);
+    const { cfg: scoped, denied } = await configFor(upload, email, { write: !readOnly.has(action) });
+    if (denied) return noWrite();
     if (!scoped) return NextResponse.json({ error: 'Storage is not configured for S3.' }, { status: 400 });
 
     if (action === 'sign') {
