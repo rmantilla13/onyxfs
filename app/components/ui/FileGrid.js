@@ -154,6 +154,8 @@ export default function FileGrid({
   const onKeyDown = useCallback((e, index) => {
     // Never swallow a key meant for a text field inside a card.
     if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+    // Nor a shortcut: ⌘↑ is "up to the enclosing folder" (see FilesClient).
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
 
     const cols = metrics.cols;
     const moves = {

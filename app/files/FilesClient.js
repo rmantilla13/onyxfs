@@ -1,14 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import FilespaceSwitcher from '@/app/components/FilespaceSwitcher';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
 import { createThumbnailBackfill } from '@/lib/thumbnail-client';
 import { createUploadQueue, uploadOne, filesFromDrop, filesFromInput, joinFolder } from '@/lib/upload-client';
 import FileGrid from '@/app/components/ui/FileGrid';
-import FileList, { FileListHeader } from '@/app/components/ui/FileList';
-import { VIEW_STORAGE_KEY, parseView } from '@/lib/list-columns';
+import FileList from '@/app/components/ui/FileList';
+import FilterPanel, { ActiveFilters, countActive } from '@/app/components/ui/FilterPanel';
+import ColumnPicker, { NewFieldDialog } from '@/app/components/ui/ColumnPicker';
+import {
+  VIEW_STORAGE_KEY, parseView, availableColumns, parseColumns, resolveColumns,
+  COLUMNS_STORAGE_KEY, DEFAULT_COLUMNS, METADATA_PREFIX,
+} from '@/lib/list-columns';
 import UploadPanel from '@/app/components/ui/UploadPanel';
 import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
@@ -16,7 +21,9 @@ import { usePrompt } from '@/app/components/ui/Prompt';
 import { useFolderPicker } from '@/app/components/ui/FolderPicker';
 import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
 import { useContextMenu } from '@/app/components/ui/ContextMenu';
-import { folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit } from '@/lib/folder-ops';
+import {
+  folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, crumbsFor,
+} from '@/lib/folder-ops';
 
 const KINDS = [
   { key: 'image', label: 'Images' },
@@ -30,6 +37,18 @@ const KINDS = [
 // 'Files' instead, which is what tells an upload from a move.
 const DRAG_FILES = 'application/x-onyx-files';
 const DRAG_FOLDER = 'application/x-onyx-folder';
+
+// Whether the filter panel was left open, per browser.
+const FILTERS_STORAGE_KEY = 'onyx.files.filters';
+
+// Where the open folder came from, kept in the history entry itself. Only
+// our keys are passed: Next.js copies its own in, and an object that already
+// carries them is taken for one of Next's internal writes and not synced to
+// useSearchParams (see the pushState patch in next/dist/.../app-router).
+const historyState = () => {
+  const s = typeof window !== 'undefined' ? window.history.state : null;
+  return { depth: Number(s?.onyxDepth) || 0, from: typeof s?.onyxFrom === 'string' ? s.onyxFrom : null };
+};
 
 // Keys must stay in step with SORTS in lib/file-query.js — an unknown key
 // falls back to `new` on the server, which reads as "sorting is broken"
@@ -49,15 +68,23 @@ const SORTS = [
 ];
 
 
-export default function FilesClient({ flags, canWrite, schema, filespaceId, filespaces, isAdmin = false }) {
+export default function FilesClient({ flags, canWrite, schema: initialSchema, filespaceId, filespaces, isAdmin = false }) {
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [cursor, setCursor] = useState(null);
   const [error, setError] = useState(null);
+  // State rather than the prop alone: adding a field from the list's column
+  // picker extends it without a reload.
+  const [schema, setSchema] = useState(initialSchema);
 
-  const [folder, setFolder] = useState('');
+  // The open folder lives in the URL (?folder=), so a folder is a link that
+  // survives a reload, and the browser's Back and Forward — the mouse's back
+  // button, ⌘[ — walk between folders the way they do between pages.
+  const searchParams = useSearchParams();
+  const folder = cleanFolder(searchParams.get('folder') || '');
+  const [nav, setNav] = useState({ depth: 0, from: null });
   const [query, setQuery] = useState('');
   const [kinds, setKinds] = useState([]);
   const [sort, setSort] = useState('new');
@@ -69,9 +96,12 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
   const [selected, setSelected] = useState(new Set());
   const [uploadSnap, setUploadSnap] = useState(null);
   const [dragging, setDragging] = useState(false);
-  // Phone only: facets live behind a toggle. On desktop the sidebar is always
-  // there and this is ignored by the stylesheet.
+  // The facet filters live in a panel under the toolbar, open only while
+  // someone is adjusting them; what is applied shows as chips when it is shut.
   const [filtersOpen, setFiltersOpen] = useState(false);
+  // The list view's columns, as keys (lib/list-columns.js).
+  const [columnKeys, setColumnKeys] = useState(DEFAULT_COLUMNS);
+  const [addingField, setAddingField] = useState(false);
   const router = useRouter();
   const toast = useToast();
   const { confirm, confirmElement } = useConfirm();
@@ -141,17 +171,88 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
 
   useEffect(() => {
     try { setView(parseView(localStorage.getItem(VIEW_STORAGE_KEY))); } catch {}
+    try { setFiltersOpen(localStorage.getItem(FILTERS_STORAGE_KEY) === 'open'); } catch {}
   }, []);
   const changeView = (next) => {
     setView(next);
     try { localStorage.setItem(VIEW_STORAGE_KEY, next); } catch {}
   };
+  const toggleFilters = (open = !filtersOpen) => {
+    setFiltersOpen(open);
+    try { localStorage.setItem(FILTERS_STORAGE_KEY, open ? 'open' : 'closed'); } catch {}
+  };
+
+  // ── Columns (list view) ───────────────────────────────────────────────────
+  // Stored per browser, like the grid/list choice, and read after mount for
+  // the same hydration reason. Metadata columns follow the feature flag.
+  const available = useMemo(() => availableColumns(schema, { metadata: !!flags.metadata }), [schema, flags.metadata]);
+  useEffect(() => {
+    try { setColumnKeys(parseColumns(localStorage.getItem(COLUMNS_STORAGE_KEY), available)); } catch {}
+  }, [available]);
+  const changeColumns = useCallback((keys) => {
+    setColumnKeys(keys);
+    try { localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(keys)); } catch {}
+  }, []);
+  const columns = useMemo(() => resolveColumns(columnKeys, available), [columnKeys, available]);
+
+  // ── Folder navigation ─────────────────────────────────────────────────────
+  // Opening a folder pushes a history entry; a correction — the folder was
+  // renamed or deleted under us — replaces the current one, so Back never
+  // leads to a path that no longer exists. Pushed through window.history
+  // rather than router.push: Next keeps useSearchParams in step with it and
+  // skips a server round trip for what is only a change of folder.
+  const navigate = useCallback((path, { replace = false } = {}) => {
+    const next = cleanFolder(path);
+    const params = new URLSearchParams(window.location.search);
+    if (next) params.set('folder', next);
+    else params.delete('folder');
+    const qs = params.toString();
+    const url = `${window.location.pathname}${qs ? `?${qs}` : ''}`;
+    const cur = historyState();
+    if (replace) {
+      window.history.replaceState({ onyxDepth: cur.depth, onyxFrom: cur.from }, '', url);
+      return;
+    }
+    if (next === folder) return;
+    const entry = { depth: cur.depth + 1, from: folder };
+    window.history.pushState({ onyxDepth: entry.depth, onyxFrom: entry.from }, '', url);
+    setNav(entry);
+  }, [folder]);
+
+  useEffect(() => {
+    const sync = () => setNav(historyState());
+    sync();
+    window.addEventListener('popstate', sync);
+    return () => window.removeEventListener('popstate', sync);
+  }, []);
+
+  // Back is history when we put the previous folder there; opened from a link
+  // (nothing of ours to go back through), it is the enclosing folder instead.
+  const back = nav.depth > 0
+    ? { label: `Back to ${nav.from ? baseName(nav.from) : 'All files'}`, go: () => window.history.back() }
+    : folder
+      ? { label: `Up to ${parentOf(folder) ? baseName(parentOf(folder)) : 'All files'}`, go: () => navigate(parentOf(folder)) }
+      : null;
+
+  // ⌘↑ / Ctrl+↑ / Alt+↑: the enclosing folder, as in Finder. Back and Forward
+  // (⌘[ ⌘], Alt+← →) are the browser's own, now that folders are history.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'ArrowUp' || !(e.metaKey || e.ctrlKey || e.altKey) || e.shiftKey) return;
+      if (!folder || e.defaultPrevented) return;
+      if (e.target?.closest?.('input, textarea, select, [contenteditable], dialog')) return;
+      e.preventDefault();
+      navigate(parentOf(folder));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [folder, navigate]);
 
   // A soft navigation: the page re-renders with the new ?filespace= and the
-  // effects above refetch. The open folder belongs to the old filespace.
+  // effects above refetch. The open folder belongs to the old filespace, and
+  // is left behind with the old URL.
   const switchFilespace = useCallback((id) => {
     if ((id || '') === (filespaceId || '')) return;
-    setFolder('');
     router.push(id ? `/files?filespace=${encodeURIComponent(id)}` : '/files');
   }, [filespaceId, router]);
 
@@ -369,13 +470,13 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     });
     if (created == null) return;
     await loadFolders();
-    setFolder(joinFolder(parent, created));
+    navigate(joinFolder(parent, created));
     toast.success(`Folder “${created}” created.`);
   };
 
   // After a folder moves, anything that pointed into it follows.
   const followFolder = (from, to) => {
-    if (isWithin(folder, from)) setFolder(rebase(folder, from, to));
+    if (isWithin(folder, from)) navigate(rebase(folder, from, to), { replace: true });
     load();
     loadFolders();
   };
@@ -469,7 +570,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
       lastError = body.error;
       if (!body.more || !body.deleted) break;
     }
-    if (isWithin(folder, path) && !failed && !lastError) setFolder(parentOf(path));
+    if (isWithin(folder, path) && !failed && !lastError) navigate(parentOf(path), { replace: true });
     load();
     loadFolders();
     if (failed || (lastError && !deleted)) toast.error(`${failed ? `${failed} file${failed === 1 ? '' : 's'} could not be removed, so the folder stays.` : ''} ${lastError || ''}`.trim());
@@ -614,7 +715,7 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
 
   const folderMenu = (path) => [
     { heading: baseName(path) },
-    { label: 'Open', onSelect: () => setFolder(path) },
+    { label: 'Open', onSelect: () => navigate(path) },
     canWrite && '-',
     canWrite && { label: 'New folder inside…', onSelect: () => newFolder(path) },
     canWrite && { label: 'Rename…', onSelect: () => renameFolderUI(path) },
@@ -689,6 +790,64 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
     });
   }, []);
 
+  // ── Editing from the list ─────────────────────────────────────────────────
+  // An edit shows at once and is put back if the server refuses it. PATCH
+  // merges metadata (updateFile in lib/db.js), so only the edited field is
+  // sent, and null clears it; tags go as the whole list, which is what the
+  // column edits.
+  const editCell = useCallback(async (f, col, value) => {
+    const isTags = col.key === 'tags';
+    const key = col.field?.key;
+    const apply = (x, v) => (isTags ? { ...x, tags: v || [] } : { ...x, metadata: { ...(x.metadata || {}), [key]: v } });
+    const previous = isTags ? f.tags : f.metadata?.[key];
+    setFiles((prev) => prev.map((x) => (x.id === f.id ? apply(x, value) : x)));
+    try {
+      const r = await fetch(`/api/files/${f.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(isTags ? { tags: value || [] } : { metadata: { [key]: value } }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        throw new Error(body.error === 'No access' ? 'You can view this file but not edit it.' : body.error || `HTTP ${r.status}.`);
+      }
+      // The row as stored — tags lowercased, a cleared field as null — but
+      // keeping the signed URLs the list holds; the PATCH row is unsigned.
+      const saved = body.file || {};
+      setFiles((prev) => prev.map((x) => (x.id === f.id
+        ? { ...x, tags: saved.tags ?? x.tags, metadata: saved.metadata ?? x.metadata, version: saved.version ?? x.version, updatedAt: saved.updatedAt ?? x.updatedAt }
+        : x)));
+    } catch (e) {
+      setFiles((prev) => prev.map((x) => (x.id === f.id ? apply(x, previous) : x)));
+      toast.error(`${col.label} was not saved. ${e.message}`);
+    }
+  }, [toast]);
+
+  // What an editor offers: the values already in use across the loaded files.
+  const suggestionsFor = useCallback((col) => {
+    const key = col.key === 'tags' ? 'tags' : col.field?.key;
+    const def = facetDefs.find((d) => d.key === key);
+    return def ? def.values.map((v) => v.value) : [];
+  }, [facetDefs]);
+
+  // Admins only; the route checks again. The field arrives as a column that
+  // is already shown, so filling it in is the next thing on screen.
+  const createField = useCallback(async (spec) => {
+    const r = await fetch('/api/admin/metadata', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(spec),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) return body.error || `Could not add the field (HTTP ${r.status}).`;
+    const key = `${METADATA_PREFIX}${body.field.key}`;
+    changeColumns([...columnKeys.filter((k) => k !== key), key]);
+    setSchema(body.schema);
+    setAddingField(false);
+    toast.success(`Added “${body.field.label}”. Click a cell in its column to fill it in.`);
+    return null;
+  }, [columnKeys, changeColumns, toast]);
+
   // What the grid and the list share: the same files, selection and actions,
   // so switching views never changes what a click or a key does.
   const gridProps = {
@@ -730,7 +889,19 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
       onKeyDown={onMenuKey}
     >
       <div className="row files-head" style={{ marginBottom: 20 }}>
-        <h1 className="files-title" style={{ fontSize: 24, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{folder || 'All files'}</h1>
+        <button
+          type="button"
+          className="btn btn-ghost btn-icon files-back"
+          onClick={back?.go}
+          disabled={!back}
+          aria-label={back?.label || 'Back'}
+          title={back ? `${back.label}${nav.depth > 0 ? '  (⌘[)' : '  (⌘↑)'}` : undefined}
+        >
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
+            <path d="M9.5 3.5 5 8l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+        <Breadcrumbs folder={folder} onOpen={navigate} canWrite={canWrite} onDrop={onTreeDrop} />
         <span className="muted small">
           {visible.length}{visible.length !== files.length ? ` of ${files.length}` : ''}{cursor ? '+' : ''}
         </span>
@@ -816,18 +987,42 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
             </button>
           ))}
         </div>
-        {flags.metadata && facetDefs.some((d) => d.values.length > 0) && (
+        {flags.metadata && (
           <button
-            className="btn only-mobile"
-            onClick={() => setFiltersOpen((v) => !v)}
+            type="button"
+            className={`btn files-filters-btn${filtersOpen ? ' is-open' : ''}`}
+            onClick={() => toggleFilters()}
             aria-expanded={filtersOpen}
-            style={hasAnyFacet(facets) || filtersOpen ? { borderColor: 'var(--ink)' } : undefined}
+            aria-controls="files-filters"
           >
-            Filters{hasAnyFacet(facets) ? ` · ${Object.values(facets).reduce((n, v) => n + v.length, 0)}` : ''}
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+              <path d="M2 4h12M4.5 8h7M7 12h2" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            </svg>
+            Filters
+            {hasAnyFacet(facets) && <span className="count-badge">{countActive(facets)}</span>}
           </button>
         )}
         </div>
       </div>
+
+      {flags.metadata && (filtersOpen ? (
+        <FilterPanel
+          id="files-filters"
+          defs={facetDefs}
+          selected={facets}
+          onToggle={toggleFacet}
+          onClear={() => setFacets({})}
+          onClose={() => toggleFilters(false)}
+        />
+      ) : (
+        <ActiveFilters
+          defs={facetDefs}
+          selected={facets}
+          onToggle={toggleFacet}
+          onClear={() => setFacets({})}
+          onEdit={() => toggleFilters(true)}
+        />
+      ))}
 
       {error && (
         <div className="card" style={{ padding: 16, marginBottom: 16, borderColor: 'var(--danger)' }}>
@@ -842,12 +1037,12 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
               <Section title="Folders">
                 <div className="folder-list edge-scroll">
                   <FolderDrop target="" enabled={canWrite} onDrop={onTreeDrop}>
-                    <FolderLink active={!folder} onClick={() => setFolder('')} path="">All files</FolderLink>
+                    <FolderLink active={!folder} onClick={() => navigate('')} path="">All files</FolderLink>
                   </FolderDrop>
                   <FolderTree
                     folders={folders}
                     selected={folder}
-                    onSelect={setFolder}
+                    onSelect={navigate}
                     canWrite={canWrite}
                     onDrop={onTreeDrop}
                     storageKey={`onyx.tree.open:${filespaceId || 'all'}`}
@@ -855,53 +1050,45 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
                 </div>
               </Section>
             </div>
-
-            <div className={`side-facets${filtersOpen ? ' open' : ''}`}>
-            {flags.metadata &&
-              facetDefs
-                .filter((d) => d.values.length > 0)
-                .map((d) => (
-                  <Section key={d.key} title={d.label}>
-                    {d.values.slice(0, 8).map((v) => (
-                      <label key={v.value} className="row small" style={{ gap: 6, padding: '3px 0', cursor: 'pointer' }}>
-                        <input
-                          type="checkbox"
-                          checked={(facets[d.key] || []).includes(v.value)}
-                          onChange={() => toggleFacet(d.key, v.value)}
-                        />
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.value}</span>
-                        <div className="spacer" />
-                        <span className="muted">{v.count}</span>
-                      </label>
-                    ))}
-                  </Section>
-                ))}
-            </div>
           </aside>
 
           <section className="files-pane">
             {view === 'grid' && showTiles && subfolders.length > 0 && (
               <FolderTiles
                 folders={subfolders}
-                onOpen={setFolder}
+                onOpen={navigate}
                 canWrite={canWrite}
                 onDrop={onTreeDrop}
               />
             )}
-            {loading ? (
-              <>
-                {view === 'list' && <FileListHeader sort={sort} onSort={changeSort} />}
-                <div className="empty">Loading…</div>
-              </>
-            ) : view === 'list' ? (
+            {view === 'list' ? (
               <FileList
                 {...gridProps}
+                loading={loading}
                 sort={sort}
                 onSort={changeSort}
-                before={showTiles && subfolders.length > 0 ? (
-                  <FolderRows folders={subfolders} onOpen={setFolder} canWrite={canWrite} onDrop={onTreeDrop} />
+                columns={columns}
+                picker={(waiting) => (
+                  <ColumnPicker
+                    available={available}
+                    visible={columnKeys}
+                    waiting={waiting}
+                    onChange={changeColumns}
+                    onReset={() => changeColumns(DEFAULT_COLUMNS)}
+                    onAddField={isAdmin && flags.metadata ? () => setAddingField(true) : undefined}
+                  />
+                )}
+                canEdit={canWrite}
+                onEdit={editCell}
+                suggestionsFor={suggestionsFor}
+                onOpenFolder={navigate}
+                usageRights={!!flags.usageRights}
+                before={showTiles && subfolders.length > 0 ? (cols) => (
+                  <FolderRows folders={subfolders} columns={cols} onOpen={navigate} canWrite={canWrite} onDrop={onTreeDrop} />
                 ) : null}
               />
+            ) : loading ? (
+              <div className="empty">Loading…</div>
             ) : (
               <FileGrid {...gridProps} />
             )}
@@ -946,7 +1133,40 @@ export default function FilesClient({ flags, canWrite, schema, filespaceId, file
       {promptElement}
       {pickerElement}
       {contextMenuElement}
+      {isAdmin && flags.metadata && (
+        <NewFieldDialog open={addingField} onClose={() => setAddingField(false)} onCreate={createField} />
+      )}
     </main>
+  );
+}
+
+/**
+ * The open folder as a path: every ancestor is a way back up, and a drop
+ * target, so files can be dragged to a folder above without the tree. The
+ * last crumb is the page's heading. Each crumb carries data-folder, so the
+ * page's context menu treats it as that folder.
+ */
+function Breadcrumbs({ folder, onOpen, canWrite, onDrop }) {
+  const crumbs = crumbsFor(folder);
+  const here = crumbs[crumbs.length - 1];
+  return (
+    <nav className="crumbs" aria-label="Folder path">
+      <ol>
+        {crumbs.slice(0, -1).map((c) => (
+          <li key={c.path || '/'} className="crumb-item">
+            <FolderDrop target={c.path} enabled={canWrite} onDrop={onDrop} className="crumb-drop">
+              <button type="button" className="crumb" data-folder={c.path} title={c.path || c.name} onClick={() => onOpen(c.path)}>
+                {c.name}
+              </button>
+            </FolderDrop>
+            <span className="crumb-sep" aria-hidden>/</span>
+          </li>
+        ))}
+        <li className="crumb-item crumb-here">
+          <h1 className="files-title truncate" aria-current="page" title={here.path || here.name}>{here.name}</h1>
+        </li>
+      </ol>
+    </nav>
   );
 }
 
@@ -1026,8 +1246,16 @@ function FolderTiles({ folders, onOpen, canWrite, onDrop }) {
  * The list view's version of the folder tiles: the open folder's subfolders
  * as rows above its files, in the list's columns. Same behaviour as a tile —
  * click opens, drop target, draggable, data-folder for the context menu.
+ * A folder has a size (its file count) and a type; the other columns are
+ * about files and stay empty.
  */
-function FolderRows({ folders, onOpen, canWrite, onDrop }) {
+function folderCell(f, c) {
+  if (c.key === 'size') return f.count ? `${f.count} file${f.count === 1 ? '' : 's'}` : '—';
+  if (c.key === 'type') return 'Folder';
+  return '';
+}
+
+function FolderRows({ folders, columns, onOpen, canWrite, onDrop }) {
   const shown = folders.slice(0, MAX_TILES);
   return (
     <div className="filelist-folders" role="list" aria-label="Folders">
@@ -1053,9 +1281,10 @@ function FolderRows({ folders, onOpen, canWrite, onDrop }) {
               </svg>
             </span>
             <span className="filelist-name"><span className="truncate">{f.name}</span></span>
-            <span className="filelist-col-size muted">{f.count ? `${f.count} file${f.count === 1 ? '' : 's'}` : '—'}</span>
-            <span className="filelist-col-type muted">Folder</span>
-            <span className="filelist-col-modified muted" />
+            {columns.map((c) => (
+              <span key={c.key} className="filelist-cell muted truncate">{folderCell(f, c)}</span>
+            ))}
+            <span aria-hidden />
           </button>
         </FolderDrop>
       ))}

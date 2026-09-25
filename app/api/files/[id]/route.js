@@ -104,9 +104,11 @@ export async function PATCH(req, { params }) {
   }
 
   // Sanitize the metadata object against the field schema (drop unknown keys /
-  // coerce types) so only valid fields are stored.
+  // coerce types) so only valid fields are stored. Read fresh: the settings
+  // cache is per instance, and a field an admin added a moment ago on another
+  // instance would otherwise be an "unknown key" here and silently dropped.
   if (body.metadata !== undefined) {
-    const schema = normalizeSchema(await getFileMetadataSchema());
+    const schema = normalizeSchema(await getFileMetadataSchema({ fresh: true }));
     body.metadata = validateMetadataPatch(body.metadata, schema);
   }
 

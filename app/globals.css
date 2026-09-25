@@ -494,11 +494,12 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 .view-toggle .btn:last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
 
 /* The list view. Header, folder rows and file rows share one column
-   template, so everything lines up without a table. */
-.filelist { --filelist-cols: 44px minmax(0, 1fr) 92px 110px 190px; }
+   template, so everything lines up without a table. The template is built
+   from the viewer's columns (columnTemplate in lib/list-columns.js) and set
+   inline as --filelist-cols; the fallback is the name alone. */
 .filelist-cols {
   display: grid;
-  grid-template-columns: var(--filelist-cols);
+  grid-template-columns: var(--filelist-cols, 44px minmax(0, 1fr));
   align-items: center;
   gap: var(--s3);
 }
@@ -542,10 +543,110 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 .filelist-folder-icon { display: grid; place-items: center; height: 33px; color: var(--muted); background: var(--surface-sunken); }
 .filelist-name { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .filelist-name .truncate { min-width: 0; }
-.filelist-col-size { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.filelist-col-modified { white-space: nowrap; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
-.filelist-col-size, .filelist-col-type, .filelist-col-modified { font-size: var(--t-sm); }
+.filelist-cell { display: flex; align-items: center; min-width: 0; overflow: hidden; font-size: var(--t-sm); }
+.filelist-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.filelist-date { white-space: nowrap; font-variant-numeric: tabular-nums; text-overflow: ellipsis; }
 .filelist-head .filelist-sort { font-size: var(--t-sm); }
+.filelist-sort { max-width: 100%; }
+.filelist-label { color: var(--muted); font-size: var(--t-sm); padding: var(--s1) 0; min-width: 0; }
+.filelist-colpick { display: flex; justify-content: flex-end; }
+.filelist-colbtn { padding: 3px 5px; color: var(--muted); }
+.colpick-count { font-size: var(--t-xs); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ink); }
+/* A date column narrower than a date and a time keeps the date. */
+.filelist-date { container-type: inline-size; }
+@container (max-width: 150px) {
+  .filelist-time { display: none; }
+}
+.filelist-link {
+  min-width: 0; max-width: 100%;
+  padding: 0; border: 0; background: none;
+  color: var(--muted); font: inherit; text-align: left; cursor: pointer;
+}
+.filelist-link:hover { color: var(--ink); text-decoration: underline; }
+
+/* A cell that edits in place. At rest it reads as text; hovering outlines it
+   so it is clear the value is a control, not decoration. */
+.cell-edit {
+  display: flex; align-items: center;
+  width: 100%; min-width: 0; height: 30px;
+  padding: 0 6px; margin-left: -7px;
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: none; color: inherit;
+  font: inherit; font-size: var(--t-sm); text-align: left;
+  cursor: text;
+}
+.cell-edit:hover { border-color: var(--line); background: var(--surface); }
+.cell-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.cell-empty { color: var(--muted); opacity: 0.5; }
+.cell-edit:hover .cell-empty { opacity: 1; }
+.cell-chips { display: flex; gap: 4px; min-width: 0; overflow: hidden; }
+.cell-chips .tag { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cell-date { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cell-date.is-expired { color: var(--danger); font-weight: 500; }
+.cell-date.is-soon { color: var(--warning); }
+.filelist-cell.is-editing { position: relative; overflow: visible; }
+.filelist-row.is-editing { cursor: default; }
+.input.cell-input { height: 30px; min-height: 0; padding: 0 var(--s2); font-size: var(--t-sm); }
+select.input.cell-input { padding-right: 2px; }
+
+/* Tags and multi-value fields edit in a small panel over the cell. */
+.cell-pop {
+  position: absolute; top: -5px; left: -7px;
+  z-index: var(--z-menu);
+  width: max(100%, 260px);
+  padding: var(--s2);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+  cursor: default;
+  user-select: text;
+}
+.cell-pop.is-up { top: auto; bottom: -5px; }
+.cell-pop-list { max-height: 196px; overflow-y: auto; margin: var(--s2) 0; }
+.cell-pop-row {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 4px var(--s1);
+  border-radius: var(--radius-sm);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+.cell-pop-row:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.cell-pop-add {
+  display: block; width: 100%;
+  padding: 6px var(--s1);
+  border: 0; border-radius: var(--radius-sm);
+  background: none; color: var(--accent-deep);
+  font: inherit; font-size: var(--t-sm); text-align: left;
+  cursor: pointer;
+}
+.cell-pop-add:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.cell-pop-empty { margin: 0; padding: 6px var(--s1); }
+.cell-pop-foot { display: flex; align-items: center; gap: var(--s1); padding-top: var(--s2); border-top: 1px solid var(--line); }
+
+/* The column picker, opened from the end of the list's header. */
+.popover { padding: var(--s2); }
+.colpick { width: 260px; max-height: min(70vh, 520px); overflow-y: auto; }
+.colpick-head { display: flex; align-items: center; gap: var(--s2); padding: 0 var(--s1) var(--s1); }
+.colpick-label {
+  margin: var(--s2) 0 2px; padding: 0 var(--s1);
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+.colpick-row {
+  display: flex; align-items: center; gap: var(--s2);
+  min-height: 30px; padding: 0 var(--s1);
+  border-radius: var(--radius-sm);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+.colpick-row:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.colpick-row.is-locked { cursor: default; color: var(--muted); }
+.colpick-row.is-locked:hover { background: none; }
+.colpick-check { display: flex; align-items: center; gap: var(--s2); flex: 1; min-width: 0; cursor: pointer; }
+.colpick-move { padding: 0 6px; min-height: 0; line-height: 22px; }
+.colpick-hint { margin-left: auto; font-size: var(--t-xs); color: var(--muted); white-space: nowrap; }
+.colpick-note { margin: 2px 0 var(--s1); padding: 0 var(--s1); }
+.colpick-foot { margin-top: var(--s2); padding: var(--s2) var(--s1) 0; border-top: 1px solid var(--line); }
 .filelist-folders .folder-drop { border-radius: 0; }
 .filelist-folders .folder-drop.is-over .filelist-row { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
 .filelist-more { margin: 0; padding: var(--s2); }
@@ -560,6 +661,72 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 .kind-row { display: flex; align-items: center; gap: var(--s2); min-width: 0; flex: 1 1 auto; }
 .kind-row .kind-strip { min-width: 0; }
 .only-mobile { display: none; }
+
+/* The facet filters: a toggle in the toolbar, a panel under it while open,
+   and a row of chips for what is applied once it is shut. */
+.files-filters-btn { flex: 0 0 auto; }
+.files-filters-btn.is-open { border-color: var(--ink); }
+.count-badge {
+  display: inline-grid; place-items: center;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--ink); color: var(--paper);
+  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.filters-panel { padding: var(--s3) var(--s4) var(--s4); margin-bottom: var(--s4); animation: filters-in var(--dur-2) var(--ease); }
+@keyframes filters-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+.filters-head { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s3); }
+.filters-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--s4) var(--s5); }
+.facet { margin: 0; padding: 0; border: 0; min-width: 0; }
+.facet-title {
+  padding: 0; margin-bottom: 6px;
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+.facet-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; min-width: 0; font-size: var(--t-sm); cursor: pointer; }
+.facet-row .truncate { flex: 1; min-width: 0; }
+.facet-count { font-variant-numeric: tabular-nums; }
+.facet-more { margin-top: 2px; padding: 2px 0; border: 0; background: none; color: var(--accent-deep); font: inherit; font-size: var(--t-sm); cursor: pointer; }
+.facet-more:hover { text-decoration: underline; }
+.filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: calc(var(--s1) * -1) 0 var(--s4); }
+.filter-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 280px; min-width: 0;
+  padding: 4px 8px 4px 10px;
+  border: 1px solid var(--line); border-radius: var(--radius-pill);
+  background: var(--surface); color: var(--ink);
+  font: inherit; font-size: var(--t-sm);
+  cursor: pointer;
+}
+.filter-chip:hover { border-color: var(--ink); }
+.filter-chip > [aria-hidden] { color: var(--muted); font-size: 10px; }
+
+/* Back, and the path to the open folder. Every crumb but the last is a way
+   back up, and takes drops like a folder in the tree. */
+.files-back { flex: none; margin-left: calc(var(--s2) * -1); }
+.files-back:disabled { opacity: 0.3; }
+.crumbs { min-width: 0; }
+.crumbs ol { display: flex; align-items: center; gap: 2px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.crumb-item { display: flex; align-items: center; min-width: 0; flex: 0 3 auto; }
+.crumb-here { flex: 0 1 auto; min-width: 3em; }
+.crumb-here .files-title { margin: 0; padding-left: 4px; font-size: 24px; }
+.crumb-item:only-child .files-title { padding-left: 0; }
+.crumb-drop { display: flex; min-width: 0; }
+.crumb {
+  max-width: 16em; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 2px 6px;
+  border: 0; border-radius: var(--radius-sm);
+  background: none; color: var(--muted);
+  font: inherit; font-size: var(--t-lg);
+  cursor: pointer;
+}
+.crumb:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.crumb:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.crumb-drop.is-over .crumb { color: var(--ink); }
+.crumb-sep { padding: 0 2px; color: var(--muted); opacity: 0.5; font-size: var(--t-lg); }
 /* ── Selection action bar (phone) ──────────────────────────────────────────
    The header's Trash button scrolls out of reach on a phone, so a selection
    ends up with nothing to act on. This bar is fixed to the bottom edge and
@@ -613,8 +780,8 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   .files-toolbar .input { max-width: none; flex: 1 1 100%; }
   .files-layout { grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
 
-  /* The sidebar becomes two strips: folders as chips, facets behind a
-     Filters toggle. A 220px column beside a 150px grid was the whole page. */
+  /* The sidebar becomes a strip of folders as chips. A 220px column beside a
+     150px grid was the whole page. */
   .side-folders h3 { display: none; }
   .folder-list { display: flex; gap: 6px; padding-bottom: var(--s1); }
   .folder-list .folder-link {
@@ -632,10 +799,13 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   .folder-list span.folder-toggle { display: none; }
   .folder-list .folder-link .muted { color: inherit; opacity: 0.6; }
   .kind-row { flex: 1 1 100%; }
-  .kind-row .only-mobile { flex: 0 0 auto; }
   .kind-row .kind-strip { margin-right: 0; padding-right: var(--s2); }
-  .side-facets { display: none; }
-  .side-facets.open { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--s4); margin-top: var(--s2); }
+  .filters-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3) var(--s4); }
+  .filters-panel { padding: var(--s3); }
+
+  /* Only the parent crumb before the open folder; Back covers the rest. */
+  .crumb-item:not(.crumb-here):not(:nth-last-child(2)) { display: none; }
+  .crumb-here .files-title { font-size: var(--t-xl); }
 
   .files-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); }
   .empty { padding: 48px var(--s4); }
@@ -677,12 +847,11 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   .files-grid { padding-bottom: 72px; }
   .filelist-body { margin-bottom: 72px; }
 
-  /* The list on a phone: thumbnail, name, size, date. Type goes, and the
-     date loses its time. */
-  .filelist { --filelist-cols: 40px minmax(0, 1fr) 64px 84px; }
+  /* The list on a phone: thumbnail, name and the first two chosen columns
+     (FileList trims them), with dates losing their time. */
   .filelist-cols { gap: var(--s2); }
   .filelist-thumb { width: 40px; }
-  .filelist-col-type, .filelist-time { display: none; }
+  .filelist-time { display: none; }
   .filelist-row { height: 52px; }
   .files-toolbar select.input { flex: 1 1 auto; }
 }

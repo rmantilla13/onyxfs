@@ -67,6 +67,8 @@ export default async function FilePage({ params, searchParams }) {
       <FileDetail
         file={signedList[0]}
         canWrite={canWrite}
+        // Back to the folder the file is in, not the top of the library.
+        backHref={file.folder ? `/files?folder=${encodeURIComponent(file.folder)}` : '/files'}
         // ?t= opens the player at a moment, so a timecode can be shared as a
         // link. Parsed here rather than in the client so a malformed value is
         // simply absent instead of reaching the player as NaN.
