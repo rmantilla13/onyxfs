@@ -111,6 +111,7 @@ export default function FileCard({
   innerRef,
   onKeyDown,
   onMissingThumb,
+  onDragStart,
 }) {
   if (href) {
     return (
@@ -133,6 +134,9 @@ export default function FileCard({
       // for.
       onClick={onSelect}
       onDoubleClick={onOpen}
+      // Draggable onto a folder in the sidebar, when the library allows moves.
+      draggable={!!onDragStart}
+      onDragStart={onDragStart}
       style={selected ? { outline: '2px solid var(--accent)', outlineOffset: -1 } : undefined}
     >
       <Body file={file} label={label} badges={badges} onMissingThumb={onMissingThumb} />

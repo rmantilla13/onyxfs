@@ -7,9 +7,10 @@ import {
 } from '@/lib/db';
 import {
   getStorageConfig, storageMode, s3MoveObject, s3DeleteObject, presignFileUrls,
-  cfgForFilespace, folderToKeyPath,
+  cfgForFilespace, folderToKeyPath, s3UniqueKey,
 } from '@/lib/storage';
 import { normalizeSchema, validateMetadataPatch } from '@/lib/dam';
+import { keyFor } from '@/lib/folder-ops';
 
 export const runtime = 'nodejs';
 
@@ -128,18 +129,30 @@ export async function PATCH(req, { params }) {
       // downgrading a scoped move to a catalog-only one.
       const filespaceId = body.filespaceId || new URL(req.url).searchParams.get('filespace') || null;
       const fs = filespaceId ? await getFilespaceForUser(session.user.email, filespaceId) : null;
+      // Unscoped, the file is movable when its key sits where an unscoped
+      // upload would have put it (`<base prefix>/<folder>/<name>`); a key in
+      // some filespace's prefix is not, since which bucket and prefix to
+      // re-key it under is unknown from here.
+      const name0 = existing.storageKey.slice(existing.storageKey.lastIndexOf('/') + 1);
+      const unscopedOk = !fs && existing.storageKey === keyFor(base.prefix || 'files', existing.folder, name0);
       if (storageMode(base) === 's3') {
-        if (!fs) {
-          // Cross-prefix "All files" view. Without a filespace its prefix is
-          // unknown, so the destination key cannot be computed — the folders
-          // route skips the physical move here for the same reason. The
-          // catalog move still happens; the flag is how the UI can say so.
+        if (!fs && !unscopedOk) {
+          // The catalog move still happens; the flag is how the UI can say so.
           objectMoved = false;
         } else {
-          const cfg = cfgForFilespace(base, fs);
-          const prefix = (cfg.prefix || '').replace(/^\/+|\/+$/g, '');
+          const cfg = fs ? cfgForFilespace(base, fs) : base;
+          const prefix = (cfg.prefix || (fs ? '' : 'files')).replace(/^\/+|\/+$/g, '');
           const name = existing.storageKey.slice(existing.storageKey.lastIndexOf('/') + 1);
-          const newKey = [prefix, folderToKeyPath(movingTo), name].filter(Boolean).join('/');
+          let newKey = [prefix, folderToKeyPath(movingTo), name].filter(Boolean).join('/');
+          // CopyObject overwrites. A file of the same name already in the
+          // destination would silently lose its bytes to this one, so take the
+          // next free name the way an upload does ("a (2).jpg"), and keep the
+          // catalog name matching what a mounted drive shows.
+          if (newKey !== existing.storageKey) {
+            newKey = await s3UniqueKey(cfg, newKey);
+            const landed = newKey.slice(newKey.lastIndexOf('/') + 1);
+            if (landed !== name && existing.name === name && body.name === undefined) body.name = landed;
+          }
           // True also when the key already reads right and nothing physical was
           // needed: what this reports is whether bucket and catalog agree.
           objectMoved = true;
