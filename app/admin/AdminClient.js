@@ -278,7 +278,7 @@ function FilespacesTab() {
     setError(null);
     try {
       await api(`/api/admin/filespaces/${id}/access`, {
-        method: 'POST',
+        method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ email: g.email, role: g.role || 'viewer' }),
       });
@@ -317,7 +317,11 @@ function FilespacesTab() {
                       className="small muted"
                       style={{ background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
                       onClick={async () => {
-                        await fetch(`/api/admin/filespaces/${fs.id}/access?email=${encodeURIComponent(m.email)}`, { method: 'DELETE' });
+                        await fetch(`/api/admin/filespaces/${fs.id}/access`, {
+                          method: 'PATCH',
+                          headers: { 'content-type': 'application/json' },
+                          body: JSON.stringify({ email: m.email, grant: false }),
+                        });
                         reload();
                       }}
                     >
