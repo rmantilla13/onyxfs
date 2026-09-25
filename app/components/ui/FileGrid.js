@@ -1,7 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import FileCard from './FileCard';
+import { rowWindow } from '@/lib/virtual-rows';
 
 /**
  * The library grid, with the keyboard behaviour the old one had none of.
@@ -20,7 +21,17 @@ import FileCard from './FileCard';
  * `role="listbox"` rather than `role="grid"`: grid requires row and gridcell
  * children, and the `repeat(auto-fill, …)` layout has no row elements to
  * hang them on. A listbox of options is what a selectable collection is.
+ *
+ * Virtualized: only the rows near the viewport are in the DOM. Infinite
+ * scroll kept every loaded card mounted, so ten thousand rows in meant ten
+ * thousand cards, 80k DOM nodes, and scrolling at a few frames a second. The
+ * stylesheet still owns the layout; the column count and row height are read
+ * back from it, and the page (not an inner box) remains the scroller.
  */
+// Rows rendered above and below the viewport, so a fast flick does not show
+// blank space before React catches up.
+const OVERSCAN_ROWS = 4;
+
 export default function FileGrid({
   files,
   selected,
@@ -32,9 +43,15 @@ export default function FileGrid({
   label = 'Files',
   onMissingThumb,
 }) {
+  const outer = useRef(null);
   const ref = useRef(null);
   const cells = useRef([]);
+  const pendingFocus = useRef(null);
   const [active, setActive] = useState(0);
+  // Layout read back from the stylesheet: columns, row pitch (card + gap), and
+  // the grid's own bottom padding (the phone selection bar reserves some).
+  const [metrics, setMetrics] = useState({ cols: 1, pitch: 0, gap: 0, padBottom: 0 });
+  const [range, setRange] = useState({ start: 0, end: 0 });
 
   // Keep the roving index inside the list as it grows and shrinks. Without
   // this, filtering to fewer results leaves it pointing past the end and the
@@ -45,27 +62,99 @@ export default function FileGrid({
 
   // The column count is unknowable from `minmax(180px, 1fr)` — it depends on
   // the width the grid actually got. Read it back from layout.
-  const columns = useCallback(() => {
+  const measure = useCallback(() => {
     const el = ref.current;
-    if (!el) return 1;
-    const cols = window.getComputedStyle(el).gridTemplateColumns;
-    return Math.max(1, cols.split(' ').filter(Boolean).length);
+    if (!el) return;
+    const style = window.getComputedStyle(el);
+    const cols = Math.max(1, style.gridTemplateColumns.split(' ').filter(Boolean).length);
+    const gap = parseFloat(style.rowGap) || 0;
+    const padBottom = parseFloat(style.paddingBottom) || 0;
+    const card = el.firstElementChild;
+    // Before any card has rendered, estimate from the column width: a 4:3
+    // thumbnail plus the two text lines under it.
+    const width = el.clientWidth ? (el.clientWidth - gap * (cols - 1)) / cols : 180;
+    const height = card ? card.getBoundingClientRect().height : width * 0.75 + 58;
+    const pitch = Math.max(1, height + gap);
+    setMetrics((m) => (m.cols === cols && Math.abs(m.pitch - pitch) < 0.5 && m.gap === gap && m.padBottom === padBottom
+      ? m
+      : { cols, pitch, gap, padBottom }));
   }, []);
+
+  const rowCount = Math.ceil(files.length / metrics.cols);
+
+  // Which rows intersect the viewport, from the page scroll position.
+  const updateRange = useCallback(() => {
+    const el = outer.current;
+    if (!el || !metrics.pitch) return;
+    const { start, end } = rowWindow({
+      top: el.getBoundingClientRect().top,
+      viewport: window.innerHeight,
+      pitch: metrics.pitch,
+      rowCount,
+      overscan: OVERSCAN_ROWS,
+    });
+    setRange((r) => (r.start === start && r.end === end ? r : { start, end }));
+  }, [metrics.pitch, rowCount]);
+
+  useLayoutEffect(() => { measure(); }, [measure, files.length]);
+  useLayoutEffect(() => { updateRange(); }, [updateRange]);
+
+  useEffect(() => {
+    let frame = 0;
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => { frame = 0; updateRange(); });
+    };
+    const ro = new ResizeObserver(() => { measure(); onScroll(); });
+    if (outer.current) ro.observe(outer.current);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+    return () => {
+      cancelAnimationFrame(frame);
+      ro.disconnect();
+      window.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onScroll);
+    };
+  }, [measure, updateRange]);
+
+  // A card that was out of the window when the keyboard moved to it is
+  // focused once the render that brings it in has happened.
+  useEffect(() => {
+    const i = pendingFocus.current;
+    if (i == null) return;
+    const el = cells.current[i];
+    if (!el) return;
+    pendingFocus.current = null;
+    el.focus({ preventScroll: true });
+    // 'nearest', or every keypress yanks the page to centre the card.
+    el.scrollIntoView({ block: 'nearest' });
+  });
 
   const focusCell = useCallback((i) => {
     const next = Math.min(Math.max(0, i), files.length - 1);
     setActive(next);
+    pendingFocus.current = next;
     const el = cells.current[next];
-    el?.focus();
-    // 'nearest', or every keypress yanks the page to centre the card.
-    el?.scrollIntoView({ block: 'nearest' });
-  }, [files.length]);
+    if (el) {
+      pendingFocus.current = null;
+      el.focus({ preventScroll: true });
+      el.scrollIntoView({ block: 'nearest' });
+    } else if (outer.current && metrics.pitch) {
+      // Not rendered: scroll its row into view, and the effect above focuses
+      // it after the next render.
+      const row = Math.floor(next / metrics.cols);
+      const top = outer.current.getBoundingClientRect().top + window.scrollY + row * metrics.pitch;
+      const bottom = top + metrics.pitch - metrics.gap;
+      if (top < window.scrollY) window.scrollTo(0, top);
+      else if (bottom > window.scrollY + window.innerHeight) window.scrollTo(0, bottom - window.innerHeight);
+    }
+  }, [files.length, metrics]);
 
   const onKeyDown = useCallback((e, index) => {
     // Never swallow a key meant for a text field inside a card.
     if (e.target.closest('input, textarea, select, [contenteditable]')) return;
 
-    const cols = columns();
+    const cols = metrics.cols;
     const moves = {
       ArrowRight: index + 1,
       ArrowLeft: index - 1,
@@ -90,27 +179,45 @@ export default function FileGrid({
       e.preventDefault();
       onSelect?.(files[index]);
     }
-  }, [columns, files, focusCell, onOpen, onSelect]);
+  }, [metrics.cols, files, focusCell, onOpen, onSelect]);
 
   if (!files.length) return emptyState || null;
 
+  const first = range.start * metrics.cols;
+  const last = Math.min(files.length, range.end * metrics.cols);
+  // The roving tab stop has to be a mounted card, or tabbing skips the grid.
+  const tabbable = active >= first && active < last ? active : first;
+  const height = rowCount * metrics.pitch - metrics.gap + metrics.padBottom;
+
   return (
-    <div className="files-grid" role="listbox" aria-label={label} aria-multiselectable="true" ref={ref}>
-      {files.map((f, i) => (
-        <FileCard
-          key={f.id}
-          file={f}
-          label={labelFor?.(f)}
-          badges={badgesFor?.(f)}
-          selected={selected?.has(f.id) || false}
-          tabIndex={i === active ? 0 : -1}
-          innerRef={(el) => { cells.current[i] = el; }}
-          onKeyDown={(e) => onKeyDown(e, i)}
-          onSelect={() => { setActive(i); onSelect?.(f); }}
-          onOpen={() => onOpen?.(f)}
-          onMissingThumb={onMissingThumb}
-        />
-      ))}
+    <div ref={outer} style={{ position: 'relative', height: Math.max(height, 0) }}>
+      <div
+        className="files-grid"
+        role="listbox"
+        aria-label={label}
+        aria-multiselectable="true"
+        ref={ref}
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${range.start * metrics.pitch}px)` }}
+      >
+        {files.slice(first, Math.max(last, first + 1)).map((f, n) => {
+          const i = first + n;
+          return (
+            <FileCard
+              key={f.id}
+              file={f}
+              label={labelFor?.(f)}
+              badges={badgesFor?.(f)}
+              selected={selected?.has(f.id) || false}
+              tabIndex={i === tabbable ? 0 : -1}
+              innerRef={(el) => { cells.current[i] = el; }}
+              onKeyDown={(e) => onKeyDown(e, i)}
+              onSelect={() => { setActive(i); onSelect?.(f); }}
+              onOpen={() => onOpen?.(f)}
+              onMissingThumb={onMissingThumb}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 }
