@@ -2,114 +2,144 @@ import FileProvider
 import OnyxKit
 import os
 
-/// Enumeration against /api/files/delta.
+/// Lists one folder of the location, from the replica.
 ///
-/// The anchor the system hands back and forth is the server's `seq` cursor,
-/// encoded as UTF-8 text. It is not a timestamp, and that matters: two writes
-/// in the same millisecond share an `updated_at` but not a `seq`, so a
-/// timestamp anchor can be placed between them and lose one silently.
-final class FileProviderEnumerator: NSObject, NSFileProviderEnumerator {
-    let container: NSFileProviderItemIdentifier
-    let api: OnyxAPI
-    let cursors: CursorStore
-    let log = Logger(subsystem: OnyxIdentifiers.fileProvider, category: "enumerator")
+/// Listing a folder does not change the replica — only the working set's
+/// change enumeration does (SyncEngine explains why) — except on the very
+/// first look at a location nothing has been read for yet, when there is no
+/// anchor to fall out of step with.
+final class FolderEnumerator: NSObject, NSFileProviderEnumerator {
+    let path: String
+    let engine: SyncEngine
+    let rootName: String
 
-    init(container: NSFileProviderItemIdentifier, api: OnyxAPI, cursors: CursorStore) {
-        self.container = container
-        self.api = api
-        self.cursors = cursors
-        super.init()
+    init(path: String, engine: SyncEngine, rootName: String) {
+        self.path = path
+        self.engine = engine
+        self.rootName = rootName
     }
 
     func invalidate() {}
 
-    /// The full listing. Pulled from the local mirror after a sync rather than
-    /// straight from the network, so the mirror stays the single answer to
-    /// "what is in this drive".
-    func enumerateItems(for observer: NSFileProviderEnumerationObserver,
-                        startingAt page: NSFileProviderPage) {
+    func enumerateItems(for observer: NSFileProviderEnumerationObserver, startingAt page: NSFileProviderPage) {
+        Task {
+            if await !engine.hasSynced { _ = try? await engine.catchUp() }
+            let replica = await engine.replica
+            let (folders, files) = replica.children(of: path)
+            var items: [NSFileProviderItem] = folders.map(OnyxItem.folder)
+            items += files.map(OnyxItem.file)
+            observer.didEnumerate(items)
+            observer.finishEnumerating(upTo: nil)
+        }
+    }
+
+    // Changes reach folders through the working set; a folder has none of its
+    // own to report.
+    func enumerateChanges(for observer: NSFileProviderChangeObserver, from anchor: NSFileProviderSyncAnchor) {
+        Task { observer.finishEnumeratingChanges(upTo: await engine.anchor(), moreComing: false) }
+    }
+
+    func currentSyncAnchor(completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void) {
+        Task { completionHandler(await engine.anchor()) }
+    }
+}
+
+/// The working set: everything in the location, and the only place changes
+/// are reported from.
+///
+/// The anchor the system hands back and forth is the server's `seq` cursor
+/// with the access fingerprint beside it. Not a timestamp, which matters: two
+/// writes in the same millisecond share an `updated_at` but not a `seq`, so a
+/// timestamp anchor can be placed between them and lose one silently.
+final class WorkingSetEnumerator: NSObject, NSFileProviderEnumerator {
+    let engine: SyncEngine
+    let rootName: String
+    let log = Logger(subsystem: OnyxIdentifiers.fileProvider, category: "enumerator")
+    static let pageSize = 500
+
+    init(engine: SyncEngine, rootName: String) {
+        self.engine = engine
+        self.rootName = rootName
+    }
+
+    func invalidate() {}
+
+    /// Everything, in pages. The system calls this for a first read and after
+    /// an expired anchor; the replica is brought to the present first.
+    func enumerateItems(for observer: NSFileProviderEnumerationObserver, startingAt page: NSFileProviderPage) {
         Task {
             do {
-                try await syncToPresent()
-                observer.didEnumerate(ItemStore.shared.all())
-                observer.finishEnumerating(upTo: nil)
+                let offset = Self.offset(of: page)
+                if offset == 0 {
+                    do { _ = try await engine.catchUp() }
+                    catch is SyncEngine.ScopeChanged { _ = try await engine.catchUp() }
+                }
+                let replica = await engine.replica
+                let all: [NSFileProviderItem] =
+                    replica.folders.sorted().map(OnyxItem.folder) +
+                    replica.files.values.sorted { $0.id < $1.id }.map(OnyxItem.file)
+                let end = min(offset + Self.pageSize, all.count)
+                if offset < end { observer.didEnumerate(Array(all[offset..<end])) }
+                observer.finishEnumerating(upTo: end < all.count ? Self.page(end) : nil)
             } catch {
+                log.error("enumerate failed: \(error.localizedDescription, privacy: .public)")
                 observer.finishEnumeratingWithError(mapped(error))
             }
         }
     }
 
-    func enumerateChanges(for observer: NSFileProviderChangeObserver,
-                          from anchor: NSFileProviderSyncAnchor) {
+    func enumerateChanges(for observer: NSFileProviderChangeObserver, from anchor: NSFileProviderSyncAnchor) {
         Task {
+            // An anchor from some other state of the replica — before a scope
+            // change, or from a pass that did not finish reporting — cannot be
+            // brought forward honestly. Expiring it makes the system re-read.
+            guard await engine.matches(anchor) else {
+                observer.finishEnumeratingWithError(NSFileProviderError(.syncAnchorExpired))
+                return
+            }
             do {
-                let from = Int64(String(decoding: anchor.rawValue, as: UTF8.self)) ?? 0
-                let sync = DeltaSync(api: api, cursor: from)
-                var deletions: [NSFileProviderItemIdentifier] = []
-                var updates: [NSFileProviderItem] = []
-
-                try await sync.drain { page in
-                    let filespaceId = await self.defaultFilespaceId()
-                    ItemStore.shared.apply(changed: page.changed, deleted: page.deleted,
-                                           filespaceId: filespaceId)
-                    for file in page.changed {
-                        // A soft delete arrives as a change with deletedAt
-                        // set, not as a tombstone. Reported as an update it
-                        // would leave deleted files in Finder forever.
-                        if file.deletedAt != nil { deletions.append(.init(file.id)) }
-                        else if let item = ItemStore.shared.item(id: file.id) { updates.append(item) }
-                    }
-                    deletions.append(contentsOf: page.deleted.map { .init($0.id) })
+                let diff = try await engine.catchUp()
+                let replica = await engine.replica
+                let updated = diff.updated.compactMap {
+                    OnyxItem.item(for: NSFileProviderItemIdentifier($0), in: replica, rootName: rootName)
                 }
-
-                let settled = await sync.cursor
-                cursors.save(settled)
-                if !updates.isEmpty { observer.didUpdate(updates) }
-                if !deletions.isEmpty { observer.didDeleteItems(withIdentifiers: deletions) }
-                observer.finishEnumeratingChanges(upTo: anchorFor(settled), moreComing: false)
+                if !updated.isEmpty { observer.didUpdate(updated) }
+                if !diff.deleted.isEmpty { observer.didDeleteItems(withIdentifiers: diff.deleted.map { .init($0) }) }
+                observer.finishEnumeratingChanges(upTo: await engine.anchor(), moreComing: false)
+            } catch is SyncEngine.ScopeChanged {
+                observer.finishEnumeratingWithError(NSFileProviderError(.syncAnchorExpired))
             } catch {
+                log.error("changes failed: \(error.localizedDescription, privacy: .public)")
                 observer.finishEnumeratingWithError(mapped(error))
             }
         }
     }
 
     func currentSyncAnchor(completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void) {
-        completionHandler(anchorFor(cursors.load()))
+        Task { completionHandler(await engine.anchor()) }
     }
 
-    // MARK: - Helpers
-
-    private func anchorFor(_ cursor: Int64) -> NSFileProviderSyncAnchor {
-        NSFileProviderSyncAnchor(Data(String(cursor).utf8))
+    private static func offset(of page: NSFileProviderPage) -> Int {
+        Int(String(decoding: page.rawValue, as: UTF8.self)) ?? 0
     }
 
-    private func syncToPresent() async throws {
-        let sync = DeltaSync(api: api, cursor: cursors.load())
-        let filespaceId = await defaultFilespaceId()
-        try await sync.drain { page in
-            ItemStore.shared.apply(changed: page.changed, deleted: page.deleted, filespaceId: filespaceId)
-        }
-        // Saved only after every page applied cleanly. Committing the cursor
-        // first would skip an unapplied page permanently.
-        cursors.save(await sync.cursor)
+    private static func page(_ offset: Int) -> NSFileProviderPage {
+        NSFileProviderPage(Data(String(offset).utf8))
     }
+}
 
-    /// /api/files/delta does not say which filespace a row belongs to, so for
-    /// now every item is attributed to the first one. That is correct for a
-    /// single-filespace deployment and wrong for several — when the server
-    /// starts returning a filespace per row, this is the only place that
-    /// changes.
-    private func defaultFilespaceId() async -> String {
-        guard let spaces = try? await api.filespaces(), let first = spaces.first else { return "" }
-        return first.id
-    }
-
-    private func mapped(_ error: Error) -> Error {
-        if case OnyxError.notAuthenticated = error {
-            // Finder shows a "Sign in" affordance for this specific error.
-            // Anything else is presented as a generic failure.
-            return NSFileProviderError(.notAuthenticated)
-        }
+/// Finder shows a "Sign in" affordance for `.notAuthenticated` specifically;
+/// anything else reads as a generic failure. A drive you lost access to is
+/// not a sign-in problem, so that one is reported as unavailable.
+func mapped(_ error: Error) -> Error {
+    switch error {
+    case OnyxError.notAuthenticated:
+        return NSFileProviderError(.notAuthenticated)
+    case OnyxError.http(let status, _) where status == 403 || status == 404:
+        return NSFileProviderError(.noSuchItem)
+    case let e as URLError where e.code == .notConnectedToInternet || e.code == .networkConnectionLost:
+        return NSFileProviderError(.serverUnreachable)
+    default:
         return error
     }
 }

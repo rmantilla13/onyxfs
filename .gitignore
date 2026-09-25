@@ -19,3 +19,12 @@ desktop/src-tauri/binaries
 # Personal Claude Code settings for this checkout
 .claude/settings.local.json
 .claude/launch.json
+
+# Swift build output (apple/): SwiftPM's, the assembled Onyx.app, and the
+# Xcode project XcodeGen generates from project.yml
+apple/.build/
+apple/OnyxKit/.build/
+apple/build/
+apple/*.xcodeproj
+apple/.swiftpm/
+apple/OnyxKit/.swiftpm/

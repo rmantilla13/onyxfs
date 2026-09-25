@@ -56,8 +56,10 @@ public struct SigV4 {
         SymmetricKey(data: Data(HMAC<SHA256>.authenticationCode(for: Data(message.utf8), using: key)))
     }
 
-    static func hex(_ data: some DataProtocol) -> String {
-        data.map { String(format: "%02x", $0) }.joined()
+    /// A digest or MAC, as lowercase hex. Any byte sequence: CryptoKit's
+    /// digests are Sequences of UInt8 but not DataProtocol.
+    static func hex<Bytes: Sequence>(_ bytes: Bytes) -> String where Bytes.Element == UInt8 {
+        bytes.map { String(format: "%02x", $0) }.joined()
     }
 
     static func sha256Hex(_ s: String) -> String { hex(SHA256.hash(data: Data(s.utf8))) }

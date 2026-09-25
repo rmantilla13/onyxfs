@@ -36,9 +36,12 @@ before filtering; that mints a URL for a row the caller may not be entitled to.
 **Drives are boundaries.** A file stored under a filespace's prefix belongs to
 that drive's members (`lib/drive-access.js`): members read, editors and owners
 write, everyone else sees nothing but a file shared with them directly. The
-listing query, `canAccessFile`, `modifiableFileIds` and every route that writes
-under a prefix (`getFilespaceForWrite`) apply it — a new read or write path
-must too.
+listing query, the sync feed (`/api/files/delta`, via the shared
+`accessClauses`), `canAccessFile`, `modifiableFileIds` and every route that
+writes under a prefix (`getFilespaceForWrite`) apply it — a new read or write
+path must too. A change to who may see a file must reach devices: bump the
+file's `seq` (as `setFileAcl` does), or it moves the delta's `scope`
+fingerprint (`lib/sync-scope.js`).
 
 **Enforce feature flags on the server.** A flag that changes behaviour must be
 read server-side, not passed in by the client. `DELETE /api/files/[id]` is the
@@ -63,6 +66,8 @@ npm run dev:local                  # the app on local Postgres + S3; sign-in lin
 npm test                           # unit tests, no database needed
 npm run build                      # web — the real check; JSX errors surface here
 npm run doctor                     # creates the schema and verifies a live database
+cd apple && swift test --package-path OnyxKit   # Mac/iOS sync + sign-in logic
+cd apple && scripts/build-mac.sh   # Onyx.app, no Xcode needed (apple/README.md)
 cd desktop && npm run build        # tsc -b && vite build
 cd desktop/src-tauri && cargo check
 ```

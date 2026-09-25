@@ -7,7 +7,7 @@ name: Onyx
 options:
   bundleIdPrefix: io.onyxfs
   deploymentTarget:
-    macOS: "13.0"
+    macOS: "14.0"
     iOS: "16.0"
   createIntermediateGroups: true
 

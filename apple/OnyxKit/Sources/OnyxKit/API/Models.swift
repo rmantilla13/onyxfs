@@ -53,11 +53,20 @@ public struct FileItem: Codable, Sendable, Identifiable, Equatable {
     public let seq: Int64?
 }
 
+/// Something that changed and is gone, as far as the caller is concerned:
+/// deleted, trashed, moved out of the scope, or no longer theirs to see. The
+/// server sends an id and a seq and nothing more — it will not say what a
+/// file was called to someone who may not see it — so the other fields are
+/// optional and normally absent.
 public struct Tombstone: Codable, Sendable, Equatable {
     public let id: String
     public let seq: Int64
     public let folder: String?
     public let storageKey: String?
+
+    public init(id: String, seq: Int64, folder: String? = nil, storageKey: String? = nil) {
+        self.id = id; self.seq = seq; self.folder = folder; self.storageKey = storageKey
+    }
 }
 
 public struct DeltaPage: Codable, Sendable {
@@ -68,14 +77,47 @@ public struct DeltaPage: Codable, Sendable {
     public let cursor: Int64
     /// False when more pages remain at this instant.
     public let done: Bool
+    /// A fingerprint of the access this page was computed under. When it
+    /// changes, who may see what has changed without any file changing, and
+    /// the replica must start again from cursor 0 (lib/sync-scope.js).
+    public let scope: String?
+    /// Present when asked for (`folders=1`): every folder of the scope, whole,
+    /// so empty ones appear. Nil means "not sent", not "no folders".
+    public let folders: [String]?
 }
 
-public struct Filespace: Codable, Sendable, Identifiable, Equatable {
+/// A drive (a "filespace" on the wire): a named folder of the bucket with
+/// its own members.
+public struct Filespace: Codable, Sendable, Identifiable, Equatable, Hashable {
     public let id: String
     public let name: String
     public let bucket: String?
     public let prefix: String?
     public let region: String?
+    /// viewer | editor | owner — what this account may do in it.
+    public let role: String?
+
+    public init(id: String, name: String, bucket: String? = nil, prefix: String? = nil,
+                region: String? = nil, role: String? = nil) {
+        self.id = id; self.name = name; self.bucket = bucket; self.prefix = prefix
+        self.region = region; self.role = role
+    }
+}
+
+/// Where to fetch one file's bytes (`GET /api/space/files/<id>`). Presigned,
+/// so short-lived: fetch it when the bytes are wanted, never store it.
+public struct ContentLink: Codable, Sendable {
+    public let id: String
+    public let url: URL
+    public let expiresAt: EpochMillis?
+    public let version: Int?
+    public let contentHash: String?
+}
+
+/// `POST /api/desktop/web-session`: the one-time URL that signs a web view in.
+public struct WebSessionLink: Codable, Sendable {
+    public let url: URL
+    public let expiresAt: EpochMillis?
 }
 
 /// The response from `POST /api/space/sts`.

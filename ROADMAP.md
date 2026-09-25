@@ -246,8 +246,9 @@ apple/
 | | Work | Notes |
 |---|---|---|
 | 5.0 | Decide identifiers, once | `io.onyxfs.app` (already chosen), `io.onyxfs.app.fileprovider`, app group `group.io.onyxfs`, one Keychain access group. Compiled into every install; changing them later orphans every device. |
-| 5.1 | OnyxKit: auth + API client | Sign in on macOS and iOS against production. Tokens visible to the extension. Reuses `/api/desktop/*` PKCE routes as-is. |
-| 5.2 | Read-only File Provider, macOS | Enumerate from `/delta`, materialise files on open via STS + ranged S3 GET, evict. Finder shows Onyx. This is the milestone that proves the architecture. |
+| 5.1 | OnyxKit: auth + API client | **Done (macOS).** Sign-in by PKCE or pairing code, token in the Keychain; builds and tests with the Command Line Tools alone. |
+| 5.1b | The Mac app as a platform | **Done.** Onyx.app: the whole web workspace in a window of its own, signed in from the device token (`/api/desktop/web-session`), plus a menu bar item and Settings. `apple/scripts/build-mac.sh`. |
+| 5.2 | Read-only File Provider, macOS | **Built; first run needs a team-signed build.** One Finder location per drive (and the library), each enumerating `/delta?drive=` into a local replica with real folders, materialising on open via `/api/space/files/<id>`. |
 | 5.3 | Same extension on iOS | The source is shared; this is provisioning, memory profiling under the 50MB cap, and Files.app testing. |
 | 5.4 | Writes | Create, rename, move, delete, modify → `POST /api/files`, `PATCH /api/files/[id]`, multipart for large. Background `URLSession` so a 20GB upload survives the app being killed. |
 | 5.5 | Conflict policy, written down | Server keeps a `version` counter per file; a write carries the version it was based on; mismatch → the server keeps both, the loser is renamed `name (conflict from <device>)`. Decided here, not discovered later. |
@@ -261,9 +262,9 @@ apple/
   `db/init.sql` together.
 - `PATCH /api/files/[id]` already renames and moves; make it accept
   `If-Match: <version>`.
-- `/api/files/delta` should include `version` and `content_hash` in each row
-  so the extension can tell a metadata change from a content change without
-  a HEAD to S3.
+- ~~`/api/files/delta` should include `version` and `content_hash` in each row~~
+  **Done**, and the feed is now judged by the listing's access rule, scoped
+  per drive, and fingerprints the access it was computed under.
 - A device registry: `devices` table (`id`, `email`, `name`, `platform`,
   `last_seen`, `cursor`), so the admin can see and revoke a device, and so
   the conflict rename above can name it.
