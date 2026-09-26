@@ -105,8 +105,9 @@
 /* ── The image stage (FilePreview) ──────────────────────────────────────── */
 
 .image-stage-wrap { display: flex; flex-direction: column; gap: var(--s2); }
-/* Shaped like the image, up to 70% of the window, like the player's stage;
-   the frame inside is placed on the contained rectangle. */
+/* Shaped like the image, up to 70% of the window, like the player's stage.
+   A size container, so the frame inside can be contained in it by CSS alone
+   (container units) — right in the server's HTML, before any script runs. */
 .image-stage {
   position: relative;
   width: 100%;
@@ -116,11 +117,38 @@
   background: var(--surface-sunken);
   border-radius: var(--radius);
   overflow: hidden;
+  container-type: size;
 }
-.image-stage.is-actual { aspect-ratio: auto; height: 70vh; overflow: auto; }
-.image-frame { position: absolute; }
-.image-stage.is-actual .image-frame { position: relative; margin: 0 auto; }
-.image-frame img { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; }
+.image-stage.is-actual { aspect-ratio: auto; height: 70vh; overflow: auto; container-type: normal; }
+/* The picture's own rectangle inside the stage (or Quick Look): as large as
+   fits, in the picture's shape, centred. The overlay fills it, so a pin at
+   0.4 is 0.4 of the picture, not of the grey around it. */
+.image-frame {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: min(100cqw, calc(100cqh * var(--ratio, 4 / 3)));
+  height: min(100cqh, calc(100cqw / var(--ratio, 4 / 3)));
+}
+.image-stage.is-actual .image-frame { position: relative; inset: auto; margin: 0 auto; }
+.image-frame img {
+  position: absolute; inset: 0;
+  display: block; width: 100%; height: 100%;
+  object-fit: contain;
+  -webkit-user-select: none; user-select: none;
+  -webkit-user-drag: none; -webkit-touch-callout: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .image-frame img.is-new { animation: image-sharpen 90ms ease-out; }
+}
+@keyframes image-sharpen { from { opacity: 0; } to { opacity: 1; } }
+/* The original of a file with no preview, on its way. */
+.image-progress {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 1;
+  height: 3px;
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+}
+.image-progress > span { display: block; height: 100%; background: var(--accent); transition: width var(--dur-1) linear; }
 .image-overlay { position: absolute; inset: 0; pointer-events: none; }
 .image-stage-bar { display: flex; align-items: center; gap: var(--s3); }
 
