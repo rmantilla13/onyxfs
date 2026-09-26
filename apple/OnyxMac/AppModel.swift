@@ -110,13 +110,43 @@ final class AppModel: ObservableObject {
         // The server refused the sign-in (tokenRejected): signed out now,
         // so there is no one to put drives in Finder for.
         guard phase == .signedIn else { return }
+        // A sign-in kept from before the account was recorded (0.2.0 did not
+        // record it): the drive list usually names it, and if the server
+        // could not be asked yet, this does.
+        if !knowsAccount, let who = try? await api.me() { adoptAccount(who) }
         await finder.start(model: self)
+        // Finder stops short without an account; refresh() starts it again
+        // once one is known.
+        finderWaitingForAccount = !knowsAccount
+    }
+
+    private var knowsAccount: Bool { !(email ?? "").isEmpty }
+
+    /// Set by afterSignIn when the Finder bridge could not start for want of
+    /// an account, so the refresh that learns it can start it.
+    private var finderWaitingForAccount = false
+
+    /// Record the signed-in account as the server names it, when this Mac
+    /// does not know it. Offline copies and drive mirrors are kept per
+    /// account, so without one no drive can be shown in Finder. An account
+    /// already known is never replaced here: the token decides who is signed
+    /// in, and that only changes by signing in.
+    @discardableResult
+    private func adoptAccount(_ who: String?) -> Bool {
+        guard !knowsAccount,
+              let address = who?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !address.isEmpty else { return false }
+        email = address
+        settings.email = address
+        appLog.info("signed-in account learned from the server")
+        return true
     }
 
     func signOut() async {
         try? await api.signOut()
         settings.email = nil
         email = nil
+        finderWaitingForAccount = false
         drives = []
         drivesLoaded = false
         isAdmin = false
@@ -194,6 +224,10 @@ final class AppModel: ObservableObject {
             guard phase == .signedIn, email == account else { return }
             drives = listing.drives.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             isAdmin = listing.isAdmin
+            if adoptAccount(listing.email), finderWaitingForAccount {
+                finderWaitingForAccount = false
+                await finder.start(model: self)
+            }
             drivesLoaded = true
             if problem == listingProblem { problem = nil }
             listingProblem = nil
