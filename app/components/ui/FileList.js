@@ -168,9 +168,13 @@ function FileList({
   useEffect(() => () => intent.cancel(), [intent]);
   // What every cell needs from the list, as one object that only changes
   // when one of these does — so a memoized row is not re-rendered for it.
+  // Read through a ref, so a change of selection does not re-render every row.
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const soleSelected = useCallback((id) => selectedRef.current?.size === 1 && selectedRef.current.has(id), []);
   const ctx = useMemo(() => ({
-    labelFor, canEdit, onEdit, suggestionsFor, onOpenFolder, usageRights, setEditing, intent,
-  }), [labelFor, canEdit, onEdit, suggestionsFor, onOpenFolder, usageRights, intent]);
+    labelFor, canEdit, onEdit, suggestionsFor, onOpenFolder, usageRights, setEditing, intent, soleSelected,
+  }), [labelFor, canEdit, onEdit, suggestionsFor, onOpenFolder, usageRights, intent, soleSelected]);
 
   // The list's own width, so the columns can be fitted to it (fitColumns in
   // lib/list-columns.js). A callback ref, because the element comes and goes
@@ -516,8 +520,9 @@ function EditableCell({ file, col, ctx, tabbable, selected, editing: rowEditing 
   const editing = rowEditing === id;
   const button = useRef(null);
   const refocus = useRef(false);
-  // Whether the row was selected when this press began — before the click
-  // it makes has selected it. Only then is a click the slow second one.
+  // Whether the row was the whole selection when this press began — before
+  // the click it makes has selected it. Only then is a click the slow second
+  // one.
   const wasSelected = useRef(false);
 
   // Back to the cell after a keyboard Enter or Escape, so the next Tab or
@@ -554,11 +559,14 @@ function EditableCell({ file, col, ctx, tabbable, selected, editing: rowEditing 
         type="button"
         className="cell-edit"
         tabIndex={tabbable ? 0 : -1}
-        onPointerDown={() => { wasSelected.current = selected; }}
+        onPointerDown={() => { wasSelected.current = selected && ctx.soleSelected(file.id); }}
         // The click goes on to the row, which selects it. A slow second
         // click on a row that was already selected edits this cell; a
         // double-click cancels that and opens the file (FileRow).
-        onClick={(e) => { ctx.intent.click({ wasSelected: wasSelected.current, detail: e.detail }, start); wasSelected.current = false; }}
+        onClick={(e) => {
+          ctx.intent.click({ wasSelected: wasSelected.current, detail: e.detail, modified: e.metaKey || e.ctrlKey || e.shiftKey }, start);
+          wasSelected.current = false;
+        }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === 'F2') { e.preventDefault(); e.stopPropagation(); ctx.intent.cancel(); start(); }
         }}

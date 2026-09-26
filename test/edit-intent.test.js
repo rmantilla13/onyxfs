@@ -60,3 +60,19 @@ test('a second slow click replaces the first, so one edit starts', () => {
   t.fire();
   assert.equal(edits, 1);
 });
+
+// ⌘- and ⇧-clicks change the selection; a click on one row of several picks
+// it out of them. Neither is the slow second click that edits.
+test('a modified click, or one on a row that was not the whole selection, never edits', () => {
+  const t = fakeTimers();
+  const intent = createEditIntent(t);
+  let edits = 0;
+  assert.equal(intent.click({ wasSelected: true, detail: 1, modified: true }, () => edits++), false);
+  // FileList passes wasSelected only when the row was selected on its own.
+  assert.equal(intent.click({ wasSelected: false, detail: 1 }, () => edits++), false);
+  t.fire();
+  assert.equal(edits, 0);
+  assert.equal(intent.click({ wasSelected: true, detail: 1, modified: false }, () => edits++), true);
+  t.fire();
+  assert.equal(edits, 1);
+});
