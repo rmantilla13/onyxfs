@@ -214,6 +214,23 @@ struct PinStoreTests {
         #expect(await store.usage() == 0)
     }
 
+    @Test func keptOfflineGoesByTheRecordsAtTheCurrentEtag() async throws {
+        let store = try PinStore(directory: try tempFolder())
+        await store.pin(pinFolder(""))
+        _ = await store.reconcile(scope: scope, index: FakeIndex([file("a", "a.txt"), file("b", "b.txt")]),
+                                  download: FakeDownloads().download)
+        let entries = [file("a", "a.txt"), file("b", "b.txt", etag: "v2"), file("c", "c.txt"), folderEntry("F")]
+        #expect(await store.keptOffline(scope: scope, entries) == ["a"], "b's copy is of another version")
+        #expect(await store.keptOffline(scope: "drive.other", entries).isEmpty)
+        #expect(await store.keptOffline(scope: scope, []).isEmpty)
+        // The records alone: a copy deleted by hand counts until the next
+        // pass, but is not served.
+        let a = try #require(await store.localCopy(scope: scope, fileId: "a", etag: "v1"))
+        try FileManager.default.removeItem(at: a)
+        #expect(await store.keptOffline(scope: scope, entries) == ["a"])
+        #expect(await store.localCopy(scope: scope, fileId: "a", etag: "v1") == nil)
+    }
+
     @Test func aDriveStillBeingFetchedDeletesNothing() async throws {
         // A first sync, or one after the access changed, fails a quarter of
         // the way through: the index has a quarter of the drive. The rest is

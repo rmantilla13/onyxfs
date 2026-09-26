@@ -362,6 +362,24 @@ struct MirrorIndexTests {
         // Debug build; generous, to catch a quadratic step rather than to time it.
         #expect(took < 20, "built in \(took)s")
     }
+
+    @Test func theIndexAddsUpItsBytesAndWalksEveryFolder() {
+        let index = MirrorIndex(replica([
+            item("a", "a.png", in: "X/Y", hash: "h-a", size: 10),
+            item("b", "b.png", in: "X", size: nil),
+            item("c", "c.png", hash: "", size: 5),
+        ], folders: ["Empty"]))
+        #expect(index.byteCount == 15, "a file with no size counts as none")
+        #expect(index.allFolders.map(\.path) == ["", "Empty", "X", "X/Y"], "the drive first, then depth-first")
+        #expect(index.allFolders.allSatisfy { $0.isFolder })
+        #expect(index.authoritative(false).allFolders.count == 4)
+        // The content hash rides along, apart from the etag, which falls
+        // back to the version.
+        #expect(index.file(id: "a")?.contentHash == "h-a")
+        #expect(index.file(id: "b")?.contentHash == nil && index.file(id: "b")?.etag == "v1")
+        #expect(index.file(id: "c")?.contentHash == nil, "an empty hash is none")
+        #expect(MirrorIndex(Replica()).allFolders.map(\.path) == [""])
+    }
 }
 
 // MARK: - A stub server
@@ -1298,5 +1316,108 @@ struct DriveMirrorTests {
         let urls = try await [a, b, c]
         #expect(Set(urls).count == 1)
         #expect(stub.server.requests(to: "/api/space/files/f1").count == 1)
+    }
+
+    // MARK: - What the onyxfs bridge follows
+
+    @Test func theRevisionMovesWhenWhatIsShownChangesAndOnlyThen() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 10))
+        let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        #expect(await mirror.revision == 0)
+
+        // A long-poll waiting when the pass comes is woken by it.
+        let started = ContinuousClock.now
+        let waiter = Task { await mirror.waitForChange(after: 0, timeout: .seconds(20)) }
+        try await Task.sleep(for: .milliseconds(50))
+        _ = try await mirror.sync()
+        await waiter.value
+        #expect(ContinuousClock.now - started < .seconds(10), "woken, not timed out")
+        #expect(await mirror.revision == 1)
+        let snapshot = await mirror.snapshot
+        #expect(snapshot.revision == 1 && snapshot.index.entry(at: "a.png")?.fileId == "a")
+
+        // A pass that brings nothing new moves nothing.
+        stub.server.page(at: 10, page([], cursor: 10))
+        _ = try await mirror.sync()
+        #expect(await mirror.revision == 1)
+
+        // Withheld, the drive shows nothing: that is a change. Shown again, another.
+        stub.server.refuseDelta(404)
+        #expect(isRefusal(await failure(of: mirror)))
+        #expect(await mirror.revision == 2)
+        #expect(await mirror.index.fileCount == 0)
+        #expect(isRefusal(await failure(of: mirror)))
+        #expect(await mirror.revision == 2, "still withheld, still nothing shown")
+        stub.server.refuseDelta(nil)
+        _ = try await mirror.sync()
+        #expect(await mirror.revision == 3)
+        #expect(await mirror.index.fileCount == 1)
+    }
+
+    @Test func aWaitEndsOnAChangeOnItsTimeOrWhenCancelled() async throws {
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server, account: "a@b.c",
+                                 api: { OnyxAPI() })
+        var started = ContinuousClock.now
+        await mirror.waitForChange(after: 0, timeout: .milliseconds(200))
+        #expect(ContinuousClock.now - started >= .milliseconds(200), "nothing changed: the whole wait")
+
+        started = ContinuousClock.now
+        let waiter = Task { await mirror.waitForChange(after: 0, timeout: .seconds(20)) }
+        try await Task.sleep(for: .milliseconds(50))
+        await mirror.applyForTesting(changed: [item("a", "a.png")])
+        await waiter.value
+        #expect(ContinuousClock.now - started < .seconds(10))
+        #expect(await mirror.revision == 1)
+
+        // Already past what the caller saw: at once.
+        started = ContinuousClock.now
+        await mirror.waitForChange(after: 0, timeout: .seconds(20))
+        #expect(ContinuousClock.now - started < .seconds(5))
+
+        // Cancelled: at once too.
+        started = ContinuousClock.now
+        let cancelled = Task { await mirror.waitForChange(after: 1, timeout: .seconds(20)) }
+        try await Task.sleep(for: .milliseconds(50))
+        cancelled.cancel()
+        await cancelled.value
+        #expect(ContinuousClock.now - started < .seconds(10))
+
+        // The same file again changes nothing, so moves nothing.
+        await mirror.applyForTesting(changed: [item("a", "a.png")])
+        #expect(await mirror.revision == 1)
+    }
+
+    @Test func aLinkForTheExtensionHasAQuarterOfAnHourLeft() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 10))
+        let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        func millis(in seconds: TimeInterval) -> Int64 { Int64((Date().timeIntervalSince1970 + seconds) * 1000) }
+
+        let soon = millis(in: 12 * 60)
+        stub.server.link("a", json: #"{"id":"a","url":"https://s3.test/a?sig=1","expiresAt":\#(soon),"version":1}"#)
+        #expect(try await mirror.contentURL(fileId: "a").absoluteString == "https://s3.test/a?sig=1")
+        let later = millis(in: 6 * 3600)
+        stub.server.link("a", json: #"{"id":"a","url":"https://s3.test/a?sig=2","expiresAt":\#(later),"version":1}"#)
+        // Twelve minutes left: enough for rclone's next read, not for the extension.
+        #expect(try await mirror.contentURL(fileId: "a").absoluteString == "https://s3.test/a?sig=1")
+        let link = try await mirror.contentLink(fileId: "a")
+        #expect(link.url.absoluteString == "https://s3.test/a?sig=2")
+        #expect(abs(link.expiresAt.timeIntervalSince1970 - Double(later) / 1000) < 0.01)
+        // The new one is kept, for both.
+        #expect(try await mirror.contentURL(fileId: "a").absoluteString == "https://s3.test/a?sig=2")
+        #expect(try await mirror.contentLink(fileId: "a").url.absoluteString == "https://s3.test/a?sig=2")
+        #expect(stub.server.requests(to: "/api/space/files/a").count == 2)
     }
 }
