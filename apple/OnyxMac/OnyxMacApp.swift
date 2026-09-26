@@ -32,7 +32,11 @@ struct OnyxMacApp: App {
                 .environmentObject(model.finder)
                 .task { await Launch.once { await model.handleLaunchArguments() } }
         }
-        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
+        // No title bar of SwiftUI's: the page's bar is it (WindowChrome).
+        // Declared here, not only set on the NSWindow, because SwiftUI's
+        // window lets clicks through to the page under the title bar only
+        // when it knows its title bar is hidden.
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1280, height: 820)
         .commands { OnyxCommands(model: model) }
 
