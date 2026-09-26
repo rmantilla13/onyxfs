@@ -316,6 +316,17 @@ describe('link rules', () => {
     assert.equal(can(p, 'shares.private', { canModify: true, kind: 'private', driveShareKinds: ['private'] }).ok, true);
   });
 
+  test('a drive whose kinds are none allows no link at all', () => {
+    // [] is "no links on this drive" — the opposite of null, "every kind".
+    const p = principal('member', 'editor');
+    for (const [cap, kind] of [['shares.private', 'private'], ['shares.public', 'public'], ['shares.public', 'password']]) {
+      const d = can(p, cap, { canModify: true, kind, driveShareKinds: [] });
+      assert.equal(d.ok, false, kind);
+      assert.match(d.reason, /turned off for this drive/);
+    }
+    assert.equal(can(p, 'shares.public', { canModify: true, kind: 'public', driveShareKinds: null }).ok, true);
+  });
+
   test('no write access to the file, no link', () => {
     assert.equal(can(principal('member'), 'shares.private', { canModify: false }).ok, false);
   });

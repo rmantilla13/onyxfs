@@ -12,7 +12,7 @@ import { audit } from '@/lib/audit';
 /**
  * The per-drive settings, from a request: quota (bytes, null = no limit),
  * whether AI tools may be used on it, and which link kinds its files may
- * have (null = all). Only the keys present are returned; { error } for a bad
+ * have (null = all, [] = none). Only the keys present are returned; { error } for a bad
  * value.
  */
 function driveSettings(body) {
@@ -30,7 +30,7 @@ function driveSettings(body) {
     const k = body.shareKinds;
     const known = [...SHARE_KINDS.map((x) => x.id), 'review'];
     if (!(k === null || (Array.isArray(k) && k.every((x) => known.includes(x))))) {
-      return { error: `shareKinds must be null (every kind) or a list of: ${known.join(', ')}.` };
+      return { error: `shareKinds must be null (every kind) or a list — empty for none — of: ${known.join(', ')}.` };
     }
     out.shareKinds = k === null ? null : [...new Set(k)];
   }
