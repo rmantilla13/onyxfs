@@ -84,6 +84,30 @@ describe('frames and seconds', () => {
     });
   }
 
+  for (const { name, fps } of RATES) {
+    test(`${name}: a timestamp rounded to the microsecond, as browsers report it, is still its frame`, () => {
+      // THE browser case: Chrome's requestVideoFrameCallback gave frame 302
+      // of a 29.97 clip as mediaTime 10.076733 — frame 301.99999 — and the
+      // label read one frame early. Rounding either way must not move a frame.
+      for (let n = 1; n < 400000; n += 373) {
+        const exact = (n * fps.den) / fps.num;
+        for (const t of [Math.round(exact * 1e6) / 1e6, Math.floor(exact * 1e6) / 1e6, Math.ceil(exact * 1e6) / 1e6]) {
+          assert.equal(frameAt(t, fps), n, `${n} at ${t}`);
+        }
+      }
+    });
+  }
+
+  test('the real mediaTime Chrome reported', () => {
+    assert.equal(frameAt(10.076733, { num: 30000, den: 1001 }), 302);
+  });
+
+  test('a time just short of a boundary is still the frame before it', () => {
+    // Only a start is snapped: 1% of a frame early is still the previous one.
+    const fps = { num: 24000, den: 1001 };
+    assert.equal(frameAt(((100 - 0.01) * 1001) / 24000, fps), 99);
+  });
+
   test('seeks land mid-frame, not on the boundary browsers disagree about', () => {
     const fps = { num: 24000, den: 1001 };
     const t = secondsOfFrame(24, fps);

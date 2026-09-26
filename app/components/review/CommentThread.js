@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useState } from 'react';
-import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
+import Menu, { MenuItem } from '@/app/components/ui/Menu';
 import MentionTextarea, { mentionsIn } from './MentionTextarea';
 import { ago, handleOf, initials, personLabel } from './format';
 
@@ -59,14 +59,6 @@ function CommentThread({
         onRemove={onRemove}
         onError={onError}
         fileId={fileId}
-        extra={!comment.deletedAt && (isMine(comment, me) || canModify) && !comment.pending && (
-          <>
-            <MenuSeparator />
-            <MenuItem onClick={() => onUpdate(comment.id, { resolved: !resolved }).catch(onError)}>
-              {resolved ? 'Reopen' : 'Resolve'}
-            </MenuItem>
-          </>
-        )}
       />
 
       {replies.length > 0 && (
@@ -102,6 +94,7 @@ function CommentThread({
             placeholder="Reply…"
             label="Reply"
             rows={2}
+            autoFocus
           />
           <div className="review-composer-row">
             <div className="spacer" />
@@ -112,6 +105,15 @@ function CommentThread({
       ) : (
         <div className="review-thread-foot">
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReplying(true)}>Reply</button>
+          {!comment.deletedAt && (isMine(comment, me) || canModify) && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => onUpdate(comment.id, { resolved: !resolved }).catch(onError)}
+            >
+              {resolved ? 'Reopen' : '✓ Resolve'}
+            </button>
+          )}
           {resolved && <span className="small muted">Resolved{comment.resolvedBy ? ` by ${handleOf(comment.resolvedBy)}` : ''}</span>}
         </div>
       ))}
@@ -123,7 +125,7 @@ export default memo(CommentThread);
 
 const isMine = (c, me) => !!me && c.author?.email === me;
 
-function CommentBody({ c, me, canModify, anchor, pinNumber, unread, onSelect, onUpdate, onRemove, onError, fileId, extra = null, reply = false }) {
+function CommentBody({ c, me, canModify, anchor, pinNumber, unread, onSelect, onUpdate, onRemove, onError, fileId, reply = false }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(c.body);
   const [people, setPeople] = useState([]);
@@ -168,7 +170,6 @@ function CommentBody({ c, me, canModify, anchor, pinNumber, unread, onSelect, on
           <Menu label="Comment actions">
             {mine && <MenuItem onClick={() => { setText(c.body); setEditing(true); }}>Edit</MenuItem>}
             <MenuItem danger onClick={() => onRemove(c.id).catch(onError)}>Delete</MenuItem>
-            {extra}
           </Menu>
         )}
       </div>
@@ -191,6 +192,7 @@ function CommentBody({ c, me, canModify, anchor, pinNumber, unread, onSelect, on
             onEscape={() => setEditing(false)}
             label="Edit comment"
             rows={2}
+            autoFocus
           />
           <div className="review-composer-row">
             <div className="spacer" />

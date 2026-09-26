@@ -1,6 +1,7 @@
 'use client';
 
 import ReviewStatusTag from './ReviewStatusTag';
+import './review.css';
 
 /**
  * The review badges for a file in the grid and the list: its decision
@@ -17,7 +18,7 @@ export function reviewBadges(file) {
   if (!decided && !open) return null;
   return (
     <>
-      {decided && <ReviewStatusTag status={status} />}
+      {decided && <ReviewStatusTag status={status} short />}
       {open > 0 && (
         <span className="tag review-open" title={`${open} open comment${open === 1 ? '' : 's'}`}>{open} open</span>
       )}

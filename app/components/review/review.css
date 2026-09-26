@@ -341,7 +341,17 @@
 .review-status { white-space: nowrap; }
 .review-open { white-space: nowrap; }
 
+/* Beside the file's name in the header; never squeezed, since the name is
+   the one that truncates. */
+.review-status-head { flex: none; }
+
 @media (max-width: 900px) {
   /* Stacked under the player there is room to scroll the page itself. */
   .review-list { max-height: none; }
+}
+
+@media (max-width: 720px) {
+  /* A phone's header has room for the actions and nothing else; the status
+     is at the top of the Comments tab, a scroll away. */
+  .review-status-head { display: none; }
 }

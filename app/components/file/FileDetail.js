@@ -264,7 +264,7 @@ export default function FileDetail({
       <div className="row" style={{ marginBottom: 'var(--s4)' }}>
         <a className="btn btn-ghost btn-sm" href={backHref}>← Back</a>
         <h1 className="truncate" style={{ fontSize: 'var(--t-xl)', minWidth: 0 }} title={file.name}>{file.name}</h1>
-        {review && <ReviewStatusTag status={status} />}
+        {review && <ReviewStatusTag status={status} className="review-status-head" />}
         <div className="spacer" />
         {canShare && <button type="button" className="btn" onClick={() => setSharing(true)}>Share</button>}
         <a className="btn" href={`/api/files/${file.id}/download`}>Download</a>

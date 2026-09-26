@@ -177,7 +177,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   useEffect(() => {
     const v = video.current;
     if (!v) return undefined;
-    setFrame(frameAt(v.currentTime, fps));
+    // Until the source loads (a master waits for play) its currentTime is 0
+    // whatever ?t= asked for; the label shows where playback will start.
+    setFrame(frameAt(v.readyState > 0 ? v.currentTime : Number(startAt) || 0, fps));
     if (typeof v.requestVideoFrameCallback === 'function') {
       let live = true;
       let handle = 0;
@@ -196,7 +198,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
       v.removeEventListener('timeupdate', sync);
       v.removeEventListener('seeked', sync);
     };
-  }, [fps, src]);
+  }, [fps, src, startAt]);
 
   // Tell the page which frame is up. Every frame while paused or scrubbing;
   // at most five times a second while playing, so a comment list beside the
@@ -247,8 +249,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({
       v.playbackRate = speed;
       // A rejected play() is normal — autoplay policy, or a source that will
       // not decode. Swallowing it silently leaves a dead button, so it is
-      // reported.
-      v.play().catch((e) => setError(e?.message || 'This video could not be played.'));
+      // reported. Except an AbortError: that is a pause (a seek to a
+      // comment, a drawing tool picked up) overtaking the play, as asked.
+      v.play().catch((e) => { if (e?.name !== 'AbortError') setError(e?.message || 'This video could not be played.'); });
     } else {
       v.pause();
     }

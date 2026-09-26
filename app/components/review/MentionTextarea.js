@@ -16,7 +16,7 @@ import { handleOf, personLabel } from './format';
  */
 export default function MentionTextarea({
   fileId, value, onChange, people, onPeopleChange, onSubmit, onEscape, onFocus,
-  textareaRef, placeholder = 'Add a comment…', rows = 3, disabled = false, label = 'Comment',
+  textareaRef, placeholder = 'Add a comment…', rows = 3, disabled = false, label = 'Comment', autoFocus = false,
 }) {
   const own = useRef(null);
   const ref = textareaRef || own;
@@ -31,6 +31,15 @@ export default function MentionTextarea({
     const m = /(^|\s)@([^\s@]{0,40})$/.exec(upto);
     setQuery(m ? { text: m[2], start: upto.length - m[2].length - 1 } : null);
   };
+
+  // Opened to type into (a reply, an edit): the caret goes after what is
+  // already there, not before it.
+  useEffect(() => {
+    const el = ref.current;
+    if (!autoFocus || !el) return;
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
+  }, [autoFocus, ref]);
 
   const term = query ? query.text : null;
   useEffect(() => {
@@ -88,6 +97,8 @@ export default function MentionTextarea({
         placeholder={placeholder}
         aria-label={label}
         disabled={disabled}
+        // A reply or an edit opens because someone asked to type: straight in.
+        autoFocus={autoFocus}
         role="combobox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
