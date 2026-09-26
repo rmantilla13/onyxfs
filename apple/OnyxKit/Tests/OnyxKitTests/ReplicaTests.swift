@@ -102,6 +102,60 @@ struct ReplicaTests {
         #expect(back == r)
     }
 
+    @Test func aFolderIsStampedWithWhenItAppeared() throws {
+        var r = Replica()
+        r.apply(changed: [file("a", "a.png", in: "A")], deleted: [], folders: ["E"], cursor: 10)
+        #expect(r.firstSeen("A") == 0 && r.firstSeen("E") == 0, "the first page is the start")
+        r.apply(changed: [file("b", "b.png", in: "B/C")], deleted: [], folders: ["E"], cursor: 20)
+        #expect(r.firstSeen("B") == 10 && r.firstSeen("B/C") == 10)
+        r.apply(changed: [], deleted: ["b"], folders: ["E"], cursor: 30)
+        #expect(r.folderSeen["B"] == nil && r.folderSeen["B/C"] == nil, "gone, so forgotten")
+        r.apply(changed: [file("b2", "b.png", in: "B")], deleted: [], folders: ["E"], cursor: 40)
+        #expect(r.firstSeen("B") == 30, "back, and new")
+
+        // Fetched again from the start: the stamps it had carry over, and a
+        // folder new to this Mac — "from the start" on the fetch's first
+        // page — comes after every one of them.
+        var fresh = Replica()
+        fresh.apply(changed: [file("a", "a.png", in: "A"), file("b2", "b.png", in: "B"), file("z", "z.png", in: "Z")],
+                    deleted: [], folders: ["E"], cursor: 50)
+        fresh.keepFolderStamps(from: r)
+        #expect(fresh.firstSeen("B") == 30 && fresh.firstSeen("A") == 0 && fresh.firstSeen("E") == 0)
+        #expect(fresh.firstSeen("Z") == 41, "after the cursor the replica had reached")
+
+        r.reset(scope: "s2")
+        #expect(r.folderSeen.isEmpty)
+    }
+
+    @Test func aFolderThatAppearsIsNeverDatedBeforeOneAlreadyHere() throws {
+        var r = Replica()
+        r.apply(changed: [file("a", "a.png", in: "A")], deleted: [], folders: [], cursor: 10)
+        // Folder-only changes: the cursor does not move.
+        r.apply(changed: [], deleted: [], folders: ["B"], cursor: 10)
+        r.apply(changed: [], deleted: [], folders: ["B", "C", "D"], cursor: 10)
+        #expect(r.firstSeen("B") == 10)
+        #expect(r.firstSeen("C") == 11 && r.firstSeen("D") == 11, "later than B; together with each other")
+
+        // A fetch from scratch dated a new folder past the cursor; one that
+        // appears after it, at that same cursor, still comes later.
+        var fresh = Replica()
+        fresh.apply(changed: [file("a", "a.png", in: "A")], deleted: [], folders: ["B", "N"], cursor: 10)
+        fresh.keepFolderStamps(from: r)
+        #expect(fresh.firstSeen("N") == 12)
+        fresh.apply(changed: [], deleted: [], folders: ["B", "N", "M"], cursor: 10)
+        #expect(fresh.firstSeen("M") == 13)
+    }
+
+    @Test func aReplicaSavedBeforeFolderStampsStillLoads() throws {
+        var r = Replica()
+        r.apply(changed: [file("a", "a.png", in: "X")], deleted: [], folders: ["Empty"], cursor: 9)
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(r)) as! [String: Any]
+        json["folderSeen"] = nil
+        let back = try JSONDecoder().decode(Replica.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(back.files == r.files && back.cursor == 9 && back.folders == r.folders)
+        #expect(back.folderSeen.isEmpty)
+    }
+
     @Test func pathsAndIdentifiers() {
         #expect(Replica.parentPath("a/b/c") == "a/b")
         #expect(Replica.parentPath("a") == "")
