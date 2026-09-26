@@ -9,6 +9,7 @@ import {
   getStorageConfig, storageMode, s3MoveObject, s3DeleteObject, presignFileUrls,
   cfgForFilespace, folderToKeyPath, s3UniqueKey, s3ObjectExists, safeObjectName,
 } from '@/lib/storage';
+import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
 import { normalizeSchema, validateMetadataPatch } from '@/lib/dam';
 import { keyFor, fileNameProblem } from '@/lib/folder-ops';
 
@@ -296,6 +297,8 @@ export async function DELETE(_req, { params }) {
         }
       }
       await deleteFile(id);
+      // Its previews go with it, once no other row points at them.
+      await dropUnusedPreviews(previewKeysOf(file), { cfg });
       return NextResponse.json({ ok: true, trashed: false });
     }
 

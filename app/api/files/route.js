@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { createFile, buildPrincipal, getFilespaceForUser } from '@/lib/db';
+import { createFile, buildPrincipal, getFilespaceForUser, previewKeysInUse } from '@/lib/db';
 import { listFilesPage, listFolderTree, storagePrefixFor } from '@/lib/file-listing';
 import { driveAccess } from '@/lib/drive-access';
 import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject } from '@/lib/storage';
 import { decodeCursor } from '@/lib/file-query';
-import { uploadFields } from '@/lib/media';
+import { uploadFields, withoutTakenPreviews } from '@/lib/media';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -107,9 +107,10 @@ export async function POST(req) {
     // Storage page adds up. Best-effort — a bucket that will not answer a
     // HEAD still gets its file recorded, just without a hash.
     const facts = await objectFacts(session.user.email, body);
+    const previews = await ownPreviews(uploadFields(body));
     const file = await createFile({
       ...body,
-      ...uploadFields(body),
+      ...previews,
       ...(facts?.size != null ? { size: facts.size } : {}),
       contentHash: facts?.etag || null,
       createdBy: session.user.email,
@@ -132,4 +133,19 @@ async function objectFacts(email, body) {
   } catch {
     return null;
   }
+}
+
+/**
+ * The upload's preview keys, less any another row already uses (lib/db.js
+ * previewKeysInUse says why; lib/media.js withoutTakenPreviews what goes with
+ * what). A dropped preview does not fail the upload: the file is recorded
+ * without it, and the background queue makes one. When the check cannot be
+ * made, every preview is dropped rather than trusted.
+ */
+async function ownPreviews(fields) {
+  const keys = [fields.thumbnailKey, fields.posterKey, fields.filmstripKey].filter(Boolean);
+  if (!keys.length) return fields;
+  let taken;
+  try { taken = await previewKeysInUse(keys); } catch { taken = new Set(keys); }
+  return withoutTakenPreviews(fields, taken);
 }

@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { getFileById, buildPrincipal, canModifyFile, setFileThumbnail, unreferencedPreviewKeys } from '@/lib/db';
-import { presignFileUrls, getStorageConfig, s3DeleteObject } from '@/lib/storage';
-import { isThumbKey, isPosterKey, mediaFacts, thumbSizesFrom, thumbSiblingKey, THUMB_SIZES } from '@/lib/media';
+import { getFileById, buildPrincipal, canModifyFile, setFileThumbnail, previewKeysInUse } from '@/lib/db';
+import { presignFileUrls } from '@/lib/storage';
+import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
+import { isThumbKey, isPosterKey, mediaFacts, thumbSizesFrom } from '@/lib/media';
 
 export const runtime = 'nodejs';
 
@@ -50,6 +51,18 @@ export async function PUT(req, { params }) {
   const principal = await buildPrincipal(session.user.email);
   if (!(await canModifyFile(existing, principal))) return NextResponse.json({ error: 'No access' }, { status: 403 });
 
+  // A key the presign route named, and no other file's: keys are not secret,
+  // and adopting another file's preview would keep it signed on this row
+  // after access to that file is gone — and let the sizes route sign PUTs
+  // over that file's siblings (lib/db.js previewKeysInUse).
+  let taken;
+  try {
+    taken = await previewKeysInUse([body.thumbnailKey, body.posterKey], { exceptId: existing.id });
+  } catch (e) {
+    return NextResponse.json({ error: 'Could not check the thumbnail. Try again.' }, { status: 503 });
+  }
+  if (taken.size) return NextResponse.json({ error: 'That preview belongs to another file.' }, { status: 409 });
+
   let file;
   try {
     file = await setFileThumbnail(existing.id, body.thumbnailKey, mediaFacts(body.media), body.posterKey || null, thumbSizesFrom(body.thumbSizes));
@@ -66,24 +79,11 @@ export async function PUT(req, { params }) {
  * Delete the previews this write replaced, once no row points at them. Every
  * old small thumbnail is replaced exactly once as the library is browsed, and
  * each would otherwise stay in the bucket for good, reachable by nothing.
- *
- * Only keys the presign route names (`_thumbs/<uuid>…`) are ever candidates —
- * never a legacy thumbnail stored beside the files, never a file. A replaced
- * thumbnail takes its siblings with it: they share its uuid, and nothing can
- * point at them except through it. Best-effort: a preview left behind costs
- * a few kilobytes; a failed save would cost the thumbnail.
+ * lib/preview-gc.js says which keys are ever candidates (only ones the
+ * presign route names) and takes a replaced thumbnail's siblings with it.
  */
 async function dropReplaced(before, after) {
-  try {
-    const keep = new Set([after.thumbnailKey, after.posterKey].filter(Boolean));
-    const thumbKeys = isThumbKey(before.thumbnailKey) && !keep.has(before.thumbnailKey) ? [before.thumbnailKey] : [];
-    const posterKeys = isPosterKey(before.posterKey) && !keep.has(before.posterKey) ? [before.posterKey] : [];
-    const unused = await unreferencedPreviewKeys({ thumbKeys, posterKeys });
-    if (!unused.length) return;
-    const siblings = unused.filter(isThumbKey).flatMap((k) => THUMB_SIZES.map((size) => thumbSiblingKey(k, size))).filter(Boolean);
-    const cfg = await getStorageConfig();
-    await Promise.all([...unused, ...siblings].map((key) => s3DeleteObject(cfg, key).catch(() => false)));
-  } catch (e) {
-    console.warn('[thumbnail] could not remove a replaced preview:', e.message);
-  }
+  const keep = new Set([after.thumbnailKey, after.posterKey].filter(Boolean));
+  const { thumbKeys, posterKeys } = previewKeysOf(before);
+  await dropUnusedPreviews({ thumbKeys: thumbKeys.filter((k) => !keep.has(k)), posterKeys: posterKeys.filter((k) => !keep.has(k)) });
 }

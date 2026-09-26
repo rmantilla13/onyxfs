@@ -45,9 +45,11 @@ const OWNER = `owner-${tag}@sizes.test`;
 const VIEWER = `viewer-${tag}@sizes.test`;
 const OUTSIDER = `out-${tag}@sizes.test`;
 const PREFIX = `sz-${tag}`;
-const UUID = '0f8fad5b-d9cb-469f-a165-70867728950e';
+// Fresh keys per run: a key another row holds is refused (lib/db.js
+// previewKeysInUse), and other test files run beside this one.
+const UUID = crypto.randomUUID();
 const KEY = `_thumbs/${UUID}.webp`;
-const KEY2 = '_thumbs/7c9e6679-7425-40de-944b-e07fc1f90ae7.webp';
+const KEY2 = `_thumbs/${crypto.randomUUID()}.webp`;
 
 const req = (url, init = {}) => new Request(`http://app.test${url}`, {
   ...init,
@@ -197,4 +199,37 @@ test('an upload records its siblings with its thumbnail, and none without one', 
   const f2 = await db.createFile({ ...none, ...uploadFields(none), createdBy: OWNER });
   t.after(() => db.deleteFile(f2.id).catch(() => {}));
   assert.deepEqual(f2.thumbSizes, []);
+});
+
+// A row written before keys were checked may hold another file's thumbnail.
+// Editing that row is not editing the other file: its siblings — named after
+// the shared thumbnail — are never signed or recorded through it.
+describe('a thumbnail another row also holds', { skip }, () => {
+  test('gets no sibling PUTs and records no sizes', async (t) => {
+    const SHARED = `_thumbs/${crypto.randomUUID()}.webp`;
+    const theirs = await db.createFile({
+      name: 'theirs.jpg', url: `http://s3.test/b/${PREFIX}/theirs.jpg`, mime: 'image/jpeg', kind: 'image', size: 1,
+      storage: 's3', storageKey: `${PREFIX}/theirs.jpg`, createdBy: OWNER, thumbnailKey: SHARED,
+    });
+    const mine = await db.createFile({
+      name: 'mine.jpg', url: `http://s3.test/b/library/${VIEWER}/mine.jpg`, mime: 'image/jpeg', kind: 'image', size: 1,
+      storage: 's3', storageKey: `library/${VIEWER}/mine.jpg`, createdBy: VIEWER,
+    });
+    made.push(theirs.id, mine.id);
+    // As an old write could have left it.
+    await db.sql`UPDATE files SET thumbnail_key = ${SHARED} WHERE id = ${mine.id}`;
+    as(VIEWER);
+    const post = await call(sizesRoute.POST, '/x', { id: mine.id }, { method: 'POST' });
+    assert.equal(post.status, 409, JSON.stringify(post.body));
+    assert.equal(post.body?.siblings, undefined, 'nothing signed');
+    const put = await call(sizesRoute.PUT, '/x', { id: mine.id }, { method: 'PUT', body: { thumbnailKey: SHARED, sizes: ['sm', 'xs'] } });
+    assert.equal(put.status, 409);
+    assert.deepEqual((await db.getFileById(mine.id)).thumbSizes, []);
+    // The file that has it alone is unaffected once the other row lets go.
+    await db.sql`UPDATE files SET thumbnail_key = NULL WHERE id = ${mine.id}`;
+    as(OWNER);
+    const own = await call(sizesRoute.POST, '/x', { id: theirs.id }, { method: 'POST' });
+    assert.notEqual(own.status, 409, JSON.stringify(own.body));
+    t.after(() => as(null));
+  });
 });
