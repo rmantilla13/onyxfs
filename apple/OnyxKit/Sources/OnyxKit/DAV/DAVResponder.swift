@@ -75,18 +75,22 @@ public struct DAVResponse: Sendable {
         return headers.first { $0.0.lowercased() == name }?.1
     }
 
-    /// For the status line. Covers every status the responder produces.
+    /// For the status line. Covers every status the responders produce
+    /// (this one, and FSResponder's).
     public static func reasonPhrase(for status: Int) -> String {
         switch status {
         case 200: return "OK"
         case 206: return "Partial Content"
         case 207: return "Multi-Status"
         case 302: return "Found"
+        case 307: return "Temporary Redirect"
         case 400: return "Bad Request"
         case 401: return "Unauthorized"
         case 403: return "Forbidden"
         case 404: return "Not Found"
         case 405: return "Method Not Allowed"
+        case 409: return "Conflict"
+        case 413: return "Payload Too Large"
         case 416: return "Range Not Satisfiable"
         case 500: return "Internal Server Error"
         case 503: return "Service Unavailable"
