@@ -22,6 +22,11 @@ import AnnotationLayer from '@/app/components/review/AnnotationLayer';
 import PinLayer from '@/app/components/review/PinLayer';
 import useReviewFeed from '@/app/components/review/useReviewFeed';
 import useReviewDraft from '@/app/components/review/useReviewDraft';
+import TranscriptPanel from '@/app/components/transcript/TranscriptPanel';
+import useTranscript from '@/app/components/transcript/useTranscript';
+import { createMediaClock } from '@/app/components/transcript/mediaClock';
+import useMacApp from '@/app/components/useMacApp';
+import { toVTT } from '@/lib/transcripts';
 
 /**
  * The file detail view: preview on the left, inspector on the right.
@@ -41,10 +46,18 @@ import useReviewDraft from '@/app/components/review/useReviewDraft';
  * pin) and shows its drawing; a marker or a pin selects its comment; the
  * draft being drawn is shared between the composer and the overlay; and C on
  * the player starts a comment on the frame on screen.
+ *
+ * TRANSCRIPT. With `transcripts` on (the flag, decided on the server, for a
+ * video or an audio file) there is a Transcript tab. The transcript is
+ * loaded with the page and kept here, not in the tab, so switching tabs
+ * loses nothing and captions stay on: the player reports its time to a
+ * small clock the panel subscribes to, a line picked in the panel seeks the
+ * player, and Captions turns the segments into a subtitles track on it.
  */
 export default function FileDetail({
   file: initial, canWrite = false, canShare = false, backHref = '/files', startAt = 0,
   review = false, me = null, focusComment = null, previewPossible = true,
+  transcripts = false, brandName = '',
 }) {
   const [file, setFile] = useState(initial);
   const [sharing, setSharing] = useState(false);
@@ -109,7 +122,8 @@ export default function FileDetail({
   }, [canWrite, kind, md.fps, md.fpsUnknown, file.id]);
 
   // ── Review ──
-  const [tab, setTab] = useState(review ? 'comments' : 'details');
+  const tabs = useMemo(() => [review && 'comments', transcripts && 'transcript', 'details'].filter(Boolean), [review, transcripts]);
+  const [tab, setTab] = useState(tabs[0]);
   const feed = useReviewFeed(file.id, { enabled: review && tab === 'comments', me });
   const draftApi = useReviewDraft();
   const { draft } = draftApi;
@@ -121,6 +135,26 @@ export default function FileDetail({
   const onError = useCallback((e) => toast.error(e?.message || 'Something went wrong.'), [toast]);
 
   const onFrameChange = useCallback((f) => setFrame(f), []);
+
+  // ── Transcript ──
+  const transcript = useTranscript(file.id, { enabled: transcripts });
+  const clock = useMemo(createMediaClock, []);
+  const mac = useMacApp();
+  const seekTo = useCallback((seconds) => player.current?.seekTo?.(seconds), []);
+  const [captionsOn, setCaptionsOn] = useState(false);
+  const [captionsUrl, setCaptionsUrl] = useState(null);
+  const lines = transcript.transcript?.segments;
+  useEffect(() => {
+    if (!captionsOn || kind !== 'video' || !lines?.length) { setCaptionsUrl(null); return undefined; }
+    const url = URL.createObjectURL(new Blob([toVTT(lines)], { type: 'text/vtt' }));
+    setCaptionsUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [captionsOn, kind, lines]);
+  const captionLang = transcript.transcript?.resultLanguage || transcript.transcript?.language || null;
+  const captions = useMemo(
+    () => (captionsUrl ? { src: captionsUrl, lang: captionLang ? captionLang.split('-')[0] : undefined, label: 'Transcript' } : null),
+    [captionsUrl, captionLang],
+  );
 
   const selectComment = useCallback((c) => {
     setSelectedId(c.id);
@@ -240,10 +274,12 @@ export default function FileDetail({
   const onTabKey = (e) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     e.preventDefault();
-    const next = tab === 'comments' ? 'details' : 'comments';
+    const at = tabs.indexOf(tab);
+    const next = tabs[(at + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
     setTab(next);
     e.currentTarget.parentElement.querySelector(`[data-tab="${next}"]`)?.focus();
   };
+  const TAB_LABELS = { comments: 'Comments', transcript: 'Transcript', details: 'Details' };
 
   const patch = useCallback(async (body, okMessage) => {
     setBusy(true);
@@ -329,40 +365,48 @@ export default function FileDetail({
             onComment={review ? onComment : undefined}
             handoff={handoff}
             onOriginalBlob={backfill && previewPossible ? onOriginalBlob : undefined}
+            onTime={transcripts ? clock.set : undefined}
+            captions={captions}
           />
       )}
       aside={(
         <>
-          {review && (
+          {tabs.length > 1 && (
             <div className="review-tabs" role="tablist" aria-label="Inspector">
-              <button
-                type="button"
-                role="tab"
-                data-tab="comments"
-                className="review-tab"
-                aria-selected={tab === 'comments'}
-                tabIndex={tab === 'comments' ? 0 : -1}
-                onClick={() => setTab('comments')}
-                onKeyDown={onTabKey}
-              >
-                Comments{openCount > 0 && <span className="review-count">{openCount}</span>}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                data-tab="details"
-                className="review-tab"
-                aria-selected={tab === 'details'}
-                tabIndex={tab === 'details' ? 0 : -1}
-                onClick={() => setTab('details')}
-                onKeyDown={onTabKey}
-              >
-                Details
-              </button>
+              {tabs.map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  data-tab={key}
+                  className="review-tab"
+                  aria-selected={tab === key}
+                  tabIndex={tab === key ? 0 : -1}
+                  onClick={() => setTab(key)}
+                  onKeyDown={onTabKey}
+                >
+                  {TAB_LABELS[key]}
+                  {key === 'comments' && openCount > 0 && <span className="review-count">{openCount}</span>}
+                </button>
+              ))}
             </div>
           )}
 
-          {review && tab === 'comments' ? (
+          {transcripts && tab === 'transcript' ? (
+            <div role="tabpanel" aria-label="Transcript">
+              <TranscriptPanel
+                file={file}
+                kind={kind}
+                brandName={brandName}
+                data={transcript}
+                mac={mac}
+                clock={clock}
+                onSeek={seekTo}
+                captions={captionsOn}
+                onCaptions={kind === 'video' ? setCaptionsOn : undefined}
+              />
+            </div>
+          ) : review && tab === 'comments' ? (
             <div role="tabpanel" aria-label="Comments">
               <ReviewPanel
                 file={file}

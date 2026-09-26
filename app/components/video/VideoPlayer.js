@@ -47,6 +47,12 @@ import useContainedRect from '@/app/components/review/useContainedRect';
  * reads, so it loads and shows that frame first. All optional; the share
  * page passes none of them.
  *
+ * TRANSCRIPTS. `onTime` hears the playhead (timeupdate and seeks, a few
+ * times a second — not every frame), the ref's seekTo(seconds) lands on a
+ * line of the transcript without pausing, and `captions` ({ src, lang,
+ * label }, a WebVTT blob URL the page made from the segments) is shown as
+ * a subtitles track. Optional too.
+ *
  * SEEKS BEFORE LOAD. A seek asked for before the source has loaded (a ?t=
  * link, a comment marker, a frame step on a master still waiting for play)
  * is kept and made when the metadata arrives — the latest one, not the deep
@@ -67,8 +73,10 @@ const SPEEDS = [0.25, 0.5, 1, 1.5, 2];
 
 const VideoPlayer = forwardRef(function VideoPlayer({
   file, startAt = 0, onRangeChange, markers = null, onMarkerClick, onFrameChange, overlay = null, onComment,
+  onTime, captions = null,
 }, ref) {
   const video = useRef(null);
+  const track = useRef(null);
   const bar = useRef(null);
   const shell = useRef(null);
   const stage = useRef(null);
@@ -248,10 +256,11 @@ const VideoPlayer = forwardRef(function VideoPlayer({
     const clamped = Math.min(Math.max(0, to), length || to);
     intent.current.seek(v, clamped);
     setCurrent(clamped);
+    onTime?.(clamped);
     // No frame will be presented to say where this landed until the source
     // loads, so the label moves now.
     if (v.readyState === 0) setFrame(frameAt(clamped, fps));
-  }, [duration, fps]);
+  }, [duration, fps, onTime]);
 
   // Where the player is, or will be once it has loaded: the base for a
   // relative seek, which from a deep link not yet loaded is the link's time,
@@ -288,10 +297,21 @@ const VideoPlayer = forwardRef(function VideoPlayer({
 
   useImperativeHandle(ref, () => ({
     seekToFrame: (n) => { video.current?.pause(); seekToFrame(n); },
+    // A transcript line: go there, playing or not as it was, loading the
+    // source if nothing has yet.
+    seekTo: (seconds) => { setStarted(true); seek(seconds); },
     pause: () => video.current?.pause(),
     hold,
     frame: () => frameRef.current,
-  }), [seekToFrame, hold]);
+    time: position,
+  }), [seekToFrame, hold, seek, position]);
+
+  // A track added after the video loaded is not shown by `default` alone in
+  // every browser; its mode says so outright.
+  useEffect(() => {
+    const t = track.current?.track;
+    if (t) t.mode = 'showing';
+  }, [captions?.src]);
 
   const togglePlay = useCallback(() => {
     const v = video.current;
@@ -459,9 +479,11 @@ const VideoPlayer = forwardRef(function VideoPlayer({
           }}
           // Either one ends the poster: from here the stage shows frames.
           onSeeking={() => intent.current.shown()}
+          onSeeked={(e) => onTime?.(e.target.currentTime)}
           onTimeUpdate={(e) => {
             const t = e.target.currentTime;
             setCurrent(t);
+            onTime?.(t);
             // Loop the selected range rather than the whole clip when one is
             // set: that is what a range is for.
             if (loop && inPoint != null && outPoint != null && t >= outPoint) {
@@ -475,7 +497,19 @@ const VideoPlayer = forwardRef(function VideoPlayer({
           onVolumeChange={(e) => { setVolume(e.target.volume); setMuted(e.target.muted); }}
           onError={() => setError('This browser cannot decode this video. Download it to view.')}
           loop={loop && inPoint == null}
-        />
+        >
+          {captions?.src && (
+            <track
+              key={captions.src}
+              ref={track}
+              kind="subtitles"
+              src={captions.src}
+              srcLang={captions.lang || 'en'}
+              label={captions.label || 'Transcript'}
+              default
+            />
+          )}
+        </video>
 
         {/* On the picture's own rectangle, not the stage's: the stage
             letterboxes, and a drawing belongs to the frame. Inside the

@@ -13,10 +13,12 @@ import { useEffect, useState } from 'react';
  *
  * `pinned` holds the ids of files kept offline (directly, or through a
  * pinned folder or drive); `mounted` the drives in Finder, as the app names
- * them ("drive.<id>", "library").
+ * them ("drive.<id>", "library"). `transcriber` is { enabled, busy } — busy
+ * is the id of the file this Mac is transcribing — in builds that
+ * transcribe, and null in older ones.
  */
 export default function useMacApp() {
-  const [state, setState] = useState({ inApp: false, pinned: new Set(), mounted: new Set(), pinnedFolders: [] });
+  const [state, setState] = useState({ inApp: false, pinned: new Set(), mounted: new Set(), pinnedFolders: [], transcriber: null });
 
   useEffect(() => {
     const mac = typeof window !== 'undefined' ? window.onyxMac : null;
@@ -26,6 +28,9 @@ export default function useMacApp() {
       pinned: new Set(s?.pinned || []),
       mounted: new Set(s?.mounted || []),
       pinnedFolders: Array.isArray(s?.pinnedFolders) ? s.pinnedFolders : [],
+      transcriber: s?.transcriber && typeof s.transcriber === 'object'
+        ? { enabled: s.transcriber.enabled !== false, busy: s.transcriber.busy || null }
+        : null,
     });
     apply(mac.state);
     const on = (e) => apply(e.detail);
@@ -42,6 +47,8 @@ export default function useMacApp() {
     unpinFiles: (ids, driveId) => mac()?.unpinFiles(ids, driveId || null),
     pinFolder: (path, driveId, on = true) => mac()?.pinFolder(path, driveId || null, on),
     showInFinder: (driveId, name) => mac()?.showInFinder(driveId || null, name || ''),
+    /** Look at the transcription queue now, not at the next poll. A no-op in builds without it. */
+    transcribe: (fileId) => mac()?.transcribe?.(fileId),
     folderPinned: (path, driveId) => state.pinnedFolders.some((f) =>
       f.scope === (driveId ? `drive.${driveId}` : 'library') && f.path === path),
   };

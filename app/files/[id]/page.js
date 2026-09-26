@@ -13,6 +13,7 @@ import { isFeatureEnabled } from '@/lib/features';
 import { effectiveKind } from '@/lib/media';
 import { imagePreviewFor } from '@/lib/poster';
 import { isReviewableKind } from '@/lib/review';
+import { isTranscribableKind } from '@/lib/transcripts';
 
 export const dynamic = 'force-dynamic';
 
@@ -133,6 +134,11 @@ export default async function FilePage({ params, searchParams }) {
         // ?c= is a comment to open on — a notification's link.
         focusComment={typeof searchParams?.c === 'string' ? searchParams.c.slice(0, 64) : null}
         previewPossible={previewPossible(file)}
+        // Transcripts: the flag as this person has it, for a video or an
+        // audio file. The transcript routes read the flag again themselves.
+        transcripts={isFeatureEnabled(principal.flags, 'transcripts') && isTranscribableKind(effectiveKind(file))}
+        // The Mac app is named after the brand, never "Onyx" hardcoded.
+        brandName={brand.name}
       />
     </>
   );
