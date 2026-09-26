@@ -6,6 +6,7 @@ import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3Head
 import { decodeCursor } from '@/lib/file-query';
 import { uploadFields } from '@/lib/media';
 import { parseFileRecord } from '@/lib/file-record';
+import { withoutTakenPreviews } from '@/lib/preview-gc';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,7 +67,7 @@ export async function GET(req) {
 /**
  * POST /api/files — record an uploaded asset.
  * Body: { name, url, mime, size, kind?, folder, storage, storageKey, tags, notes?,
- *         visibility?, thumbnailKey?, posterKey?, media?, filmstripKey?, filmstrip?, filespace? }
+ *         visibility?, thumbnailKey?, posterKey?, thumbSizes?, media?, filmstripKey?, filmstrip?, filespace? }
  * `media` is { width, height, duration } read by the browser while it made the thumbnail.
  * Only these fields are read (lib/file-record.js); anything else in the body
  * is ignored, so who, when and what the bytes hash to stay the server's word.
@@ -187,22 +188,15 @@ async function objectTarget(email, record, principal) {
 
 /**
  * The upload's preview keys, less any another row already uses (lib/db.js
- * previewKeysInUse says why). A dropped preview does not fail the upload:
- * the file is recorded without it, and the background queue makes one. When
- * the check cannot be made, every preview is dropped rather than trusted.
+ * previewKeysInUse says why; lib/preview-gc.js withoutTakenPreviews what goes with
+ * what). A dropped preview does not fail the upload: the file is recorded
+ * without it, and the background queue makes one. When the check cannot be
+ * made, every preview is dropped rather than trusted.
  */
 async function ownPreviews(fields) {
   const keys = [fields.thumbnailKey, fields.posterKey, fields.filmstripKey].filter(Boolean);
   if (!keys.length) return fields;
   let taken;
   try { taken = await previewKeysInUse(keys); } catch { taken = new Set(keys); }
-  if (!taken.size) return fields;
-  const out = { ...fields };
-  if (taken.has(out.thumbnailKey)) { out.thumbnailKey = null; out.posterKey = null; }
-  if (taken.has(out.posterKey)) out.posterKey = null;
-  if (taken.has(out.filmstripKey)) {
-    out.filmstripKey = null;
-    if (out.metadata?.filmstrip) { const { filmstrip: _drop, ...rest } = out.metadata; out.metadata = rest; }
-  }
-  return out;
+  return withoutTakenPreviews(fields, taken);
 }

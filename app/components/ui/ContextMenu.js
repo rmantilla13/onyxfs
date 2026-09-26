@@ -153,7 +153,7 @@ function ContextMenuPopup({ x, y, anchor, items, onClose }) {
             onClick={() => choose(item)}
           >
             <span className="ctx-label">{item.label}</span>
-            {item.hint && <span className="small muted">{item.hint}</span>}
+            {item.hint && <span className="small muted ctx-hint">{item.hint}</span>}
           </button>
         );
       })}

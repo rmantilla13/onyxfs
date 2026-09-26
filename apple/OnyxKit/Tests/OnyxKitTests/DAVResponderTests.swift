@@ -127,6 +127,17 @@ struct DAVResponderTests {
         #expect(await r.respond(to: DAVRequest(method: "OPTIONS", target: "/", headers: ["authorization": "Bearer"])).status == 401)
     }
 
+    @Test func theSocketLayerChecksTheTokenTheSameWay() {
+        let token = Self.token
+        #expect(DAVResponder.authorizes("Bearer \(token)", token: token))
+        #expect(DAVResponder.authorizes(" Bearer \(token)\t", token: token), "surrounding blanks are not the token")
+        for given in [nil, "", "Bearer wrong", "bearer \(token)", "Bearer \(token)x", "Basic \(token)", token, "Bearer "] {
+            #expect(!DAVResponder.authorizes(given, token: token), "\(given ?? "no header")")
+        }
+        #expect(!DAVResponder.authorizes("Bearer ", token: ""), "an empty token lets nobody in")
+        #expect(!DAVResponder.authorizes("Bearer", token: ""))
+    }
+
     @Test func constantTimeComparisonStillCompares() {
         let a = Array("Bearer abc".utf8)
         #expect(DAVResponder.constantTimeEquals(a, a))
@@ -527,6 +538,47 @@ struct DAVResponderTests {
         #expect(DAVResponder.quotedETag(#"a"b c"#) == #""abc""#)
         #expect(DAVResponder.quotedETag("\"\"") == nil)
         #expect(DAVResponder.quotedETag(nil) == nil)
+    }
+
+    @Test func onlyAWellFormedMediaTypeIsSentAsTheContentType() {
+        for good in ["image/png", "text/plain", "application/vnd.apple.pages", "video/x-matroska",
+                     "text/plain; charset=utf-8", "text/plain;charset=UTF-8", "text/html ; charset=\"utf-8\"",
+                     "multipart/mixed; boundary=\"a b:c\"", "application/x-thing", "a/b; x=1; y=2"] {
+            #expect(DAVResponder.contentType(good) == good, "\(good)")
+        }
+        // Anything that could break the header block — or is just not a
+        // type — goes out as plain bytes.
+        for bad in ["text/plain\r\n\r\n", "text/plain\r\nContent-Length: 5", "text/plain\n", "text/plain\r",
+                    "text/plain\0", "text/\u{0}plain", "text/plain; a=\"b\r\nc\"", "text/plain; a=\"b\nc\"",
+                    "text/plain;\r\n charset=utf-8", "image/pngé", "image", "/png", "image/", "image/png/x",
+                    "text/plain; charset", "text/plain; charset=", "text/plain; a=\"unterminated",
+                    "text/plain; a=\"back\\\\slash\"", "text plain", "", String(repeating: "a", count: 200) + "/" +
+                    String(repeating: "b", count: 100)] {
+            #expect(DAVResponder.contentType(bad) == "application/octet-stream", "\(bad.debugDescription)")
+        }
+        #expect(DAVResponder.contentType(nil) == "application/octet-stream")
+    }
+
+    @Test func aMimeThatWouldInjectHeadersIsNotServed() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("dav-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let copy = dir.appendingPathComponent("copy.bin")
+        try Data("hello".utf8).write(to: copy)
+        let mime = "text/plain\r\nContent-Length: 0\r\n\r\nHTTP/1.1 200 OK"
+        let entry = MirrorEntry(kind: .file, name: "Evil.txt", path: "Evil.txt", fileId: "id-evil", size: 5,
+                                modified: Self.modified, etag: "e1", mime: mime)
+        let responder = DAVResponder(source: FakeSource(entries: [entry], content: ["Evil.txt": .local(copy)]),
+                                     bearerToken: Self.token)
+        let get = await send(responder, "GET", "/Evil.txt")
+        #expect(get.status == 200)
+        #expect(get.header("Content-Type") == "application/octet-stream")
+        for (name, value) in get.headers {
+            #expect(!name.contains(where: \.isNewline) && !value.contains(where: \.isNewline), "\(name)")
+        }
+        let listing = await send(responder, "PROPFIND", "/", ["depth": "1"])
+        let file = Multistatus.parse(listing)?.first { $0.href == "/Evil.txt" }
+        #expect(file?.props["getcontenttype"] == "application/octet-stream")
     }
 
     @Test func xmlEscapingDropsWhatXMLCannotCarry() {

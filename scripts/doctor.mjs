@@ -211,7 +211,8 @@ const warmers = [
   // every table the delta touches (files, tombstones, file_acl).
   ['tombstones', () => db.listFileChanges({ cursor: 0, limit: 1, principal: { isAdmin: true } })],
   ['uploads', () => db.listUploads('doctor@example.com')],
-  ['shares', () => db.getShareByToken('__doctor__')],
+  ['shares', () => db.getShareRow('__doctor__')],
+  ['review', () => db.listReviewFeed('__doctor__')],
   ['filespaces', () => db.listFilespaces()],
   ['desktop tokens', () => db.listDesktopTokens('doctor@example.com')],
   ['invites', () => db.listInviteRequests({})],
@@ -238,6 +239,7 @@ const EXPECTED = [
   'file_tombstones', 'uploads', 'filespaces', 'filespace_access',
   'desktop_auth_codes', 'desktop_tokens', 'invite_requests',
   'notifications', 'notification_reads', 'user_preferences', 'magic_link_redirects',
+  'review_comments', 'review_decisions', 'review_watchers', 'review_reads',
 ];
 
 try {

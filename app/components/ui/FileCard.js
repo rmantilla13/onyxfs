@@ -1,8 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { effectiveKind, drawableKind, fmtDuration, fmtSize, GRID_ORIGINAL_MAX_BYTES } from '@/lib/media';
-import { isUndersizedPoster } from '@/lib/poster';
+import { memo, useEffect, useRef, useState } from 'react';
+import { effectiveKind, drawableKind, fmtDuration, fmtSize } from '@/lib/media';
+import { isUndersizedPoster, thumbSiblingSizes } from '@/lib/poster';
+import { thumbSources } from '@/lib/renditions';
+import { fileKey } from '@/lib/selection';
+import { watch } from '@/lib/thumb-observer';
 
 /**
  * One file card, for the library grid and the public share grid — which had
@@ -14,63 +17,92 @@ import { isUndersizedPoster } from '@/lib/poster';
  * inside a button at all. Selection is `aria-selected`; the grid owns the
  * tab order (see FileGrid) so only one card is ever in it.
  *
+ * What a press does is the page's (app/files/useSelectionModel.js), reached
+ * through `handlers` — one stable object for every card, called with the
+ * event and the card's key — so a card re-renders only when its own props
+ * change: its row, whether it is selected, whether it holds the tab stop.
+ * The card works out its own label and badges (`labelFor`, `badgesFor`),
+ * which would otherwise be new elements on every render of the grid.
+ *
  * `href` turns it into a link instead — used by the share page, where a card
  * is a download rather than a selection.
  *
- * `onMissingThumb(file)` is called once a tile that should have a thumbnail
- * and does not comes into view, and `onMissingThumb(file, { upgrade: true })`
- * once one whose thumbnail is an old, too-small one has loaded; the library
- * passes the backfill queue (lib/thumbnail-client.js).
+ * `onMissingThumb(file, opts)` asks the backfill queue (lib/thumbnail-client.js)
+ * for what the tile lacks, once it is near the screen: a thumbnail, a sharper
+ * one than the old 480px ones, or its smaller siblings.
  */
 
 // Lives in lib/media.js so server pages can use it too; re-exported here for
 // the components that already import it from this module.
 export { fmtSize };
 
-// Also used, shrunk, by the list view's rows (FileList).
-export function Thumb({ file, label, onMissingThumb }) {
+// A card's box before the grid is measured: a 240px column's 4:3 picture.
+const CARD_BOX = { width: 240, height: 180 };
+
+/** Whether a picture of `md` dimensions is smaller than `box` both ways, and so shown at its own size. */
+function smallerThan(md, box) {
+  const w = Number(md?.width);
+  const h = Number(md?.height);
+  return w > 0 && h > 0 && w < box.width && h < box.height;
+}
+
+/**
+ * The picture of a file on a surface (lib/renditions.js): a card gets a
+ * srcset of its sm sibling and the grid poster sized to the measured column
+ * (`sizes`, CSS px); a list row, the palette and the storage pages its xs
+ * sibling; Get info its sm. `eager` is for the first row of the grid, which
+ * is on screen before anything else is.
+ */
+export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface = 'card', sizes, eager = false }) {
   const kind = effectiveKind(file);
   const drawable = drawableKind(file);
   // URLs that failed to load in this tile. A broken-image icon is never the
-  // answer: a dead thumbnail falls back to the original, then to the label.
+  // answer: a dead sibling falls back to the grid poster, that to a small
+  // original, and that to the label.
   const [failed, setFailed] = useState(() => new Set());
   // `cover` fills the tile. A picture smaller than the tile in both
   // directions — an icon, a small screenshot — is shown at its own size
-  // instead of blown up into a blur.
-  const [fit, setFit] = useState('cover');
+  // instead of blown up into a blur. Decided from the recorded dimensions
+  // when there are some, so it never switches once the picture is up.
+  const box = typeof sizes === 'number' && sizes > 0 ? { width: sizes, height: sizes * 0.75 } : CARD_BOX;
+  const known = Number(file.metadata?.width) > 0 && Number(file.metadata?.height) > 0;
+  const [measuredFit, setMeasuredFit] = useState(null);
+  const fit = surface === 'card' && known ? (smallerThan(file.metadata, box) ? 'scale-down' : 'cover') : measuredFit || 'cover';
   const upgradeAsked = useRef(false);
   const ref = useRef(null);
   const imgRef = useRef(null);
 
-  // A video's poster is its thumbnail or nothing — never the original, which
-  // would pull a multi-gigabyte master into an <img> that cannot show it. An
-  // image's original stands in only while small and in a format <img> draws.
-  const original = drawable === 'image' && Number(file.size || 0) <= GRID_ORIGINAL_MAX_BYTES ? file.url : null;
-  const src = [file.thumbnailUrl, original].find((u) => u && !failed.has(u)) || null;
+  const { src, srcSet, sizes: sizesAttr } = thumbSources(file, surface, { sizes, failed });
+  const hasSizes = Array.isArray(file.thumbSizes) && file.thumbSizes.length > 0;
   const needsThumb = !!onMissingThumb && !!drawable && (!file.thumbnailUrl || failed.has(file.thumbnailUrl));
+  // A thumbnail from before siblings were made: an editor's browser draws
+  // them from it (never from the original) once the tile is seen. Not for a
+  // picture too small to have any.
+  const needsSizes = !!onMissingThumb && !needsThumb && !!file.thumbnailUrl && !hasSizes
+    && (!known || Object.keys(thumbSiblingSizes(file.metadata)).length > 0);
 
-  // Ask for a thumbnail only once the tile is near the viewport, so opening a
-  // folder of thousands does not decode thousands of originals.
+  // Asked once the tile is near the viewport, through one shared observer.
   useEffect(() => {
     const el = ref.current;
-    if (!needsThumb || !el) return;
-    const io = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) { io.disconnect(); onMissingThumb(file); }
-    }, { rootMargin: '200px' });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [needsThumb, file, onMissingThumb]);
+    if (!el || (!needsThumb && !needsSizes)) return undefined;
+    return watch(el, () => onMissingThumb(file, needsThumb ? {} : { sizes: true }));
+  }, [needsThumb, needsSizes, file, onMissingThumb]);
 
   const inspect = (img) => {
     if (!img || !img.naturalWidth) return;
     const natural = { width: img.naturalWidth, height: img.naturalHeight };
-    const box = ref.current;
-    setFit(box && natural.width < box.clientWidth && natural.height < box.clientHeight ? 'scale-down' : 'cover');
+    if (!known) {
+      const el = ref.current;
+      const next = el && natural.width < el.clientWidth && natural.height < el.clientHeight ? 'scale-down' : 'cover';
+      setMeasuredFit((f) => (f === next ? f : next));
+    }
     // A thumbnail from before posters were sized for a 2x screen (480px on
     // the long edge) is remade, once, by someone who may edit the file. Known
     // by its decoded size against the source's recorded one (lib/poster.js),
-    // so nothing has to be stored to tell old from new.
-    if (onMissingThumb && src === file.thumbnailUrl && !upgradeAsked.current
+    // so nothing has to be stored to tell old from new. Only the grid poster
+    // itself is judged — a row with siblings was made after that change.
+    const shown = img.currentSrc || img.src;
+    if (onMissingThumb && !hasSizes && shown === file.thumbnailUrl && !upgradeAsked.current
         && isUndersizedPoster(natural, file.metadata)) {
       upgradeAsked.current = true;
       onMissingThumb(file, { upgrade: true });
@@ -89,35 +121,39 @@ export function Thumb({ file, label, onMissingThumb }) {
 
   const duration = kind === 'video' ? fmtDuration(file.metadata?.duration) : '';
   return (
-    <div
-      ref={ref}
-      className="filecard-thumb"
-      style={{ aspectRatio: '4/3', background: 'var(--surface-sunken)', display: 'grid', placeItems: 'center', overflow: 'hidden', position: 'relative' }}
-    >
+    <div ref={ref} className="filecard-thumb">
       {src
         ? (
           <img
             ref={imgRef}
             src={src}
+            srcSet={srcSet}
+            sizes={sizesAttr}
             alt=""
-            loading="lazy"
+            loading={eager ? 'eager' : 'lazy'}
+            fetchPriority={eager ? 'high' : undefined}
             decoding="async"
+            draggable={false}
             onLoad={onLoad}
-            onError={() => setFailed((prev) => new Set(prev).add(src))}
-            style={{ width: '100%', height: '100%', objectFit: fit }}
+            onError={(e) => {
+              // With a srcset, what failed is whichever candidate was chosen.
+              const bad = e.currentTarget.currentSrc || src;
+              setFailed((prev) => new Set(prev).add(bad));
+            }}
+            style={{ objectFit: fit }}
           />
         )
         : <span className="muted small mono">{label || kind}</span>}
       {kind === 'video' && <span className="filecard-badge">{duration ? `▶ ${duration}` : '▶'}</span>}
     </div>
   );
-}
+});
 
-function Body({ file, label, badges, onMissingThumb }) {
+function Body({ file, label, badges, onMissingThumb, sizes, eager }) {
   return (
     <>
-      <Thumb file={file} label={label} onMissingThumb={onMissingThumb} />
-      <div style={{ padding: 10 }}>
+      <Thumb file={file} label={label} onMissingThumb={onMissingThumb} sizes={sizes} eager={eager} />
+      <div className="filecard-text">
         <div className="small truncate" title={file.name}>{file.name}</div>
         <div className="row small muted" style={{ gap: 6, marginTop: 4 }}>
           <span>{fmtSize(file.size)}</span>
@@ -129,29 +165,30 @@ function Body({ file, label, badges, onMissingThumb }) {
   );
 }
 
-export default function FileCard({
+function FileCard({
   file,
   label,
   badges = null,
+  labelFor,
+  badgesFor,
   selected = false,
-  onSelect,
-  onOpen,
+  handlers = null,
   href,
   downloadName,
   tabIndex = -1,
-  innerRef,
-  onKeyDown,
+  eager = false,
+  sizes,
   onMissingThumb,
-  onDragStart,
 }) {
+  const shownLabel = label ?? labelFor?.(file);
+  const shownBadges = badges ?? badgesFor?.(file) ?? null;
+  const body = <Body file={file} label={shownLabel} badges={shownBadges} onMissingThumb={onMissingThumb} sizes={sizes} eager={eager} />;
   if (href) {
-    return (
-      <a className="card filecard" href={href} download={downloadName} ref={innerRef}>
-        <Body file={file} label={label} badges={badges} onMissingThumb={onMissingThumb} />
-      </a>
-    );
+    return <a className="card filecard" href={href} download={downloadName}>{body}</a>;
   }
 
+  const key = fileKey(file.id);
+  const drag = handlers?.dragStart;
   return (
     <div
       className="card filecard"
@@ -161,19 +198,18 @@ export default function FileCard({
       // without threading a handler through every card.
       data-file-id={file.id}
       tabIndex={tabIndex}
-      ref={innerRef}
-      onKeyDown={onKeyDown}
-      // A click selects, as it always did. Opening is a double-click or
-      // Enter, so a click never costs a request for a preview nobody asked
-      // for.
-      onClick={onSelect}
-      onDoubleClick={onOpen}
+      // A click selects (⌘ toggles, ⇧ extends); a double-click, Return or
+      // ⌘↓ opens; on a touch screen a tap opens. See useSelectionModel.
+      onClick={handlers ? (e) => handlers.click(e, key) : undefined}
+      onDoubleClick={handlers ? (e) => handlers.dblclick(e, key) : undefined}
+      onKeyDown={handlers ? (e) => handlers.keyDown(e, key) : undefined}
       // Draggable onto a folder in the sidebar, when the library allows moves.
-      draggable={!!onDragStart}
-      onDragStart={onDragStart}
-      style={selected ? { outline: '2px solid var(--accent)', outlineOffset: -1 } : undefined}
+      draggable={!!drag}
+      onDragStart={drag ? (e) => drag(e, key) : undefined}
     >
-      <Body file={file} label={label} badges={badges} onMissingThumb={onMissingThumb} />
+      {body}
     </div>
   );
 }
+
+export default memo(FileCard);

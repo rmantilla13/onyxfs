@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 107
+-- Statements: 118
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -196,6 +196,8 @@ ALTER TABLE files ADD COLUMN IF NOT EXISTS poster_key TEXT;
 
 CREATE INDEX IF NOT EXISTS files_poster_key_idx ON files (poster_key) WHERE poster_key IS NOT NULL;
 
+ALTER TABLE files ADD COLUMN IF NOT EXISTS thumb_sizes TEXT;
+
 ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_at BIGINT;
 
 ALTER TABLE files ADD COLUMN IF NOT EXISTS trash_key TEXT;
@@ -241,6 +243,10 @@ CREATE INDEX IF NOT EXISTS files_thumbnail_key_idx ON files (thumbnail_key);
 CREATE INDEX IF NOT EXISTS files_live_folder_idx ON files (folder) WHERE deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS files_content_hash_idx ON files (content_hash, size) WHERE deleted_at IS NULL AND content_hash IS NOT NULL;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS review_status TEXT;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS open_comments INT NOT NULL DEFAULT 0;
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
@@ -343,6 +349,71 @@ ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS pw_failures INT NOT NULL DEFAUL
 ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS pw_locked_until BIGINT;
 
 CREATE INDEX IF NOT EXISTS file_shares_created_by_idx ON file_shares (created_by);
+
+CREATE SEQUENCE IF NOT EXISTS review_change_seq;
+
+CREATE TABLE IF NOT EXISTS review_comments (
+  id           TEXT PRIMARY KEY,
+  file_id      TEXT NOT NULL,
+  stack_id     TEXT,
+  parent_id    TEXT,
+  author_email TEXT,
+  guest_id     TEXT,
+  author_name  TEXT,
+  body         TEXT NOT NULL,
+  anchor       TEXT NOT NULL DEFAULT 'general',
+  frame_in     INT,
+  frame_out    INT,
+  fps_num      INT,
+  fps_den      INT,
+  point_x      REAL,
+  point_y      REAL,
+  annotation   JSONB,
+  mentions     JSONB,
+  audience     TEXT NOT NULL DEFAULT 'all',
+  share_token  TEXT,
+  resolved_at  BIGINT,
+  resolved_by  TEXT,
+  edited_at    BIGINT,
+  deleted_at   BIGINT,
+  created_at   BIGINT NOT NULL,
+  updated_at   BIGINT NOT NULL,
+  seq          BIGINT NOT NULL DEFAULT nextval('review_change_seq')
+);
+
+CREATE INDEX IF NOT EXISTS review_comments_file_seq_idx ON review_comments (file_id, seq);
+
+CREATE INDEX IF NOT EXISTS review_comments_parent_idx ON review_comments (parent_id) WHERE parent_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS review_comments_stack_idx ON review_comments (stack_id) WHERE stack_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS review_decisions (
+  file_id     TEXT NOT NULL,
+  reviewer    TEXT NOT NULL,
+  status      TEXT NOT NULL,
+  note        TEXT,
+  share_token TEXT,
+  decided_at  BIGINT NOT NULL,
+  seq         BIGINT NOT NULL DEFAULT nextval('review_change_seq'),
+  PRIMARY KEY (file_id, reviewer)
+);
+
+CREATE TABLE IF NOT EXISTS review_watchers (
+  file_id         TEXT NOT NULL,
+  email           TEXT NOT NULL,
+  added_at        BIGINT NOT NULL,
+  muted           BOOLEAN NOT NULL DEFAULT false,
+  last_emailed_at BIGINT,
+  PRIMARY KEY (file_id, email)
+);
+
+CREATE TABLE IF NOT EXISTS review_reads (
+  subject  TEXT NOT NULL,
+  file_id  TEXT NOT NULL,
+  last_seq BIGINT NOT NULL,
+  read_at  BIGINT NOT NULL,
+  PRIMARY KEY (subject, file_id)
+);
 
 CREATE TABLE IF NOT EXISTS folder_access (
   folder TEXT NOT NULL,

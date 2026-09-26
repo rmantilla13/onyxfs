@@ -13,6 +13,7 @@ import {
   cleanFolder, folderPathProblem, isWithin, planRename, rebase, mapLimit, settleLimit,
 } from '@/lib/folder-ops';
 import { listFolderTree, storagePrefixFor } from '@/lib/file-listing';
+import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -294,6 +295,13 @@ export async function DELETE(req) {
   const failed = results.filter((r) => !r.ok);
   const deleted = results.length - failed.length;
   const more = work.length > batch.length;
+  // With the trash off the rows are gone, and their previews go with them
+  // once no other row points at them. (Trashed rows keep theirs for a
+  // restore; the purge takes them later.)
+  if (flags.trash === false) {
+    const gone = new Set(batch.filter((_, i) => results[i]?.ok).map((w) => w.id));
+    await dropUnusedPreviews(previewKeysOf(files.filter((f) => gone.has(f.id))));
+  }
 
   if (!more && !failed.length) {
     await deleteFolderRows(name, { tag: scope.tag });

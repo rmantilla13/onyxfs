@@ -1,19 +1,24 @@
 'use client';
 
-import { useState } from 'react';
+import { forwardRef, useEffect, useState } from 'react';
 import { effectiveKind, drawableKind } from '@/lib/media';
+import { probedNow, decodeProbe } from '@/lib/decode-probe';
 import VideoPlayer from '@/app/components/video/VideoPlayer';
+import ImageStage from './ImageStage';
+import '@/app/components/review/review.css';
 
 /**
  * The preview pane of the detail view.
  *
  * Deliberately four narrow cases rather than one generic viewer:
  *
- *   image  a plain <img>. NOT next/image — the optimizer would cache a
- *          presigned URL and keep serving it after it expires.
- *   video  <video> with playsInline (iOS Safari otherwise takes over the
- *          screen on play) and preload="metadata" (auto-preloading a 4 GB
- *          master on a phone is a real bill, not a hypothetical one).
+ *   image  ImageStage: the thumbnail at once, sharpening to the large
+ *          preview (ProgressiveImage) — NOT next/image, whose optimizer
+ *          would cache a presigned URL and keep serving it after it expires
+ *          — with Fit / 100% and a slot for the review overlay on the
+ *          picture. The original is loaded only at 100%, or when there is
+ *          no preview.
+ *   video  VideoPlayer, which owns playback, frames and its own overlay slot.
  *   audio  <audio controls>.
  *   else   the kind, and the download button that is always there anyway.
  *
@@ -24,9 +29,15 @@ import VideoPlayer from '@/app/components/video/VideoPlayer';
  * recorded as 'other', which hid the player for every uploaded video. A format
  * the browser cannot draw (TIFF, HEIC, ProRes) says so instead of showing a
  * broken image or a player that never starts.
+ *
+ * The review props (overlay, markers, onFrameChange, onRangeChange,
+ * onComment, and the ref, which reaches the player) are all optional: the
+ * share page renders this with none of them.
  */
-
-export default function FilePreview({ file, startAt = 0 }) {
+const FilePreview = forwardRef(function FilePreview({
+  file, startAt = 0, overlay = null, markers = null, onMarkerClick, onFrameChange, onRangeChange, onComment,
+  handoff = null, onOriginalBlob,
+}, ref) {
   const kind = effectiveKind(file);
   const [failed, setFailed] = useState(false);
   const box = {
@@ -37,14 +48,19 @@ export default function FilePreview({ file, startAt = 0 }) {
     minHeight: 280,
     overflow: 'hidden',
   };
-  const fill = { maxWidth: '100%', maxHeight: '70vh', display: 'block' };
 
-  if (kind === 'image' && drawableKind(file) && !failed) {
-    return (
-      <div style={box}>
-        <img src={file.url} alt={file.name} style={{ ...fill, objectFit: 'contain' }} onError={() => setFailed(true)} />
-      </div>
-    );
+  // Any image with a rendition shows it, whether or not this browser could
+  // draw the original (a HEIC or TIFF, say); without one, only an original
+  // it can draw — which, for those two, a quick probe of this browser says
+  // (lib/decode-probe.js; Safari can).
+  const renditions = !!(file.posterUrl || file.thumbnailUrl);
+  const [probe, setProbe] = useState(probedNow);
+  const probeWorth = kind === 'image' && !renditions && !probe && /heic|heif|tiff?/i.test(`${file.mime || ''} ${file.name || ''}`);
+  useEffect(() => {
+    if (probeWorth) decodeProbe().then(setProbe, () => {});
+  }, [probeWorth]);
+  if (kind === 'image' && (renditions || drawableKind(file, { probe })) && !failed) {
+    return <ImageStage file={file} overlay={overlay} handoff={handoff} onOriginalBlob={onOriginalBlob} onFailed={() => setFailed(true)} />;
   }
 
   if (kind === 'video' && !failed) {
@@ -53,7 +69,19 @@ export default function FilePreview({ file, startAt = 0 }) {
     // to this component's placeholder only if it has no source at all — a
     // format the browser cannot decode is reported by the player itself, which
     // is the only thing that knows the decode failed.
-    return <VideoPlayer file={file} startAt={startAt} />;
+    return (
+      <VideoPlayer
+        ref={ref}
+        file={file}
+        startAt={startAt}
+        overlay={overlay}
+        markers={markers}
+        onMarkerClick={onMarkerClick}
+        onFrameChange={onFrameChange}
+        onRangeChange={onRangeChange}
+        onComment={onComment}
+      />
+    );
   }
 
   if (kind === 'audio') {
@@ -74,4 +102,6 @@ export default function FilePreview({ file, startAt = 0 }) {
       </div>
     </div>
   );
-}
+});
+
+export default FilePreview;

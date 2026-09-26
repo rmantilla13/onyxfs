@@ -8,6 +8,7 @@ import {
   getStorageConfig, storageMode, s3MoveObject, s3DeleteObject, presignFileUrls,
   cfgForFilespace, folderToKeyPath, s3UniqueKey, s3ObjectExists, safeObjectName,
 } from '@/lib/storage';
+import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
 import { normalizeSchema, validateMetadataPatch } from '@/lib/dam';
 import { keyFor, fileNameProblem } from '@/lib/folder-ops';
 
@@ -29,7 +30,9 @@ export async function GET(_req, { params }) {
   const { principal } = g;
 
   const file = await getFileById(params.id);
-  if (!file) return NextResponse.json({ error: 'File not found' }, { status: 404 });
+  // A trashed file is gone until it is restored: its row waits for the purge,
+  // and a URL minted for it now would outlive the decision to delete it.
+  if (!file || file.deletedAt) return NextResponse.json({ error: 'File not found' }, { status: 404 });
 
   // Authorize → presign, in that order, so a URL is never minted for a file
   // the caller may not have.
@@ -318,6 +321,8 @@ export async function DELETE(_req, { params }) {
         }
       }
       await deleteFile(id);
+      // Its previews go with it, once no other row points at them.
+      await dropUnusedPreviews(previewKeysOf(file), { cfg });
       return NextResponse.json({ ok: true, trashed: false });
     }
 

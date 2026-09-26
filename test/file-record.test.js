@@ -79,3 +79,19 @@ describe('parseFileRecord keeps the preview keys uploadFields checks', async () 
     assert.equal(uploadFields(record).posterKey, null);
   });
 });
+
+describe('parseFileRecord keeps the thumbnail sizes uploadFields checks', async () => {
+  const { uploadFields } = await import('../lib/media.js');
+  const thumb = '_thumbs/3f2b8c1e-0d4a-4a53-9a0e-2b7c5d1f6e90.webp';
+
+  test('the sizes uploaded with a thumbnail are recorded', () => {
+    const { record } = parseFileRecord({ ...base, thumbnailKey: thumb, thumbSizes: ['sm', 'xs'] });
+    assert.deepEqual(uploadFields(record).thumbSizes, ['sm', 'xs']);
+  });
+
+  test('sizes that are not ours are refused', () => {
+    const { record } = parseFileRecord({ ...base, thumbnailKey: thumb, thumbSizes: ['huge', '../x'] });
+    const sizes = uploadFields(record).thumbSizes;
+    assert.ok(!sizes || !sizes.length, `got ${JSON.stringify(sizes)}`);
+  });
+});

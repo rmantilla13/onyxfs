@@ -7,10 +7,15 @@ import Foundation
 // `respond(to:)`, and writes out what comes back, so every rule about what the
 // mount shows and serves lives here and is testable without rclone.
 //
-// rclone's webdav backend (vendor "other") is the only client. It lists with
+// rclone's webdav backend (vendor "rclone") is the only client. It lists with
 // PROPFIND Depth 1, reads with GET (following redirects, keeping its Range
 // header), and matches each <D:href> against the URL it asked for, so hrefs
 // must carry the same path prefix its remote was configured with.
+//
+// It ignores getetag. What tells it a cached file is stale is the size and
+// getlastmodified (the vendor makes times count), so the modified time must
+// move whenever the bytes might have — MirrorIndex takes it from the file's
+// updatedAt, which every write to the row moves.
 
 /// One HTTP request, as the socket layer parsed it.
 public struct DAVRequest: Sendable {
@@ -168,10 +173,17 @@ public struct DAVResponder: Sendable {
     // MARK: - Auth
 
     func authorized(_ request: DAVRequest) -> Bool {
+        Self.authorizes(request.headers["authorization"], token: bearerToken)
+    }
+
+    /// Whether an Authorization header value carries `token`. Public for
+    /// the socket layer, which checks it as soon as a request's headers are
+    /// in — before waiting for, or holding, a body from someone without it.
+    public static func authorizes(_ authorization: String?, token: String) -> Bool {
         // An empty token would make "Bearer " a password anyone can type.
-        guard !bearerToken.isEmpty, let given = request.headers["authorization"] else { return false }
+        guard !token.isEmpty, let given = authorization else { return false }
         let trimmed = given.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
-        return Self.constantTimeEquals(Array(trimmed.utf8), Array("Bearer \(bearerToken)".utf8))
+        return constantTimeEquals(Array(trimmed.utf8), Array("Bearer \(token)".utf8))
     }
 
     /// Time depends only on the expected length, not on where a guess first
@@ -442,9 +454,68 @@ public struct DAVResponder: Sendable {
 
     static let xmlType = "application/xml; charset=utf-8"
 
+    /// The file's type as the server recorded it, when it is one. The server
+    /// keeps whatever a client sent, and this goes into a response header:
+    /// a CR or LF in it would end the header block early, and the rest would
+    /// be read as body — or as the next response on the connection. So only
+    /// a well-formed media type goes out; anything else is plain bytes.
     static func contentType(_ mime: String?) -> String {
-        guard let mime, !mime.isEmpty else { return "application/octet-stream" }
+        guard let mime, isMediaType(mime) else { return "application/octet-stream" }
         return mime
+    }
+
+    /// RFC 9110's media-type, in printable ASCII: type "/" subtype, then any
+    /// number of `; name=value` parameters, each value a token or a quoted
+    /// string with no quote or backslash inside. No control character — tab
+    /// aside, between parameters — fits anywhere in it.
+    static func isMediaType(_ s: String) -> Bool {
+        let b = Array(s.utf8)
+        guard !b.isEmpty, b.count <= 255 else { return false }
+        var i = 0
+        func token() -> Bool {
+            let start = i
+            while i < b.count, isTokenByte(b[i]) { i += 1 }
+            return i > start
+        }
+        func skipSpace() {
+            while i < b.count, b[i] == UInt8(ascii: " ") || b[i] == UInt8(ascii: "\t") { i += 1 }
+        }
+        func take(_ c: Character) -> Bool {
+            guard i < b.count, b[i] == c.asciiValue else { return false }
+            i += 1
+            return true
+        }
+        guard token(), take("/"), token() else { return false }
+        while true {
+            skipSpace()
+            if i == b.count { return true }
+            guard take(";") else { return false }
+            skipSpace()
+            guard token(), take("=") else { return false }
+            if take("\"") {
+                while i < b.count, b[i] != UInt8(ascii: "\"") {
+                    // Printable ASCII and spaces; a backslash would start an
+                    // escape, and nothing here needs one.
+                    guard b[i] == UInt8(ascii: " ") || (0x21...0x7E).contains(b[i]),
+                          b[i] != UInt8(ascii: "\\") else { return false }
+                    i += 1
+                }
+                guard take("\"") else { return false }
+            } else {
+                guard token() else { return false }
+            }
+        }
+    }
+
+    /// RFC 9110 tchar.
+    private static func isTokenByte(_ b: UInt8) -> Bool {
+        switch b {
+        case UInt8(ascii: "A")...UInt8(ascii: "Z"), UInt8(ascii: "a")...UInt8(ascii: "z"),
+             UInt8(ascii: "0")...UInt8(ascii: "9"):
+            return true
+        default:
+            return "!#$%&'*+-.^_`|~".utf8.contains(b)
+        }
     }
 
     /// Quoted, keeping only what an entity-tag may hold (RFC 9110 etagc), so

@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import { cookies } from 'next/headers';
 import { loadBrand } from '@/lib/brand-config';
 import { listFilespacesForSpace, getFileMetadataSchema } from '@/lib/db';
 import { getSessionUser } from '@/lib/session';
@@ -6,6 +7,7 @@ import { getPrincipal, can } from '@/lib/authz';
 import { listFilesPage, listFolderTree } from '@/lib/file-listing';
 import { listingKey } from '@/lib/listing-cache';
 import { cleanFolder } from '@/lib/folder-ops';
+import { VIEW_STORAGE_KEY, parseView } from '@/lib/list-columns';
 import { normalizeSchema } from '@/lib/dam';
 import { canWriteDrive } from '@/lib/drive-access';
 import TopNav from '@/app/components/TopNav';
@@ -22,6 +24,14 @@ export default async function FilesPage({ searchParams }) {
   const user = await getSessionUser();
   if (!user) redirect('/signin');
   const { email, avatarUrl } = user;
+
+  // Grid or list, and whether the filter panel was left open: the client
+  // keeps both in a cookie as well as localStorage, so the page is rendered
+  // the way it will be shown — a list from the first byte, not a grid of
+  // posters swapped for rows after hydration.
+  const jar = cookies();
+  const initialView = parseView(jar.get(VIEW_STORAGE_KEY)?.value);
+  const initialFiltersOpen = jar.get('onyx.files.filters')?.value === 'open';
 
   // One principal for the whole page (lib/authz.js): the flags as this person
   // sees them, their capabilities, and their drives with each role already
@@ -91,6 +101,8 @@ export default async function FilesPage({ searchParams }) {
         isAdmin={admin}
         drives={filespaces}
         initial={initial}
+        initialView={initialView}
+        initialFiltersOpen={initialFiltersOpen}
       />
     </>
   );
