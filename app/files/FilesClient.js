@@ -17,7 +17,7 @@ import { modKey, isTyping } from '@/lib/keys';
 import { fmtSize } from '@/lib/media';
 import { listingCache, listingKey, returnSlot } from '@/lib/listing-cache';
 import { mergeFirstPage, keepUnchanged } from '@/lib/listing-merge';
-import { setHandoff, getHandoff, rememberReturn, markReady } from '@/lib/file-handoff';
+import { setHandoff, getHandoff, rememberReturn, markReady, holdPictures, releasePictures } from '@/lib/file-handoff';
 import {
   VIEW_STORAGE_KEY, parseView, availableColumns, parseColumns, resolveColumns,
   COLUMNS_STORAGE_KEY, DEFAULT_COLUMNS, METADATA_PREFIX,
@@ -43,9 +43,14 @@ import {
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 // The opening shell and Quick Look are not needed to show a folder, so they
-// are not part of the page's first load: they are fetched at the first press
-// of a key or a pointer anywhere on it — ahead of the double-click or the
-// Space that needs them — and rendered at once from then on.
+// are not part of the page's first load. They are fetched ahead of the
+// double-click or the Space that needs them: at once on a key or a mouse
+// press; otherwise when the page comes to rest (300 ms without a scroll, a
+// touch or a pointer move) after someone has done anything at all, or ten
+// seconds after it loaded — never in the middle of a scroll. They render at
+// once from then on.
+const VIEWERS_REST_MS = 300;
+const VIEWERS_IDLE_MS = 10000;
 const viewers = { FileOpening: null, QuickLook: null, promise: null };
 function loadViewers() {
   viewers.promise ||= Promise.all([
@@ -1331,14 +1336,32 @@ export default function FilesClient({
   useEffect(() => {
     if (viewersReady) return undefined;
     let live = true;
-    const load = () => loadViewers().then(() => { if (live) setViewersReady(true); }, () => {});
-    const opts = { capture: true, once: true, passive: true };
-    window.addEventListener('pointerdown', load, opts);
-    window.addEventListener('keydown', load, opts);
+    let started = false;
+    const load = () => {
+      if (started) return;
+      started = true;
+      loadViewers().then(() => { if (live) setViewersReady(true); }, () => { started = false; });
+    };
+    const since = performance.now();
+    let armed = false;
+    let last = since;
+    const moved = () => { armed = true; last = performance.now(); };
+    const pressed = (e) => { if (e.type === 'keydown' || e.pointerType !== 'touch') load(); else moved(); };
+    const opts = { capture: true, passive: true };
+    const MOVES = ['scroll', 'wheel', 'touchstart', 'pointermove'];
+    MOVES.forEach((t) => window.addEventListener(t, moved, opts));
+    window.addEventListener('pointerdown', pressed, opts);
+    window.addEventListener('keydown', pressed, opts);
+    const tick = setInterval(() => {
+      const now = performance.now();
+      if ((armed || now - since > VIEWERS_IDLE_MS) && now - last >= VIEWERS_REST_MS) load();
+    }, 100);
     return () => {
       live = false;
-      window.removeEventListener('pointerdown', load, opts);
-      window.removeEventListener('keydown', load, opts);
+      clearInterval(tick);
+      MOVES.forEach((t) => window.removeEventListener(t, moved, opts));
+      window.removeEventListener('pointerdown', pressed, opts);
+      window.removeEventListener('keydown', pressed, opts);
     };
   }, [viewersReady]);
   const openFileImpl = useRef(null);
@@ -1347,6 +1370,10 @@ export default function FilesClient({
     const img = document.querySelector(`[data-file-id="${CSS.escape(String(f.id))}"] img`);
     const shown = img && img.complete && img.naturalWidth ? img.currentSrc || img.src : null;
     if (shown) markReady(shown);
+    // The shell is drawn by code loaded after the page; a tap can come first.
+    if (!viewers.FileOpening) loadViewers().then(() => setViewersReadyRef.current?.(true), () => {});
+    // The pictures on screen, kept for ← Back.
+    holdPictures([...document.querySelectorAll('.files-pane [data-file-id] img')].map((i) => i.currentSrc || i.src));
     setHandoff(f.id, { row: f, currentSrc: shown, natural: null });
     rememberReturn({ href: `${window.location.pathname}${window.location.search}`, listingKey: currentKey, fileId: f.id });
     listingCache.extend(currentKey, { files, cursor });
@@ -1452,6 +1479,11 @@ export default function FilesClient({
   // window is brought to the new scroll position before the frame is
   // painted, so no blank rows show.
   const restoring = useRef(returned ? { y: returned.scrollY || 0, focusId: returned.focusId, tries: 0 } : null);
+  // The pictures held for this return have done their job once it has painted.
+  useEffect(() => {
+    const t = setTimeout(releasePictures, 5000);
+    return () => clearTimeout(t);
+  }, []);
   useIsoLayoutEffect(() => {
     const r = restoring.current;
     if (!r) return;
