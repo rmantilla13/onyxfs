@@ -12,7 +12,9 @@ import FilterPanel, { ActiveFilters, countActive } from '@/app/components/ui/Fil
 import ColumnPicker, { NewFieldDialog } from '@/app/components/ui/ColumnPicker';
 import InfoDialog from '@/app/components/ui/InfoDialog';
 import ShareDialog from '@/app/components/ShareDialog';
-import { DriveList, NewDriveDialog, DriveMembersDialog } from '@/app/components/Drives';
+import { DriveList, DriveMembersDialog } from '@/app/components/Drives';
+import NewDriveDialog from '@/app/components/drives/NewDriveDialog';
+import { useDeleteDrive } from '@/app/components/drives/DeleteDriveConfirm';
 import { modKey, isTyping } from '@/lib/keys';
 import { fmtSize } from '@/lib/media';
 import { listingCache, listingKey, returnSlot } from '@/lib/listing-cache';
@@ -229,6 +231,7 @@ export default function FilesClient({
   const router = useRouter();
   const toast = useToast();
   const { confirm, confirmElement } = useConfirm();
+  const { deleteDrive: confirmDeleteDrive, deleteElement } = useDeleteDrive();
   const { prompt, promptElement } = usePrompt();
   const { pick, pickerElement } = useFolderPicker();
   const { openMenu, contextMenuElement } = useContextMenu();
@@ -1146,21 +1149,11 @@ export default function FilesClient({
     toast.success(`Renamed to “${renamed.trim()}”.`);
   };
 
+  // One confirm for this and Admin → Drives (DeleteDriveConfirm): it asks
+  // the server what the drive holds and says what becomes of it.
   const deleteDrive = async (d) => {
-    const u = driveUsage[d.id];
-    const ok = await confirm({
-      title: `Delete the drive “${d.name}”?`,
-      body: `Its members lose it, and desktop mounts of it stop within the hour. ${u?.files
-        ? `The ${u.files} file${u.files === 1 ? '' : 's'} in it (${fmtSize(u.bytes) || '0 B'}) are not deleted: they stay in the bucket and in All files.`
-        : 'Nothing in the bucket is deleted.'}`,
-      confirmLabel: 'Delete drive',
-    });
-    if (!ok) return;
-    const r = await fetch(`/api/admin/filespaces?id=${encodeURIComponent(d.id)}`, { method: 'DELETE' });
-    if (!r.ok) {
-      toast.error((await r.json().catch(() => ({}))).error || `Could not delete the drive (HTTP ${r.status}).`);
-      return;
-    }
+    const done = await confirmDeleteDrive(d);
+    if (!done) return;
     toast.success(`Deleted the drive “${d.name}”.`);
     if (d.id === filespaceId) openDrive('');
     router.refresh();
@@ -1177,7 +1170,7 @@ export default function FilesClient({
     canManageDrive(d) && '-',
     canManageDrive(d) && { label: 'Members and permissions…', onSelect: () => setMembersOf(d) },
     isAdmin && { label: 'Rename…', onSelect: () => renameDrive(d) },
-    isAdmin && { label: 'Bucket and keys…', onSelect: () => router.push('/admin?tab=filespaces') },
+    isAdmin && { label: 'Bucket and keys…', onSelect: () => router.push(`/admin/drives/${encodeURIComponent(d.id)}#settings`) },
     isAdmin && '-',
     isAdmin && { label: 'Delete drive…', danger: true, onSelect: () => deleteDrive(d) },
   ];
@@ -2007,6 +2000,7 @@ export default function FilesClient({
         </div>
       )}
       {confirmElement}
+      {deleteElement}
       {promptElement}
       {pickerElement}
       {contextMenuElement}

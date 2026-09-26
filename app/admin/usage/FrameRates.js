@@ -51,8 +51,8 @@ export default function FrameRates({ summary }) {
 
   const { videos = 0, missing = 0, unreadable = 0 } = summary || {};
   return (
-    <section className="card storage-card" aria-labelledby="st-rates">
-      <h2 id="st-rates" className="storage-h2">Frame rates</h2>
+    <section className="card admin-card" aria-labelledby="st-rates">
+      <h2 id="st-rates" className="admin-h2 admin-card-title">Frame rates</h2>
       {missing > 0 ? (
         <p className="storage-stat">
           <strong>{missing.toLocaleString()}</strong>

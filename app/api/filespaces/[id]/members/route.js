@@ -14,9 +14,8 @@ export const maxDuration = 30;
 /**
  * Who may manage a filespace's members: admins (every filespace) and the
  * filespace's own owners — owner after the ceiling their platform role sets,
- * so a Viewer granted owner manages nothing. /api/admin/filespaces/[id]/access
- * stays the admin-only path; this one exists so an owner can do it from the
- * files UI without the Admin panel.
+ * so a Viewer granted owner manages nothing. The one route for it, used by
+ * the drive menu on the files page and by the drive drawer in Admin → Drives.
  */
 async function gate(id) {
   const g = await requirePrincipal();
@@ -26,7 +25,7 @@ async function gate(id) {
   const fs = id ? await getFilespaceById(id) : null;
   // A non-member learns nothing about whether the id exists.
   const role = fs ? driveRoleOf(principal, id) : null;
-  if (!fs || !role) return { error: NextResponse.json({ error: 'Filespace not found' }, { status: 404 }) };
+  if (!fs || !role) return { error: NextResponse.json({ error: 'Drive not found' }, { status: 404 }) };
   const d = can(principal, 'drive.manageMembers', { driveRole: role });
   if (!d.ok) return { error: NextResponse.json({ error: d.reason }, { status: d.status }) };
   return { email, admin, role, fs };

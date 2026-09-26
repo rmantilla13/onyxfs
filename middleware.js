@@ -1,11 +1,28 @@
 import NextAuth from 'next-auth';
+import { NextResponse } from 'next/server';
 import { authConfig } from '@/auth.config';
+import { legacyAdminUrl } from '@/lib/admin-redirects';
 
 // Built from the Edge-safe config, NOT from @/auth. Importing the full auth
 // config here would pull the Postgres driver into the Edge bundle, which has
 // no TCP sockets — it builds cleanly and then fails at runtime on every
-// request. See auth.config.js.
-export const { auth: middleware } = NextAuth(authConfig);
+// request. See auth.config.js. The same goes for everything else imported
+// here: lib/admin-redirects.js imports nothing.
+const { auth } = NextAuth(authConfig);
+
+/**
+ * The sign-in gate (Auth.js, from authConfig's `authorized`), after one
+ * redirect that has to happen before any page renders: the old tabbed admin
+ * panel's /admin?tab=… addresses, still in bookmarks and the Mac app, go
+ * straight to their sections with a 307. Done ahead of the gate because it
+ * reveals nothing — a signed-out visitor is then sent to sign in for the
+ * section itself, and returns there.
+ */
+export function middleware(req, ev) {
+  const legacy = legacyAdminUrl(req.nextUrl.pathname, req.nextUrl.search);
+  if (legacy) return NextResponse.redirect(new URL(legacy, req.url), 307);
+  return auth(req, ev);
+}
 export default middleware;
 
 export const config = {

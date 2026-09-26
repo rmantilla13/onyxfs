@@ -367,6 +367,39 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   padding: var(--s3) var(--s5) var(--s5);
 }
 
+/* ── Forms: the admin panel and the drive dialogs ───────────────────────── */
+/* Here rather than in app/admin/admin.css because "New drive" and "Delete
+   drive" open on the files page too, and must look the same in both places. */
+
+.admin-note { margin: 0; }
+.admin-inline-error { margin: 0; color: var(--danger); overflow-wrap: anywhere; }
+/* Sentences read as a list (a confirm's consequences), a little apart. */
+.admin-lines { display: flex; flex-direction: column; gap: var(--s2); }
+.admin-lines + .admin-lines { margin-top: var(--s3); }
+
+.admin-form { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+.admin-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: var(--s3) var(--s4); }
+.admin-field { display: flex; flex-direction: column; gap: var(--s1); min-width: 0; }
+.admin-field-label { font-size: var(--t-sm); font-weight: 500; }
+.admin-field-hint { margin: 0; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
+.admin-field .input:disabled { opacity: 0.7; cursor: not-allowed; background: var(--surface-sunken); }
+.admin-field-row { display: flex; align-items: center; gap: var(--s2); }
+.admin-check { display: flex; align-items: flex-start; gap: var(--s2); cursor: pointer; }
+.admin-check input { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--accent); }
+.admin-check > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.admin-form-actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.admin-lock {
+  display: flex; gap: var(--s2); align-items: flex-start;
+  padding: var(--s2) var(--s3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-size: var(--t-sm);
+}
+.admin-lock > [aria-hidden] { flex: none; margin-top: 2px; color: var(--muted); }
+.admin-disclosure > summary { cursor: pointer; font-size: var(--t-sm); font-weight: 500; color: var(--muted); padding: var(--s1) 0; }
+.admin-disclosure > summary:hover { color: var(--ink); }
+.admin-disclosure[open] > summary { margin-bottom: var(--s2); }
+
 /* ── Menu ───────────────────────────────────────────────────────────────── */
 
 .menu-wrap { position: relative; display: inline-flex; }
