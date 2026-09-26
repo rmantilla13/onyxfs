@@ -252,6 +252,9 @@ struct FinderMenu: View {
         } label: {
             Label("Finder", systemImage: "externaldrive.connected.to.line.below")
         }
+        // Named, not just drawn: an unlabeled drive glyph beside the back and
+        // forward buttons was the whole way into Finder, and it went unseen.
+        .labelStyle(.titleAndIcon)
         .help("Show drives in Finder")
     }
 }

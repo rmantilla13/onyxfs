@@ -155,6 +155,8 @@ final class DriveService: ObservableObject {
 
     /// After sign-in: start the bridge, bring back the drives that were
     /// mounted, and start keeping mirrors and pins current.
+    static let noAccountProblem = "Onyx is checking which account is signed in. Your drives appear here once the server answers."
+
     func start(model: AppModel) async {
         self.model = model
         generation += 1
@@ -171,10 +173,12 @@ final class DriveService: ObservableObject {
         guard started == generation, model.phase == .signedIn else { return }
         guard let account = model.email, !account.isEmpty else {
             // Mirrors and offline files are each one account's; with no
-            // account known, none can be shown or kept.
-            problem = "Onyx does not know which account is signed in. Sign out and in again to see your drives in Finder."
+            // account known, none can be shown or kept. The app asks the
+            // server who is signed in and starts this again once it knows.
+            problem = Self.noAccountProblem
             return
         }
+        if problem == Self.noAccountProblem { problem = nil }
         Self.adoptUnscopedMirrors(into: Self.mirrorsDirectory(server: model.config.baseURL, account: account))
         // Its disk may not be connected. The drives mount and stream all the
         // same, and each tick tries the store again.
