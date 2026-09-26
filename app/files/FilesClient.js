@@ -4,8 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { useRouter, useSearchParams } from 'next/navigation';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
 import { reviewBadges } from '@/app/components/review/badges';
-import { createThumbnailBackfill, mergeBackfilled } from '@/lib/thumbnail-client';
-import { createUploadQueue, uploadOne, filesFromDrop, filesFromInput, joinFolder } from '@/lib/upload-client';
+import { lazyThumbnailBackfill, mergeBackfilled } from '@/lib/backfill';
+import { createUploadQueue, filesFromDrop, filesFromInput, joinFolder } from '@/lib/upload-queue';
 import FileGrid from '@/app/components/ui/FileGrid';
 import FileList from '@/app/components/ui/FileList';
 import FilterPanel, { ActiveFilters, countActive } from '@/app/components/ui/FilterPanel';
@@ -18,9 +18,6 @@ import { fmtSize } from '@/lib/media';
 import { listingCache, listingKey, returnSlot } from '@/lib/listing-cache';
 import { mergeFirstPage, keepUnchanged } from '@/lib/listing-merge';
 import { setHandoff, getHandoff, rememberReturn, markReady } from '@/lib/file-handoff';
-import FileOpening from '@/app/components/file/FileOpening';
-import QuickLook from '@/app/components/quicklook/QuickLook';
-import useQuickLook from '@/app/components/quicklook/useQuickLook';
 import {
   VIEW_STORAGE_KEY, parseView, availableColumns, parseColumns, resolveColumns,
   COLUMNS_STORAGE_KEY, DEFAULT_COLUMNS, METADATA_PREFIX,
@@ -39,12 +36,27 @@ import FolderDrop, { DRAG_FILES, DRAG_FOLDER, startFolderDrag } from './FolderDr
 import { FolderTiles, FolderRows } from './FolderItems';
 import useSelectionModel from './useSelectionModel';
 import useLongPress from './useLongPress';
-import useOpenPrefetch from './useOpenPrefetch';
 import {
   folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, crumbsFor, folderStats,
 } from '@/lib/folder-ops';
 
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
+// The opening shell and Quick Look are not needed to show a folder, so they
+// are not part of the page's first load: they are fetched at the first press
+// of a key or a pointer anywhere on it — ahead of the double-click or the
+// Space that needs them — and rendered at once from then on.
+const viewers = { FileOpening: null, QuickLook: null, promise: null };
+function loadViewers() {
+  viewers.promise ||= Promise.all([
+    import('@/app/components/file/FileOpening'),
+    import('@/app/components/quicklook/QuickLook'),
+  ]).then(([a, b]) => {
+    viewers.FileOpening = a.default;
+    viewers.QuickLook = b.default;
+  }, (e) => { viewers.promise = null; throw e; });
+  return viewers.promise;
+}
 const NO_FACETS = [];
 
 const KINDS = [
@@ -270,6 +282,9 @@ export default function FilesClient({
       if (token === requestRef.current) { setLoading(false); setLoadingMore(false); }
     }
   }, [folder, query, kinds, sort, filespaceId]);
+
+  const fetchPageRef = useRef(fetchPage);
+  fetchPageRef.current = fetchPage;
 
   // After anything that changes files: drop every cached listing (which
   // folders a move or an upload touched is not worth working out) and fetch.
@@ -568,6 +583,9 @@ export default function FilesClient({
   const refreshTimer = useRef(null);
   const [queue] = useState(() => createUploadQueue({
     run: async (item, opts) => {
+      // The transfer code (and the thumbnail, filmstrip and probe code it
+      // uses) is loaded with the first upload, not with the page.
+      const { uploadOne } = await import('@/lib/upload-client');
       const row = await uploadOne(item.file, {
         folder: item.folder,
         filespaceId: live.current.filespaceId,
@@ -1298,7 +1316,7 @@ export default function FilesClient({
   // from the original), and an image opened with no preview hands over the
   // original it fetched.
   const requestThumb = useMemo(() => (canWrite
-    ? createThumbnailBackfill((f) => setFiles((prev) => prev.map((x) => (x.id === f.id ? mergeBackfilled(x, f) : x))))
+    ? lazyThumbnailBackfill((f) => setFiles((prev) => prev.map((x) => (x.id === f.id ? mergeBackfilled(x, f) : x))))
     : null), [canWrite]);
 
   // ── Opening a file ────────────────────────────────────────────────────────
@@ -1308,6 +1326,21 @@ export default function FilesClient({
   // the server has answered (FileOpening). What was on screen here is kept
   // for ← Back (returnSlot).
   const [opening, setOpening] = useState(null);
+  const [viewersReady, setViewersReady] = useState(() => !!viewers.QuickLook);
+  const setViewersReadyRef = useRef(setViewersReady);
+  useEffect(() => {
+    if (viewersReady) return undefined;
+    let live = true;
+    const load = () => loadViewers().then(() => { if (live) setViewersReady(true); }, () => {});
+    const opts = { capture: true, once: true, passive: true };
+    window.addEventListener('pointerdown', load, opts);
+    window.addEventListener('keydown', load, opts);
+    return () => {
+      live = false;
+      window.removeEventListener('pointerdown', load, opts);
+      window.removeEventListener('keydown', load, opts);
+    };
+  }, [viewersReady]);
   const openFileImpl = useRef(null);
   openFileImpl.current = (f) => {
     if (!f?.id) return;
@@ -1350,8 +1383,14 @@ export default function FilesClient({
   }, [navigate, filespaceId, query, kinds, sort]);
 
   // Quick Look is opened through here (Space, the menus, the phone bar).
-  const quickLookRef = useRef(null);
-  const quickLook = useCallback((key) => quickLookRef.current?.(key), []);
+  const quickLookApi = useRef(null);
+  const quickLookPending = useRef(null);
+  const quickLook = useCallback((key) => {
+    if (quickLookApi.current) { quickLookApi.current.open(key); return; }
+    // Not loaded yet (the very first key press of the page): opened when it is.
+    quickLookPending.current = key;
+    loadViewers().then(() => setViewersReadyRef.current?.(true), () => {});
+  }, []);
 
   // ── Selection ─────────────────────────────────────────────────────────────
   // Finder's model over the folders and files in the pane: a click selects,
@@ -1373,12 +1412,7 @@ export default function FilesClient({
   const mainRef = useRef(null);
   useLongPress(mainRef, { onLongPress: (key) => selRef.current.longPress(key) });
   const anySelected = selected.size + sel.selectedFolders.size;
-  useOpenPrefetch({
-    rootRef: mainRef,
-    router,
-    selectedId: selected.size === 1 && !sel.selectedFolders.size ? [...selected][0] : null,
-    find: (id) => filesRef.current.find((f) => String(f.id) === id),
-  });
+  const prefetchFind = useCallback((id) => filesRef.current.find((f) => String(f.id) === id), []);
 
   // ── Quick Look ────────────────────────────────────────────────────────────
   // Space on an item (or the selection), from the rows already on the page.
@@ -1393,24 +1427,16 @@ export default function FilesClient({
     if (p?.type === 'folder') return itemFoldersRef.current.find((f) => f.folder === p.id) || null;
     return null;
   }, []);
-  const ql = useQuickLook({
-    order: sel.order,
-    selectedKeys: sel.keys,
-    find: findItem,
-    more: !!cursor,
-    loadMore: () => (cursorRef.current ? fetchPage(cursorRef.current) : null),
-    onStep: (key, { follow }) => {
-      if (follow) selRef.current.setKeys([key], { anchor: key, focus: key });
-      selRef.current.reveal(key);
-    },
-    onClose: (key) => { if (key) selRef.current.focusItem(key); },
-  });
-  quickLookRef.current = ql.open;
+  const qlLoadMore = useCallback(() => (cursorRef.current ? fetchPageRef.current(cursorRef.current) : null), []);
+  const qlStep = useCallback((key, { follow }) => {
+    if (follow) selRef.current.setKeys([key], { anchor: key, focus: key });
+    selRef.current.reveal(key);
+  }, []);
+  const qlClose = useCallback((key) => { if (key) selRef.current.focusItem(key); }, []);
   const openFromQuickLook = (key) => {
     const p = parseKey(key);
     const item = findItem(key);
     if (!item) return;
-    ql.dismiss();
     if (p.type === 'file') openFile(item);
     else openFolderItem(p.id);
   };
@@ -1898,10 +1924,30 @@ export default function FilesClient({
         </div>
       )}
       <MarqueeRect store={marquee.store} />
-      <QuickLook ql={ql} find={findItem} onOpen={openFromQuickLook} onInfo={infoFromQuickLook} />
-      {opening && (
+      {viewersReady && viewers.QuickLook && (
+        <viewers.QuickLook
+          apiRef={quickLookApi}
+          pending={quickLookPending}
+          order={sel.order}
+          selectedKeys={sel.keys}
+          find={findItem}
+          more={!!cursor}
+          loadMore={qlLoadMore}
+          onStep={qlStep}
+          onClose={qlClose}
+          onOpen={openFromQuickLook}
+          onInfo={infoFromQuickLook}
+          prefetch={{
+            rootRef: mainRef,
+            router,
+            selectedId: selected.size === 1 && !sel.selectedFolders.size ? [...selected][0] : null,
+            find: prefetchFind,
+          }}
+        />
+      )}
+      {opening && viewersReady && viewers.FileOpening && (
         <div className="file-opening-overlay" style={{ top: opening.top }}>
-          <FileOpening
+          <viewers.FileOpening
             file={opening.file}
             handoff={opening.handoff}
             backHref={`${typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/files'}`}

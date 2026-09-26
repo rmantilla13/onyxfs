@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import FilePreview from './FilePreview';
 import FileDetailFrame from './FileDetailFrame';
 import { getHandoff, returnFor } from '@/lib/file-handoff';
+import { lazyThumbnailBackfill, mergeBackfilled } from '@/lib/backfill';
 import Dialog from '@/app/components/ui/Dialog';
 import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
 import { Panel, Field } from '@/app/components/ui/Layout';
@@ -66,14 +67,11 @@ export default function FileDetail({
   // An image with no large preview is shown from its original; a writer's
   // browser makes the preview from that same download (fromBlob), so the next
   // viewer gets it — no second download of the original. The drawing code is
-  // loaded only then: most files have a preview and never need it.
-  const backfill = useRef(null);
-  const onOriginalBlob = useCallback((blob) => {
-    const row = file;
-    (backfill.current ||= import('@/lib/thumbnail-client').then(({ createThumbnailBackfill, mergeBackfilled }) => (
-      createThumbnailBackfill((f) => setFile((x) => mergeBackfilled(x, f)))
-    ))).then((request) => request(row, { blob })).catch(() => {});
-  }, [file]);
+  // loaded only then (lib/backfill.js): most files have a preview.
+  const backfill = useMemo(() => (canWrite
+    ? lazyThumbnailBackfill((f) => setFile((x) => mergeBackfilled(x, f)))
+    : null), [canWrite]);
+  const onOriginalBlob = useCallback((blob) => { backfill?.(file, { blob }); }, [backfill, file]);
 
   // ← Back: through history when this page was opened from the files view,
   // so the listing comes back as it was left (its rows, scroll and
@@ -319,7 +317,7 @@ export default function FileDetail({
             onRangeChange={review ? setRange : undefined}
             onComment={review ? onComment : undefined}
             handoff={handoff}
-            onOriginalBlob={canWrite ? onOriginalBlob : undefined}
+            onOriginalBlob={backfill ? onOriginalBlob : undefined}
           />
       )}
       aside={(

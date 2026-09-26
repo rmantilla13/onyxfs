@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { effectiveKind } from '@/lib/media';
 import FileDetailFrame from './FileDetailFrame';
-import { ImageStage } from './FilePreview';
+import ImageStage from './ImageStage';
 import ProgressiveImage from '@/app/components/media/ProgressiveImage';
 import '@/app/components/review/review.css';
 

@@ -8,6 +8,8 @@ import { positionLabel } from '@/lib/quicklook';
 import { parseKey } from '@/lib/selection';
 import { modKey } from '@/lib/keys';
 import ProgressiveImage from '@/app/components/media/ProgressiveImage';
+import useQuickLook from './useQuickLook';
+import useOpenPrefetch from '@/app/files/useOpenPrefetch';
 import '@/app/components/review/review.css';
 import './quicklook.css';
 
@@ -38,7 +40,38 @@ const FOCUSABLE = 'button:not([disabled]), a[href], video[controls], audio[contr
  * are taken on window in the capture phase while it is open, so nothing
  * behind it (the grid, the page's shortcuts) sees them.
  */
-export default function QuickLook({ ql, find, onOpen, onInfo }) {
+/**
+ * Quick Look with its state, as the files view mounts it — loaded after the
+ * page, at its first key or pointer press, so it is no part of showing a
+ * folder (nor is the open prefetch, which rides along with it). `apiRef.current` gets { open, dismiss }; `pending` is a key Space
+ * asked for before this had loaded, opened as soon as it mounts. Opening an
+ * item from here (Return, the Open button) leaves Quick Look first.
+ */
+export default function QuickLookHost({ apiRef, pending, find, onOpen, onInfo, prefetch, ...state }) {
+  const ql = useQuickLook({ ...state, find });
+  // Getting a file's page and preview ready while it rests selected
+  // (app/files/useOpenPrefetch.js) — loaded with this, after the page.
+  useOpenPrefetch(prefetch);
+  const live = useRef(ql);
+  live.current = ql;
+  useEffect(() => {
+    if (!apiRef) return undefined;
+    apiRef.current = {
+      open: (key) => live.current.open(key),
+      dismiss: () => live.current.dismiss(),
+    };
+    if (pending?.current != null) {
+      const key = pending.current;
+      pending.current = null;
+      live.current.open(key);
+    }
+    return () => { apiRef.current = null; };
+  }, [apiRef, pending]);
+  const open = (key) => { ql.dismiss(); onOpen?.(key); };
+  return <QuickLook ql={ql} find={find} onOpen={open} onInfo={onInfo} />;
+}
+
+function QuickLook({ ql, find, onOpen, onInfo }) {
   const root = useRef(null);
   const titleId = useId();
   const key = ql.currentKey;
