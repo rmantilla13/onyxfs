@@ -1,0 +1,121 @@
+/*
+ * The Transcript tab (TranscriptPanel). Tokens only, like review.css: every
+ * colour is one of the brand's custom properties or a mix of them, so a
+ * white-label brand repaints it and the dark scheme needs no rules here.
+ */
+
+.tx-panel { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+.tx-view { display: flex; flex-direction: column; gap: var(--s2); min-width: 0; }
+.tx-quiet { margin: 0; }
+.tx-error-text { margin: 0; color: var(--danger); overflow-wrap: anywhere; }
+
+/* Waiting, working, failed, and the request itself. */
+.tx-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.tx-card p { margin: 0; }
+.tx-card.is-failed { border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); }
+.tx-title { font-weight: 600; font-size: var(--t-sm); }
+.tx-pct { font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.tx-progress {
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+}
+.tx-progress > span {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--aura-a), var(--aura-b));
+  transition: width var(--dur-2) var(--ease);
+}
+
+.tx-request { display: flex; align-items: flex-end; gap: var(--s2); flex-wrap: wrap; }
+.tx-lang { display: flex; flex-direction: column; gap: var(--s1); flex: 1 1 160px; min-width: 0; }
+.tx-lang .input { padding: 6px var(--s2); font-size: var(--t-sm); }
+
+/* A finished transcript of an earlier version. */
+.tx-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+.tx-note > span { flex: 1 1 auto; }
+
+.tx-toolbar, .tx-meta { display: flex; align-items: center; gap: var(--s1); flex-wrap: wrap; min-height: 28px; }
+.tx-search { display: flex; align-items: center; gap: var(--s1); }
+.tx-search .input { flex: 1 1 auto; min-width: 0; padding: 6px var(--s2); font-size: var(--t-sm); }
+.tx-count { white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* The lines scroll on their own, so following the playhead never moves
+   the page (and the player with it). Positioned, so a row's offsetTop is
+   measured from here. */
+.tx-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 52vh;
+  margin: 0;
+  padding: 2px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.tx-seg {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--s2);
+  width: 100%;
+  padding: 6px var(--s2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--t-sm);
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease);
+}
+@media (hover: hover) {
+  .tx-seg:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+}
+.tx-seg.is-active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.tx-seg.is-active .tx-time { color: var(--accent-deep); font-weight: 600; }
+.tx-seg:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tx-time { padding-top: 1px; color: var(--muted); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+.tx-text { overflow-wrap: anywhere; }
+
+mark.tx-mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--warning) 28%, transparent);
+  color: inherit;
+}
+mark.tx-mark.is-current {
+  background: color-mix(in srgb, var(--warning) 55%, transparent);
+  box-shadow: 0 0 0 1px var(--warning);
+}
+
+@media (max-width: 900px) {
+  /* Stacked under the player: still its own scroller, shorter, so the
+     player stays on screen while the lines follow it. */
+  .tx-list { max-height: 45vh; }
+}

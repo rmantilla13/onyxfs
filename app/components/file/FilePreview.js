@@ -1,6 +1,6 @@
 'use client';
 
-import { forwardRef, useEffect, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { effectiveKind, drawableKind } from '@/lib/media';
 import { probedNow, decodeProbe } from '@/lib/decode-probe';
 import VideoPlayer from '@/app/components/video/VideoPlayer';
@@ -19,7 +19,8 @@ import '@/app/components/review/review.css';
  *          picture. The original is loaded only at 100%, or when there is
  *          no preview.
  *   video  VideoPlayer, which owns playback, frames and its own overlay slot.
- *   audio  <audio controls>.
+ *   audio  <audio controls> (AudioStage), with the same seekTo/time handle
+ *          as the player, for the transcript.
  *   else   the kind, and the download button that is always there anyway.
  *
  * A PDF is deliberately not iframed: a cross-origin presigned PDF does not
@@ -32,11 +33,13 @@ import '@/app/components/review/review.css';
  *
  * The review props (overlay, markers, onFrameChange, onRangeChange,
  * onComment, and the ref, which reaches the player) are all optional: the
- * share page renders this with none of them.
+ * share page renders this with none of them. So are the transcript's:
+ * `onTime` (the playhead, for the line to light) and `captions` (a video's
+ * subtitles track).
  */
 const FilePreview = forwardRef(function FilePreview({
   file, startAt = 0, overlay = null, markers = null, onMarkerClick, onFrameChange, onRangeChange, onComment,
-  handoff = null, onOriginalBlob,
+  handoff = null, onOriginalBlob, onTime, captions = null,
 }, ref) {
   const kind = effectiveKind(file);
   const [failed, setFailed] = useState(false);
@@ -80,16 +83,14 @@ const FilePreview = forwardRef(function FilePreview({
         onFrameChange={onFrameChange}
         onRangeChange={onRangeChange}
         onComment={onComment}
+        onTime={onTime}
+        captions={captions}
       />
     );
   }
 
   if (kind === 'audio') {
-    return (
-      <div style={{ ...box, minHeight: 120, padding: 'var(--s5)' }}>
-        <audio src={file.url} controls preload="metadata" style={{ width: '100%' }} />
-      </div>
-    );
+    return <AudioStage ref={ref} file={file} onTime={onTime} style={{ ...box, minHeight: 120, padding: 'var(--s5)' }} />;
   }
 
   return (
@@ -105,3 +106,35 @@ const FilePreview = forwardRef(function FilePreview({
 });
 
 export default FilePreview;
+
+/**
+ * An audio file: the browser's own controls, and the handle the transcript
+ * uses on a video's player — seekTo(seconds), time() — so a line of an
+ * interview's transcript lands on its moment the same way.
+ */
+const AudioStage = forwardRef(function AudioStage({ file, onTime, style }, ref) {
+  const audio = useRef(null);
+  useImperativeHandle(ref, () => ({
+    seekTo: (seconds) => {
+      const a = audio.current;
+      if (!a || !Number.isFinite(seconds)) return;
+      a.currentTime = Math.max(0, seconds);
+      onTime?.(a.currentTime);
+    },
+    pause: () => audio.current?.pause(),
+    time: () => audio.current?.currentTime || 0,
+  }), [onTime]);
+  return (
+    <div style={style}>
+      <audio
+        ref={audio}
+        src={file.url}
+        controls
+        preload="metadata"
+        style={{ width: '100%' }}
+        onTimeUpdate={(e) => onTime?.(e.target.currentTime)}
+        onSeeked={(e) => onTime?.(e.target.currentTime)}
+      />
+    </div>
+  );
+});

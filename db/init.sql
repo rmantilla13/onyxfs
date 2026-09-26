@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 118
+-- Statements: 120
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -414,6 +414,28 @@ CREATE TABLE IF NOT EXISTS review_reads (
   read_at  BIGINT NOT NULL,
   PRIMARY KEY (subject, file_id)
 );
+
+CREATE TABLE IF NOT EXISTS transcripts (
+  file_id         TEXT PRIMARY KEY,
+  status          TEXT NOT NULL DEFAULT 'queued',
+  language        TEXT,
+  result_language TEXT,
+  engine          TEXT,
+  source_key      TEXT,
+  segments        JSONB,
+  text            TEXT,
+  progress        REAL,
+  error           TEXT,
+  requested_by    TEXT,
+  requested_at    TIMESTAMPTZ,
+  claimed_by      TEXT,
+  claimed_device  TEXT,
+  lease_until     TIMESTAMPTZ,
+  finished_at     TIMESTAMPTZ,
+  updated_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS transcripts_queue_idx ON transcripts (requested_at) WHERE status IN ('queued', 'working');
 
 CREATE TABLE IF NOT EXISTS folder_access (
   folder TEXT NOT NULL,
