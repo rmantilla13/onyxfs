@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import { redirect, notFound } from 'next/navigation';
 import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
@@ -15,8 +16,11 @@ import { isReviewableKind } from '@/lib/review';
 
 export const dynamic = 'force-dynamic';
 
+// One query per request for the row, shared by the title and the page.
+const fileById = cache((id) => getFileById(id));
+
 export async function generateMetadata({ params }) {
-  const file = await getFileById(params.id).catch(() => null);
+  const file = await fileById(params.id).catch(() => null);
   return { title: file?.name || 'File' };
 }
 
@@ -49,10 +53,9 @@ export default async function FilePage({ params, searchParams }) {
   const session = await auth();
   const email = session?.user?.email;
   if (!email) redirect('/signin');
-  // The account menu's picture, or null for initials; never throws.
-  const avatarUrl = await getAvatarUrl(email);
-
-  const file = await getFileById(params.id);
+  // The account menu's picture (null for initials; never throws), asked for
+  // alongside the row rather than before it.
+  const [avatarUrl, file] = await Promise.all([getAvatarUrl(email), fileById(params.id)]);
   // A trashed file waits for the purge, and is not a page until it is restored.
   if (!file || file.deletedAt) notFound();
 

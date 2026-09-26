@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getFileById, buildPrincipal, canModifyFile, setFileThumbnail, unreferencedPreviewKeys } from '@/lib/db';
 import { presignFileUrls, getStorageConfig, s3DeleteObject } from '@/lib/storage';
-import { isThumbKey, isPosterKey, mediaFacts } from '@/lib/media';
+import { isThumbKey, isPosterKey, mediaFacts, thumbSizesFrom, thumbSiblingKey, THUMB_SIZES } from '@/lib/media';
 
 export const runtime = 'nodejs';
 
@@ -27,13 +27,15 @@ export async function GET(_req, { params }) {
 }
 
 /**
- * PUT /api/files/[id]/thumbnail  Body: { thumbnailKey, posterKey?, media? }
+ * PUT /api/files/[id]/thumbnail  Body: { thumbnailKey, posterKey?, thumbSizes?, media? }
  *
  * Attach a thumbnail the browser made for a file that has none, whose
- * thumbnail is gone, or whose thumbnail is one of the old small ones — and,
- * for a video, the player poster of the same frame. The bytes went to the
- * bucket through the presign route, which named the keys; this only records
- * them. A write, so it takes the same canModifyFile check as PATCH.
+ * thumbnail is gone, or whose thumbnail is one of the old small ones — and
+ * the large picture of the same frame (a video's player poster, an image's
+ * preview), and which of the thumbnail's smaller siblings were uploaded
+ * (sizes only: their keys are the thumbnail's, lib/media.js). The bytes went
+ * to the bucket through the presign route, which named the keys; this only
+ * records them. A write, so it takes the same canModifyFile check as PATCH.
  */
 export async function PUT(req, { params }) {
   const session = await auth();
@@ -50,7 +52,7 @@ export async function PUT(req, { params }) {
 
   let file;
   try {
-    file = await setFileThumbnail(existing.id, body.thumbnailKey, mediaFacts(body.media), body.posterKey || null);
+    file = await setFileThumbnail(existing.id, body.thumbnailKey, mediaFacts(body.media), body.posterKey || null, thumbSizesFrom(body.thumbSizes));
   } catch (e) {
     return NextResponse.json({ error: e.message || 'Could not save the thumbnail.' }, { status: 500 });
   }
@@ -66,9 +68,10 @@ export async function PUT(req, { params }) {
  * each would otherwise stay in the bucket for good, reachable by nothing.
  *
  * Only keys the presign route names (`_thumbs/<uuid>…`) are ever candidates —
- * never a legacy thumbnail stored beside the files, never a file. Best-effort:
- * a preview left behind costs a few kilobytes; a failed save would cost the
- * thumbnail.
+ * never a legacy thumbnail stored beside the files, never a file. A replaced
+ * thumbnail takes its siblings with it: they share its uuid, and nothing can
+ * point at them except through it. Best-effort: a preview left behind costs
+ * a few kilobytes; a failed save would cost the thumbnail.
  */
 async function dropReplaced(before, after) {
   try {
@@ -77,8 +80,9 @@ async function dropReplaced(before, after) {
     const posterKeys = isPosterKey(before.posterKey) && !keep.has(before.posterKey) ? [before.posterKey] : [];
     const unused = await unreferencedPreviewKeys({ thumbKeys, posterKeys });
     if (!unused.length) return;
+    const siblings = unused.filter(isThumbKey).flatMap((k) => THUMB_SIZES.map((size) => thumbSiblingKey(k, size))).filter(Boolean);
     const cfg = await getStorageConfig();
-    await Promise.all(unused.map((key) => s3DeleteObject(cfg, key).catch(() => false)));
+    await Promise.all([...unused, ...siblings].map((key) => s3DeleteObject(cfg, key).catch(() => false)));
   } catch (e) {
     console.warn('[thumbnail] could not remove a replaced preview:', e.message);
   }

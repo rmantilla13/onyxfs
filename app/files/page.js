@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import { cookies } from 'next/headers';
 import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
 import { isAdmin } from '@/lib/auth-allowlist';
@@ -8,6 +9,7 @@ import {
 import { listFilesPage, listFolderTree } from '@/lib/file-listing';
 import { listingKey } from '@/lib/listing-cache';
 import { cleanFolder } from '@/lib/folder-ops';
+import { VIEW_STORAGE_KEY, parseView } from '@/lib/list-columns';
 import { resolveRole, effectiveFlags } from '@/lib/roles';
 import { applyBetaAdminFlags } from '@/lib/features';
 import { normalizeSchema } from '@/lib/dam';
@@ -23,11 +25,17 @@ export default async function FilesPage({ searchParams }) {
   const session = await auth();
   const email = session?.user?.email;
   if (!email) redirect('/signin');
-  // The account menu's picture, or null for initials; never throws.
-  const avatarUrl = await getAvatarUrl(email);
+
+  // Grid or list, and whether the filter panel was left open: the client
+  // keeps both in a cookie as well as localStorage, so the page is rendered
+  // the way it will be shown — a list from the first byte, not a grid of
+  // posters swapped for rows after hydration.
+  const jar = cookies();
+  const initialView = parseView(jar.get(VIEW_STORAGE_KEY)?.value);
+  const initialFiltersOpen = jar.get('onyx.files.filters')?.value === 'open';
 
   const admin = isAdmin(email);
-  const [brand, globalFlags, rolesConfig, filespaces, rawSchema] = await Promise.all([
+  const [brand, globalFlags, rolesConfig, filespaces, rawSchema, avatarUrl] = await Promise.all([
     loadBrand(),
     getFeatureFlags(),
     getRolesConfig(),
@@ -36,6 +44,8 @@ export default async function FilesPage({ searchParams }) {
     // never stored as grant rows.
     listFilespacesForSpace(email),
     getFileMetadataSchema(),
+    // The account menu's picture, or null for initials; never throws.
+    getAvatarUrl(email),
   ]);
 
   // Global flags → admin beta overrides → narrowed by role. The role can only
@@ -97,6 +107,8 @@ export default async function FilesPage({ searchParams }) {
         isAdmin={admin}
         drives={filespaces}
         initial={initial}
+        initialView={initialView}
+        initialFiltersOpen={initialFiltersOpen}
       />
     </>
   );

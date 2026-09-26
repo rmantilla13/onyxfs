@@ -9,7 +9,7 @@
 -- GENERATED from the same statements lib/db.js executes, so the two agree by
 -- construction; regenerate it rather than hand-editing.
 --
--- Statements: 101
+-- Statements: 102
 
 CREATE TABLE IF NOT EXISTS "user" (
     id              TEXT PRIMARY KEY,
@@ -142,6 +142,9 @@ ALTER TABLE files ADD COLUMN IF NOT EXISTS filmstrip_key TEXT;
 ALTER TABLE files ADD COLUMN IF NOT EXISTS poster_key TEXT;
 
 CREATE INDEX IF NOT EXISTS files_poster_key_idx ON files (poster_key) WHERE poster_key IS NOT NULL;
+-- Which smaller siblings of the grid thumbnail exist ('sm', 'xs'),
+-- comma-separated. The keys are derived from thumbnail_key, never stored.
+ALTER TABLE files ADD COLUMN IF NOT EXISTS thumb_sizes TEXT;
 
 ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_at BIGINT;
 
