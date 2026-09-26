@@ -102,6 +102,11 @@ public enum OnyxError: LocalizedError {
     case notAuthenticated
     case decoding(String)
     case storageUnavailable(String)
+    /// This account may no longer open the drive: it was deleted, or the
+    /// account was taken off it. Not a hiccup to retry through — the drive's
+    /// mirror has already forgotten it (DriveMirror.sync), and the app should
+    /// unmount it and drop its offline copies.
+    case driveGone
 
     public var errorDescription: String? {
         switch self {
@@ -113,6 +118,8 @@ public enum OnyxError: LocalizedError {
             return "The server sent something unexpected: \(detail)"
         case let .storageUnavailable(detail):
             return detail
+        case .driveGone:
+            return "This drive is no longer available to you."
         }
     }
 }

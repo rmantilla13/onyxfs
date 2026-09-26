@@ -26,8 +26,28 @@ public struct Replica: Codable, Sendable, Equatable {
     public var cursor: Int64 = 0
     /// The access fingerprint the replica was built under (DeltaPage.scope).
     public var scope: String?
+    /// Folder path → the cursor the replica was at when the folder appeared.
+    /// Folders do not have ids or dates on the server, so this is what says
+    /// which of two folders was here first (MirrorIndex keeps that one's
+    /// name). A folder with no stamp was here from the start.
+    public private(set) var folderSeen: [String: Int64] = [:]
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case files, listedFolders, cursor, scope, folderSeen
+    }
+
+    /// By hand only so a replica saved before `folderSeen` existed still
+    /// loads: its folders count as there from the start.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        files = try c.decode([String: ReplicaFile].self, forKey: .files)
+        listedFolders = try c.decode(Set<String>.self, forKey: .listedFolders)
+        cursor = try c.decode(Int64.self, forKey: .cursor)
+        scope = try c.decodeIfPresent(String.self, forKey: .scope)
+        folderSeen = try c.decodeIfPresent([String: Int64].self, forKey: .folderSeen) ?? [:]
+    }
 
     // MARK: - Identifiers
 
@@ -79,6 +99,21 @@ public struct Replica: Codable, Sendable, Equatable {
 
     public func file(id: String) -> ReplicaFile? { files[id] }
 
+    /// When a folder appeared: 0 for one here from the start.
+    public func firstSeen(_ path: String) -> Int64 { folderSeen[path] ?? 0 }
+
+    /// Take `earlier`'s stamps for the folders both have: a replica fetched
+    /// again from scratch (after a scope change) would otherwise date every
+    /// folder alike, and a folder could lose its name to a newer one that
+    /// differs only in case.
+    public mutating func keepFolderStamps(from earlier: Replica) {
+        let had = earlier.folders
+        for path in folders where had.contains(path) {
+            let stamp = earlier.firstSeen(path)
+            if stamp == 0 { folderSeen[path] = nil } else { folderSeen[path] = stamp }
+        }
+    }
+
     // MARK: - Applying a page
 
     /// What one page did to the tree, in item identifiers: the files and
@@ -120,8 +155,14 @@ public struct Replica: Codable, Sendable, Equatable {
         if let listed { listedFolders = Set(listed.map(Self.clean).filter { !$0.isEmpty }) }
 
         let after = folders
-        diff.updated.append(contentsOf: after.subtracting(before).sorted().map(Self.folderID))
-        diff.deleted.append(contentsOf: before.subtracting(after).sorted().map(Self.folderID))
+        let appeared = after.subtracting(before), vanished = before.subtracting(after)
+        diff.updated.append(contentsOf: appeared.sorted().map(Self.folderID))
+        diff.deleted.append(contentsOf: vanished.sorted().map(Self.folderID))
+        // Stamped with where the replica was before this page, so everything
+        // in the first page of a fill is "from the start", like a folder
+        // loaded from a replica saved before stamps.
+        for path in appeared where cursor > 0 { folderSeen[path] = cursor }
+        for path in vanished { folderSeen[path] = nil }
         if let newCursor { cursor = max(cursor, newCursor) }
         // Net of the whole page: an id is reported once, as what it is now. A
         // file changed and then hard-deleted in the same page is a deletion,
@@ -143,6 +184,7 @@ public struct Replica: Codable, Sendable, Equatable {
         listedFolders = []
         cursor = 0
         self.scope = scope
+        folderSeen = [:]
     }
 
     /// A folder path as the replica keys it: no leading, trailing or doubled

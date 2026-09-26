@@ -114,6 +114,46 @@ struct MirrorIndexTests {
         #expect(index.folderCount == 4)
     }
 
+    @Test func aNewFolderNeverTakesTheNameOfOneThatWasThere() {
+        // "PHOTOS" sorts before "Photos" byte for byte, and its file is
+        // older (moved in from elsewhere). Neither matters: Photos was here
+        // first, and its Finder paths and pins stay where they were.
+        var r = Replica()
+        r.apply(changed: [item("p", "a.jpg", in: "Photos", created: 100)], deleted: [], folders: ["Photos"], cursor: 10)
+        r.apply(changed: [item("n", "b.jpg", in: "PHOTOS", created: 50)], deleted: [], folders: ["Photos", "PHOTOS"],
+                cursor: 20)
+        let index = MirrorIndex(r)
+        #expect(names(index.children(of: "")) == ["Photos", "PHOTOS (2)"])
+        #expect(index.files(under: "Photos").map(\.fileId) == ["p"])
+        #expect(index.entry(at: "PHOTOS (2)/b.jpg")?.fileId == "n")
+    }
+
+    @Test func foldersSeenTogetherGoOldestFilesFirst() {
+        // A Mac fetching the drive for the first time sees both at once. The
+        // one holding the older files — at any depth — keeps the name, as it
+        // has on every Mac that saw it first; an empty one comes last.
+        let index = MirrorIndex(replica([
+            item("p", "a.jpg", in: "Photos/2020", created: 100),
+            item("n", "b.jpg", in: "PHOTOS", created: 900),
+        ], folders: ["photos"]))
+        #expect(names(index.children(of: "")) == ["Photos", "PHOTOS (2)", "photos (3)"])
+        #expect(index.entry(at: "Photos/2020/a.jpg")?.fileId == "p")
+    }
+
+    @Test func theModifiedTimeMovesWithEveryChangeToAFile() throws {
+        // rclone takes a cached file as current while its size and this time
+        // match. A frame re-rendered to the same size must not match.
+        let old = try #require(MirrorIndex(replica([item("old", "frame.dpx", created: 1_000_000, updated: 1_000_000)]))
+            .entry(at: "frame.dpx"))
+        let replaced = try #require(MirrorIndex(replica([item("new", "frame.dpx", created: 2_000_000,
+                                                              updated: 2_000_000)])).entry(at: "frame.dpx"))
+        #expect(old.size == replaced.size)
+        #expect(DAVResponder.httpDate(old.modified) != DAVResponder.httpDate(replaced.modified))
+        let rewritten = try #require(MirrorIndex(replica([item("old", "frame.dpx", created: 1_000_000,
+                                                               updated: 1_500_000, version: 2)])).entry(at: "frame.dpx"))
+        #expect(DAVResponder.httpDate(old.modified) != DAVResponder.httpDate(rewritten.modified))
+    }
+
     @Test func aSuffixNeverTakesARealName() {
         let index = MirrorIndex(replica([
             item("1", "a.png", created: 1),
@@ -331,6 +371,8 @@ private final class MirrorStubServer: @unchecked Sendable {
     private var pages: [Int64: DeltaPage] = [:]
     private var links: [String: String] = [:]
     private var delay: TimeInterval = 0
+    private var linkDelay: TimeInterval = 0
+    private var refusal: (status: Int, body: String)?
     private var log: [URL] = []
 
     private static let lock = NSLock()
@@ -347,6 +389,11 @@ private final class MirrorStubServer: @unchecked Sendable {
     func page(at cursor: Int64, _ page: DeltaPage) { lock.withLock { pages[cursor] = page } }
     func link(_ id: String, json: String) { lock.withLock { links[id] = json } }
     func slow(_ seconds: TimeInterval) { lock.withLock { delay = seconds } }
+    func slowLinks(_ seconds: TimeInterval) { lock.withLock { linkDelay = seconds } }
+    /// Every delta request answered with this, until set to nil.
+    func refuseDelta(_ status: Int?, body: String = #"{"error":"No access to this drive"}"#) {
+        lock.withLock { refusal = status.map { ($0, body) } }
+    }
     var requests: [URL] { lock.withLock { log } }
     func requests(to path: String) -> [URL] { requests.filter { $0.path == path } }
 
@@ -355,13 +402,14 @@ private final class MirrorStubServer: @unchecked Sendable {
             log.append(url)
             let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
             if url.path == "/api/files/delta" {
+                if let refusal { return (refusal.status, Data(refusal.body.utf8), delay) }
                 let cursor = query.first { $0.name == "cursor" }.flatMap { Int64($0.value ?? "") } ?? -1
                 guard let page = pages[cursor] else { return (500, Data(#"{"error":"no page"}"#.utf8), delay) }
                 return (200, try! JSONEncoder().encode(page), delay)
             }
             let prefix = "/api/space/files/"
             if url.path.hasPrefix(prefix), let json = links[String(url.path.dropFirst(prefix.count))] {
-                return (200, Data(json.utf8), delay)
+                return (200, Data(json.utf8), delay + linkDelay)
             }
             return (404, Data(#"{"error":"Not found"}"#.utf8), delay)
         }
@@ -381,12 +429,18 @@ private final class MirrorStubProtocol: URLProtocol {
             return
         }
         let (status, body, delay) = server.respond(to: url)
-        if delay > 0 { Thread.sleep(forTimeInterval: delay) }
-        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1",
-                                       headerFields: ["Content-Type": "application/json"])!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: body)
-        client?.urlProtocolDidFinishLoading(self)
+        let finish = { [self] in
+            let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: body)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+        guard delay > 0 else { return finish() }
+        // Later, on this thread's run loop rather than by sleeping on it:
+        // the protocol thread is shared, and a sleep would hold up every
+        // other request — a race a test sets up would never happen.
+        RunLoop.current.add(Timer(timeInterval: delay, repeats: false) { _ in finish() }, forMode: .common)
     }
 }
 
@@ -545,7 +599,7 @@ struct DriveMirrorTests {
         #expect(stored.replica.scope == "s2" && stored.replica.cursor == 30)
     }
 
-    @Test func aScopeThatMovesTwiceInOnePassStopsEmpty() async throws {
+    @Test func aScopeThatMovesTwiceInOnePassStopsAndStartsOverNextTime() async throws {
         let stub = try MirrorStubbedAPI()
         defer { stub.tearDown() }
         let dir = temporaryDirectory()
@@ -556,15 +610,277 @@ struct DriveMirrorTests {
         _ = try await mirror.sync()
 
         stub.server.page(at: 5, page([], cursor: 6, scope: "s2"))
-        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 9, scope: "s3"))
+        stub.server.page(at: 0, page([item("b", "b.png")], cursor: 9, scope: "s3"))
         let diff = try await mirror.sync()
-        #expect(diff.deleted == ["a"] && diff.updated.isEmpty)
-        #expect(await mirror.index.fileCount == 0, "nothing fetched under a superseded scope is kept")
+        #expect(diff.isEmpty, "nothing is shown from a fetch that never finished")
+        #expect(await mirror.index.entry(at: "a.png") != nil, "the whole tree answers meanwhile")
+        #expect(await mirror.isAuthoritative == false, "but nothing is deleted on its strength")
         #expect(stub.server.requests(to: "/api/files/delta").count == 3)
 
-        // The next pass starts over under the current scope.
-        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 9, scope: "s3"))
-        #expect(try await mirror.sync().updated == ["a"])
+        // The next pass starts over under the current scope, and swaps.
+        let next = try await mirror.sync()
+        #expect(next.updated == ["b"] && next.deleted == ["a"])
+        #expect(await mirror.isAuthoritative)
+        #expect(stub.server.requests(to: "/api/files/delta").count == 4)
+    }
+
+    @Test func aScopeChangeKeepsTheWholeTreeUntilTheNewOneIsWhole() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png", in: "Gone"), item("b", "b.png", in: "Kept")],
+                                     cursor: 20, scope: "s1"))
+        let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        #expect(await mirror.isAuthoritative)
+
+        // The access moves, and the fresh fetch fails after its first page.
+        stub.server.page(at: 20, page([], cursor: 21, scope: "s2"))
+        stub.server.page(at: 0, page([item("b", "b.png", in: "Kept")], cursor: 25, done: false, scope: "s2"))
+        await #expect(throws: OnyxError.self) { try await mirror.sync() }
+        let during = await mirror.index
+        #expect(during.fileCount == 2, "not the half-fetched drive")
+        #expect(!during.isAuthoritative)
+        let file = dir.appendingPathComponent("drive.d1.json")
+        let stored = try JSONDecoder().decode(DriveMirror.Stored.self, from: Data(contentsOf: file))
+        #expect(stored.replica.scope == "s1" && stored.replica.files.count == 2 && stored.complete == true,
+                "nor is a half-fetched drive written down")
+
+        // A relaunch now still has the whole drive, and fetches afresh.
+        let relaunched = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                     account: "me@example.com", api: { stub.api })
+        #expect(await relaunched.index.fileCount == 2)
+        #expect(await relaunched.isAuthoritative)
+
+        // The next pass goes on from where the fetch stopped, and swaps.
+        stub.server.page(at: 25, page([item("c", "c.png", in: "New")], cursor: 30, scope: "s2"))
+        let diff = try await mirror.sync()
+        #expect(Set(diff.deleted) == ["a", "folder:Gone"])
+        #expect(Set(diff.updated) == ["b", "c", "folder:Kept", "folder:New"])
+        let after = await mirror.index
+        #expect(after.isAuthoritative)
+        #expect(Set(after.files(under: "").compactMap(\.fileId)) == ["b", "c"])
+        let cursors = stub.server.requests(to: "/api/files/delta").map {
+            URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "cursor" }?.value
+        }
+        #expect(cursors == ["0", "20", "0", "25", "25"])
+        let saved = try JSONDecoder().decode(DriveMirror.Stored.self, from: Data(contentsOf: file))
+        #expect(saved.replica.scope == "s2" && saved.replica.cursor == 30 && saved.complete == true)
+    }
+
+    @Test func aFirstSyncIsNotAuthoritativeUntilItReachesTheEnd() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 10, done: false))
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        #expect(await mirror.isAuthoritative == false, "nothing fetched yet")
+        await #expect(throws: OnyxError.self) { try await mirror.sync() }
+        #expect(await mirror.index.entry(at: "a.png") != nil, "shown, having nothing better")
+        #expect(await mirror.isAuthoritative == false)
+
+        // Written down so a relaunch resumes it, but not as whole.
+        let reopened = DriveMirror(scope: .library, directory: dir, server: server,
+                                   account: "me@example.com", api: { stub.api })
+        #expect(await reopened.index.fileCount == 1)
+        #expect(await reopened.isAuthoritative == false)
+
+        stub.server.page(at: 10, page([item("b", "b.png")], cursor: 20))
+        _ = try await reopened.sync()
+        #expect(await reopened.isAuthoritative)
+        let again = DriveMirror(scope: .library, directory: dir, server: server,
+                                account: "me@example.com", api: { stub.api })
+        #expect(await again.isAuthoritative)
+    }
+
+    @Test func aReplicaFromBeforeCompletenessWasKeptIsTrustedOnlyAfterAPass() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var old = Replica()
+        old.apply(changed: [item("a", "a.png")], deleted: [], folders: [], cursor: 10)
+        old.scope = "s1"
+        let legacy = DriveMirror.Stored(identity: .init(server: server.absoluteString, account: "me@example.com"),
+                                        replica: old)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as! [String: Any]
+        var fields = json["replica"] as! [String: Any]
+        fields["folderSeen"] = nil
+        json["replica"] = fields
+        #expect(json["complete"] == nil && json["generation"] == nil)
+        try JSONSerialization.data(withJSONObject: json).write(to: dir.appendingPathComponent("library.json"))
+
+        let mirror = await DriveMirror.open(scope: .library, directory: dir, server: server,
+                                            account: "me@example.com", api: { stub.api })
+        #expect(await mirror.index.entry(at: "a.png") != nil)
+        #expect(await mirror.isAuthoritative == false, "it may have been a first sync cut short")
+        stub.server.page(at: 10, page([], cursor: 12))
+        _ = try await mirror.sync()
+        #expect(await mirror.isAuthoritative)
+    }
+
+    @Test func openReadsWhatSyncWrote() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png", in: "X")], cursor: 7))
+        _ = try await DriveMirror.open(scope: .drive(id: "d1"), directory: dir, server: server,
+                                       account: "me@example.com", api: { stub.api }).sync()
+        let opened = await DriveMirror.open(scope: .drive(id: "d1"), directory: dir, server: server,
+                                            account: "ME@example.com", api: { stub.api })
+        #expect(await opened.index.entry(at: "X/a.png")?.fileId == "a")
+        #expect(await opened.isAuthoritative)
+        #expect(await opened.lastSynced == nil, "until it has synced itself")
+        let stranger = await DriveMirror.open(scope: .drive(id: "d1"), directory: dir, server: server,
+                                              account: "someone@example.com", api: { stub.api })
+        #expect(await stranger.index.fileCount == 0)
+    }
+
+    @Test func aFolderKeepsItsNameThroughAScopeChange() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("p", "a.jpg", in: "Photos", created: 100)], cursor: 10, folders: ["Photos"]))
+        stub.server.page(at: 10, page([item("n", "b.jpg", in: "PHOTOS", created: 50)], cursor: 20,
+                                      folders: ["Photos", "PHOTOS"]))
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        _ = try await mirror.sync()
+        #expect(names(await mirror.index.children(of: "")) == ["Photos", "PHOTOS (2)"])
+
+        // Fetched afresh, both arrive at once, and PHOTOS has the older
+        // file; Photos was still here first.
+        stub.server.page(at: 20, page([], cursor: 21, scope: "s2"))
+        stub.server.page(at: 0, page([item("p", "a.jpg", in: "Photos", created: 100),
+                                      item("n", "b.jpg", in: "PHOTOS", created: 50)],
+                                     cursor: 25, scope: "s2", folders: ["Photos", "PHOTOS"]))
+        _ = try await mirror.sync()
+        #expect(await mirror.isAuthoritative)
+        #expect(names(await mirror.index.children(of: "")) == ["Photos", "PHOTOS (2)"])
+    }
+
+    @Test func aDriveTheAccountLostIsForgotten() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png", in: "X")], cursor: 7))
+        stub.server.link("a", json: #"{"id":"a","url":"https://bucket.test/a","expiresAt":null,"version":1}"#)
+        let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        _ = try await mirror.contentURL(fileId: "a")
+        let file = dir.appendingPathComponent("drive.d1.json")
+        #expect(FileManager.default.fileExists(atPath: file.path))
+
+        stub.server.refuseDelta(404)
+        do {
+            _ = try await mirror.sync()
+            Issue.record("a drive the account lost synced")
+        } catch OnyxError.driveGone {
+        } catch {
+            Issue.record("not driveGone: \(error)")
+        }
+        #expect(await mirror.isGone)
+        let gone = await mirror.index
+        #expect(gone.fileCount == 0 && gone.entry(at: "X") == nil, "no longer listed")
+        #expect(await mirror.isAuthoritative == false, "the copies are the app's call, not this index's")
+        #expect(!FileManager.default.fileExists(atPath: file.path), "nor kept on disk")
+        #expect(await mirror.lastError == OnyxError.driveGone.localizedDescription)
+        _ = try? await mirror.contentURL(fileId: "a")
+        #expect(stub.server.requests(to: "/api/space/files/a").count == 2, "its links are forgotten too")
+
+        // Given back: fetched again from the start.
+        stub.server.refuseDelta(nil)
+        #expect(try await mirror.sync().updated.contains("a"))
+        #expect(await mirror.isGone == false)
+    }
+
+    @Test func onlyTheFeedsOwnNoAccessMeansGone() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 7))
+        let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+
+        // A proxy's missing page, or a server without the route: a hiccup.
+        stub.server.refuseDelta(404, body: "<html>Not Found</html>")
+        do {
+            _ = try await mirror.sync()
+            Issue.record("a 404 synced")
+        } catch let OnyxError.http(status, message) {
+            #expect(status == 404 && message == nil)
+        } catch {
+            Issue.record("not the 404 itself: \(error)")
+        }
+        stub.server.refuseDelta(503, body: #"{"error":"Changes could not be read right now."}"#)
+        await #expect(throws: OnyxError.self) { try await mirror.sync() }
+        #expect(await mirror.index.entry(at: "a.png") != nil)
+        #expect(await mirror.isGone == false)
+
+        #expect(DriveMirror.meansGone(OnyxError.http(status: 404, message: "No access"), scope: .drive(id: "x")))
+        #expect(!DriveMirror.meansGone(OnyxError.http(status: 404, message: "No access"), scope: .library))
+        #expect(!DriveMirror.meansGone(OnyxError.http(status: 403, message: "Forbidden"), scope: .drive(id: "x")))
+        #expect(!DriveMirror.meansGone(URLError(.notConnectedToInternet), scope: .drive(id: "x")))
+    }
+
+    @Test func aPassThatOnlyMovesTheCursorWritesOnlyTheCursor() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 10))
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        let file = dir.appendingPathComponent("library.json")
+        let progress = dir.appendingPathComponent("library.cursor.json")
+        let written = try Data(contentsOf: file)
+
+        // Changes in other drives: bare ids this replica never had.
+        stub.server.page(at: 10, page([], deleted: ["elsewhere"], cursor: 20))
+        #expect(try await mirror.sync().isEmpty)
+        #expect(try Data(contentsOf: file) == written, "the replica is not rewritten")
+        #expect(FileManager.default.fileExists(atPath: progress.path))
+
+        // A relaunch goes on from the newer cursor.
+        let reopened = DriveMirror(scope: .library, directory: dir, server: server,
+                                   account: "me@example.com", api: { stub.api })
+        stub.server.page(at: 20, page([item("b", "b.png")], cursor: 30))
+        #expect(try await reopened.sync().updated == ["b"])
+        let asked = stub.server.requests(to: "/api/files/delta").last.flatMap {
+            URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "cursor" }?.value
+        }
+        #expect(asked == "20")
+
+        // A real change rewrites the replica, cursor and all, and the cursor
+        // file goes with the replica it extended.
+        let stored = try JSONDecoder().decode(DriveMirror.Stored.self, from: Data(contentsOf: file))
+        #expect(stored.replica.cursor == 30 && stored.replica.files.count == 2)
+        #expect(!FileManager.default.fileExists(atPath: progress.path))
+
+        // A cursor file naming another replica is not applied to this one.
+        let stale = DriveMirror.Progress(generation: "not-this-one", cursor: 99)
+        try JSONEncoder().encode(stale).write(to: progress)
+        let again = DriveMirror(scope: .library, directory: dir, server: server,
+                                account: "me@example.com", api: { stub.api })
+        stub.server.page(at: 30, page([], cursor: 30))
+        _ = try await again.sync()
+        let last = stub.server.requests(to: "/api/files/delta").last.flatMap {
+            URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "cursor" }?.value
+        }
+        #expect(last == "30")
     }
 
     @Test func overlappingSyncsShareOnePass() async throws {
@@ -624,6 +940,7 @@ struct DriveMirrorTests {
         defer { stub.tearDown() }
         let dir = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("f1", "1.png"), item("f2", "2.png"), item("f3", "3.png")], cursor: 5))
         let inAnHour = Int64(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000)
         let inFiveMinutes = Int64(Date().addingTimeInterval(300).timeIntervalSince1970 * 1000)
         stub.server.link("f1", json: #"{"id":"f1","url":"https://bucket.test/f1?sig=1","expiresAt":\#(inAnHour)}"#)
@@ -631,6 +948,7 @@ struct DriveMirrorTests {
         stub.server.link("f3", json: #"{"id":"f3","url":"https://bucket.test/f3?sig=3","expiresAt":null}"#)
         let mirror = DriveMirror(scope: .library, directory: dir, server: server,
                                  account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
         let count = { (id: String) in stub.server.requests(to: "/api/space/files/\(id)").count }
 
         #expect(try await mirror.contentURL(fileId: "f1").absoluteString == "https://bucket.test/f1?sig=1")
@@ -652,6 +970,116 @@ struct DriveMirrorTests {
         await #expect(throws: OnyxError.self) { try await mirror.contentURL(fileId: "missing") }
         await #expect(throws: OnyxError.self) { try await mirror.contentURL(fileId: "missing") }
         #expect(count("missing") == 2, "a failure is not kept")
+    }
+
+    @Test func aLinkIsDroppedWhenItsFileMoves() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("f1", "a.mov", in: "Shots", version: 1)], cursor: 5))
+        stub.server.link("f1", json: #"{"id":"f1","url":"https://bucket.test/Shots/a.mov","expiresAt":null,"version":1}"#)
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        let count = { stub.server.requests(to: "/api/space/files/f1").count }
+        _ = try await mirror.contentURL(fileId: "f1")
+        _ = try await mirror.contentURL(fileId: "f1")
+        #expect(count() == 1)
+
+        // Renamed on the web: the object moved to a new key.
+        stub.server.page(at: 5, page([item("f1", "b.mov", in: "Shots", version: 2)], cursor: 6))
+        stub.server.link("f1", json: #"{"id":"f1","url":"https://bucket.test/Shots/b.mov","expiresAt":null,"version":2}"#)
+        _ = try await mirror.sync()
+        #expect(try await mirror.contentURL(fileId: "f1").absoluteString == "https://bucket.test/Shots/b.mov")
+        #expect(count() == 2)
+        _ = try await mirror.contentURL(fileId: "f1")
+        #expect(count() == 2, "the new link is reused")
+    }
+
+    @Test func aLinkSignedBeforeTheFileMovedIsNotReused() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("f1", "a.mov", version: 3)], cursor: 5))
+        // The server signed version 2: served, but not kept.
+        stub.server.link("f1", json: #"{"id":"f1","url":"https://bucket.test/old","expiresAt":null,"version":2}"#)
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        _ = try await mirror.contentURL(fileId: "f1")
+        _ = try await mirror.contentURL(fileId: "f1")
+        #expect(stub.server.requests(to: "/api/space/files/f1").count == 2)
+    }
+
+    @Test func aFetchThatRacedAMoveIsNotKept() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("f1", "a.mov", version: 1)], cursor: 5))
+        // No version from the server: the one asked for is assumed.
+        stub.server.link("f1", json: #"{"id":"f1","url":"https://bucket.test/a.mov","expiresAt":null}"#)
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+
+        stub.server.slowLinks(0.4)
+        let reading = Task { try await mirror.contentURL(fileId: "f1") }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        stub.server.page(at: 5, page([item("f1", "b.mov", version: 2)], cursor: 6))
+        let started = Date()
+        _ = try await mirror.sync()
+        #expect(Date().timeIntervalSince(started) < 0.25, "the move landed while the link was in flight")
+        _ = try await reading.value
+        stub.server.slowLinks(0)
+
+        _ = try await mirror.contentURL(fileId: "f1")
+        #expect(stub.server.requests(to: "/api/space/files/f1").count == 2, "fetched again, not the raced one")
+    }
+
+    @Test func aScopeChangeForgetsEveryLink() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("f1", "a.png")], cursor: 5, scope: "s1"))
+        stub.server.link("f1", json: #"{"id":"f1","url":"https://bucket.test/f1","expiresAt":null,"version":1}"#)
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        _ = try await mirror.contentURL(fileId: "f1")
+
+        // The new scope's fetch is still going: the old tree answers, but no
+        // link fetched under the old access is used again.
+        stub.server.page(at: 5, page([], cursor: 6, scope: "s2"))
+        stub.server.page(at: 0, page([item("f1", "a.png")], cursor: 6, done: false, scope: "s2"))
+        await #expect(throws: OnyxError.self) { try await mirror.sync() }
+        _ = try await mirror.contentURL(fileId: "f1")
+        #expect(stub.server.requests(to: "/api/space/files/f1").count == 2)
+    }
+
+    @Test func theLinkCacheIsBounded() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ids = (0..<20).map { "f\($0)" }
+        stub.server.page(at: 0, page(ids.map { item($0, "\($0).png") }, cursor: 5))
+        for id in ids { stub.server.link(id, json: #"{"id":"\#(id)","url":"https://bucket.test/\#(id)","expiresAt":null}"#) }
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api }, linkLimit: 8)
+        _ = try await mirror.sync()
+        for id in ids {
+            _ = try await mirror.contentURL(fileId: id)
+            #expect(await mirror.linkCount <= 8)
+        }
+        // The newest are the ones kept.
+        _ = try await mirror.contentURL(fileId: "f19")
+        #expect(stub.server.requests(to: "/api/space/files/f19").count == 1)
+        _ = try await mirror.contentURL(fileId: "f0")
+        #expect(stub.server.requests(to: "/api/space/files/f0").count == 2)
     }
 
     @Test func concurrentReadsOfOneFileShareOneFetch() async throws {

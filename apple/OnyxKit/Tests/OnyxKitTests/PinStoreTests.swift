@@ -150,6 +150,32 @@ struct PinStoreTests {
         #expect(await store.usage() == 0)
     }
 
+    @Test func aDriveStillBeingFetchedDeletesNothing() async throws {
+        // A first sync, or one after the access changed, fails a quarter of
+        // the way through: the index has a quarter of the drive. The rest is
+        // not gone, only not fetched yet, and its copies are what someone
+        // offline is counting on.
+        let store = try PinStore(directory: try tempFolder())
+        let downloads = FakeDownloads()
+        await store.pin(pinFolder(""))
+        let whole = [file("a", "a.jpg"), file("b", "Photos/b.jpg"), file("c", "c.jpg")]
+        _ = await store.reconcile(scope: scope, index: FakeIndex(whole), download: downloads.download)
+
+        let partial = FakeIndex([file("a", "a.jpg"), file("d", "d.jpg")], authoritative: false)
+        let report = await store.reconcile(scope: scope, index: partial, download: downloads.download)
+        #expect(report.removed == 0)
+        #expect(report.downloaded == 1, "what it does have is still fetched")
+        for id in ["a", "b", "c", "d"] {
+            #expect(await store.localCopy(scope: scope, fileId: id, etag: "v1") != nil, "\(id) kept")
+        }
+
+        // Once the drive is whole again, what it lacks is really gone.
+        let done = await store.reconcile(scope: scope, index: FakeIndex([file("a", "a.jpg"), file("d", "d.jpg")]),
+                                         download: downloads.download)
+        #expect(done.removed == 2)
+        #expect(await store.localCopy(scope: scope, fileId: "b", etag: nil) == nil)
+    }
+
     @Test func aNewVersionReplacesTheOldOne() async throws {
         let store = try PinStore(directory: try tempFolder())
         let downloads = FakeDownloads()
@@ -332,6 +358,28 @@ struct PinStoreTests {
         #expect(await reopened.localCopy(scope: "library", fileId: "c", etag: "v1") != nil)
     }
 
+    @Test func removeAllMidDownloadLeavesNothingBehind() async throws {
+        // A drive the account lost while its pins were downloading: nothing
+        // that lands afterwards may stay.
+        let dir = try tempFolder()
+        let store = try PinStore(directory: dir)
+        let gate = Gate()
+        let downloads = FakeDownloads(gate: gate)
+        await store.pin(pinFolder(""))
+        let scope = self.scope, index = FakeIndex([file("a", "a.txt"), file("b", "b.txt")])
+        let pass = Task { await store.reconcile(scope: scope, index: index, download: downloads.download) }
+        await until { await downloads.started == 2 }
+        await store.removeAll(scope: scope)
+        await gate.open()
+        let report = await pass.value
+        #expect(report.downloaded == 0)
+        #expect(await store.rules(scope: scope).isEmpty)
+        #expect(await store.usage(scope: scope) == 0)
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent(scope).path))
+        let reopened = try PinStore(directory: dir)
+        #expect(await reopened.rules().isEmpty)
+    }
+
     // MARK: - Where it lives
 
     @Test func relocateMovesEverythingAndUsesTheNewPlace() async throws {
@@ -449,7 +497,11 @@ extension PinStoreTests {
     /// segments, ignoring case.
     struct FakeIndex: PinnableIndex {
         let entries: [MirrorEntry]
-        init(_ entries: [MirrorEntry]) { self.entries = entries }
+        var isAuthoritative = true
+        init(_ entries: [MirrorEntry], authoritative: Bool = true) {
+            self.entries = entries
+            isAuthoritative = authoritative
+        }
 
         func files(under folderPath: String) -> [MirrorEntry] {
             let prefix = folderPath.lowercased().split(separator: "/")

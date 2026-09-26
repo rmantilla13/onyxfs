@@ -7,10 +7,15 @@ import Foundation
 // `respond(to:)`, and writes out what comes back, so every rule about what the
 // mount shows and serves lives here and is testable without rclone.
 //
-// rclone's webdav backend (vendor "other") is the only client. It lists with
+// rclone's webdav backend (vendor "rclone") is the only client. It lists with
 // PROPFIND Depth 1, reads with GET (following redirects, keeping its Range
 // header), and matches each <D:href> against the URL it asked for, so hrefs
 // must carry the same path prefix its remote was configured with.
+//
+// It ignores getetag. What tells it a cached file is stale is the size and
+// getlastmodified (the vendor makes times count), so the modified time must
+// move whenever the bytes might have — MirrorIndex takes it from the file's
+// updatedAt, which every write to the row moves.
 
 /// One HTTP request, as the socket layer parsed it.
 public struct DAVRequest: Sendable {

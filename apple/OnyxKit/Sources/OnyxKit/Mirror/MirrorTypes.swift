@@ -29,6 +29,10 @@ public struct MirrorEntry: Sendable, Equatable, Hashable {
     public let fileId: String?
     /// Bytes; 0 for folders.
     public let size: Int64
+    /// The file's updatedAt, else its createdAt; for a folder, its newest
+    /// file's. Moves with every change to a file, bytes or not: rclone keys
+    /// its cache on size and this time, so it must never stand still while
+    /// the bytes change.
     public let modified: Date
     /// Changes exactly when the bytes do: the content hash when the server
     /// has one, else "v<version>". Nil for folders.
@@ -50,6 +54,9 @@ public protocol PinnableIndex: Sendable {
     func files(under folderPath: String) -> [MirrorEntry]
     /// A file by its server id, wherever it is.
     func file(id: String) -> MirrorEntry?
+    /// Whether a file this index lacks is really gone. When false — the
+    /// drive is still being fetched — the store deletes nothing.
+    var isAuthoritative: Bool { get }
 }
 
 /// Where the bytes of a file come from, when the bridge is asked for them.

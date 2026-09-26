@@ -164,8 +164,11 @@ final class DriveService: ObservableObject {
         if let existing = mirrors[scope.identifier] { return existing }
         guard let model else { return nil }
         let config = model.config
-        let mirror = DriveMirror(scope: scope, directory: Self.mirrorsDirectory, server: config.baseURL,
-                                 account: model.email ?? "", api: { OnyxAPI(config: config) })
+        // Read and indexed off the main thread; a large drive takes a moment.
+        let mirror = await DriveMirror.open(scope: scope, directory: Self.mirrorsDirectory, server: config.baseURL,
+                                            account: model.email ?? "", api: { OnyxAPI(config: config) })
+        // Another caller may have opened it meanwhile; one mirror per drive.
+        if let existing = mirrors[scope.identifier] { return existing }
         mirrors[scope.identifier] = mirror
         // The first listing waits for a sync, so a new mount does not open empty.
         if await mirror.lastSynced == nil { _ = try? await mirror.sync() }

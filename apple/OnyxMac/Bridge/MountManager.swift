@@ -70,7 +70,13 @@ final class MountManager: ObservableObject {
         let env = ProcessInfo.processInfo.environment.merging([
             "RCLONE_CONFIG_\(remote.uppercased())_TYPE": "webdav",
             "RCLONE_CONFIG_\(remote.uppercased())_URL": bridge.absoluteString,
-            "RCLONE_CONFIG_\(remote.uppercased())_VENDOR": "other",
+            // "rclone", not "other": its modification times count (to the
+            // second), so they are part of the fingerprint the VFS cache
+            // checks a cached file against. Under "other" that is the size
+            // alone, and a file replaced by another of the same size would
+            // be served from the old one's cached bytes. The bridge's times
+            // move with every change to a file (MirrorEntry.modified).
+            "RCLONE_CONFIG_\(remote.uppercased())_VENDOR": "rclone",
             // Sent on every request to the bridge. It is not forwarded when
             // rclone follows a read to storage (another host), which is right:
             // the presigned URL carries its own authority.

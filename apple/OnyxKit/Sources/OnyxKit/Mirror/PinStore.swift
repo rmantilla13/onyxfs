@@ -155,6 +155,8 @@ public actor PinStore {
 
     /// Make the scope's copies match its rules against `index`: fetch what is
     /// missing or stale, at most three at a time, and delete what nothing pins.
+    /// Deletes only when `index.isAuthoritative`: a drive still being fetched
+    /// lacks files it has, and their copies are what someone offline has.
     ///
     /// `download` returns a temporary file holding the whole of one entry's
     /// bytes; the store takes it from there. A failure is reported and the
@@ -192,8 +194,9 @@ public actor PinStore {
 
         // Deletions first: they free the room the downloads may need. The file
         // goes before the record, so a crash between the two re-tries the
-        // deletion rather than leaking the file.
-        for (fileId, copy) in state.copies[scope] ?? [:] where !keep.contains(fileId) {
+        // deletion rather than leaking the file. None at all against an index
+        // that may just not have everything yet.
+        for (fileId, copy) in state.copies[scope] ?? [:] where index.isAuthoritative && !keep.contains(fileId) {
             try? FileManager.default.removeItem(at: location(of: copy, in: scope))
             state.copies[scope]?[fileId] = nil
             report.removed += 1

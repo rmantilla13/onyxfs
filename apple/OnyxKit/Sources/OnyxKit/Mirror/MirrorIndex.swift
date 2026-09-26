@@ -44,18 +44,41 @@ public struct MirrorIndex: Sendable, PinnableIndex {
     public let fileCount: Int
     /// Folders beneath the root; the drive itself is not counted.
     public let folderCount: Int
+    /// Whether a file missing from this index is really gone from the drive.
+    /// False while the drive is still being fetched from the start — a first
+    /// sync, or one after the access changed — when a missing file may just
+    /// not have arrived yet. Nothing is deleted on the strength of an index
+    /// that is not (PinStore.reconcile).
+    public let isAuthoritative: Bool
 
-    /// `emptyFolderDate` dates a folder with no files beneath it, and a file
-    /// the server sent no dates for. A fixed value, not now: a date that moved
-    /// on every rebuild would tell every client the folder had changed.
+    /// `authoritative`: the replica holds the whole drive (see
+    /// `isAuthoritative`). `emptyFolderDate` dates a folder with no files
+    /// beneath it, and a file the server sent no dates for. A fixed value,
+    /// not now: a date that moved on every rebuild would tell every client
+    /// the folder had changed.
     ///
     /// The walk is a loop, not recursion: it runs on a concurrency thread,
     /// whose stack a drive nested deeply enough would overflow.
-    public init(_ replica: Replica, emptyFolderDate: Date = Date(timeIntervalSince1970: 0)) {
+    public init(_ replica: Replica, authoritative: Bool = true,
+                emptyFolderDate: Date = Date(timeIntervalSince1970: 0)) {
         var subfolders: [String: [String]] = [:]
         for path in replica.folders { subfolders[Replica.parentPath(path), default: []].append(path) }
         var filesIn: [String: [ReplicaFile]] = [:]
-        for file in replica.files.values { filesIn[Replica.clean(file.folder), default: []].append(file) }
+        // The oldest file anywhere beneath each folder, for telling apart
+        // folders that differ only in case. Walked up from each file, and
+        // only as far as it makes something older: past that point every
+        // ancestor already is.
+        var oldest: [String: Int64] = [:]
+        for file in replica.files.values {
+            let folder = Replica.clean(file.folder)
+            filesIn[folder, default: []].append(file)
+            guard let created = file.createdAt?.raw else { continue }
+            var path = folder
+            while !path.isEmpty, created < oldest[path] ?? .max {
+                oldest[path] = created
+                path = Replica.parentPath(path)
+            }
+        }
 
         var entries: [MirrorEntry] = []
         entries.reserveCapacity(replica.files.count + subfolders.count + 1)
@@ -82,10 +105,12 @@ public struct MirrorIndex: Sendable, PinnableIndex {
             var items: [Item] = []
             items.reserveCapacity(subs.count + files.count)
             for f in subs {
-                items.append(Item(isFolder: true, name: Self.safeName(Replica.lastComponent(f)), created: nil, key: f))
+                items.append(Item(isFolder: true, name: Self.safeName(Replica.lastComponent(f)),
+                                  seen: replica.firstSeen(f), created: oldest[f], key: f))
             }
             for f in files {
-                items.append(Item(isFolder: false, name: Self.safeName(f.name), created: f.createdAt?.raw, key: f.id))
+                items.append(Item(isFolder: false, name: Self.safeName(f.name), seen: 0,
+                                  created: f.createdAt?.raw, key: f.id))
             }
             let names = Self.uniqueNames(items)
             let namedSubs = zip(subs, names[..<subs.count]).sorted { Self.listsBefore($0.1, $1.1) }
@@ -141,6 +166,22 @@ public struct MirrorIndex: Sendable, PinnableIndex {
         self.slots = slots
         self.fileCount = byID.count
         self.folderCount = slots.count - 1
+        self.isAuthoritative = authoritative
+    }
+
+    private init(_ other: MirrorIndex, authoritative: Bool) {
+        entries = other.entries
+        positions = other.positions
+        byID = other.byID
+        slots = other.slots
+        fileCount = other.fileCount
+        folderCount = other.folderCount
+        isAuthoritative = authoritative
+    }
+
+    /// The same tree, vouched for or not: no rebuild, the storage is shared.
+    public func authoritative(_ on: Bool) -> MirrorIndex {
+        on == isAuthoritative ? self : MirrorIndex(self, authoritative: on)
     }
 
     // MARK: - Lookups
@@ -232,6 +273,10 @@ public struct MirrorIndex: Sendable, PinnableIndex {
         let isFolder: Bool
         /// Already safe (safeName).
         let name: String
+        /// A folder's Replica.firstSeen; 0 for files.
+        let seen: Int64
+        /// A file's creation; for a folder, the oldest file's anywhere
+        /// beneath it.
         let created: Int64?
         /// The server id of a file, the server path of a folder: unique, so
         /// the order below is total and the outcome never depends on
@@ -244,9 +289,13 @@ public struct MirrorIndex: Sendable, PinnableIndex {
     /// Of items that collide, the first keeps its name and the rest take
     /// " (2)", " (3)"…: folders first, because renaming a folder moves every
     /// path beneath it; then the oldest, so an upload never renames a file
-    /// that was there before it. Every name an item has on its own is claimed
-    /// before any suffix is handed out, so a real "a (2).png" keeps its name
-    /// and the second "a.png" becomes "a (3).png".
+    /// that was there before it and a new folder never takes the name (and
+    /// the Finder paths, and the pins) of one that was. A folder's age is when
+    /// this replica first saw it, then the oldest file in it — so on a Mac
+    /// that has just fetched the drive, the folder with the older files
+    /// wins. Every name an item has on its own is claimed before any suffix
+    /// is handed out, so a real "a (2).png" keeps its name and the second
+    /// "a.png" becomes "a (3).png".
     static func uniqueNames(_ items: [Item]) -> [String] {
         var names = items.map(\.name)
         guard items.count > 1 else { return names }
@@ -272,6 +321,7 @@ public struct MirrorIndex: Sendable, PinnableIndex {
 
     private static func claimsFirst(_ a: Item, _ b: Item) -> Bool {
         if a.isFolder != b.isFolder { return a.isFolder }
+        if a.seen != b.seen { return a.seen < b.seen }
         switch (a.created, b.created) {
         case let (x?, y?) where x != y: return x < y
         case (.some, nil): return true
