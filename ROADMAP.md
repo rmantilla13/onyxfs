@@ -204,6 +204,31 @@ reason to do otherwise.
 **Not buildable in Tauri**: a File Provider runs as a separate process with
 roughly a 50MB memory ceiling and no webview. It has to be native.
 
+**Revised for macOS: Finder gets streaming mounts, not File Provider.** A File
+Provider materialises a whole file before any app can read it, which is wrong
+for a video library where the point is to scrub a 40 GB master without
+downloading it. The old rclone mount streamed but read the bucket directly —
+showing what the web hides, and never telling Onyx about a file dropped in.
+Onyx.app now does both properly: rclone's NFS mount (macOS's own client, no
+macFUSE) reads a WebDAV bridge inside the app, which lists each drive from
+`/api/files/delta` — the web's own access rule — and redirects reads to the
+file's presigned URL, so ranges stream straight from storage into rclone's
+VFS cache. Offline pins and a user-placed cache sit on top (apple/README.md).
+File Provider stays the plan for iOS's Files.app, where there is no mount.
+
+**Known gap: other accounts on the same Mac.** rclone serves each mount to
+the kernel from an NFS server on 127.0.0.1, and that server has no
+authentication. While a drive is mounted, another local account, or a
+sandboxed app allowed onto the network, can mount that port and read the
+drive as the signed-in user. The bridge's token does not help, because
+rclone presents it for whoever asks. `~/Onyx` and the mounts are private to
+the user (`0700`, `--umask 077`), which closes the file-system way in but not
+the port (apple/README.md, "Who can read a mounted drive"). Closing it needs
+a transport with no TCP listener, where the system calls the app directly:
+FSKit on recent macOS, or File Provider if FSKit cannot stream. Until then,
+Onyx should not be sold as safe on a Mac shared by people who must not see
+each other's drives (5.2b).
+
 **The control plane already has what it needs.** Phase 1 shipped the two
 contracts the extension is built on: `GET /api/files/delta?cursor=` is the
 exact shape `enumerateChanges(from:)` requires, and `POST /api/space/sts`
@@ -248,7 +273,8 @@ apple/
 | 5.0 | Decide identifiers, once | `io.onyxfs.app` (already chosen), `io.onyxfs.app.fileprovider`, app group `group.io.onyxfs`, one Keychain access group. Compiled into every install; changing them later orphans every device. |
 | 5.1 | OnyxKit: auth + API client | **Done (macOS).** Sign-in by PKCE or pairing code, token in the Keychain; builds and tests with the Command Line Tools alone. |
 | 5.1b | The Mac app as a platform | **Done.** Onyx.app: the whole web workspace in a window of its own, signed in from the device token (`/api/desktop/web-session`), plus a menu bar item and Settings. `apple/scripts/build-mac.sh`. |
-| 5.2 | Read-only File Provider, macOS | **Built; first run needs a team-signed build.** One Finder location per drive (and the library), each enumerating `/delta?drive=` into a local replica with real folders, materialising on open via `/api/space/files/<id>`. |
+| 5.2 | Finder on macOS | **Streaming mounts** (revised above): one rclone NFS mount per drive through the app's WebDAV bridge; offline pins; a movable cache; read-only until 5.4. The File Provider built first is kept for iOS (5.3). |
+| 5.2b | Finder with no local port | Replace the rclone NFS loopback, which any local account can mount (known gap above), with FSKit, or with File Provider if FSKit cannot stream. Must keep ranged streaming and offline pins. Needed before Onyx is recommended for Macs shared between users. |
 | 5.3 | Same extension on iOS | The source is shared; this is provisioning, memory profiling under the 50MB cap, and Files.app testing. |
 | 5.4 | Writes | Create, rename, move, delete, modify → `POST /api/files`, `PATCH /api/files/[id]`, multipart for large. Background `URLSession` so a 20GB upload survives the app being killed. |
 | 5.5 | Conflict policy, written down | Server keeps a `version` counter per file; a write carries the version it was based on; mismatch → the server keeps both, the loser is renamed `name (conflict from <device>)`. Decided here, not discovered later. |

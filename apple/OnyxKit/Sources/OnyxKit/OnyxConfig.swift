@@ -13,6 +13,20 @@ public enum OnyxIdentifiers {
     public static let keychainAccessGroup = "group.io.onyxfs"
     /// Registered for the PKCE redirect.
     public static let urlScheme = "onyxfs"
+
+    /// A development build ("Onyx Dev", bundle id ending ".dev") keeps its
+    /// sign-in and settings apart from the real app's, so trying a build never
+    /// signs the installed Onyx out, points it at a test server, or makes the
+    /// Keychain ask whether one may read the other's token.
+    public static var isDevBuild: Bool { Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true }
+    /// The Keychain service the sign-in is stored under.
+    public static var tokenService: String { isDevBuild ? app + ".dev" : app }
+    /// Where the settings the app and its extension share are kept.
+    public static var settingsSuite: String { isDevBuild ? "io.onyxfs.dev" : appGroup }
+    /// The folder name for everything kept on disk — ~/Onyx for the mounts,
+    /// Application Support, Logs — so a dev build's mounts, mirrors and
+    /// offline copies never land on the real app's.
+    public static var folderName: String { isDevBuild ? "Onyx Dev" : "Onyx" }
 }
 
 public struct OnyxConfig: Sendable, Equatable {
@@ -65,7 +79,7 @@ public struct SharedSettings: @unchecked Sendable {
     // UserDefaults is thread-safe; it just predates Sendable.
     let defaults: UserDefaults
 
-    public init(suiteName: String = OnyxIdentifiers.appGroup) {
+    public init(suiteName: String = OnyxIdentifiers.settingsSuite) {
         defaults = UserDefaults(suiteName: suiteName) ?? .standard
     }
 
@@ -88,6 +102,13 @@ public enum OnyxError: LocalizedError {
     case notAuthenticated
     case decoding(String)
     case storageUnavailable(String)
+    /// This account may no longer open the drive: it was deleted, or the
+    /// account was taken off it. The server has said so for minutes on end
+    /// (DriveMirror.refusalsBeforeGone), so it is not a hiccup to retry
+    /// through — the drive's mirror has already forgotten it
+    /// (DriveMirror.sync), and the app should unmount it and drop its
+    /// offline copies.
+    case driveGone
 
     public var errorDescription: String? {
         switch self {
@@ -99,6 +120,8 @@ public enum OnyxError: LocalizedError {
             return "The server sent something unexpected: \(detail)"
         case let .storageUnavailable(detail):
             return detail
+        case .driveGone:
+            return "This drive is no longer available to you."
         }
     }
 }

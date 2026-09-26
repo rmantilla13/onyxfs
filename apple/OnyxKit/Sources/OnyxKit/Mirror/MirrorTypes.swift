@@ -29,6 +29,10 @@ public struct MirrorEntry: Sendable, Equatable, Hashable {
     public let fileId: String?
     /// Bytes; 0 for folders.
     public let size: Int64
+    /// The file's updatedAt, else its createdAt; for a folder, its newest
+    /// file's. Moves with every change to a file, bytes or not: rclone keys
+    /// its cache on size and this time, so it must never stand still while
+    /// the bytes change.
     public let modified: Date
     /// Changes exactly when the bytes do: the content hash when the server
     /// has one, else "v<version>". Nil for folders.
@@ -50,6 +54,29 @@ public protocol PinnableIndex: Sendable {
     func files(under folderPath: String) -> [MirrorEntry]
     /// A file by its server id, wherever it is.
     func file(id: String) -> MirrorEntry?
+    /// Whether `path` is a folder ("" = the drive itself). A pinned folder
+    /// that is not — renamed or deleted on the web — is shown as not found,
+    /// rather than read as a folder with nothing in it.
+    func hasFolder(at path: String) -> Bool
+    /// Whether a file this index lacks is really gone. When false — the
+    /// drive is still being fetched — the store deletes nothing.
+    var isAuthoritative: Bool { get }
+}
+
+/// The folder one account's things are kept in on this Mac, for one server:
+/// "account-" and 24 hex of a hash of both. Another account signed in here —
+/// or the same address on another server — has a folder of its own, so it
+/// never reads, serves or deletes what was kept for this one. The same
+/// identity DriveMirror keeps: the server as given, the address in lower case.
+public enum AccountFolder {
+    public static func name(server: URL, account: String) -> String {
+        "account-" + SigV4.sha256Hex(server.absoluteString + "\n" + account.lowercased()).prefix(24)
+    }
+
+    public static func isName(_ name: String) -> Bool {
+        name.hasPrefix("account-") && name.count == 32
+            && name.dropFirst(8).allSatisfy { "0123456789abcdef".contains($0) }
+    }
 }
 
 /// Where the bytes of a file come from, when the bridge is asked for them.

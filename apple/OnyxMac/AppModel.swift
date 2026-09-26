@@ -15,6 +15,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var phase: Phase
     @Published private(set) var email: String?
     @Published private(set) var drives: [Filespace] = []
+    /// `drives` is the server's answer, not the empty list before one: the
+    /// server may have been out of reach when the app opened.
+    private(set) var drivesLoaded = false
     /// Whether the server treats this account as an admin; only decides
     /// which menu items are offered — the server enforces it either way.
     @Published private(set) var isAdmin = false
@@ -22,6 +25,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var busy: Set<String> = []
     /// The last thing that went wrong, for the window to say.
     @Published var problem: String?
+    /// What the last failed refresh() said, so the one that works clears it
+    /// and nothing else.
+    private var listingProblem: String?
     @Published private(set) var server: URL
 
     let web: WebController
@@ -29,6 +35,9 @@ final class AppModel: ObservableObject {
     /// Drives in Finder (streaming mounts) and files kept offline.
     let finder = DriveService()
     private let settings = SharedSettings()
+    /// Signed in as the app opened: bringing the drives back, in the
+    /// background. Launch arguments that need the drives wait for it.
+    private var startup: Task<Void, Never>?
 
     init() {
         let settings = SharedSettings()
@@ -38,7 +47,7 @@ final class AppModel: ObservableObject {
         web = WebController()
         web.model = self
         updater.model = self
-        if phase == .signedIn { Task { await afterSignIn() } }
+        if phase == .signedIn { startup = Task { await afterSignIn() } }
         // Quitting unmounts every drive, so none is left for the system to reap.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
                                                object: nil, queue: .main) { [finder] _ in
@@ -98,6 +107,9 @@ final class AppModel: ObservableObject {
     private func afterSignIn() async {
         web.signIn()
         await refresh()
+        // The server refused the sign-in (tokenRejected): signed out now,
+        // so there is no one to put drives in Finder for.
+        guard phase == .signedIn else { return }
         await finder.start(model: self)
     }
 
@@ -106,6 +118,7 @@ final class AppModel: ObservableObject {
         settings.email = nil
         email = nil
         drives = []
+        drivesLoaded = false
         isAdmin = false
         phase = .signedOut
         finder.stop()
@@ -163,6 +176,7 @@ final class AppModel: ObservableObject {
         TokenStore().clear()
         settings.email = nil
         email = nil
+        drivesLoaded = false
         phase = .signedOut
         problem = "Your sign-in on this Mac has expired or was revoked. Sign in again."
         finder.stop()
@@ -173,16 +187,31 @@ final class AppModel: ObservableObject {
 
     func refresh() async {
         guard phase == .signedIn else { return }
+        let account = email
         do {
             let listing = try await api.drives()
+            // Signed out, or in as someone else, while it was asked for.
+            guard phase == .signedIn, email == account else { return }
             drives = listing.drives.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             isAdmin = listing.isAdmin
+            drivesLoaded = true
+            if problem == listingProblem { problem = nil }
+            listingProblem = nil
         } catch OnyxError.notAuthenticated {
+            // A sign-out meanwhile takes the token away too; only the
+            // sign-in this was asked under is the one refused.
+            guard email == account else { return }
             await tokenRejected()
             return
         } catch {
+            guard email == account else { return }
             problem = error.localizedDescription
+            listingProblem = problem
+            return
         }
+        // The drives wanted in Finder that are not there yet — all of them,
+        // when this is the first list since the server came within reach.
+        await finder.mountWanted()
     }
 
     /// The drives Finder can show: the ones whose files are yours to see.
@@ -191,6 +220,9 @@ final class AppModel: ObservableObject {
     func isMounted(_ scope: SyncDomain) -> Bool { finder.isMounted(scope) }
 
     func setMounted(_ scope: SyncDomain, name: String, _ on: Bool) async {
+        // Already on its way: a second "Show in Finder" from the page, sent
+        // before the first had finished.
+        guard !busy.contains(scope.identifier) else { return }
         busy.insert(scope.identifier)
         defer { busy.remove(scope.identifier) }
         await finder.setMounted(scope, name: name, on)
@@ -217,6 +249,15 @@ final class AppModel: ObservableObject {
         }
         if let s = value("--server") { await setServer(s) }
         if let code = value("--pair") { await pair(code: code) }
+        // `--keep-offline <drive.id|library>`: what the Offline checkbox does.
+        if let scope = value("--keep-offline") {
+            // Signed in already as the app opened: the store the rule goes
+            // in opens as the drives come back (init), which is not done yet
+            // as the window appears. Without the wait the rule would land
+            // on no store at all.
+            await startup?.value
+            await finder.pin(PinRule(scope: scope, target: .folder(path: "")))
+        }
         // Where to look for updates, instead of the server — for trying the
         // updater against a local feed. What it installs is verified the same.
         updater.start(feed: value("--update-feed").flatMap(URL.init(string:)))

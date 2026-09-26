@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import ServiceManagement
+import OnyxKit
 
 /// Onyx lives in the menu bar. The drives it mounts in Finder, the offline
 /// copies it keeps current and the update checks all need it running, so it
@@ -37,6 +38,8 @@ final class Background: ObservableObject {
     /// On first launch, open at login unless the person has said otherwise:
     /// drives vanish from Finder whenever Onyx is not running.
     func registerOnFirstRun() {
+        // A development build never adds itself to the person's login items.
+        guard !OnyxIdentifiers.isDevBuild else { return }
         let key = "background.loginItemOffered"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         UserDefaults.standard.set(true, forKey: key)

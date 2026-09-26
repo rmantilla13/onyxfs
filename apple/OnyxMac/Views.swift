@@ -343,7 +343,7 @@ enum MenuBarStatus: Equatable {
         }).first {
             return .attention(failed)
         }
-        if let problem = finder.problem { return .attention(problem) }
+        if let problem = finder.problem ?? finder.offlineProblem { return .attention(problem) }
         if finder.isOffline { return .offline }
         if !finder.syncing.isEmpty || finder.downloading > 0 { return .syncing }
         let mounted = finder.mounts.states.values.filter { if case .mounted = $0 { return true } else { return false } }.count
@@ -570,15 +570,22 @@ struct StorageSettings: View {
                     Text(finder.cacheRoot.path).font(.caption).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle).frame(maxWidth: 260, alignment: .trailing)
                     HStack {
+                        if finder.relocating { ProgressView().controlSize(.small) }
                         Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([finder.cacheRoot]) }
-                        Button("Change…") { choose() }
+                        Button("Change…") { choose() }.disabled(finder.relocating)
                     }
                 }
             }
-            Picker("Streaming cache", selection: $finder.cacheLimitGB) {
-                ForEach(limits, id: \.self) { gb in
-                    Text(gb == 0 ? "No limit" : "\(gb) GB").tag(gb)
+            VStack(alignment: .leading, spacing: 4) {
+                Picker("Streaming cache, per drive", selection: $finder.cacheLimitGB) {
+                    ForEach(limits, id: \.self) { gb in
+                        Text(gb == 0 ? "No limit" : "\(gb) GB").tag(gb)
+                    }
                 }
+                // rclone holds each drive's cache to the size it was given
+                // when that drive mounted.
+                Text("Each drive in Finder keeps its own streaming cache, up to this size. A new size applies as each drive next mounts; Clear Streaming Cache remounts them now.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             LabeledContent("In use") {
                 Text("\(size(finder.streamingBytes)) streamed · \(size(finder.pinnedBytes)) kept offline")
@@ -591,6 +598,10 @@ struct StorageSettings: View {
                 ForEach(finder.pinRules, id: \.self) { rule in
                     HStack {
                         Text(describe(rule)).lineLimit(1).truncationMode(.middle)
+                        if finder.unresolvedPins.contains(rule) {
+                            Text("Not found").font(.caption).foregroundStyle(.orange)
+                                .help("This folder is not in the drive now: it was renamed or deleted on the web. What was kept offline from it stays until you remove this.")
+                        }
                         Spacer()
                         Button("Remove") { Task { await finder.unpin(rule) } }.buttonStyle(.link)
                     }
@@ -601,7 +612,7 @@ struct StorageSettings: View {
                 Text("Streamed files download again when opened. Files kept offline stay.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if let problem = finder.problem {
+            if let problem = finder.relocationProblem ?? finder.problem ?? finder.offlineProblem {
                 Text(problem).foregroundStyle(.red).font(.caption)
             }
         }

@@ -71,6 +71,9 @@ final class Updater: ObservableObject {
 
     func check(userInitiated: Bool) async {
         if !userInitiated && !automatic { return }
+        // A development build is not on the release channel: offering it the
+        // published app would "update" a test build into the real one.
+        if OnyxIdentifiers.isDevBuild && !userInitiated { return }
         switch state {
         case .checking, .downloading, .installing: return
         default: break
