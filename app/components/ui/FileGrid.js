@@ -2,9 +2,10 @@
 
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import FileCard from './FileCard';
-import { rowWindow } from '@/lib/virtual-rows';
+import { rowWindow, overscanFor } from '@/lib/virtual-rows';
 import { gridHits, overlaps } from '@/lib/marquee';
 import { rowsPerViewport } from '@/lib/nav-geometry';
+import { observeThumbLatency, thumbsAreSlow } from '@/lib/thumb-latency';
 
 /**
  * The library grid.
@@ -32,8 +33,13 @@ import { rowsPerViewport } from '@/lib/nav-geometry';
  * Cards are memoized (FileCard): a click, an arrow or a thumbnail arriving
  * re-renders the cards whose own props changed, not every mounted one.
  */
-// Rows rendered above and below the viewport, so a fast flick does not show
-// blank space before React catches up.
+// Rows rendered beyond the viewport, so a fast flick does not show blank
+// space before React catches up: four each side. When pictures are slow to
+// arrive (lib/thumb-latency.js), a scroll leans them ahead of it — one row
+// behind, seven ahead (overscanFor) — so the pictures there have loaded and
+// decoded before they come into view rather than as they do, which on a 4G
+// link is what made the compositor present frames without the page's own
+// update. On a fast link reaching that far ahead only moved work around.
 const OVERSCAN_ROWS = 4;
 // Before the first measurement — the server render, and the client render
 // that hydrates it — there is no layout to window against. Rather than one
@@ -106,20 +112,27 @@ function FileGrid({
 
   const rowCount = Math.ceil(files.length / metrics.cols);
 
-  // Which rows intersect the viewport, from the page scroll position.
+  // Which rows intersect the viewport, from the page scroll position, and
+  // which way it last moved.
+  const lastTop = useRef(null);
+  const direction = useRef(0);
   const updateRange = useCallback(() => {
     const el = outer.current;
     if (!el || !metrics.pitch) return;
+    const top = el.getBoundingClientRect().top;
+    if (lastTop.current != null && Math.abs(top - lastTop.current) > 1) direction.current = top < lastTop.current ? 1 : -1;
+    lastTop.current = top;
     const { start, end } = rowWindow({
-      top: el.getBoundingClientRect().top,
+      top,
       viewport: window.innerHeight,
       pitch: metrics.pitch,
       rowCount,
-      overscan: OVERSCAN_ROWS,
+      ...overscanFor(thumbsAreSlow() ? direction.current : 0, { overscan: OVERSCAN_ROWS }),
     });
     setRange((r) => (r.start === start && r.end === end ? r : { start, end }));
   }, [metrics.pitch, rowCount]);
 
+  useEffect(() => { observeThumbLatency(); }, []);
   useLayoutEffect(() => { measure(); }, [measure, files.length]);
   useLayoutEffect(() => { updateRange(); }, [updateRange]);
 
