@@ -1138,6 +1138,12 @@ select.input.cell-input { padding-right: 2px; }
   .file-detail-body { grid-template-columns: minmax(0, 1fr); }
 }
 
+/* A menu's keyboard hints (Space, ⌘I, ⇧Space) mean nothing on a screen
+   with no keyboard to press them on — the phone's More menu among them. */
+@media (hover: none) and (pointer: coarse) {
+  .ctx-hint { display: none; }
+}
+
 /* ── Phone ──────────────────────────────────────────────────────────────── */
 
 @media (max-width: 720px) {
@@ -1162,6 +1168,18 @@ select.input.cell-input { padding-right: 2px; }
      squeezing it to nothing. */
   .files-head { flex-wrap: wrap; row-gap: var(--s2); }
   .files-head > .spacer { flex: 1 0 100%; height: 0; }
+  /* The same on a file's page, and on the opening screen that stands in
+     for it (FileDetailFrame): the name keeps the line beside ← Back, the
+     buttons go beneath. Squeezed beside Share, Download and the menu the
+     name was a single letter, and it jumped there from the opening screen,
+     which has no buttons. */
+  .file-detail-head { flex-wrap: wrap; row-gap: var(--s2); }
+  .file-detail-head > .spacer { flex: 1 0 100%; height: 0; }
+  /* While files are selected, what acts on them takes the row New folder
+     and the uploads were in, rather than adding a row: the grid stays where
+     it was, so the second click of a double-click (or the finger of a
+     long-press) is still on the card it started on. */
+  .files-head.has-selection .files-create { display: none; }
   .files-toolbar .input { max-width: none; flex: 1 1 100%; }
   .files-layout { grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
 

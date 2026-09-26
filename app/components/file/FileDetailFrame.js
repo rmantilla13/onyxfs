@@ -13,7 +13,7 @@
 export default function FileDetailFrame({ as: Tag = 'main', className = '', header, stage, aside, children, ...rest }) {
   return (
     <Tag className={`shell file-detail ${className}`.trim()} style={{ padding: 'var(--s5) var(--s5) 64px' }} {...rest}>
-      <div className="row" style={{ marginBottom: 'var(--s4)' }}>{header}</div>
+      <div className="row file-detail-head" style={{ marginBottom: 'var(--s4)' }}>{header}</div>
       <div className="file-detail-body">
         <div style={{ minWidth: 0 }}>{stage}</div>
         <aside style={{ minWidth: 0 }}>{aside}</aside>

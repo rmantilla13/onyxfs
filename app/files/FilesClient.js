@@ -1690,7 +1690,7 @@ export default function FilesClient({
       onFocus={onFolderHover}
       onPointerDown={marquee.onPointerDown}
     >
-      <div className="row files-head" style={{ marginBottom: 20 }}>
+      <div className={`row files-head${selected.size > 0 ? ' has-selection' : ''}`} style={{ marginBottom: 20 }}>
         {/* All files is the top of the tree: nothing to go back up to, so no
             button — the heading sits flush with the page. Inside a folder,
             Back is history when there is some and the enclosing folder when
@@ -1752,9 +1752,9 @@ export default function FilesClient({
               hidden
               onChange={(e) => { enqueue(filesFromInput(e.target.files)); e.target.value = ''; }}
             />
-            <button className="btn" onClick={() => newFolder()}>New folder</button>
-            <button className="btn" onClick={() => folderInputRef.current?.click()}>Upload folder</button>
-            <button className="btn btn-primary" onClick={() => inputRef.current?.click()}>Upload</button>
+            <button className="btn files-create" onClick={() => newFolder()}>New folder</button>
+            <button className="btn files-create" onClick={() => folderInputRef.current?.click()}>Upload folder</button>
+            <button className="btn btn-primary files-create" onClick={() => inputRef.current?.click()}>Upload</button>
           </>
         )}
       </div>
