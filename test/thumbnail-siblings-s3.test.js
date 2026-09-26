@@ -63,9 +63,14 @@ test('siblings land at the keys derived from the thumbnail’s, and a retry repl
     assert.equal((await put(again.putUrl, `${size}-2`)).status, 200);
     assert.equal(await text(key), `${size}-2`);
   }
-  // Replacing the thumbnail takes its siblings with it (dropReplaced).
-  for (const k of [grid.key, ...THUMB_SIZES.map((s) => thumbSiblingKey(grid.key, s))]) await s3DeleteObject(cfg, k);
-  for (const size of THUMB_SIZES) assert.equal(await exists(thumbSiblingKey(grid.key, size)), false);
+  // Replacing (or deleting) the thumbnail takes its siblings with it: the
+  // objects lib/preview-gc.js deletes are exactly the ones that landed.
+  const { previewObjects } = await import('../lib/preview-gc.js');
+  const objects = previewObjects([grid.key]);
+  assert.equal(objects.length, 1 + THUMB_SIZES.length);
+  for (const k of objects) assert.equal(await exists(k), true, `${k} is where it was put`);
+  for (const k of objects) await s3DeleteObject(cfg, k);
+  for (const k of objects) assert.equal(await exists(k), false, `${k} is gone`);
 });
 
 test('an exact-key PUT is refused for anything but a sibling key', async () => {
