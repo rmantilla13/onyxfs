@@ -5,7 +5,8 @@ import { listFilesPage, listFolderTree, storagePrefixFor } from '@/lib/file-list
 import { driveAccess } from '@/lib/drive-access';
 import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject } from '@/lib/storage';
 import { decodeCursor } from '@/lib/file-query';
-import { uploadFields, withoutTakenPreviews } from '@/lib/media';
+import { uploadFields } from '@/lib/media';
+import { withoutTakenPreviews } from '@/lib/preview-gc';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -137,7 +138,7 @@ async function objectFacts(email, body) {
 
 /**
  * The upload's preview keys, less any another row already uses (lib/db.js
- * previewKeysInUse says why; lib/media.js withoutTakenPreviews what goes with
+ * previewKeysInUse says why; lib/preview-gc.js withoutTakenPreviews what goes with
  * what). A dropped preview does not fail the upload: the file is recorded
  * without it, and the background queue makes one. When the check cannot be
  * made, every preview is dropped rather than trusted.

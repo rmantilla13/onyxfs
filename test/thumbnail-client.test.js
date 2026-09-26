@@ -80,7 +80,7 @@ test('previewWanted: only for a picture that would get a preview, and not twice'
     value: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) },
   });
   t.after(() => { if (prev) Object.defineProperty(globalThis, 'localStorage', prev); else delete globalThis.localStorage; });
-  const { previewWanted, rememberSkip } = await import('../lib/backfill.js');
+  const { previewWanted, rememberSkip } = await import('../lib/preview-wanted.js');
   const photo = {
     id: 'p1', storage: 's3', name: 'a.jpg', mime: 'image/jpeg', kind: 'image', size: 9_000_000,
     thumbnailKey: '_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.webp', metadata: { width: 6000, height: 4000 },

@@ -172,14 +172,11 @@ export default function useSelectionModel({
   }, [apply, move, open]);
 
   const click = useCallback((e, key) => {
-    // The click a marquee's release makes never gets here: the marquee
-    // swallows that one event (useMarquee), so a real click straight after a
-    // drag counts.
+    // (The click a marquee's release makes is swallowed by useMarquee.)
     if (e.defaultPrevented) return;
     const L = live.current;
     if (isTouch()) {
-      // In selection mode every tap flips the item, however quickly it
-      // follows the last one (a second tap is a click with detail 2).
+      // In selection mode every tap flips the item, a quick second one too.
       if (L.selectionMode) apply(clickSelect(current(), key, { toggle: true, order: L.order }));
       else if (e.detail <= 1) open(key);
       return;

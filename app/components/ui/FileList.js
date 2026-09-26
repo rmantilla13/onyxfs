@@ -168,7 +168,6 @@ function FileList({
   useEffect(() => () => intent.cancel(), [intent]);
   // What every cell needs from the list, as one object that only changes
   // when one of these does — so a memoized row is not re-rendered for it.
-  // Read through a ref, so a change of selection does not re-render every row.
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const soleSelected = useCallback((id) => selectedRef.current?.size === 1 && selectedRef.current.has(id), []);
@@ -521,8 +520,7 @@ function EditableCell({ file, col, ctx, tabbable, selected, editing: rowEditing 
   const button = useRef(null);
   const refocus = useRef(false);
   // Whether the row was the whole selection when this press began — before
-  // the click it makes has selected it. Only then is a click the slow second
-  // one.
+  // the click it makes has selected it. Only then is a click the slow second one.
   const wasSelected = useRef(false);
 
   // Back to the cell after a keyboard Enter or Escape, so the next Tab or

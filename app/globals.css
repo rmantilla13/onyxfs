@@ -734,16 +734,10 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 /* A card is picked, not read: no text selection from a double-click, and no
    iOS image callout on a long-press (which selects, useLongPress). */
 .filecard { display: block; overflow: hidden; cursor: pointer; text-align: left; -webkit-user-select: none; user-select: none; }
-/* Focus is a ring standing off the card; selection is the card itself — an
-   accent edge on it and a tint, as a folder tile has — so the two never look
-   alike, and a card that is both shows both. */
+/* Focus: a ring standing off the card. Selection: the card's own edge and a
+   tint, as a folder tile (its edge ring is with the glow, below). */
 .filecard:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.filecard[aria-selected='true'] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
-  box-shadow: 0 0 0 1px var(--accent);
-}
-/* A dark surface needs more of the accent for the tint to read. */
+.filecard[aria-selected='true'] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
 [data-theme='dark'] .filecard[aria-selected='true'],
 [data-theme='dark'] .folder-tile[aria-selected='true'] { background: color-mix(in srgb, var(--accent) 22%, var(--surface)); }
 .filecard-thumb {
@@ -1138,8 +1132,7 @@ select.input.cell-input { padding-right: 2px; }
   .file-detail-body { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* A menu's keyboard hints (Space, ⌘I, ⇧Space) mean nothing on a screen
-   with no keyboard to press them on — the phone's More menu among them. */
+/* No keyboard, no keyboard hints (the phone's More menu). */
 @media (hover: none) and (pointer: coarse) {
   .ctx-hint { display: none; }
 }
@@ -1168,17 +1161,11 @@ select.input.cell-input { padding-right: 2px; }
      squeezing it to nothing. */
   .files-head { flex-wrap: wrap; row-gap: var(--s2); }
   .files-head > .spacer { flex: 1 0 100%; height: 0; }
-  /* The same on a file's page, and on the opening screen that stands in
-     for it (FileDetailFrame): the name keeps the line beside ← Back, the
-     buttons go beneath. Squeezed beside Share, Download and the menu the
-     name was a single letter, and it jumped there from the opening screen,
-     which has no buttons. */
+  /* So on a file's page and its opening screen: the name keeps its line. */
   .file-detail-head { flex-wrap: wrap; row-gap: var(--s2); }
   .file-detail-head > .spacer { flex: 1 0 100%; height: 0; }
-  /* While files are selected, what acts on them takes the row New folder
-     and the uploads were in, rather than adding a row: the grid stays where
-     it was, so the second click of a double-click (or the finger of a
-     long-press) is still on the card it started on. */
+  /* Selecting swaps New folder and the uploads for what acts on the
+     selection, in the same row, so the grid does not move under a click. */
   .files-head.has-selection .files-create { display: none; }
   .files-toolbar .input { max-width: none; flex: 1 1 100%; }
   .files-layout { grid-template-columns: minmax(0, 1fr); gap: var(--s3); }

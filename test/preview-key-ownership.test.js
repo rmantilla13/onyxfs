@@ -16,7 +16,6 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { registerHooks } from 'node:module';
 import { randomUUID } from 'node:crypto';
-import { withoutTakenPreviews } from '../lib/media.js';
 
 // lib/db.js reads DATABASE_URL when it is first imported, so everything that
 // reaches it is imported below, once that is set.
@@ -43,7 +42,7 @@ const as = (email) => { globalThis.__keysSession = email ? { user: { email } } :
 
 const db = await import('../lib/db.js');
 const gc = await import('../lib/preview-gc.js');
-const { previewKeysOf, previewObjects } = gc;
+const { previewKeysOf, previewObjects, withoutTakenPreviews } = gc;
 const thumbRoute = await import('../app/api/files/[id]/thumbnail/route.js');
 const sizesRoute = await import('../app/api/files/[id]/thumbnail/sizes/route.js');
 const filesRoute = await import('../app/api/files/route.js');

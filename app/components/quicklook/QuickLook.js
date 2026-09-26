@@ -5,7 +5,8 @@ import { effectiveKind, drawableKind, fmtSize, fmtDuration } from '@/lib/media';
 import { thumbSources } from '@/lib/renditions';
 import { probedNow, decodeProbe } from '@/lib/decode-probe';
 import { positionLabel } from '@/lib/quicklook';
-import { previewWanted } from '@/lib/backfill';
+import { previewWanted } from '@/lib/preview-wanted';
+import { preloaded } from '@/lib/original-preload';
 import { parseKey } from '@/lib/selection';
 import { modKey } from '@/lib/keys';
 import ProgressiveImage from '@/app/components/media/ProgressiveImage';
@@ -278,7 +279,7 @@ function imageLayers(file, { keepOriginal = false } = {}) {
 function ImageItem({ file, layers, onSharp, onOriginalBlob }) {
   const md = file.metadata || {};
   // Handed to the fill-in only when it would make a preview from it: never
-  // for a file that by design gets none (lib/backfill.js previewWanted).
+  // for a file that by design gets none (lib/preview-wanted.js).
   const blob = !file.posterUrl && onOriginalBlob && previewWanted(file, { probe: probedNow() });
   return (
     <ProgressiveImage
@@ -289,6 +290,7 @@ function ImageItem({ file, layers, onSharp, onOriginalBlob }) {
       width={Number(md.width) || 0}
       height={Number(md.height) || 0}
       onBlob={blob ? (b) => onOriginalBlob(file, b) : undefined}
+      preloaded={preloaded}
       onDecoded={(q) => {
         // What is on screen first may already be sharp (a neighbour loaded
         // ahead): then it is both.

@@ -46,12 +46,10 @@ const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayout
 // The opening shell and Quick Look are not needed to show a folder, so they
 // are not part of the page's first load. They are fetched ahead of the
 // double-click or the Space that needs them: at once on a key or a mouse
-// press; otherwise 300 ms after the mouse first moves, or after the page
-// comes to rest (300 ms without a scroll or a touch) once someone has done
-// anything at all, or ten seconds after it loaded — never in the middle of
-// a scroll. They render at once from then on. Until the shell has loaded,
-// opening a file leaves the folder on screen rather than hiding it under a
-// shell that is not there yet (a blank frame, on a slow link a long one).
+// press; otherwise when the page comes to rest (300 ms without a scroll or a
+// touch) after someone has done anything at all, or ten seconds after it
+// loaded — never in the middle of a scroll. Until the shell has loaded, an
+// open leaves the folder on screen (not a blank frame).
 const VIEWERS_REST_MS = 300;
 const VIEWERS_IDLE_MS = 10000;
 const viewers = { FileOpening: null, QuickLook: null, promise: null };
@@ -495,9 +493,7 @@ export default function FilesClient({
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  // Up to the enclosing folder (⌘↑, the menu's Enclosing folder, Back with
-  // no history of ours): arriving, the folder we came out of is selected and
-  // focused, as after Back.
+  // Up a folder, landing on the one we left selected, as Back does.
   const goUp = useCallback(() => {
     if (!folder) return;
     const up = parentOf(folder);
@@ -1358,10 +1354,7 @@ export default function FilesClient({
     const since = performance.now();
     let armed = false;
     let last = since;
-    // A mouse moving over the page is someone about to point at something:
-    // it arms the load without holding it back (only scrolling and touches
-    // do), so a pointer on its way to a tile has the viewers by the time it
-    // gets there.
+    // A mouse moving arms the load without holding it back.
     const moved = (e) => { armed = true; if (e?.type !== 'pointermove' || e.pointerType === 'touch') last = performance.now(); };
     const pressed = (e) => { if (e.type === 'keydown' || e.pointerType !== 'touch') load(); else moved(); };
     const opts = { capture: true, passive: true };
@@ -1394,9 +1387,7 @@ export default function FilesClient({
     setHandoff(f.id, { row: f, currentSrc: shown, natural: null });
     rememberReturn({ href: `${window.location.pathname}${window.location.search}`, listingKey: currentKey, fileId: f.id });
     listingCache.extend(currentKey, { files, cursor });
-    // Opened by a tap, it comes back unselected: on a touch screen a tap
-    // opens rather than selects, and a selection left behind put the phone's
-    // selection bar up and was added to by the next long-press.
+    // A tap opens rather than selects: it comes back unselected.
     returnSlot.save({
       filespaceId, folder, query, kinds, sort, facets, files, cursor, scrollY: window.scrollY, focusId: f.id,
       select: !isTouch(),
