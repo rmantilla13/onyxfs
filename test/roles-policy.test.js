@@ -121,6 +121,18 @@ describe('reading roles.config', () => {
     assert.deepEqual(parseRolesConfig(saved).legacyFullIds, ['admin']);
   });
 
+  test('reading is idempotent: a parsed config reads back as itself', () => {
+    const once = parseRolesConfig(V1);
+    assert.deepEqual(parseRolesConfig(once), once);
+  });
+
+  test('a hand-edited v2 blob is normalized before anyone is resolved against it', () => {
+    const raw = { version: 2, legacyFullIds: [], roles: [{ id: 'boss', name: 'Boss', full: true }], assignments: { 'b@example.com': 'boss' } };
+    const r = resolveRole('b@example.com', raw);
+    assert.equal(r.id, 'member');
+    assert.equal(r.legacyAdmin, true);
+  });
+
   test('the read-only fallback role is the Viewer', () => {
     assert.equal(READ_ONLY_ROLE.id, 'viewer');
     assert.equal(roleCaps(READ_ONLY_ROLE).has('files.upload'), false);
