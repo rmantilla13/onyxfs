@@ -1708,4 +1708,51 @@ dialog.dialog {
 
 /* The nav's "Mac app" button: shown on a Mac browser, never inside the app. */
 .topnav-get-app { white-space: nowrap; }
+
+/* ── Inside Onyx for Mac: the bar is the window's title bar ───────────────
+   The app draws no toolbar (apple/OnyxMac/WindowChrome.swift): this bar
+   spans the window, clears the traffic lights at its left and is exactly as
+   tall as the title bar they are centred in. The app sets data-mac-app and
+   the two sizes on <html> before the page paints; in full screen there are
+   no traffic lights to clear. */
+html[data-mac-app] .topnav-row {
+  max-width: none;
+  height: var(--mac-bar-h, 52px);
+  padding-left: calc(var(--mac-left, 78px) + var(--s1));
+  padding-right: var(--s3);
+}
+html[data-mac-app][data-mac-fullscreen] .topnav-row { padding-left: var(--s3); }
+.topnav-history { display: flex; gap: 2px; flex: none; }
+.topnav-history .btn:disabled { opacity: 0.35; }
+.topnav-finder { position: relative; flex: none; }
+.finder-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.finder-menu { width: 300px; }
+.finder-rows { list-style: none; margin: 0; padding: 0 0 var(--s1); }
+.finder-row { display: flex; align-items: center; gap: var(--s2); padding: 2px var(--s1) 2px var(--s2); min-height: 32px; }
+.finder-switch { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: var(--s2); cursor: pointer; }
+.finder-switch input {
+  appearance: none; -webkit-appearance: none;
+  align-self: center; flex: none; position: relative; margin: 0;
+  width: 28px; height: 16px; border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+  cursor: pointer; transition: background var(--dur-1) var(--ease);
+}
+.finder-switch input::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--on-aura, var(--paper)); box-shadow: var(--shadow-1);
+  transition: transform var(--dur-1) var(--ease);
+}
+.finder-switch input:checked { background: var(--accent); }
+.finder-switch input:checked::after { transform: translateX(12px); }
+.finder-switch input:disabled { opacity: 0.5; cursor: default; }
+.finder-switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.finder-name { min-width: 0; }
+.finder-busy { color: var(--muted); animation: finder-spin 0.9s linear infinite; }
+@keyframes finder-spin { to { transform: rotate(360deg); } }
+.finder-failed { color: var(--warning); }
 @media (max-width: 720px) { .topnav-get-app { display: none; } }

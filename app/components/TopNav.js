@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import ProfileMenu from '@/app/components/ProfileMenu';
 import BrandLogo from '@/app/components/BrandLogo';
@@ -8,6 +8,9 @@ import ShortcutsDialog from '@/app/components/ShortcutsDialog';
 import CommandPalette, { useCommandPaletteShortcut } from '@/app/components/CommandPalette';
 import { isTyping, modKey } from '@/lib/keys';
 import Icon from '@/app/components/ui/Icon';
+import useMacApp from '@/app/components/useMacApp';
+import useMacBar from '@/app/components/mac/useMacBar';
+import FinderMenu from '@/app/components/mac/FinderMenu';
 
 /**
  * The bar across the top: the mark, one search box, and the account menu.
@@ -20,6 +23,12 @@ import Icon from '@/app/components/ui/Icon';
  *
  * `filespaces` comes from the page (listFilespacesForSpace); the palette
  * lists them as drives.
+ *
+ * Inside Onyx for Mac this bar is the window's title bar — the app has no
+ * toolbar of its own — so it also carries what the toolbar did: back and
+ * forward beside the traffic lights, and the Finder menu. Its layout there
+ * (clearing the traffic lights, the title bar's height) is CSS, keyed on
+ * html[data-mac-app], which the app sets before the page paints.
  */
 export default function TopNav({ brandName, logo, email, isAdmin, build, filespaces = [], avatarUrl = null }) {
   const [palette, setPalette] = useState(false);
@@ -41,6 +50,9 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
     setOfferMacApp(!app && /Macintosh|Mac OS X/.test(ua) && !/iPhone|iPad/.test(ua) && navigator.maxTouchPoints < 2);
   }, []);
   useCommandPaletteShortcut(setPalette);
+  const mac = useMacApp();
+  const bar = useRef(null);
+  useMacBar(bar);
 
   // "?" anywhere that is not a text field or an open dialog.
   useEffect(() => {
@@ -55,8 +67,18 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
   }, []);
 
   return (
-    <header className="topnav">
+    <header className="topnav" ref={bar}>
       <div className="shell topnav-row">
+        {mac.inApp && mac.hasBar && (
+          <div className="topnav-history" role="group" aria-label="History">
+            <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={mac.goBack} disabled={!mac.nav.canGoBack} aria-label="Back" title="Back (⌘[)">
+              <Icon name="chevron-left" />
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={mac.goForward} disabled={!mac.nav.canGoForward} aria-label="Forward" title="Forward (⌘])">
+              <Icon name="chevron-right" />
+            </button>
+          </div>
+        )}
         <Link href="/files" className="topnav-brand" title="All files">
           <BrandLogo logo={logo} name={brandName} withName height={22} />
         </Link>
@@ -73,6 +95,7 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
             Mac app
           </Link>
         )}
+        {mac.inApp && mac.hasBar && <FinderMenu mac={mac} />}
         <ProfileMenu email={email} isAdmin={isAdmin} build={build} avatarUrl={avatarUrl} onShortcuts={() => setShortcuts(true)} inApp={inApp} />
       </div>
       <CommandPalette

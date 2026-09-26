@@ -2,8 +2,6 @@
 // vendor/lucide/LICENSE). Do not edit: use Image(lucide:) and run `npm run icons`.
 enum LucideData {
     static let shapes: [String: String] = [
-        "chevron-left": #"<path d="m15 18-6-6 6-6"/>"#,
-        "chevron-right": #"<path d="m9 18 6-6-6-6"/>"#,
         "circle-user": #"<circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"/>"#,
         "cloud-download": #"<path d="M12 13v8l-4-4"/><path d="m12 21 4-4"/><path d="M4.393 15.269A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.436 8.284"/>"#,
         "cloud-off": #"<path d="M10.94 5.274A7 7 0 0 1 15.71 10h1.79a4.5 4.5 0 0 1 4.222 6.057"/><path d="M18.796 18.81A4.5 4.5 0 0 1 17.5 19H9A7 7 0 0 1 5.79 5.78"/><path d="m2 2 20 20"/>"#,

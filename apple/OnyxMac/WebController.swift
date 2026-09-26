@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Combine
 import WebKit
 import OnyxKit
 
@@ -13,8 +14,10 @@ import OnyxKit
 /// Finder (the rest of the app).
 @MainActor
 final class WebController: NSObject, ObservableObject {
-    weak var model: AppModel?
-    let webView: WKWebView
+    weak var model: AppModel? {
+        didSet { followFinder() }
+    }
+    let webView: OnyxWebView
 
     @Published private(set) var canGoBack = false
     @Published private(set) var canGoForward = false
@@ -28,6 +31,9 @@ final class WebController: NSObject, ObservableObject {
 
     private var observations: [NSKeyValueObservation] = []
     private var lastHandoff: Date?
+    /// The window's title bar, as the page lays its bar out to it.
+    private var chrome: WindowChrome.Metrics?
+    private var following: Set<AnyCancellable> = []
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -39,11 +45,10 @@ final class WebController: NSObject, ObservableObject {
         config.preferences.isElementFullscreenEnabled = true
         // window.onyxMac: how the page, inside the app, keeps files offline
         // and puts drives in Finder. Defined before any page script runs.
-        config.userContentController.addUserScript(WKUserScript(
-            source: Self.bridgeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        config.userContentController.addUserScript(Self.bridge(chrome: nil))
         let relay = MessageRelay()
         config.userContentController.add(relay, name: "onyx")
-        webView = WKWebView(frame: .zero, configuration: config)
+        webView = OnyxWebView(frame: .zero, configuration: config)
         super.init()
         relay.controller = self
         webView.navigationDelegate = self
@@ -54,16 +59,22 @@ final class WebController: NSObject, ObservableObject {
         webView.setValue(false, forKey: "drawsBackground")
         observations = [
             webView.observe(\.canGoBack, options: [.new]) { [weak self] v, _ in
-                Task { @MainActor in self?.canGoBack = v.canGoBack }
+                Task { @MainActor in self?.canGoBack = v.canGoBack; self?.publishOfflineState() }
             },
             webView.observe(\.canGoForward, options: [.new]) { [weak self] v, _ in
-                Task { @MainActor in self?.canGoForward = v.canGoForward }
+                Task { @MainActor in self?.canGoForward = v.canGoForward; self?.publishOfflineState() }
             },
             webView.observe(\.isLoading, options: [.new]) { [weak self] v, _ in
                 Task { @MainActor in self?.isLoading = v.isLoading }
             },
             webView.observe(\.title, options: [.new]) { [weak self] v, _ in
-                Task { @MainActor in self?.title = (v.title?.isEmpty == false ? v.title : nil) ?? "Onyx" }
+                Task { @MainActor in
+                    let title = (v.title?.isEmpty == false ? v.title : nil) ?? "Onyx"
+                    self?.title = title
+                    // Hidden in the window, but Mission Control and the
+                    // Window menu name it by this (WindowChrome).
+                    v.window?.title = title
+                }
             },
         ]
     }
@@ -138,20 +149,48 @@ final class WebController: NSObject, ObservableObject {
     /// pushing its state (`_update`), which fires an `onyxmac:state` event the
     /// page listens for. Present only in the app, so the web shows its
     /// offline and Finder actions only here.
-    static let bridgeScript = """
+    static func bridge(chrome: WindowChrome.Metrics?) -> WKUserScript {
+        // Until the window is known, a unified title bar's usual size.
+        let metrics = chrome ?? WindowChrome.Metrics(left: 78, height: 52, fullScreen: false)
+        let json = (try? JSONSerialization.data(withJSONObject: metrics.json)).flatMap { String(data: $0, encoding: .utf8) } ?? "null"
+        return WKUserScript(source: bridgeScript.replacingOccurrences(of: "__CHROME__", with: json),
+                            injectionTime: .atDocumentStart, forMainFrameOnly: true)
+    }
+
+    private static let bridgeScript = """
     (() => {
       if (window.onyxMac) return;
       const post = (msg) => window.webkit.messageHandlers.onyx.postMessage(msg);
-      const state = { pinned: [], mounted: [], pinnedFolders: [] };
+      const state = { pinned: [], mounted: [], pinnedFolders: [], chrome: null, nav: null, finder: null };
+      // The bar is the window's title bar: laid out by CSS from the first
+      // paint, so nothing shifts when the page's scripts arrive.
+      const root = document.documentElement;
+      const lay = (c) => {
+        if (!root || !c) return;
+        root.style.setProperty('--mac-left', `${c.left}px`);
+        root.style.setProperty('--mac-bar-h', `${c.height}px`);
+        root.toggleAttribute('data-mac-fullscreen', !!c.fullScreen);
+      };
+      root?.setAttribute('data-mac-app', '');
+      lay(__CHROME__);
       window.onyxMac = {
-        version: 1,
+        version: 2,
         get state() { return state; },
         pinFiles: (ids, drive) => post({ type: 'pinFiles', ids, drive: drive || null, on: true }),
         unpinFiles: (ids, drive) => post({ type: 'pinFiles', ids, drive: drive || null, on: false }),
         pinFolder: (path, drive, on = true) => post({ type: 'pinFolder', path, drive: drive || null, on }),
         showInFinder: (drive, name) => post({ type: 'mount', drive: drive || null, name: name || '', on: true }),
+        setMounted: (drive, on, name) => post({ type: 'mount', drive: drive || null, name: name || '', on: !!on }),
+        reveal: (drive) => post({ type: 'reveal', drive: drive || null }),
+        syncNow: () => post({ type: 'syncNow' }),
+        goBack: () => post({ type: 'navigate', to: 'back' }),
+        goForward: () => post({ type: 'navigate', to: 'forward' }),
+        // The bar and its controls, in CSS pixels: between the controls, a
+        // drag moves the window.
+        setBar: (bar, holes) => post({ type: 'bar', bar: bar || null, holes: holes || [] }),
         _update: (next) => {
           Object.assign(state, next);
+          if (next.chrome) lay(next.chrome);
           window.dispatchEvent(new CustomEvent('onyxmac:state', { detail: state }));
         },
       };
@@ -166,14 +205,64 @@ final class WebController: NSObject, ObservableObject {
             if case let .folder(path) = rule.target { return ["scope": rule.scope, "path": path] }
             return nil
         }
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "pinned": Array(finder.pinnedFiles),
             "pinnedFolders": folders,
             "mounted": finder.wantMounted.sorted(),
+            "nav": ["canGoBack": webView.canGoBack, "canGoForward": webView.canGoForward],
+            "finder": finderState(),
         ]
+        if let chrome { payload["chrome"] = chrome.json }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8) else { return }
         webView.evaluateJavaScript("window.onyxMac && window.onyxMac._update(\(json))")
+    }
+
+    /// The drives Finder can show and how each is doing, for the bar's
+    /// Finder menu — the same list as the menu bar's.
+    private func finderState() -> [String: Any] {
+        guard let model else { return [:] }
+        var states: [String: Any] = [:]
+        for scope in [SyncDomain.library] + model.finderDrives.map({ SyncDomain.drive(id: $0.id) }) {
+            switch model.finder.mounts.state(of: scope) {
+            case .mounting?: states[scope.identifier] = ["state": "mounting"]
+            case .mounted?: states[scope.identifier] = ["state": "mounted"]
+            case let .failed(message)?: states[scope.identifier] = ["state": "failed", "message": message]
+            case nil: break
+            }
+        }
+        return [
+            "drives": model.finderDrives.map { ["id": $0.id, "name": $0.name, "role": $0.role ?? ""] },
+            "states": states,
+            "busy": model.busy.sorted(),
+        ]
+    }
+
+    /// Mounts starting, finishing and failing, and the drive list changing,
+    /// reach the page's Finder menu — gathered, since one change fires many.
+    private func followFinder() {
+        following = []
+        guard let model else { return }
+        model.finder.objectWillChange.merge(with: model.objectWillChange)
+            .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.publishOfflineState() } }
+            .store(in: &following)
+    }
+
+    /// The window moved into or out of full screen, or first appeared.
+    func windowChanged(_ window: NSWindow) {
+        WindowChrome.apply(to: window)
+        window.title = title
+        let next = WindowChrome.metrics(of: window)
+        webView.titlebarHeight = next.height
+        webView.needsLayout = true
+        guard next != chrome else { return }
+        chrome = next
+        // The next page loaded lays its bar out right from the first paint.
+        let scripts = webView.configuration.userContentController
+        scripts.removeAllUserScripts()
+        scripts.addUserScript(Self.bridge(chrome: next))
+        publishOfflineState()
     }
 
     fileprivate func received(_ body: Any) {
@@ -195,12 +284,30 @@ final class WebController: NSObject, ObservableObject {
             case "mount":
                 let name = (msg["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                     ?? model.finderDrives.first { SyncDomain.drive(id: $0.id).identifier == scope }?.name ?? "Library"
-                await model.setMounted(SyncDomain(identifier: scope) ?? .library, name: name, true)
+                await model.setMounted(SyncDomain(identifier: scope) ?? .library, name: name, on)
+            case "reveal":
+                model.reveal(SyncDomain(identifier: scope) ?? .library)
+            case "syncNow":
+                await model.syncNow()
+            case "navigate":
+                if msg["to"] as? String == "forward" { forward() } else { back() }
+                return
+            case "bar":
+                webView.bar = Self.rect(msg["bar"])
+                webView.holes = (msg["holes"] as? [Any] ?? []).prefix(200).compactMap(Self.rect)
+                return
             default:
                 break
             }
             publishOfflineState()
         }
+    }
+
+    /// `[x, y, width, height]` from the page.
+    private static func rect(_ value: Any?) -> CGRect? {
+        guard let n = value as? [NSNumber], n.count == 4 else { return nil }
+        let r = CGRect(x: n[0].doubleValue, y: n[1].doubleValue, width: n[2].doubleValue, height: n[3].doubleValue)
+        return r.width.isFinite && r.height.isFinite && r.width >= 0 && r.height >= 0 ? r : nil
     }
 
     fileprivate func acceptsMessages(from url: URL) -> Bool { isOnServer(url) }

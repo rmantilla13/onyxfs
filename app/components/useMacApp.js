@@ -13,10 +13,14 @@ import { useEffect, useState } from 'react';
  *
  * `pinned` holds the ids of files kept offline (directly, or through a
  * pinned folder or drive); `mounted` the drives in Finder, as the app names
- * them ("drive.<id>", "library").
+ * them ("drive.<id>", "library"). `nav` is the window's back and forward;
+ * `finder` the drives Finder can show, with how each mount is doing (the
+ * bar's Finder menu). All three are empty in an app older than they are.
  */
+const NONE = { inApp: false, pinned: new Set(), mounted: new Set(), pinnedFolders: [], nav: { canGoBack: false, canGoForward: false }, finder: { drives: [], states: {}, busy: [] } };
+
 export default function useMacApp() {
-  const [state, setState] = useState({ inApp: false, pinned: new Set(), mounted: new Set(), pinnedFolders: [] });
+  const [state, setState] = useState(NONE);
 
   useEffect(() => {
     const mac = typeof window !== 'undefined' ? window.onyxMac : null;
@@ -26,6 +30,12 @@ export default function useMacApp() {
       pinned: new Set(s?.pinned || []),
       mounted: new Set(s?.mounted || []),
       pinnedFolders: Array.isArray(s?.pinnedFolders) ? s.pinnedFolders : [],
+      nav: { ...NONE.nav, ...(s?.nav || {}) },
+      finder: {
+        drives: Array.isArray(s?.finder?.drives) ? s.finder.drives : [],
+        states: s?.finder?.states || {},
+        busy: Array.isArray(s?.finder?.busy) ? s.finder.busy : [],
+      },
     });
     apply(mac.state);
     const on = (e) => apply(e.detail);
@@ -42,6 +52,13 @@ export default function useMacApp() {
     unpinFiles: (ids, driveId) => mac()?.unpinFiles(ids, driveId || null),
     pinFolder: (path, driveId, on = true) => mac()?.pinFolder(path, driveId || null, on),
     showInFinder: (driveId, name) => mac()?.showInFinder(driveId || null, name || ''),
+    /** Newer apps only: each is undefined in one that predates the bar. */
+    setMounted: (driveId, on, name) => mac()?.setMounted?.(driveId || null, on, name || ''),
+    reveal: (driveId) => mac()?.reveal?.(driveId || null),
+    syncNow: () => mac()?.syncNow?.(),
+    goBack: () => mac()?.goBack?.(),
+    goForward: () => mac()?.goForward?.(),
+    hasBar: typeof window !== 'undefined' && !!window.onyxMac?.setBar,
     folderPinned: (path, driveId) => state.pinnedFolders.some((f) =>
       f.scope === (driveId ? `drive.${driveId}` : 'library') && f.path === path),
   };

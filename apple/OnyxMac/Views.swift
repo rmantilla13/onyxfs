@@ -12,10 +12,14 @@ struct MainWindow: View {
         Group {
             switch model.phase {
             case .signedIn: WorkspaceView(web: model.web)
-            case .signedOut, .signingIn: SignInView()
+            case .signedOut, .signingIn:
+                SignInView().overlay(alignment: .top) { TitlebarDragArea().frame(height: 52) }
             }
         }
         .frame(minWidth: 880, minHeight: 560)
+        // No toolbar: the web's bar is the title bar (WindowChrome).
+        .ignoresSafeArea(.container, edges: .top)
+        .background(WindowReader { window in model.web.windowChanged(window) })
         .sheet(isPresented: $updater.showSheet) { UpdateSheet() }
     }
 }
@@ -213,21 +217,6 @@ struct WorkspaceView: View {
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
                 }
             }
-            .navigationTitle(web.title)
-            .toolbar {
-                ToolbarItemGroup(placement: .navigation) {
-                    Button { web.back() } label: { Image(lucide: "chevron-left") }
-                        .disabled(!web.canGoBack).help("Back")
-                    Button { web.forward() } label: { Image(lucide: "chevron-right") }
-                        .disabled(!web.canGoForward).help("Forward")
-                }
-                ToolbarItemGroup(placement: .primaryAction) {
-                    if web.isLoading { ProgressView().controlSize(.small) }
-                    FinderMenu()
-                    Button { web.reload() } label: { Image(lucide: "refresh-cw") }
-                        .help("Reload")
-                }
-            }
             .task { if web.webView.url == nil { web.signIn() } }
     }
 }
@@ -242,25 +231,8 @@ struct WebViewHost: NSViewRepresentable {
 
 // MARK: - Finder
 
-/// The toolbar's drive menu: which drives are in Finder, and a way there.
-struct FinderMenu: View {
-    @EnvironmentObject var model: AppModel
-
-    var body: some View {
-        Menu {
-            FinderItems()
-        } label: {
-            Label { Text("Finder") } icon: { Image(lucide: "hard-drive") }
-        }
-        // Named, not just drawn: an unlabeled drive glyph beside the back and
-        // forward buttons was the whole way into Finder, and it went unseen.
-        .labelStyle(.titleAndIcon)
-        .help("Show drives in Finder")
-    }
-}
-
-/// One entry per drive, and one for the library, shared by the toolbar and
-/// the menu bar item.
+/// One entry per drive, and one for the library, in the menu bar item. (The
+/// window's bar has the same menu, drawn by the page: FinderMenu.js.)
 struct FinderItems: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var finder: DriveService
