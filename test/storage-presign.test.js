@@ -87,3 +87,30 @@ test('an unphased window starts on the boundary, as before', async () => {
   const now = Date.UTC(2026, 8, 25, 13, 30);
   assert.equal(signingDate('k', now, 3600).toISOString(), '2026-09-25T13:00:00.000Z');
 });
+
+// A listing signs five URLs a row; within a window each is the same string,
+// so it is kept rather than signed again — and must be exactly what signing
+// again would give.
+test('a stable URL is kept for its window, and is what signing afresh gives', async (t) => {
+  const { signedUrlCache } = await import('../lib/storage.js');
+  const realNow = Date.now;
+  t.after(() => { Date.now = realNow; });
+  Date.now = () => Date.UTC(2026, 8, 25, 3, 0, 0);
+  const opts = { expiresIn: 86400, stableFor: 518400, phased: true };
+  signedUrlCache.clear();
+  const a = await s3PresignGet(cfg, '_thumbs/k.webp', opts);
+  assert.equal(signedUrlCache.size, 1);
+  const b = await s3PresignGet(cfg, '_thumbs/k.webp', opts);
+  assert.equal(b, a);
+  signedUrlCache.clear();
+  assert.equal(await s3PresignGet(cfg, '_thumbs/k.webp', opts), a, 'the kept URL is the signer\'s own answer');
+  // Anything that goes into the signature is a different entry.
+  assert.notEqual(await s3PresignGet({ ...cfg, secretAccessKey: 'another-secret' }, '_thumbs/k.webp', opts), a);
+  assert.notEqual(await s3PresignGet(cfg, '_thumbs/k.webp', { ...opts, expiresIn: 3600 }), a);
+  assert.notEqual(await s3PresignGet(cfg, '_thumbs/k.webp', { ...opts, download: true }), a);
+  assert.notEqual(await s3PresignGet(cfg, '_thumbs/j.webp', opts), a);
+  // Unstable (signed as of now) URLs are never kept.
+  const n = signedUrlCache.size;
+  await s3PresignGet(cfg, '_thumbs/k.webp', { expiresIn: 600 });
+  assert.equal(signedUrlCache.size, n);
+});
