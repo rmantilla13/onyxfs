@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 120
+-- Statements: 122
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -436,6 +436,20 @@ CREATE TABLE IF NOT EXISTS transcripts (
 );
 
 CREATE INDEX IF NOT EXISTS transcripts_queue_idx ON transcripts (requested_at) WHERE status IN ('queued', 'working');
+
+CREATE TABLE IF NOT EXISTS saved_views (
+  id          TEXT PRIMARY KEY,
+  owner_email TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  drive_id    TEXT,
+  filters     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  sort        TEXT NOT NULL DEFAULT 'new',
+  display     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at  BIGINT NOT NULL,
+  updated_at  BIGINT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS saved_views_owner_idx ON saved_views (owner_email, created_at);
 
 CREATE TABLE IF NOT EXISTS folder_access (
   folder TEXT NOT NULL,
