@@ -160,3 +160,40 @@ test('a forged filmstrip key is dropped along with its geometry', () => {
   assert.equal(out.filmstripKey, null);
   assert.equal(out.metadata.filmstrip, undefined);
 });
+
+// ── Player posters ─────────────────────────────────────────────────────────
+// A video's larger poster for the detail page. Same prefix again, told apart by
+// `.poster`, and recorded only with the thumbnail it is a larger copy of.
+
+const { isPosterKey } = await import('../lib/media.js');
+const POSTER_KEY = `_thumbs/${UUID}.poster.webp`;
+
+test('a poster key is none of the other preview keys, and they are not posters', () => {
+  assert.equal(isPosterKey(POSTER_KEY), true);
+  assert.equal(isPosterKey(`_thumbs/${UUID}.poster.jpg`), true, 'JPEG, from a browser with no WebP encoder');
+  assert.equal(isThumbKey(POSTER_KEY), false, 'a poster must not be recordable as a thumbnail');
+  assert.equal(isFilmstripKey(POSTER_KEY), false);
+  assert.equal(isPosterKey(`_thumbs/${UUID}.webp`), false, 'a thumbnail must not be recordable as a poster');
+  assert.equal(isPosterKey(STRIP_KEY), false);
+});
+
+test('a poster key must be one the presign route would have named', () => {
+  for (const bad of [
+    `files/${UUID}.poster.webp`,
+    `_thumbs/${UUID}.poster.png`,
+    `_thumbs/../${UUID}.poster.webp`,
+    `_thumbs/notauuid.poster.webp`,
+    `${POSTER_KEY}?x=1`,
+    null, 42, {},
+  ]) {
+    assert.equal(isPosterKey(bad), false, JSON.stringify(bad));
+  }
+});
+
+test('a poster is recorded only alongside a thumbnail, and only under a key the server named', () => {
+  assert.equal(uploadFields({ thumbnailKey: KEY, posterKey: POSTER_KEY }).posterKey, POSTER_KEY);
+  assert.equal(uploadFields({ posterKey: POSTER_KEY }).posterKey, null, 'no poster without the thumbnail it enlarges');
+  assert.equal(uploadFields({ thumbnailKey: KEY, posterKey: 'files/someone-else.jpg' }).posterKey, null);
+  assert.equal(uploadFields({ thumbnailKey: KEY, posterKey: KEY }).posterKey, null, 'a thumbnail key is not a poster');
+  assert.equal(uploadFields({ thumbnailKey: KEY }).posterKey, null);
+});

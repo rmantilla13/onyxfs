@@ -7,8 +7,9 @@ import assert from 'node:assert/strict';
 
 const {
   filmstripLayout, filmstripTimes, frameIndexAt, framePosition, layoutFromMetadata,
-  FILMSTRIP_FRAMES, FILMSTRIP_COLUMNS, FILMSTRIP_TILE_WIDTH,
+  FILMSTRIP_FRAMES, FILMSTRIP_COLUMNS, FILMSTRIP_TILE_WIDTH, FILMSTRIP_DENSITY, FILMSTRIP_MAX_SHEET,
 } = await import('../lib/filmstrip.js');
+const { filmstripFacts } = await import('../lib/media.js');
 
 describe('filmstripLayout', () => {
   test('a 16:9 source tiles into rows of the configured width', () => {
@@ -59,6 +60,61 @@ describe('filmstripLayout', () => {
                        { width: NaN, height: 100 }, { width: -1920, height: -1080 }]) {
       assert.equal(filmstripLayout(bad), null, JSON.stringify(bad));
     }
+  });
+});
+
+describe('sheet density', () => {
+  // A sheet is encoded at 2 image pixels per CSS pixel, so a tile is sharp on
+  // a 2x screen. The geometry stays in CSS pixels: that is what is stored and
+  // what the player positions with, so it needs no change and a 1x sheet from
+  // before still lines up.
+  test('a 1080p clip gets a 2x sheet with the same CSS geometry as before', () => {
+    const l = filmstripLayout({ width: 1920, height: 1080, density: FILMSTRIP_DENSITY });
+    assert.equal(FILMSTRIP_DENSITY, 2);
+    assert.equal(l.density, 2);
+    assert.equal(l.tileWidth, FILMSTRIP_TILE_WIDTH);
+    assert.equal(l.tileHeight, 90);
+    assert.equal(l.pixelWidth, 2560);
+    assert.equal(l.pixelHeight, 900);
+    const { density, pixelWidth, pixelHeight, ...css } = l;
+    const { density: d1, pixelWidth: w1, pixelHeight: h1, ...before } = filmstripLayout({ width: 1920, height: 1080 });
+    assert.deepEqual(css, before);
+  });
+
+  test('without asking, a layout is 1x — which is what reading a stored one does', () => {
+    const l = filmstripLayout({ width: 1920, height: 1080 });
+    assert.equal(l.density, 1);
+    assert.equal(l.pixelWidth, l.sheetWidth);
+  });
+
+  test('never enlarges a clip narrower than a 2x tile', () => {
+    const l = filmstripLayout({ width: 240, height: 136, density: 2 });
+    assert.equal(l.density, 1);
+    assert.equal(l.pixelWidth, l.sheetWidth);
+  });
+
+  test('never passes the texture limit in image pixels', () => {
+    for (const [w, h] of [[1920, 1080], [1080, 1920], [4096, 2160], [1080, 2400], [1080, 3000], [100, 37]]) {
+      const l = filmstripLayout({ width: w, height: h, density: FILMSTRIP_DENSITY });
+      assert.ok(l.pixelWidth <= FILMSTRIP_MAX_SHEET && l.pixelHeight <= FILMSTRIP_MAX_SHEET,
+        `${w}x${h}: ${l.pixelWidth}x${l.pixelHeight}`);
+    }
+    // Tall enough that 2x would pass it: 1x, as every sheet used to be.
+    assert.equal(filmstripLayout({ width: 1080, height: 3000, density: 2 }).density, 1);
+    assert.equal(filmstripLayout({ width: 1080, height: 1920, density: 2 }).density, 2);
+  });
+
+  test('what a 2x sheet stores is accepted by the server and read back as CSS pixels', () => {
+    const made = filmstripLayout({ width: 3840, height: 2160, density: FILMSTRIP_DENSITY });
+    const stored = filmstripFacts({ frames: made.frames, columns: made.columns, tileWidth: made.tileWidth, tileHeight: made.tileHeight });
+    assert.deepEqual(stored, { frames: 40, columns: 8, tileWidth: 160, tileHeight: 90 });
+    const back = layoutFromMetadata({ filmstrip: stored });
+    assert.equal(back.sheetWidth, 1280);
+    assert.equal(back.sheetHeight, 450);
+    assert.equal(back.density, undefined, 'image-pixel fields are not the player’s business');
+    // The player sets background-size in CSS pixels, so the 2560px image is fitted into 1280.
+    assert.equal(framePosition(9, back).backgroundSize, '1280px 450px');
+    assert.equal(framePosition(9, back).backgroundPosition, '-160px -90px');
   });
 });
 
