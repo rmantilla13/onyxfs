@@ -5,6 +5,7 @@ import { Thumb, fmtSize } from './FileCard';
 import { fileFacts, selectionFacts, kindLabel } from '@/lib/file-info';
 import { crumbsFor, baseName } from '@/lib/folder-ops';
 import { fmtDuration } from '@/lib/media';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * "Get info", the way a file manager has it: one file, several, or a folder.
@@ -80,19 +81,9 @@ function Facts({ rows, onOpenFolder }) {
   );
 }
 
-const FolderIcon = () => (
-  <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden>
-    <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.3l2 2h8.7A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-  </svg>
-);
+const FolderIcon = () => <Icon name="folder" size={28} strokeWidth={1.5} />;
 
-const DriveIcon = () => (
-  <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden>
-    <rect x="3" y="6" width="18" height="12" rx="2.4" fill="none" stroke="currentColor" strokeWidth="1.5" />
-    <path d="M6.5 14h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    <circle cx="17" cy="14" r="1.1" fill="currentColor" />
-  </svg>
-);
+const DriveIcon = () => <Icon name="hard-drive" size={28} strokeWidth={1.5} />;
 
 const ROLE_LABELS = {
   owner: 'Owner — can edit, and manage its members',

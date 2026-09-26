@@ -6,6 +6,7 @@ import { isUndersizedPoster, thumbSiblingSizes } from '@/lib/poster';
 import { thumbSources } from '@/lib/renditions';
 import { fileKey } from '@/lib/selection';
 import { watch } from '@/lib/thumb-observer';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * One file card, for the library grid and the public share grid — which had
@@ -144,7 +145,7 @@ export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface 
           />
         )
         : <span className="muted small mono">{label || kind}</span>}
-      {kind === 'video' && <span className="filecard-badge">{duration ? `▶ ${duration}` : '▶'}</span>}
+      {kind === 'video' && <span className="filecard-badge"><Icon name="play" size={10} strokeWidth={2.5} fill="currentColor" />{duration}</span>}
     </div>
   );
 });

@@ -43,6 +43,7 @@ import { isTouch } from './usePointerIntent';
 import {
   folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, crumbsFor, folderStats,
 } from '@/lib/folder-ops';
+import Icon from '@/app/components/ui/Icon';
 
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
@@ -1703,9 +1704,7 @@ export default function FilesClient({
             aria-label={back?.label || 'Back'}
             title={back?.label}
           >
-            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden>
-              <path d="M9.5 3.5 5 8l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+            <Icon name="chevron-left" />
           </button>
         )}
         <Breadcrumbs folder={folder} rootName={rootName} onOpen={navigate} canWrite={canWrite} onDrop={onTreeDrop} />
@@ -1780,10 +1779,10 @@ export default function FilesClient({
         </select>
         <div className="view-toggle" role="group" aria-label="View">
           <button type="button" className="btn" aria-pressed={view === 'grid'} aria-label="Grid view" title="Grid view" onClick={() => changeView('grid')}>
-            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><path d="M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" /></svg>
+            <Icon name="layout-grid" />
           </button>
           <button type="button" className="btn" aria-pressed={view === 'list'} aria-label="List view" title="List view" onClick={() => changeView('list')}>
-            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><path d="M2 3.5h12M2 8h12M2 12.5h12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg>
+            <Icon name="list" />
           </button>
         </div>
         <div className="kind-row">
@@ -1807,9 +1806,7 @@ export default function FilesClient({
             aria-expanded={filtersOpen}
             aria-controls="files-filters"
           >
-            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
-              <path d="M2 4h12M4.5 8h7M7 12h2" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-            </svg>
+            <Icon name="list-filter" size={14} />
             Filters
             {hasAnyFacet(facets) && <span className="count-badge">{countActive(facets)}</span>}
           </button>
@@ -2220,7 +2217,7 @@ const FolderTree = memo(function FolderTree({ folders, selected, onSelect, canWr
             aria-expanded={isOpen}
             aria-label={`${isOpen ? 'Collapse' : 'Expand'} ${f.folder}`}
           >
-            <span aria-hidden>{isOpen ? '▾' : '▸'}</span>
+            <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} /* icons: chevron-down chevron-right */ />
           </button>
         ) : (
           <span className="folder-toggle" aria-hidden />

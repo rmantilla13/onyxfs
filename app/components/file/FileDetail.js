@@ -22,6 +22,7 @@ import AnnotationLayer from '@/app/components/review/AnnotationLayer';
 import PinLayer from '@/app/components/review/PinLayer';
 import useReviewFeed from '@/app/components/review/useReviewFeed';
 import useReviewDraft from '@/app/components/review/useReviewDraft';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * The file detail view: preview on the left, inspector on the right.
@@ -301,7 +302,7 @@ export default function FileDetail({
     <FileDetailFrame
       header={(
         <>
-        <a className="btn btn-ghost btn-sm" href={backHref} onClick={goBack}>← Back</a>
+        <a className="btn btn-ghost btn-sm" href={backHref} onClick={goBack}><Icon name="arrow-left" size={14} />Back</a>
         <h1 className="truncate" style={{ fontSize: 'var(--t-xl)', minWidth: 0 }} title={file.name}>{file.name}</h1>
         {review && <ReviewStatusTag status={status} className="review-status-head" />}
         <div className="spacer" />

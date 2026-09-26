@@ -4,9 +4,10 @@ import { useState } from 'react';
 import MentionTextarea, { mentionsIn } from './MentionTextarea';
 import { timecode } from '@/lib/video-time';
 import { ANNOTATION_COLORS, ANNOTATION_TOOLS } from '@/lib/review';
+import Icon from '@/app/components/ui/Icon';
 
 const TOOL_LABEL = { pen: 'Pen', arrow: 'Arrow', rect: 'Rectangle' };
-const TOOL_ICON = { pen: '✎', arrow: '↗', rect: '▭' };
+const TOOL_ICON = { pen: 'pencil', arrow: 'arrow-up-right', rect: 'square' }; /* icons: pencil arrow-up-right square */
 
 /**
  * Writing a comment: the words (with @mentions), what it is pinned to, who
@@ -109,7 +110,7 @@ export default function Composer({
             : (draft.pin ? 'Remove the pin' : 'Click the picture to place a pin')}
         >
           <span className="mono">{chip}</span>
-          {((video && draft.anchored && !drawn) || (!video && draft.pin)) && <span aria-hidden="true"> ×</span>}
+          {((video && draft.anchored && !drawn) || (!video && draft.pin)) && <Icon name="x" size={12} />}
         </button>
 
         <label className="review-internal small" title="Only people signed in to this workspace see it — never guests on a review link.">
@@ -133,7 +134,7 @@ export default function Composer({
             title={TOOL_LABEL[t]}
             onClick={() => set({ tool: draft.tool === t ? null : t, placing: false })}
           >
-            <span aria-hidden="true">{TOOL_ICON[t]}</span>
+            <Icon name={TOOL_ICON[t]} size={14} />
             <span className="sr-only">{TOOL_LABEL[t]}</span>
           </button>
         ))}

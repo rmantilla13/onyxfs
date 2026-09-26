@@ -1,0 +1,3346 @@
+{
+  "source": "Lucide (lucide-static)",
+  "version": "1.48.0",
+  "license": "ISC (some icons MIT, derived from Feather) - see LICENSE",
+  "count": 454,
+  "categories": {
+    "navigation": 32,
+    "actions": 32,
+    "media": 30,
+    "communication": 30,
+    "files": 30,
+    "users": 25,
+    "commerce": 25,
+    "status": 30,
+    "settings": 29,
+    "data": 29,
+    "audio": 36,
+    "video": 36,
+    "visual": 45,
+    "documents": 45
+  },
+  "icons": [
+    {
+      "name": "arrow-up",
+      "category": "navigation",
+      "path": "svg/navigation/arrow-up.svg",
+      "id": "icon-arrow-up",
+      "aliases": []
+    },
+    {
+      "name": "arrow-down",
+      "category": "navigation",
+      "path": "svg/navigation/arrow-down.svg",
+      "id": "icon-arrow-down",
+      "aliases": []
+    },
+    {
+      "name": "arrow-left",
+      "category": "navigation",
+      "path": "svg/navigation/arrow-left.svg",
+      "id": "icon-arrow-left",
+      "aliases": []
+    },
+    {
+      "name": "arrow-right",
+      "category": "navigation",
+      "path": "svg/navigation/arrow-right.svg",
+      "id": "icon-arrow-right",
+      "aliases": []
+    },
+    {
+      "name": "arrow-up-right",
+      "category": "navigation",
+      "path": "svg/navigation/arrow-up-right.svg",
+      "id": "icon-arrow-up-right",
+      "aliases": []
+    },
+    {
+      "name": "arrow-down-right",
+      "category": "navigation",
+      "path": "svg/navigation/arrow-down-right.svg",
+      "id": "icon-arrow-down-right",
+      "aliases": []
+    },
+    {
+      "name": "chevron-up",
+      "category": "navigation",
+      "path": "svg/navigation/chevron-up.svg",
+      "id": "icon-chevron-up",
+      "aliases": []
+    },
+    {
+      "name": "chevron-down",
+      "category": "navigation",
+      "path": "svg/navigation/chevron-down.svg",
+      "id": "icon-chevron-down",
+      "aliases": []
+    },
+    {
+      "name": "chevron-left",
+      "category": "navigation",
+      "path": "svg/navigation/chevron-left.svg",
+      "id": "icon-chevron-left",
+      "aliases": []
+    },
+    {
+      "name": "chevron-right",
+      "category": "navigation",
+      "path": "svg/navigation/chevron-right.svg",
+      "id": "icon-chevron-right",
+      "aliases": []
+    },
+    {
+      "name": "chevrons-up",
+      "category": "navigation",
+      "path": "svg/navigation/chevrons-up.svg",
+      "id": "icon-chevrons-up",
+      "aliases": []
+    },
+    {
+      "name": "chevrons-down",
+      "category": "navigation",
+      "path": "svg/navigation/chevrons-down.svg",
+      "id": "icon-chevrons-down",
+      "aliases": []
+    },
+    {
+      "name": "chevrons-left",
+      "category": "navigation",
+      "path": "svg/navigation/chevrons-left.svg",
+      "id": "icon-chevrons-left",
+      "aliases": []
+    },
+    {
+      "name": "chevrons-right",
+      "category": "navigation",
+      "path": "svg/navigation/chevrons-right.svg",
+      "id": "icon-chevrons-right",
+      "aliases": []
+    },
+    {
+      "name": "chevrons-up-down",
+      "category": "navigation",
+      "path": "svg/navigation/chevrons-up-down.svg",
+      "id": "icon-chevrons-up-down",
+      "aliases": []
+    },
+    {
+      "name": "undo-2",
+      "category": "navigation",
+      "path": "svg/navigation/undo-2.svg",
+      "id": "icon-undo-2",
+      "aliases": []
+    },
+    {
+      "name": "redo-2",
+      "category": "navigation",
+      "path": "svg/navigation/redo-2.svg",
+      "id": "icon-redo-2",
+      "aliases": []
+    },
+    {
+      "name": "menu",
+      "category": "navigation",
+      "path": "svg/navigation/menu.svg",
+      "id": "icon-menu",
+      "aliases": []
+    },
+    {
+      "name": "ellipsis",
+      "category": "navigation",
+      "path": "svg/navigation/ellipsis.svg",
+      "id": "icon-ellipsis",
+      "aliases": [
+        "more-horizontal"
+      ]
+    },
+    {
+      "name": "ellipsis-vertical",
+      "category": "navigation",
+      "path": "svg/navigation/ellipsis-vertical.svg",
+      "id": "icon-ellipsis-vertical",
+      "aliases": [
+        "more-vertical"
+      ]
+    },
+    {
+      "name": "grip-vertical",
+      "category": "navigation",
+      "path": "svg/navigation/grip-vertical.svg",
+      "id": "icon-grip-vertical",
+      "aliases": []
+    },
+    {
+      "name": "house",
+      "category": "navigation",
+      "path": "svg/navigation/house.svg",
+      "id": "icon-house",
+      "aliases": [
+        "home"
+      ]
+    },
+    {
+      "name": "x",
+      "category": "navigation",
+      "path": "svg/navigation/x.svg",
+      "id": "icon-x",
+      "aliases": []
+    },
+    {
+      "name": "circle-x",
+      "category": "navigation",
+      "path": "svg/navigation/circle-x.svg",
+      "id": "icon-circle-x",
+      "aliases": [
+        "x-circle"
+      ]
+    },
+    {
+      "name": "external-link",
+      "category": "navigation",
+      "path": "svg/navigation/external-link.svg",
+      "id": "icon-external-link",
+      "aliases": []
+    },
+    {
+      "name": "panel-left",
+      "category": "navigation",
+      "path": "svg/navigation/panel-left.svg",
+      "id": "icon-panel-left",
+      "aliases": [
+        "sidebar"
+      ]
+    },
+    {
+      "name": "maximize",
+      "category": "navigation",
+      "path": "svg/navigation/maximize.svg",
+      "id": "icon-maximize",
+      "aliases": []
+    },
+    {
+      "name": "minimize",
+      "category": "navigation",
+      "path": "svg/navigation/minimize.svg",
+      "id": "icon-minimize",
+      "aliases": []
+    },
+    {
+      "name": "navigation",
+      "category": "navigation",
+      "path": "svg/navigation/navigation.svg",
+      "id": "icon-navigation",
+      "aliases": []
+    },
+    {
+      "name": "compass",
+      "category": "navigation",
+      "path": "svg/navigation/compass.svg",
+      "id": "icon-compass",
+      "aliases": []
+    },
+    {
+      "name": "layout-grid",
+      "category": "navigation",
+      "path": "svg/navigation/layout-grid.svg",
+      "id": "icon-layout-grid",
+      "aliases": []
+    },
+    {
+      "name": "layout-dashboard",
+      "category": "navigation",
+      "path": "svg/navigation/layout-dashboard.svg",
+      "id": "icon-layout-dashboard",
+      "aliases": []
+    },
+    {
+      "name": "plus",
+      "category": "actions",
+      "path": "svg/actions/plus.svg",
+      "id": "icon-plus",
+      "aliases": []
+    },
+    {
+      "name": "minus",
+      "category": "actions",
+      "path": "svg/actions/minus.svg",
+      "id": "icon-minus",
+      "aliases": []
+    },
+    {
+      "name": "circle-plus",
+      "category": "actions",
+      "path": "svg/actions/circle-plus.svg",
+      "id": "icon-circle-plus",
+      "aliases": [
+        "plus-circle"
+      ]
+    },
+    {
+      "name": "pencil",
+      "category": "actions",
+      "path": "svg/actions/pencil.svg",
+      "id": "icon-pencil",
+      "aliases": []
+    },
+    {
+      "name": "square-pen",
+      "category": "actions",
+      "path": "svg/actions/square-pen.svg",
+      "id": "icon-square-pen",
+      "aliases": [
+        "edit",
+        "pen-box",
+        "pen-square"
+      ]
+    },
+    {
+      "name": "trash",
+      "category": "actions",
+      "path": "svg/actions/trash.svg",
+      "id": "icon-trash",
+      "aliases": [
+        "trash-2"
+      ]
+    },
+    {
+      "name": "save",
+      "category": "actions",
+      "path": "svg/actions/save.svg",
+      "id": "icon-save",
+      "aliases": []
+    },
+    {
+      "name": "share",
+      "category": "actions",
+      "path": "svg/actions/share.svg",
+      "id": "icon-share",
+      "aliases": []
+    },
+    {
+      "name": "share-2",
+      "category": "actions",
+      "path": "svg/actions/share-2.svg",
+      "id": "icon-share-2",
+      "aliases": []
+    },
+    {
+      "name": "search",
+      "category": "actions",
+      "path": "svg/actions/search.svg",
+      "id": "icon-search",
+      "aliases": []
+    },
+    {
+      "name": "zoom-in",
+      "category": "actions",
+      "path": "svg/actions/zoom-in.svg",
+      "id": "icon-zoom-in",
+      "aliases": []
+    },
+    {
+      "name": "funnel",
+      "category": "actions",
+      "path": "svg/actions/funnel.svg",
+      "id": "icon-funnel",
+      "aliases": [
+        "filter"
+      ]
+    },
+    {
+      "name": "arrow-up-down",
+      "category": "actions",
+      "path": "svg/actions/arrow-up-down.svg",
+      "id": "icon-arrow-up-down",
+      "aliases": []
+    },
+    {
+      "name": "arrow-down-wide-narrow",
+      "category": "actions",
+      "path": "svg/actions/arrow-down-wide-narrow.svg",
+      "id": "icon-arrow-down-wide-narrow",
+      "aliases": [
+        "sort-desc"
+      ]
+    },
+    {
+      "name": "list-filter",
+      "category": "actions",
+      "path": "svg/actions/list-filter.svg",
+      "id": "icon-list-filter",
+      "aliases": []
+    },
+    {
+      "name": "copy",
+      "category": "actions",
+      "path": "svg/actions/copy.svg",
+      "id": "icon-copy",
+      "aliases": []
+    },
+    {
+      "name": "clipboard",
+      "category": "actions",
+      "path": "svg/actions/clipboard.svg",
+      "id": "icon-clipboard",
+      "aliases": []
+    },
+    {
+      "name": "scissors",
+      "category": "actions",
+      "path": "svg/actions/scissors.svg",
+      "id": "icon-scissors",
+      "aliases": []
+    },
+    {
+      "name": "download",
+      "category": "actions",
+      "path": "svg/actions/download.svg",
+      "id": "icon-download",
+      "aliases": []
+    },
+    {
+      "name": "upload",
+      "category": "actions",
+      "path": "svg/actions/upload.svg",
+      "id": "icon-upload",
+      "aliases": []
+    },
+    {
+      "name": "refresh-cw",
+      "category": "actions",
+      "path": "svg/actions/refresh-cw.svg",
+      "id": "icon-refresh-cw",
+      "aliases": []
+    },
+    {
+      "name": "refresh-ccw",
+      "category": "actions",
+      "path": "svg/actions/refresh-ccw.svg",
+      "id": "icon-refresh-ccw",
+      "aliases": []
+    },
+    {
+      "name": "undo",
+      "category": "actions",
+      "path": "svg/actions/undo.svg",
+      "id": "icon-undo",
+      "aliases": []
+    },
+    {
+      "name": "redo",
+      "category": "actions",
+      "path": "svg/actions/redo.svg",
+      "id": "icon-redo",
+      "aliases": []
+    },
+    {
+      "name": "link",
+      "category": "actions",
+      "path": "svg/actions/link.svg",
+      "id": "icon-link",
+      "aliases": []
+    },
+    {
+      "name": "unlink",
+      "category": "actions",
+      "path": "svg/actions/unlink.svg",
+      "id": "icon-unlink",
+      "aliases": []
+    },
+    {
+      "name": "printer",
+      "category": "actions",
+      "path": "svg/actions/printer.svg",
+      "id": "icon-printer",
+      "aliases": []
+    },
+    {
+      "name": "eye",
+      "category": "actions",
+      "path": "svg/actions/eye.svg",
+      "id": "icon-eye",
+      "aliases": []
+    },
+    {
+      "name": "eye-off",
+      "category": "actions",
+      "path": "svg/actions/eye-off.svg",
+      "id": "icon-eye-off",
+      "aliases": []
+    },
+    {
+      "name": "archive",
+      "category": "actions",
+      "path": "svg/actions/archive.svg",
+      "id": "icon-archive",
+      "aliases": []
+    },
+    {
+      "name": "qr-code",
+      "category": "actions",
+      "path": "svg/actions/qr-code.svg",
+      "id": "icon-qr-code",
+      "aliases": []
+    },
+    {
+      "name": "sparkles",
+      "category": "actions",
+      "path": "svg/actions/sparkles.svg",
+      "id": "icon-sparkles",
+      "aliases": [
+        "stars"
+      ]
+    },
+    {
+      "name": "play",
+      "category": "media",
+      "path": "svg/media/play.svg",
+      "id": "icon-play",
+      "aliases": []
+    },
+    {
+      "name": "pause",
+      "category": "media",
+      "path": "svg/media/pause.svg",
+      "id": "icon-pause",
+      "aliases": []
+    },
+    {
+      "name": "circle-play",
+      "category": "media",
+      "path": "svg/media/circle-play.svg",
+      "id": "icon-circle-play",
+      "aliases": [
+        "play-circle"
+      ]
+    },
+    {
+      "name": "circle-pause",
+      "category": "media",
+      "path": "svg/media/circle-pause.svg",
+      "id": "icon-circle-pause",
+      "aliases": [
+        "pause-circle"
+      ]
+    },
+    {
+      "name": "skip-back",
+      "category": "media",
+      "path": "svg/media/skip-back.svg",
+      "id": "icon-skip-back",
+      "aliases": []
+    },
+    {
+      "name": "skip-forward",
+      "category": "media",
+      "path": "svg/media/skip-forward.svg",
+      "id": "icon-skip-forward",
+      "aliases": []
+    },
+    {
+      "name": "rewind",
+      "category": "media",
+      "path": "svg/media/rewind.svg",
+      "id": "icon-rewind",
+      "aliases": []
+    },
+    {
+      "name": "fast-forward",
+      "category": "media",
+      "path": "svg/media/fast-forward.svg",
+      "id": "icon-fast-forward",
+      "aliases": []
+    },
+    {
+      "name": "repeat",
+      "category": "media",
+      "path": "svg/media/repeat.svg",
+      "id": "icon-repeat",
+      "aliases": []
+    },
+    {
+      "name": "shuffle",
+      "category": "media",
+      "path": "svg/media/shuffle.svg",
+      "id": "icon-shuffle",
+      "aliases": []
+    },
+    {
+      "name": "camera",
+      "category": "media",
+      "path": "svg/media/camera.svg",
+      "id": "icon-camera",
+      "aliases": []
+    },
+    {
+      "name": "image",
+      "category": "media",
+      "path": "svg/media/image.svg",
+      "id": "icon-image",
+      "aliases": []
+    },
+    {
+      "name": "images",
+      "category": "media",
+      "path": "svg/media/images.svg",
+      "id": "icon-images",
+      "aliases": []
+    },
+    {
+      "name": "video",
+      "category": "media",
+      "path": "svg/media/video.svg",
+      "id": "icon-video",
+      "aliases": []
+    },
+    {
+      "name": "video-off",
+      "category": "media",
+      "path": "svg/media/video-off.svg",
+      "id": "icon-video-off",
+      "aliases": []
+    },
+    {
+      "name": "film",
+      "category": "media",
+      "path": "svg/media/film.svg",
+      "id": "icon-film",
+      "aliases": []
+    },
+    {
+      "name": "mic",
+      "category": "media",
+      "path": "svg/media/mic.svg",
+      "id": "icon-mic",
+      "aliases": []
+    },
+    {
+      "name": "mic-off",
+      "category": "media",
+      "path": "svg/media/mic-off.svg",
+      "id": "icon-mic-off",
+      "aliases": []
+    },
+    {
+      "name": "volume",
+      "category": "media",
+      "path": "svg/media/volume.svg",
+      "id": "icon-volume",
+      "aliases": []
+    },
+    {
+      "name": "volume-1",
+      "category": "media",
+      "path": "svg/media/volume-1.svg",
+      "id": "icon-volume-1",
+      "aliases": []
+    },
+    {
+      "name": "volume-2",
+      "category": "media",
+      "path": "svg/media/volume-2.svg",
+      "id": "icon-volume-2",
+      "aliases": []
+    },
+    {
+      "name": "volume-x",
+      "category": "media",
+      "path": "svg/media/volume-x.svg",
+      "id": "icon-volume-x",
+      "aliases": []
+    },
+    {
+      "name": "music",
+      "category": "media",
+      "path": "svg/media/music.svg",
+      "id": "icon-music",
+      "aliases": []
+    },
+    {
+      "name": "headphones",
+      "category": "media",
+      "path": "svg/media/headphones.svg",
+      "id": "icon-headphones",
+      "aliases": []
+    },
+    {
+      "name": "speaker",
+      "category": "media",
+      "path": "svg/media/speaker.svg",
+      "id": "icon-speaker",
+      "aliases": []
+    },
+    {
+      "name": "radio",
+      "category": "media",
+      "path": "svg/media/radio.svg",
+      "id": "icon-radio",
+      "aliases": []
+    },
+    {
+      "name": "tv",
+      "category": "media",
+      "path": "svg/media/tv.svg",
+      "id": "icon-tv",
+      "aliases": []
+    },
+    {
+      "name": "cast",
+      "category": "media",
+      "path": "svg/media/cast.svg",
+      "id": "icon-cast",
+      "aliases": []
+    },
+    {
+      "name": "airplay",
+      "category": "media",
+      "path": "svg/media/airplay.svg",
+      "id": "icon-airplay",
+      "aliases": []
+    },
+    {
+      "name": "mic-signal",
+      "category": "media",
+      "path": "svg/media/mic-signal.svg",
+      "id": "icon-mic-signal",
+      "aliases": [
+        "podcast"
+      ]
+    },
+    {
+      "name": "mail",
+      "category": "communication",
+      "path": "svg/communication/mail.svg",
+      "id": "icon-mail",
+      "aliases": []
+    },
+    {
+      "name": "mail-open",
+      "category": "communication",
+      "path": "svg/communication/mail-open.svg",
+      "id": "icon-mail-open",
+      "aliases": []
+    },
+    {
+      "name": "mails",
+      "category": "communication",
+      "path": "svg/communication/mails.svg",
+      "id": "icon-mails",
+      "aliases": []
+    },
+    {
+      "name": "mail-plus",
+      "category": "communication",
+      "path": "svg/communication/mail-plus.svg",
+      "id": "icon-mail-plus",
+      "aliases": []
+    },
+    {
+      "name": "inbox",
+      "category": "communication",
+      "path": "svg/communication/inbox.svg",
+      "id": "icon-inbox",
+      "aliases": []
+    },
+    {
+      "name": "message-circle",
+      "category": "communication",
+      "path": "svg/communication/message-circle.svg",
+      "id": "icon-message-circle",
+      "aliases": []
+    },
+    {
+      "name": "message-square",
+      "category": "communication",
+      "path": "svg/communication/message-square.svg",
+      "id": "icon-message-square",
+      "aliases": []
+    },
+    {
+      "name": "message-square-text",
+      "category": "communication",
+      "path": "svg/communication/message-square-text.svg",
+      "id": "icon-message-square-text",
+      "aliases": []
+    },
+    {
+      "name": "messages-square",
+      "category": "communication",
+      "path": "svg/communication/messages-square.svg",
+      "id": "icon-messages-square",
+      "aliases": []
+    },
+    {
+      "name": "message-circle-more",
+      "category": "communication",
+      "path": "svg/communication/message-circle-more.svg",
+      "id": "icon-message-circle-more",
+      "aliases": []
+    },
+    {
+      "name": "phone",
+      "category": "communication",
+      "path": "svg/communication/phone.svg",
+      "id": "icon-phone",
+      "aliases": []
+    },
+    {
+      "name": "phone-call",
+      "category": "communication",
+      "path": "svg/communication/phone-call.svg",
+      "id": "icon-phone-call",
+      "aliases": []
+    },
+    {
+      "name": "phone-incoming",
+      "category": "communication",
+      "path": "svg/communication/phone-incoming.svg",
+      "id": "icon-phone-incoming",
+      "aliases": []
+    },
+    {
+      "name": "phone-outgoing",
+      "category": "communication",
+      "path": "svg/communication/phone-outgoing.svg",
+      "id": "icon-phone-outgoing",
+      "aliases": []
+    },
+    {
+      "name": "phone-missed",
+      "category": "communication",
+      "path": "svg/communication/phone-missed.svg",
+      "id": "icon-phone-missed",
+      "aliases": []
+    },
+    {
+      "name": "phone-off",
+      "category": "communication",
+      "path": "svg/communication/phone-off.svg",
+      "id": "icon-phone-off",
+      "aliases": []
+    },
+    {
+      "name": "bell",
+      "category": "communication",
+      "path": "svg/communication/bell.svg",
+      "id": "icon-bell",
+      "aliases": []
+    },
+    {
+      "name": "bell-off",
+      "category": "communication",
+      "path": "svg/communication/bell-off.svg",
+      "id": "icon-bell-off",
+      "aliases": []
+    },
+    {
+      "name": "bell-ring",
+      "category": "communication",
+      "path": "svg/communication/bell-ring.svg",
+      "id": "icon-bell-ring",
+      "aliases": []
+    },
+    {
+      "name": "bell-dot",
+      "category": "communication",
+      "path": "svg/communication/bell-dot.svg",
+      "id": "icon-bell-dot",
+      "aliases": []
+    },
+    {
+      "name": "send",
+      "category": "communication",
+      "path": "svg/communication/send.svg",
+      "id": "icon-send",
+      "aliases": []
+    },
+    {
+      "name": "send-horizontal",
+      "category": "communication",
+      "path": "svg/communication/send-horizontal.svg",
+      "id": "icon-send-horizontal",
+      "aliases": [
+        "send-horizonal"
+      ]
+    },
+    {
+      "name": "at-sign",
+      "category": "communication",
+      "path": "svg/communication/at-sign.svg",
+      "id": "icon-at-sign",
+      "aliases": []
+    },
+    {
+      "name": "megaphone",
+      "category": "communication",
+      "path": "svg/communication/megaphone.svg",
+      "id": "icon-megaphone",
+      "aliases": []
+    },
+    {
+      "name": "rss",
+      "category": "communication",
+      "path": "svg/communication/rss.svg",
+      "id": "icon-rss",
+      "aliases": []
+    },
+    {
+      "name": "voicemail",
+      "category": "communication",
+      "path": "svg/communication/voicemail.svg",
+      "id": "icon-voicemail",
+      "aliases": []
+    },
+    {
+      "name": "reply",
+      "category": "communication",
+      "path": "svg/communication/reply.svg",
+      "id": "icon-reply",
+      "aliases": []
+    },
+    {
+      "name": "reply-all",
+      "category": "communication",
+      "path": "svg/communication/reply-all.svg",
+      "id": "icon-reply-all",
+      "aliases": []
+    },
+    {
+      "name": "forward",
+      "category": "communication",
+      "path": "svg/communication/forward.svg",
+      "id": "icon-forward",
+      "aliases": []
+    },
+    {
+      "name": "face-slightly-smiling",
+      "category": "communication",
+      "path": "svg/communication/face-slightly-smiling.svg",
+      "id": "icon-face-slightly-smiling",
+      "aliases": [
+        "smile"
+      ]
+    },
+    {
+      "name": "file",
+      "category": "files",
+      "path": "svg/files/file.svg",
+      "id": "icon-file",
+      "aliases": []
+    },
+    {
+      "name": "file-text",
+      "category": "files",
+      "path": "svg/files/file-text.svg",
+      "id": "icon-file-text",
+      "aliases": []
+    },
+    {
+      "name": "file-plus",
+      "category": "files",
+      "path": "svg/files/file-plus.svg",
+      "id": "icon-file-plus",
+      "aliases": []
+    },
+    {
+      "name": "file-check",
+      "category": "files",
+      "path": "svg/files/file-check.svg",
+      "id": "icon-file-check",
+      "aliases": []
+    },
+    {
+      "name": "file-x",
+      "category": "files",
+      "path": "svg/files/file-x.svg",
+      "id": "icon-file-x",
+      "aliases": []
+    },
+    {
+      "name": "file-image",
+      "category": "files",
+      "path": "svg/files/file-image.svg",
+      "id": "icon-file-image",
+      "aliases": []
+    },
+    {
+      "name": "file-play",
+      "category": "files",
+      "path": "svg/files/file-play.svg",
+      "id": "icon-file-play",
+      "aliases": [
+        "file-video"
+      ]
+    },
+    {
+      "name": "file-headphone",
+      "category": "files",
+      "path": "svg/files/file-headphone.svg",
+      "id": "icon-file-headphone",
+      "aliases": [
+        "file-audio",
+        "file-audio-2"
+      ]
+    },
+    {
+      "name": "file-code",
+      "category": "files",
+      "path": "svg/files/file-code.svg",
+      "id": "icon-file-code",
+      "aliases": []
+    },
+    {
+      "name": "file-archive",
+      "category": "files",
+      "path": "svg/files/file-archive.svg",
+      "id": "icon-file-archive",
+      "aliases": []
+    },
+    {
+      "name": "file-spreadsheet",
+      "category": "files",
+      "path": "svg/files/file-spreadsheet.svg",
+      "id": "icon-file-spreadsheet",
+      "aliases": []
+    },
+    {
+      "name": "file-pen",
+      "category": "files",
+      "path": "svg/files/file-pen.svg",
+      "id": "icon-file-pen",
+      "aliases": [
+        "file-edit"
+      ]
+    },
+    {
+      "name": "file-search",
+      "category": "files",
+      "path": "svg/files/file-search.svg",
+      "id": "icon-file-search",
+      "aliases": []
+    },
+    {
+      "name": "files",
+      "category": "files",
+      "path": "svg/files/files.svg",
+      "id": "icon-files",
+      "aliases": []
+    },
+    {
+      "name": "folder",
+      "category": "files",
+      "path": "svg/files/folder.svg",
+      "id": "icon-folder",
+      "aliases": []
+    },
+    {
+      "name": "folder-open",
+      "category": "files",
+      "path": "svg/files/folder-open.svg",
+      "id": "icon-folder-open",
+      "aliases": []
+    },
+    {
+      "name": "folder-plus",
+      "category": "files",
+      "path": "svg/files/folder-plus.svg",
+      "id": "icon-folder-plus",
+      "aliases": []
+    },
+    {
+      "name": "folder-lock",
+      "category": "files",
+      "path": "svg/files/folder-lock.svg",
+      "id": "icon-folder-lock",
+      "aliases": []
+    },
+    {
+      "name": "folder-tree",
+      "category": "files",
+      "path": "svg/files/folder-tree.svg",
+      "id": "icon-folder-tree",
+      "aliases": []
+    },
+    {
+      "name": "folders",
+      "category": "files",
+      "path": "svg/files/folders.svg",
+      "id": "icon-folders",
+      "aliases": []
+    },
+    {
+      "name": "paperclip",
+      "category": "files",
+      "path": "svg/files/paperclip.svg",
+      "id": "icon-paperclip",
+      "aliases": []
+    },
+    {
+      "name": "cloud",
+      "category": "files",
+      "path": "svg/files/cloud.svg",
+      "id": "icon-cloud",
+      "aliases": []
+    },
+    {
+      "name": "cloud-upload",
+      "category": "files",
+      "path": "svg/files/cloud-upload.svg",
+      "id": "icon-cloud-upload",
+      "aliases": [
+        "upload-cloud"
+      ]
+    },
+    {
+      "name": "cloud-download",
+      "category": "files",
+      "path": "svg/files/cloud-download.svg",
+      "id": "icon-cloud-download",
+      "aliases": [
+        "download-cloud"
+      ]
+    },
+    {
+      "name": "cloud-off",
+      "category": "files",
+      "path": "svg/files/cloud-off.svg",
+      "id": "icon-cloud-off",
+      "aliases": []
+    },
+    {
+      "name": "hard-drive",
+      "category": "files",
+      "path": "svg/files/hard-drive.svg",
+      "id": "icon-hard-drive",
+      "aliases": []
+    },
+    {
+      "name": "database",
+      "category": "files",
+      "path": "svg/files/database.svg",
+      "id": "icon-database",
+      "aliases": []
+    },
+    {
+      "name": "book",
+      "category": "files",
+      "path": "svg/files/book.svg",
+      "id": "icon-book",
+      "aliases": []
+    },
+    {
+      "name": "book-open",
+      "category": "files",
+      "path": "svg/files/book-open.svg",
+      "id": "icon-book-open",
+      "aliases": []
+    },
+    {
+      "name": "sticky-note",
+      "category": "files",
+      "path": "svg/files/sticky-note.svg",
+      "id": "icon-sticky-note",
+      "aliases": []
+    },
+    {
+      "name": "user",
+      "category": "users",
+      "path": "svg/users/user.svg",
+      "id": "icon-user",
+      "aliases": []
+    },
+    {
+      "name": "user-plus",
+      "category": "users",
+      "path": "svg/users/user-plus.svg",
+      "id": "icon-user-plus",
+      "aliases": []
+    },
+    {
+      "name": "user-minus",
+      "category": "users",
+      "path": "svg/users/user-minus.svg",
+      "id": "icon-user-minus",
+      "aliases": []
+    },
+    {
+      "name": "user-check",
+      "category": "users",
+      "path": "svg/users/user-check.svg",
+      "id": "icon-user-check",
+      "aliases": []
+    },
+    {
+      "name": "user-x",
+      "category": "users",
+      "path": "svg/users/user-x.svg",
+      "id": "icon-user-x",
+      "aliases": []
+    },
+    {
+      "name": "user-round",
+      "category": "users",
+      "path": "svg/users/user-round.svg",
+      "id": "icon-user-round",
+      "aliases": [
+        "user-2"
+      ]
+    },
+    {
+      "name": "user-pen",
+      "category": "users",
+      "path": "svg/users/user-pen.svg",
+      "id": "icon-user-pen",
+      "aliases": []
+    },
+    {
+      "name": "user-cog",
+      "category": "users",
+      "path": "svg/users/user-cog.svg",
+      "id": "icon-user-cog",
+      "aliases": []
+    },
+    {
+      "name": "circle-user",
+      "category": "users",
+      "path": "svg/users/circle-user.svg",
+      "id": "icon-circle-user",
+      "aliases": [
+        "user-circle"
+      ]
+    },
+    {
+      "name": "users",
+      "category": "users",
+      "path": "svg/users/users.svg",
+      "id": "icon-users",
+      "aliases": []
+    },
+    {
+      "name": "users-round",
+      "category": "users",
+      "path": "svg/users/users-round.svg",
+      "id": "icon-users-round",
+      "aliases": [
+        "users-2"
+      ]
+    },
+    {
+      "name": "contact",
+      "category": "users",
+      "path": "svg/users/contact.svg",
+      "id": "icon-contact",
+      "aliases": []
+    },
+    {
+      "name": "id-card",
+      "category": "users",
+      "path": "svg/users/id-card.svg",
+      "id": "icon-id-card",
+      "aliases": []
+    },
+    {
+      "name": "log-in",
+      "category": "users",
+      "path": "svg/users/log-in.svg",
+      "id": "icon-log-in",
+      "aliases": []
+    },
+    {
+      "name": "log-out",
+      "category": "users",
+      "path": "svg/users/log-out.svg",
+      "id": "icon-log-out",
+      "aliases": []
+    },
+    {
+      "name": "lock",
+      "category": "users",
+      "path": "svg/users/lock.svg",
+      "id": "icon-lock",
+      "aliases": []
+    },
+    {
+      "name": "lock-open",
+      "category": "users",
+      "path": "svg/users/lock-open.svg",
+      "id": "icon-lock-open",
+      "aliases": [
+        "unlock"
+      ]
+    },
+    {
+      "name": "key",
+      "category": "users",
+      "path": "svg/users/key.svg",
+      "id": "icon-key",
+      "aliases": []
+    },
+    {
+      "name": "key-round",
+      "category": "users",
+      "path": "svg/users/key-round.svg",
+      "id": "icon-key-round",
+      "aliases": []
+    },
+    {
+      "name": "shield",
+      "category": "users",
+      "path": "svg/users/shield.svg",
+      "id": "icon-shield",
+      "aliases": []
+    },
+    {
+      "name": "shield-check",
+      "category": "users",
+      "path": "svg/users/shield-check.svg",
+      "id": "icon-shield-check",
+      "aliases": []
+    },
+    {
+      "name": "shield-alert",
+      "category": "users",
+      "path": "svg/users/shield-alert.svg",
+      "id": "icon-shield-alert",
+      "aliases": []
+    },
+    {
+      "name": "fingerprint-pattern",
+      "category": "users",
+      "path": "svg/users/fingerprint-pattern.svg",
+      "id": "icon-fingerprint-pattern",
+      "aliases": [
+        "fingerprint"
+      ]
+    },
+    {
+      "name": "badge-check",
+      "category": "users",
+      "path": "svg/users/badge-check.svg",
+      "id": "icon-badge-check",
+      "aliases": [
+        "verified"
+      ]
+    },
+    {
+      "name": "scan-face",
+      "category": "users",
+      "path": "svg/users/scan-face.svg",
+      "id": "icon-scan-face",
+      "aliases": []
+    },
+    {
+      "name": "shopping-cart",
+      "category": "commerce",
+      "path": "svg/commerce/shopping-cart.svg",
+      "id": "icon-shopping-cart",
+      "aliases": []
+    },
+    {
+      "name": "shopping-bag",
+      "category": "commerce",
+      "path": "svg/commerce/shopping-bag.svg",
+      "id": "icon-shopping-bag",
+      "aliases": []
+    },
+    {
+      "name": "shopping-basket",
+      "category": "commerce",
+      "path": "svg/commerce/shopping-basket.svg",
+      "id": "icon-shopping-basket",
+      "aliases": []
+    },
+    {
+      "name": "store",
+      "category": "commerce",
+      "path": "svg/commerce/store.svg",
+      "id": "icon-store",
+      "aliases": []
+    },
+    {
+      "name": "credit-card",
+      "category": "commerce",
+      "path": "svg/commerce/credit-card.svg",
+      "id": "icon-credit-card",
+      "aliases": []
+    },
+    {
+      "name": "wallet",
+      "category": "commerce",
+      "path": "svg/commerce/wallet.svg",
+      "id": "icon-wallet",
+      "aliases": []
+    },
+    {
+      "name": "banknote",
+      "category": "commerce",
+      "path": "svg/commerce/banknote.svg",
+      "id": "icon-banknote",
+      "aliases": []
+    },
+    {
+      "name": "coins",
+      "category": "commerce",
+      "path": "svg/commerce/coins.svg",
+      "id": "icon-coins",
+      "aliases": []
+    },
+    {
+      "name": "dollar-sign",
+      "category": "commerce",
+      "path": "svg/commerce/dollar-sign.svg",
+      "id": "icon-dollar-sign",
+      "aliases": []
+    },
+    {
+      "name": "euro",
+      "category": "commerce",
+      "path": "svg/commerce/euro.svg",
+      "id": "icon-euro",
+      "aliases": []
+    },
+    {
+      "name": "receipt",
+      "category": "commerce",
+      "path": "svg/commerce/receipt.svg",
+      "id": "icon-receipt",
+      "aliases": []
+    },
+    {
+      "name": "receipt-text",
+      "category": "commerce",
+      "path": "svg/commerce/receipt-text.svg",
+      "id": "icon-receipt-text",
+      "aliases": []
+    },
+    {
+      "name": "tag",
+      "category": "commerce",
+      "path": "svg/commerce/tag.svg",
+      "id": "icon-tag",
+      "aliases": []
+    },
+    {
+      "name": "tags",
+      "category": "commerce",
+      "path": "svg/commerce/tags.svg",
+      "id": "icon-tags",
+      "aliases": []
+    },
+    {
+      "name": "ticket",
+      "category": "commerce",
+      "path": "svg/commerce/ticket.svg",
+      "id": "icon-ticket",
+      "aliases": []
+    },
+    {
+      "name": "gift",
+      "category": "commerce",
+      "path": "svg/commerce/gift.svg",
+      "id": "icon-gift",
+      "aliases": []
+    },
+    {
+      "name": "percent",
+      "category": "commerce",
+      "path": "svg/commerce/percent.svg",
+      "id": "icon-percent",
+      "aliases": []
+    },
+    {
+      "name": "badge-percent",
+      "category": "commerce",
+      "path": "svg/commerce/badge-percent.svg",
+      "id": "icon-badge-percent",
+      "aliases": []
+    },
+    {
+      "name": "package",
+      "category": "commerce",
+      "path": "svg/commerce/package.svg",
+      "id": "icon-package",
+      "aliases": []
+    },
+    {
+      "name": "package-check",
+      "category": "commerce",
+      "path": "svg/commerce/package-check.svg",
+      "id": "icon-package-check",
+      "aliases": []
+    },
+    {
+      "name": "truck",
+      "category": "commerce",
+      "path": "svg/commerce/truck.svg",
+      "id": "icon-truck",
+      "aliases": []
+    },
+    {
+      "name": "handshake",
+      "category": "commerce",
+      "path": "svg/commerce/handshake.svg",
+      "id": "icon-handshake",
+      "aliases": []
+    },
+    {
+      "name": "piggy-bank",
+      "category": "commerce",
+      "path": "svg/commerce/piggy-bank.svg",
+      "id": "icon-piggy-bank",
+      "aliases": []
+    },
+    {
+      "name": "calculator",
+      "category": "commerce",
+      "path": "svg/commerce/calculator.svg",
+      "id": "icon-calculator",
+      "aliases": []
+    },
+    {
+      "name": "barcode",
+      "category": "commerce",
+      "path": "svg/commerce/barcode.svg",
+      "id": "icon-barcode",
+      "aliases": []
+    },
+    {
+      "name": "check",
+      "category": "status",
+      "path": "svg/status/check.svg",
+      "id": "icon-check",
+      "aliases": []
+    },
+    {
+      "name": "check-check",
+      "category": "status",
+      "path": "svg/status/check-check.svg",
+      "id": "icon-check-check",
+      "aliases": []
+    },
+    {
+      "name": "circle-check",
+      "category": "status",
+      "path": "svg/status/circle-check.svg",
+      "id": "icon-circle-check",
+      "aliases": [
+        "check-circle-2"
+      ]
+    },
+    {
+      "name": "square-check",
+      "category": "status",
+      "path": "svg/status/square-check.svg",
+      "id": "icon-square-check",
+      "aliases": [
+        "check-square-2"
+      ]
+    },
+    {
+      "name": "circle-alert",
+      "category": "status",
+      "path": "svg/status/circle-alert.svg",
+      "id": "icon-circle-alert",
+      "aliases": [
+        "alert-circle"
+      ]
+    },
+    {
+      "name": "triangle-alert",
+      "category": "status",
+      "path": "svg/status/triangle-alert.svg",
+      "id": "icon-triangle-alert",
+      "aliases": [
+        "alert-triangle"
+      ]
+    },
+    {
+      "name": "octagon-alert",
+      "category": "status",
+      "path": "svg/status/octagon-alert.svg",
+      "id": "icon-octagon-alert",
+      "aliases": [
+        "alert-octagon"
+      ]
+    },
+    {
+      "name": "info",
+      "category": "status",
+      "path": "svg/status/info.svg",
+      "id": "icon-info",
+      "aliases": []
+    },
+    {
+      "name": "circle-question-mark",
+      "category": "status",
+      "path": "svg/status/circle-question-mark.svg",
+      "id": "icon-circle-question-mark",
+      "aliases": [
+        "circle-help",
+        "help-circle"
+      ]
+    },
+    {
+      "name": "badge-info",
+      "category": "status",
+      "path": "svg/status/badge-info.svg",
+      "id": "icon-badge-info",
+      "aliases": []
+    },
+    {
+      "name": "loader",
+      "category": "status",
+      "path": "svg/status/loader.svg",
+      "id": "icon-loader",
+      "aliases": []
+    },
+    {
+      "name": "loader-circle",
+      "category": "status",
+      "path": "svg/status/loader-circle.svg",
+      "id": "icon-loader-circle",
+      "aliases": [
+        "loader-2"
+      ]
+    },
+    {
+      "name": "hourglass",
+      "category": "status",
+      "path": "svg/status/hourglass.svg",
+      "id": "icon-hourglass",
+      "aliases": []
+    },
+    {
+      "name": "star",
+      "category": "status",
+      "path": "svg/status/star.svg",
+      "id": "icon-star",
+      "aliases": []
+    },
+    {
+      "name": "star-half",
+      "category": "status",
+      "path": "svg/status/star-half.svg",
+      "id": "icon-star-half",
+      "aliases": []
+    },
+    {
+      "name": "heart",
+      "category": "status",
+      "path": "svg/status/heart.svg",
+      "id": "icon-heart",
+      "aliases": []
+    },
+    {
+      "name": "heart-off",
+      "category": "status",
+      "path": "svg/status/heart-off.svg",
+      "id": "icon-heart-off",
+      "aliases": []
+    },
+    {
+      "name": "bookmark",
+      "category": "status",
+      "path": "svg/status/bookmark.svg",
+      "id": "icon-bookmark",
+      "aliases": []
+    },
+    {
+      "name": "bookmark-check",
+      "category": "status",
+      "path": "svg/status/bookmark-check.svg",
+      "id": "icon-bookmark-check",
+      "aliases": []
+    },
+    {
+      "name": "bookmark-plus",
+      "category": "status",
+      "path": "svg/status/bookmark-plus.svg",
+      "id": "icon-bookmark-plus",
+      "aliases": []
+    },
+    {
+      "name": "thumbs-up",
+      "category": "status",
+      "path": "svg/status/thumbs-up.svg",
+      "id": "icon-thumbs-up",
+      "aliases": []
+    },
+    {
+      "name": "thumbs-down",
+      "category": "status",
+      "path": "svg/status/thumbs-down.svg",
+      "id": "icon-thumbs-down",
+      "aliases": []
+    },
+    {
+      "name": "flag",
+      "category": "status",
+      "path": "svg/status/flag.svg",
+      "id": "icon-flag",
+      "aliases": []
+    },
+    {
+      "name": "award",
+      "category": "status",
+      "path": "svg/status/award.svg",
+      "id": "icon-award",
+      "aliases": []
+    },
+    {
+      "name": "trophy",
+      "category": "status",
+      "path": "svg/status/trophy.svg",
+      "id": "icon-trophy",
+      "aliases": []
+    },
+    {
+      "name": "circle-dot",
+      "category": "status",
+      "path": "svg/status/circle-dot.svg",
+      "id": "icon-circle-dot",
+      "aliases": []
+    },
+    {
+      "name": "ban",
+      "category": "status",
+      "path": "svg/status/ban.svg",
+      "id": "icon-ban",
+      "aliases": []
+    },
+    {
+      "name": "zap",
+      "category": "status",
+      "path": "svg/status/zap.svg",
+      "id": "icon-zap",
+      "aliases": []
+    },
+    {
+      "name": "crown",
+      "category": "status",
+      "path": "svg/status/crown.svg",
+      "id": "icon-crown",
+      "aliases": []
+    },
+    {
+      "name": "flame",
+      "category": "status",
+      "path": "svg/status/flame.svg",
+      "id": "icon-flame",
+      "aliases": []
+    },
+    {
+      "name": "settings",
+      "category": "settings",
+      "path": "svg/settings/settings.svg",
+      "id": "icon-settings",
+      "aliases": []
+    },
+    {
+      "name": "cog",
+      "category": "settings",
+      "path": "svg/settings/cog.svg",
+      "id": "icon-cog",
+      "aliases": []
+    },
+    {
+      "name": "sliders-horizontal",
+      "category": "settings",
+      "path": "svg/settings/sliders-horizontal.svg",
+      "id": "icon-sliders-horizontal",
+      "aliases": []
+    },
+    {
+      "name": "toggle-left",
+      "category": "settings",
+      "path": "svg/settings/toggle-left.svg",
+      "id": "icon-toggle-left",
+      "aliases": []
+    },
+    {
+      "name": "toggle-right",
+      "category": "settings",
+      "path": "svg/settings/toggle-right.svg",
+      "id": "icon-toggle-right",
+      "aliases": []
+    },
+    {
+      "name": "sun",
+      "category": "settings",
+      "path": "svg/settings/sun.svg",
+      "id": "icon-sun",
+      "aliases": []
+    },
+    {
+      "name": "moon",
+      "category": "settings",
+      "path": "svg/settings/moon.svg",
+      "id": "icon-moon",
+      "aliases": []
+    },
+    {
+      "name": "sun-moon",
+      "category": "settings",
+      "path": "svg/settings/sun-moon.svg",
+      "id": "icon-sun-moon",
+      "aliases": []
+    },
+    {
+      "name": "wifi",
+      "category": "settings",
+      "path": "svg/settings/wifi.svg",
+      "id": "icon-wifi",
+      "aliases": []
+    },
+    {
+      "name": "wifi-off",
+      "category": "settings",
+      "path": "svg/settings/wifi-off.svg",
+      "id": "icon-wifi-off",
+      "aliases": []
+    },
+    {
+      "name": "battery",
+      "category": "settings",
+      "path": "svg/settings/battery.svg",
+      "id": "icon-battery",
+      "aliases": []
+    },
+    {
+      "name": "battery-low",
+      "category": "settings",
+      "path": "svg/settings/battery-low.svg",
+      "id": "icon-battery-low",
+      "aliases": []
+    },
+    {
+      "name": "battery-full",
+      "category": "settings",
+      "path": "svg/settings/battery-full.svg",
+      "id": "icon-battery-full",
+      "aliases": []
+    },
+    {
+      "name": "battery-charging",
+      "category": "settings",
+      "path": "svg/settings/battery-charging.svg",
+      "id": "icon-battery-charging",
+      "aliases": []
+    },
+    {
+      "name": "bluetooth",
+      "category": "settings",
+      "path": "svg/settings/bluetooth.svg",
+      "id": "icon-bluetooth",
+      "aliases": []
+    },
+    {
+      "name": "power",
+      "category": "settings",
+      "path": "svg/settings/power.svg",
+      "id": "icon-power",
+      "aliases": []
+    },
+    {
+      "name": "plug",
+      "category": "settings",
+      "path": "svg/settings/plug.svg",
+      "id": "icon-plug",
+      "aliases": []
+    },
+    {
+      "name": "signal",
+      "category": "settings",
+      "path": "svg/settings/signal.svg",
+      "id": "icon-signal",
+      "aliases": []
+    },
+    {
+      "name": "smartphone",
+      "category": "settings",
+      "path": "svg/settings/smartphone.svg",
+      "id": "icon-smartphone",
+      "aliases": []
+    },
+    {
+      "name": "laptop",
+      "category": "settings",
+      "path": "svg/settings/laptop.svg",
+      "id": "icon-laptop",
+      "aliases": []
+    },
+    {
+      "name": "monitor",
+      "category": "settings",
+      "path": "svg/settings/monitor.svg",
+      "id": "icon-monitor",
+      "aliases": []
+    },
+    {
+      "name": "keyboard",
+      "category": "settings",
+      "path": "svg/settings/keyboard.svg",
+      "id": "icon-keyboard",
+      "aliases": []
+    },
+    {
+      "name": "cpu",
+      "category": "settings",
+      "path": "svg/settings/cpu.svg",
+      "id": "icon-cpu",
+      "aliases": []
+    },
+    {
+      "name": "server",
+      "category": "settings",
+      "path": "svg/settings/server.svg",
+      "id": "icon-server",
+      "aliases": []
+    },
+    {
+      "name": "terminal",
+      "category": "settings",
+      "path": "svg/settings/terminal.svg",
+      "id": "icon-terminal",
+      "aliases": []
+    },
+    {
+      "name": "wrench",
+      "category": "settings",
+      "path": "svg/settings/wrench.svg",
+      "id": "icon-wrench",
+      "aliases": []
+    },
+    {
+      "name": "accessibility",
+      "category": "settings",
+      "path": "svg/settings/accessibility.svg",
+      "id": "icon-accessibility",
+      "aliases": []
+    },
+    {
+      "name": "palette",
+      "category": "settings",
+      "path": "svg/settings/palette.svg",
+      "id": "icon-palette",
+      "aliases": []
+    },
+    {
+      "name": "code",
+      "category": "settings",
+      "path": "svg/settings/code.svg",
+      "id": "icon-code",
+      "aliases": []
+    },
+    {
+      "name": "chart-bar",
+      "category": "data",
+      "path": "svg/data/chart-bar.svg",
+      "id": "icon-chart-bar",
+      "aliases": [
+        "bar-chart-horizontal"
+      ]
+    },
+    {
+      "name": "chart-column",
+      "category": "data",
+      "path": "svg/data/chart-column.svg",
+      "id": "icon-chart-column",
+      "aliases": [
+        "bar-chart-3"
+      ]
+    },
+    {
+      "name": "chart-line",
+      "category": "data",
+      "path": "svg/data/chart-line.svg",
+      "id": "icon-chart-line",
+      "aliases": [
+        "line-chart"
+      ]
+    },
+    {
+      "name": "chart-pie",
+      "category": "data",
+      "path": "svg/data/chart-pie.svg",
+      "id": "icon-chart-pie",
+      "aliases": [
+        "pie-chart"
+      ]
+    },
+    {
+      "name": "chart-area",
+      "category": "data",
+      "path": "svg/data/chart-area.svg",
+      "id": "icon-chart-area",
+      "aliases": [
+        "area-chart"
+      ]
+    },
+    {
+      "name": "chart-scatter",
+      "category": "data",
+      "path": "svg/data/chart-scatter.svg",
+      "id": "icon-chart-scatter",
+      "aliases": [
+        "scatter-chart"
+      ]
+    },
+    {
+      "name": "trending-up",
+      "category": "data",
+      "path": "svg/data/trending-up.svg",
+      "id": "icon-trending-up",
+      "aliases": []
+    },
+    {
+      "name": "trending-down",
+      "category": "data",
+      "path": "svg/data/trending-down.svg",
+      "id": "icon-trending-down",
+      "aliases": []
+    },
+    {
+      "name": "activity",
+      "category": "data",
+      "path": "svg/data/activity.svg",
+      "id": "icon-activity",
+      "aliases": []
+    },
+    {
+      "name": "gauge",
+      "category": "data",
+      "path": "svg/data/gauge.svg",
+      "id": "icon-gauge",
+      "aliases": []
+    },
+    {
+      "name": "calendar",
+      "category": "data",
+      "path": "svg/data/calendar.svg",
+      "id": "icon-calendar",
+      "aliases": []
+    },
+    {
+      "name": "calendar-days",
+      "category": "data",
+      "path": "svg/data/calendar-days.svg",
+      "id": "icon-calendar-days",
+      "aliases": []
+    },
+    {
+      "name": "calendar-check",
+      "category": "data",
+      "path": "svg/data/calendar-check.svg",
+      "id": "icon-calendar-check",
+      "aliases": []
+    },
+    {
+      "name": "calendar-clock",
+      "category": "data",
+      "path": "svg/data/calendar-clock.svg",
+      "id": "icon-calendar-clock",
+      "aliases": []
+    },
+    {
+      "name": "clock",
+      "category": "data",
+      "path": "svg/data/clock.svg",
+      "id": "icon-clock",
+      "aliases": [
+        "clock-4"
+      ]
+    },
+    {
+      "name": "alarm-clock",
+      "category": "data",
+      "path": "svg/data/alarm-clock.svg",
+      "id": "icon-alarm-clock",
+      "aliases": []
+    },
+    {
+      "name": "timer",
+      "category": "data",
+      "path": "svg/data/timer.svg",
+      "id": "icon-timer",
+      "aliases": []
+    },
+    {
+      "name": "rotate-ccw-clock",
+      "category": "data",
+      "path": "svg/data/rotate-ccw-clock.svg",
+      "id": "icon-rotate-ccw-clock",
+      "aliases": [
+        "history"
+      ]
+    },
+    {
+      "name": "map-pin",
+      "category": "data",
+      "path": "svg/data/map-pin.svg",
+      "id": "icon-map-pin",
+      "aliases": []
+    },
+    {
+      "name": "map",
+      "category": "data",
+      "path": "svg/data/map.svg",
+      "id": "icon-map",
+      "aliases": []
+    },
+    {
+      "name": "globe",
+      "category": "data",
+      "path": "svg/data/globe.svg",
+      "id": "icon-globe",
+      "aliases": []
+    },
+    {
+      "name": "locate-fixed",
+      "category": "data",
+      "path": "svg/data/locate-fixed.svg",
+      "id": "icon-locate-fixed",
+      "aliases": []
+    },
+    {
+      "name": "route",
+      "category": "data",
+      "path": "svg/data/route.svg",
+      "id": "icon-route",
+      "aliases": []
+    },
+    {
+      "name": "table",
+      "category": "data",
+      "path": "svg/data/table.svg",
+      "id": "icon-table",
+      "aliases": []
+    },
+    {
+      "name": "list",
+      "category": "data",
+      "path": "svg/data/list.svg",
+      "id": "icon-list",
+      "aliases": []
+    },
+    {
+      "name": "list-checks",
+      "category": "data",
+      "path": "svg/data/list-checks.svg",
+      "id": "icon-list-checks",
+      "aliases": []
+    },
+    {
+      "name": "list-todo",
+      "category": "data",
+      "path": "svg/data/list-todo.svg",
+      "id": "icon-list-todo",
+      "aliases": []
+    },
+    {
+      "name": "kanban",
+      "category": "data",
+      "path": "svg/data/kanban.svg",
+      "id": "icon-kanban",
+      "aliases": []
+    },
+    {
+      "name": "presentation",
+      "category": "data",
+      "path": "svg/data/presentation.svg",
+      "id": "icon-presentation",
+      "aliases": []
+    },
+    {
+      "name": "audio-waveform",
+      "category": "audio",
+      "path": "svg/audio/audio-waveform.svg",
+      "id": "icon-audio-waveform",
+      "aliases": []
+    },
+    {
+      "name": "audio-lines",
+      "category": "audio",
+      "path": "svg/audio/audio-lines.svg",
+      "id": "icon-audio-lines",
+      "aliases": []
+    },
+    {
+      "name": "audio-lines-off",
+      "category": "audio",
+      "path": "svg/audio/audio-lines-off.svg",
+      "id": "icon-audio-lines-off",
+      "aliases": []
+    },
+    {
+      "name": "audio-lines-x",
+      "category": "audio",
+      "path": "svg/audio/audio-lines-x.svg",
+      "id": "icon-audio-lines-x",
+      "aliases": []
+    },
+    {
+      "name": "headset",
+      "category": "audio",
+      "path": "svg/audio/headset.svg",
+      "id": "icon-headset",
+      "aliases": []
+    },
+    {
+      "name": "headphone-off",
+      "category": "audio",
+      "path": "svg/audio/headphone-off.svg",
+      "id": "icon-headphone-off",
+      "aliases": []
+    },
+    {
+      "name": "volume-off",
+      "category": "audio",
+      "path": "svg/audio/volume-off.svg",
+      "id": "icon-volume-off",
+      "aliases": []
+    },
+    {
+      "name": "music-2",
+      "category": "audio",
+      "path": "svg/audio/music-2.svg",
+      "id": "icon-music-2",
+      "aliases": []
+    },
+    {
+      "name": "music-3",
+      "category": "audio",
+      "path": "svg/audio/music-3.svg",
+      "id": "icon-music-3",
+      "aliases": []
+    },
+    {
+      "name": "music-4",
+      "category": "audio",
+      "path": "svg/audio/music-4.svg",
+      "id": "icon-music-4",
+      "aliases": []
+    },
+    {
+      "name": "disc",
+      "category": "audio",
+      "path": "svg/audio/disc.svg",
+      "id": "icon-disc",
+      "aliases": []
+    },
+    {
+      "name": "disc-2",
+      "category": "audio",
+      "path": "svg/audio/disc-2.svg",
+      "id": "icon-disc-2",
+      "aliases": []
+    },
+    {
+      "name": "disc-3",
+      "category": "audio",
+      "path": "svg/audio/disc-3.svg",
+      "id": "icon-disc-3",
+      "aliases": []
+    },
+    {
+      "name": "disc-album",
+      "category": "audio",
+      "path": "svg/audio/disc-album.svg",
+      "id": "icon-disc-album",
+      "aliases": []
+    },
+    {
+      "name": "list-music",
+      "category": "audio",
+      "path": "svg/audio/list-music.svg",
+      "id": "icon-list-music",
+      "aliases": []
+    },
+    {
+      "name": "keyboard-music",
+      "category": "audio",
+      "path": "svg/audio/keyboard-music.svg",
+      "id": "icon-keyboard-music",
+      "aliases": []
+    },
+    {
+      "name": "file-music",
+      "category": "audio",
+      "path": "svg/audio/file-music.svg",
+      "id": "icon-file-music",
+      "aliases": []
+    },
+    {
+      "name": "file-volume",
+      "category": "audio",
+      "path": "svg/audio/file-volume.svg",
+      "id": "icon-file-volume",
+      "aliases": []
+    },
+    {
+      "name": "sliders-vertical",
+      "category": "audio",
+      "path": "svg/audio/sliders-vertical.svg",
+      "id": "icon-sliders-vertical",
+      "aliases": [
+        "sliders"
+      ]
+    },
+    {
+      "name": "piano",
+      "category": "audio",
+      "path": "svg/audio/piano.svg",
+      "id": "icon-piano",
+      "aliases": []
+    },
+    {
+      "name": "guitar",
+      "category": "audio",
+      "path": "svg/audio/guitar.svg",
+      "id": "icon-guitar",
+      "aliases": []
+    },
+    {
+      "name": "drum",
+      "category": "audio",
+      "path": "svg/audio/drum.svg",
+      "id": "icon-drum",
+      "aliases": []
+    },
+    {
+      "name": "boom-box",
+      "category": "audio",
+      "path": "svg/audio/boom-box.svg",
+      "id": "icon-boom-box",
+      "aliases": []
+    },
+    {
+      "name": "cassette-tape",
+      "category": "audio",
+      "path": "svg/audio/cassette-tape.svg",
+      "id": "icon-cassette-tape",
+      "aliases": []
+    },
+    {
+      "name": "ear",
+      "category": "audio",
+      "path": "svg/audio/ear.svg",
+      "id": "icon-ear",
+      "aliases": []
+    },
+    {
+      "name": "ear-off",
+      "category": "audio",
+      "path": "svg/audio/ear-off.svg",
+      "id": "icon-ear-off",
+      "aliases": []
+    },
+    {
+      "name": "radio-receiver",
+      "category": "audio",
+      "path": "svg/audio/radio-receiver.svg",
+      "id": "icon-radio-receiver",
+      "aliases": []
+    },
+    {
+      "name": "radio-tower",
+      "category": "audio",
+      "path": "svg/audio/radio-tower.svg",
+      "id": "icon-radio-tower",
+      "aliases": []
+    },
+    {
+      "name": "radio-off",
+      "category": "audio",
+      "path": "svg/audio/radio-off.svg",
+      "id": "icon-radio-off",
+      "aliases": []
+    },
+    {
+      "name": "mic-vocal",
+      "category": "audio",
+      "path": "svg/audio/mic-vocal.svg",
+      "id": "icon-mic-vocal",
+      "aliases": [
+        "mic-2"
+      ]
+    },
+    {
+      "name": "mic-audio-lines",
+      "category": "audio",
+      "path": "svg/audio/mic-audio-lines.svg",
+      "id": "icon-mic-audio-lines",
+      "aliases": []
+    },
+    {
+      "name": "monitor-speaker",
+      "category": "audio",
+      "path": "svg/audio/monitor-speaker.svg",
+      "id": "icon-monitor-speaker",
+      "aliases": []
+    },
+    {
+      "name": "metronome",
+      "category": "audio",
+      "path": "svg/audio/metronome.svg",
+      "id": "icon-metronome",
+      "aliases": []
+    },
+    {
+      "name": "book-audio",
+      "category": "audio",
+      "path": "svg/audio/book-audio.svg",
+      "id": "icon-book-audio",
+      "aliases": []
+    },
+    {
+      "name": "book-headphones",
+      "category": "audio",
+      "path": "svg/audio/book-headphones.svg",
+      "id": "icon-book-headphones",
+      "aliases": []
+    },
+    {
+      "name": "bluetooth-connected",
+      "category": "audio",
+      "path": "svg/audio/bluetooth-connected.svg",
+      "id": "icon-bluetooth-connected",
+      "aliases": []
+    },
+    {
+      "name": "clapperboard",
+      "category": "video",
+      "path": "svg/video/clapperboard.svg",
+      "id": "icon-clapperboard",
+      "aliases": []
+    },
+    {
+      "name": "videotape",
+      "category": "video",
+      "path": "svg/video/videotape.svg",
+      "id": "icon-videotape",
+      "aliases": []
+    },
+    {
+      "name": "file-video-camera",
+      "category": "video",
+      "path": "svg/video/file-video-camera.svg",
+      "id": "icon-file-video-camera",
+      "aliases": [
+        "file-video-2"
+      ]
+    },
+    {
+      "name": "list-video",
+      "category": "video",
+      "path": "svg/video/list-video.svg",
+      "id": "icon-list-video",
+      "aliases": []
+    },
+    {
+      "name": "step-back",
+      "category": "video",
+      "path": "svg/video/step-back.svg",
+      "id": "icon-step-back",
+      "aliases": []
+    },
+    {
+      "name": "step-forward",
+      "category": "video",
+      "path": "svg/video/step-forward.svg",
+      "id": "icon-step-forward",
+      "aliases": []
+    },
+    {
+      "name": "circle-stop",
+      "category": "video",
+      "path": "svg/video/circle-stop.svg",
+      "id": "icon-circle-stop",
+      "aliases": [
+        "stop-circle"
+      ]
+    },
+    {
+      "name": "square-play",
+      "category": "video",
+      "path": "svg/video/square-play.svg",
+      "id": "icon-square-play",
+      "aliases": [
+        "play-square"
+      ]
+    },
+    {
+      "name": "square-pause",
+      "category": "video",
+      "path": "svg/video/square-pause.svg",
+      "id": "icon-square-pause",
+      "aliases": []
+    },
+    {
+      "name": "square-stop",
+      "category": "video",
+      "path": "svg/video/square-stop.svg",
+      "id": "icon-square-stop",
+      "aliases": []
+    },
+    {
+      "name": "captions",
+      "category": "video",
+      "path": "svg/video/captions.svg",
+      "id": "icon-captions",
+      "aliases": [
+        "subtitles"
+      ]
+    },
+    {
+      "name": "captions-off",
+      "category": "video",
+      "path": "svg/video/captions-off.svg",
+      "id": "icon-captions-off",
+      "aliases": []
+    },
+    {
+      "name": "closed-caption",
+      "category": "video",
+      "path": "svg/video/closed-caption.svg",
+      "id": "icon-closed-caption",
+      "aliases": []
+    },
+    {
+      "name": "screen-share",
+      "category": "video",
+      "path": "svg/video/screen-share.svg",
+      "id": "icon-screen-share",
+      "aliases": []
+    },
+    {
+      "name": "screen-share-off",
+      "category": "video",
+      "path": "svg/video/screen-share-off.svg",
+      "id": "icon-screen-share-off",
+      "aliases": []
+    },
+    {
+      "name": "monitor-play",
+      "category": "video",
+      "path": "svg/video/monitor-play.svg",
+      "id": "icon-monitor-play",
+      "aliases": []
+    },
+    {
+      "name": "monitor-pause",
+      "category": "video",
+      "path": "svg/video/monitor-pause.svg",
+      "id": "icon-monitor-pause",
+      "aliases": []
+    },
+    {
+      "name": "monitor-stop",
+      "category": "video",
+      "path": "svg/video/monitor-stop.svg",
+      "id": "icon-monitor-stop",
+      "aliases": []
+    },
+    {
+      "name": "monitor-off",
+      "category": "video",
+      "path": "svg/video/monitor-off.svg",
+      "id": "icon-monitor-off",
+      "aliases": []
+    },
+    {
+      "name": "tv-minimal",
+      "category": "video",
+      "path": "svg/video/tv-minimal.svg",
+      "id": "icon-tv-minimal",
+      "aliases": [
+        "tv-2"
+      ]
+    },
+    {
+      "name": "tv-minimal-play",
+      "category": "video",
+      "path": "svg/video/tv-minimal-play.svg",
+      "id": "icon-tv-minimal-play",
+      "aliases": []
+    },
+    {
+      "name": "projector",
+      "category": "video",
+      "path": "svg/video/projector.svg",
+      "id": "icon-projector",
+      "aliases": []
+    },
+    {
+      "name": "webcam",
+      "category": "video",
+      "path": "svg/video/webcam.svg",
+      "id": "icon-webcam",
+      "aliases": []
+    },
+    {
+      "name": "webcam-off",
+      "category": "video",
+      "path": "svg/video/webcam-off.svg",
+      "id": "icon-webcam-off",
+      "aliases": []
+    },
+    {
+      "name": "camera-off",
+      "category": "video",
+      "path": "svg/video/camera-off.svg",
+      "id": "icon-camera-off",
+      "aliases": []
+    },
+    {
+      "name": "switch-camera",
+      "category": "video",
+      "path": "svg/video/switch-camera.svg",
+      "id": "icon-switch-camera",
+      "aliases": []
+    },
+    {
+      "name": "cctv",
+      "category": "video",
+      "path": "svg/video/cctv.svg",
+      "id": "icon-cctv",
+      "aliases": []
+    },
+    {
+      "name": "fullscreen",
+      "category": "video",
+      "path": "svg/video/fullscreen.svg",
+      "id": "icon-fullscreen",
+      "aliases": []
+    },
+    {
+      "name": "popcorn",
+      "category": "video",
+      "path": "svg/video/popcorn.svg",
+      "id": "icon-popcorn",
+      "aliases": []
+    },
+    {
+      "name": "theater",
+      "category": "video",
+      "path": "svg/video/theater.svg",
+      "id": "icon-theater",
+      "aliases": []
+    },
+    {
+      "name": "image-play",
+      "category": "video",
+      "path": "svg/video/image-play.svg",
+      "id": "icon-image-play",
+      "aliases": []
+    },
+    {
+      "name": "play-off",
+      "category": "video",
+      "path": "svg/video/play-off.svg",
+      "id": "icon-play-off",
+      "aliases": []
+    },
+    {
+      "name": "repeat-1",
+      "category": "video",
+      "path": "svg/video/repeat-1.svg",
+      "id": "icon-repeat-1",
+      "aliases": []
+    },
+    {
+      "name": "repeat-2",
+      "category": "video",
+      "path": "svg/video/repeat-2.svg",
+      "id": "icon-repeat-2",
+      "aliases": []
+    },
+    {
+      "name": "picture-in-picture",
+      "category": "video",
+      "path": "svg/video/picture-in-picture.svg",
+      "id": "icon-picture-in-picture",
+      "aliases": []
+    },
+    {
+      "name": "picture-in-picture-2",
+      "category": "video",
+      "path": "svg/video/picture-in-picture-2.svg",
+      "id": "icon-picture-in-picture-2",
+      "aliases": []
+    },
+    {
+      "name": "image-plus",
+      "category": "visual",
+      "path": "svg/visual/image-plus.svg",
+      "id": "icon-image-plus",
+      "aliases": []
+    },
+    {
+      "name": "image-off",
+      "category": "visual",
+      "path": "svg/visual/image-off.svg",
+      "id": "icon-image-off",
+      "aliases": []
+    },
+    {
+      "name": "image-minus",
+      "category": "visual",
+      "path": "svg/visual/image-minus.svg",
+      "id": "icon-image-minus",
+      "aliases": []
+    },
+    {
+      "name": "image-upscale",
+      "category": "visual",
+      "path": "svg/visual/image-upscale.svg",
+      "id": "icon-image-upscale",
+      "aliases": []
+    },
+    {
+      "name": "crop",
+      "category": "visual",
+      "path": "svg/visual/crop.svg",
+      "id": "icon-crop",
+      "aliases": []
+    },
+    {
+      "name": "layers",
+      "category": "visual",
+      "path": "svg/visual/layers.svg",
+      "id": "icon-layers",
+      "aliases": [
+        "layers-3"
+      ]
+    },
+    {
+      "name": "layers-plus",
+      "category": "visual",
+      "path": "svg/visual/layers-plus.svg",
+      "id": "icon-layers-plus",
+      "aliases": []
+    },
+    {
+      "name": "paintbrush",
+      "category": "visual",
+      "path": "svg/visual/paintbrush.svg",
+      "id": "icon-paintbrush",
+      "aliases": []
+    },
+    {
+      "name": "brush",
+      "category": "visual",
+      "path": "svg/visual/brush.svg",
+      "id": "icon-brush",
+      "aliases": []
+    },
+    {
+      "name": "pen-tool",
+      "category": "visual",
+      "path": "svg/visual/pen-tool.svg",
+      "id": "icon-pen-tool",
+      "aliases": []
+    },
+    {
+      "name": "pipette",
+      "category": "visual",
+      "path": "svg/visual/pipette.svg",
+      "id": "icon-pipette",
+      "aliases": []
+    },
+    {
+      "name": "aperture",
+      "category": "visual",
+      "path": "svg/visual/aperture.svg",
+      "id": "icon-aperture",
+      "aliases": []
+    },
+    {
+      "name": "contrast",
+      "category": "visual",
+      "path": "svg/visual/contrast.svg",
+      "id": "icon-contrast",
+      "aliases": []
+    },
+    {
+      "name": "sun-dim",
+      "category": "visual",
+      "path": "svg/visual/sun-dim.svg",
+      "id": "icon-sun-dim",
+      "aliases": []
+    },
+    {
+      "name": "sun-medium",
+      "category": "visual",
+      "path": "svg/visual/sun-medium.svg",
+      "id": "icon-sun-medium",
+      "aliases": []
+    },
+    {
+      "name": "focus",
+      "category": "visual",
+      "path": "svg/visual/focus.svg",
+      "id": "icon-focus",
+      "aliases": []
+    },
+    {
+      "name": "scan",
+      "category": "visual",
+      "path": "svg/visual/scan.svg",
+      "id": "icon-scan",
+      "aliases": []
+    },
+    {
+      "name": "frame",
+      "category": "visual",
+      "path": "svg/visual/frame.svg",
+      "id": "icon-frame",
+      "aliases": []
+    },
+    {
+      "name": "shapes",
+      "category": "visual",
+      "path": "svg/visual/shapes.svg",
+      "id": "icon-shapes",
+      "aliases": []
+    },
+    {
+      "name": "square",
+      "category": "visual",
+      "path": "svg/visual/square.svg",
+      "id": "icon-square",
+      "aliases": []
+    },
+    {
+      "name": "circle",
+      "category": "visual",
+      "path": "svg/visual/circle.svg",
+      "id": "icon-circle",
+      "aliases": []
+    },
+    {
+      "name": "triangle",
+      "category": "visual",
+      "path": "svg/visual/triangle.svg",
+      "id": "icon-triangle",
+      "aliases": []
+    },
+    {
+      "name": "hexagon",
+      "category": "visual",
+      "path": "svg/visual/hexagon.svg",
+      "id": "icon-hexagon",
+      "aliases": []
+    },
+    {
+      "name": "blend",
+      "category": "visual",
+      "path": "svg/visual/blend.svg",
+      "id": "icon-blend",
+      "aliases": []
+    },
+    {
+      "name": "wand-sparkles",
+      "category": "visual",
+      "path": "svg/visual/wand-sparkles.svg",
+      "id": "icon-wand-sparkles",
+      "aliases": [
+        "wand-2"
+      ]
+    },
+    {
+      "name": "eraser",
+      "category": "visual",
+      "path": "svg/visual/eraser.svg",
+      "id": "icon-eraser",
+      "aliases": []
+    },
+    {
+      "name": "type",
+      "category": "visual",
+      "path": "svg/visual/type.svg",
+      "id": "icon-type",
+      "aliases": []
+    },
+    {
+      "name": "grid-2x2",
+      "category": "visual",
+      "path": "svg/visual/grid-2x2.svg",
+      "id": "icon-grid-2x2",
+      "aliases": [
+        "grid-2-x-2"
+      ]
+    },
+    {
+      "name": "grid-3x3",
+      "category": "visual",
+      "path": "svg/visual/grid-3x3.svg",
+      "id": "icon-grid-3x3",
+      "aliases": [
+        "grid",
+        "grid-3-x-3"
+      ]
+    },
+    {
+      "name": "ruler",
+      "category": "visual",
+      "path": "svg/visual/ruler.svg",
+      "id": "icon-ruler",
+      "aliases": []
+    },
+    {
+      "name": "spline",
+      "category": "visual",
+      "path": "svg/visual/spline.svg",
+      "id": "icon-spline",
+      "aliases": []
+    },
+    {
+      "name": "droplet",
+      "category": "visual",
+      "path": "svg/visual/droplet.svg",
+      "id": "icon-droplet",
+      "aliases": []
+    },
+    {
+      "name": "swatch-book",
+      "category": "visual",
+      "path": "svg/visual/swatch-book.svg",
+      "id": "icon-swatch-book",
+      "aliases": []
+    },
+    {
+      "name": "paint-bucket",
+      "category": "visual",
+      "path": "svg/visual/paint-bucket.svg",
+      "id": "icon-paint-bucket",
+      "aliases": []
+    },
+    {
+      "name": "paint-roller",
+      "category": "visual",
+      "path": "svg/visual/paint-roller.svg",
+      "id": "icon-paint-roller",
+      "aliases": []
+    },
+    {
+      "name": "spray-can",
+      "category": "visual",
+      "path": "svg/visual/spray-can.svg",
+      "id": "icon-spray-can",
+      "aliases": []
+    },
+    {
+      "name": "lasso-select",
+      "category": "visual",
+      "path": "svg/visual/lasso-select.svg",
+      "id": "icon-lasso-select",
+      "aliases": []
+    },
+    {
+      "name": "highlighter",
+      "category": "visual",
+      "path": "svg/visual/highlighter.svg",
+      "id": "icon-highlighter",
+      "aliases": []
+    },
+    {
+      "name": "ratio",
+      "category": "visual",
+      "path": "svg/visual/ratio.svg",
+      "id": "icon-ratio",
+      "aliases": []
+    },
+    {
+      "name": "proportions",
+      "category": "visual",
+      "path": "svg/visual/proportions.svg",
+      "id": "icon-proportions",
+      "aliases": []
+    },
+    {
+      "name": "gallery-thumbnails",
+      "category": "visual",
+      "path": "svg/visual/gallery-thumbnails.svg",
+      "id": "icon-gallery-thumbnails",
+      "aliases": []
+    },
+    {
+      "name": "squares-intersect",
+      "category": "visual",
+      "path": "svg/visual/squares-intersect.svg",
+      "id": "icon-squares-intersect",
+      "aliases": []
+    },
+    {
+      "name": "vector-square",
+      "category": "visual",
+      "path": "svg/visual/vector-square.svg",
+      "id": "icon-vector-square",
+      "aliases": []
+    },
+    {
+      "name": "rotate-3d",
+      "category": "visual",
+      "path": "svg/visual/rotate-3d.svg",
+      "id": "icon-rotate-3d",
+      "aliases": [
+        "rotate-3-d"
+      ]
+    },
+    {
+      "name": "triangles-centerline-dashed-horizontal",
+      "category": "visual",
+      "path": "svg/visual/triangles-centerline-dashed-horizontal.svg",
+      "id": "icon-triangles-centerline-dashed-horizontal",
+      "aliases": [
+        "flip-horizontal-2"
+      ]
+    },
+    {
+      "name": "file-minus",
+      "category": "documents",
+      "path": "svg/documents/file-minus.svg",
+      "id": "icon-file-minus",
+      "aliases": []
+    },
+    {
+      "name": "file-lock",
+      "category": "documents",
+      "path": "svg/documents/file-lock.svg",
+      "id": "icon-file-lock",
+      "aliases": [
+        "file-lock-2"
+      ]
+    },
+    {
+      "name": "file-braces",
+      "category": "documents",
+      "path": "svg/documents/file-braces.svg",
+      "id": "icon-file-braces",
+      "aliases": [
+        "file-json"
+      ]
+    },
+    {
+      "name": "file-type",
+      "category": "documents",
+      "path": "svg/documents/file-type.svg",
+      "id": "icon-file-type",
+      "aliases": []
+    },
+    {
+      "name": "file-clock",
+      "category": "documents",
+      "path": "svg/documents/file-clock.svg",
+      "id": "icon-file-clock",
+      "aliases": []
+    },
+    {
+      "name": "file-diff",
+      "category": "documents",
+      "path": "svg/documents/file-diff.svg",
+      "id": "icon-file-diff",
+      "aliases": []
+    },
+    {
+      "name": "file-stack",
+      "category": "documents",
+      "path": "svg/documents/file-stack.svg",
+      "id": "icon-file-stack",
+      "aliases": []
+    },
+    {
+      "name": "file-question-mark",
+      "category": "documents",
+      "path": "svg/documents/file-question-mark.svg",
+      "id": "icon-file-question-mark",
+      "aliases": [
+        "file-question"
+      ]
+    },
+    {
+      "name": "file-down",
+      "category": "documents",
+      "path": "svg/documents/file-down.svg",
+      "id": "icon-file-down",
+      "aliases": []
+    },
+    {
+      "name": "file-up",
+      "category": "documents",
+      "path": "svg/documents/file-up.svg",
+      "id": "icon-file-up",
+      "aliases": []
+    },
+    {
+      "name": "folder-search",
+      "category": "documents",
+      "path": "svg/documents/folder-search.svg",
+      "id": "icon-folder-search",
+      "aliases": []
+    },
+    {
+      "name": "folder-archive",
+      "category": "documents",
+      "path": "svg/documents/folder-archive.svg",
+      "id": "icon-folder-archive",
+      "aliases": []
+    },
+    {
+      "name": "folder-closed",
+      "category": "documents",
+      "path": "svg/documents/folder-closed.svg",
+      "id": "icon-folder-closed",
+      "aliases": []
+    },
+    {
+      "name": "folder-pen",
+      "category": "documents",
+      "path": "svg/documents/folder-pen.svg",
+      "id": "icon-folder-pen",
+      "aliases": [
+        "folder-edit"
+      ]
+    },
+    {
+      "name": "folder-bookmark",
+      "category": "documents",
+      "path": "svg/documents/folder-bookmark.svg",
+      "id": "icon-folder-bookmark",
+      "aliases": []
+    },
+    {
+      "name": "notebook",
+      "category": "documents",
+      "path": "svg/documents/notebook.svg",
+      "id": "icon-notebook",
+      "aliases": []
+    },
+    {
+      "name": "notebook-pen",
+      "category": "documents",
+      "path": "svg/documents/notebook-pen.svg",
+      "id": "icon-notebook-pen",
+      "aliases": []
+    },
+    {
+      "name": "notebook-text",
+      "category": "documents",
+      "path": "svg/documents/notebook-text.svg",
+      "id": "icon-notebook-text",
+      "aliases": []
+    },
+    {
+      "name": "notepad-text",
+      "category": "documents",
+      "path": "svg/documents/notepad-text.svg",
+      "id": "icon-notepad-text",
+      "aliases": []
+    },
+    {
+      "name": "scroll-text",
+      "category": "documents",
+      "path": "svg/documents/scroll-text.svg",
+      "id": "icon-scroll-text",
+      "aliases": []
+    },
+    {
+      "name": "newspaper",
+      "category": "documents",
+      "path": "svg/documents/newspaper.svg",
+      "id": "icon-newspaper",
+      "aliases": []
+    },
+    {
+      "name": "signature",
+      "category": "documents",
+      "path": "svg/documents/signature.svg",
+      "id": "icon-signature",
+      "aliases": []
+    },
+    {
+      "name": "book-open-text",
+      "category": "documents",
+      "path": "svg/documents/book-open-text.svg",
+      "id": "icon-book-open-text",
+      "aliases": []
+    },
+    {
+      "name": "clipboard-list",
+      "category": "documents",
+      "path": "svg/documents/clipboard-list.svg",
+      "id": "icon-clipboard-list",
+      "aliases": []
+    },
+    {
+      "name": "clipboard-pen",
+      "category": "documents",
+      "path": "svg/documents/clipboard-pen.svg",
+      "id": "icon-clipboard-pen",
+      "aliases": [
+        "clipboard-edit"
+      ]
+    },
+    {
+      "name": "clipboard-paste",
+      "category": "documents",
+      "path": "svg/documents/clipboard-paste.svg",
+      "id": "icon-clipboard-paste",
+      "aliases": []
+    },
+    {
+      "name": "bold",
+      "category": "documents",
+      "path": "svg/documents/bold.svg",
+      "id": "icon-bold",
+      "aliases": []
+    },
+    {
+      "name": "italic",
+      "category": "documents",
+      "path": "svg/documents/italic.svg",
+      "id": "icon-italic",
+      "aliases": []
+    },
+    {
+      "name": "underline",
+      "category": "documents",
+      "path": "svg/documents/underline.svg",
+      "id": "icon-underline",
+      "aliases": []
+    },
+    {
+      "name": "strikethrough",
+      "category": "documents",
+      "path": "svg/documents/strikethrough.svg",
+      "id": "icon-strikethrough",
+      "aliases": []
+    },
+    {
+      "name": "heading-1",
+      "category": "documents",
+      "path": "svg/documents/heading-1.svg",
+      "id": "icon-heading-1",
+      "aliases": []
+    },
+    {
+      "name": "heading-2",
+      "category": "documents",
+      "path": "svg/documents/heading-2.svg",
+      "id": "icon-heading-2",
+      "aliases": []
+    },
+    {
+      "name": "heading-3",
+      "category": "documents",
+      "path": "svg/documents/heading-3.svg",
+      "id": "icon-heading-3",
+      "aliases": []
+    },
+    {
+      "name": "list-ordered",
+      "category": "documents",
+      "path": "svg/documents/list-ordered.svg",
+      "id": "icon-list-ordered",
+      "aliases": []
+    },
+    {
+      "name": "quote",
+      "category": "documents",
+      "path": "svg/documents/quote.svg",
+      "id": "icon-quote",
+      "aliases": []
+    },
+    {
+      "name": "text-align-start",
+      "category": "documents",
+      "path": "svg/documents/text-align-start.svg",
+      "id": "icon-text-align-start",
+      "aliases": [
+        "align-left",
+        "text"
+      ]
+    },
+    {
+      "name": "text-align-center",
+      "category": "documents",
+      "path": "svg/documents/text-align-center.svg",
+      "id": "icon-text-align-center",
+      "aliases": [
+        "align-center"
+      ]
+    },
+    {
+      "name": "text-align-end",
+      "category": "documents",
+      "path": "svg/documents/text-align-end.svg",
+      "id": "icon-text-align-end",
+      "aliases": [
+        "align-right"
+      ]
+    },
+    {
+      "name": "text-align-justify",
+      "category": "documents",
+      "path": "svg/documents/text-align-justify.svg",
+      "id": "icon-text-align-justify",
+      "aliases": [
+        "align-justify"
+      ]
+    },
+    {
+      "name": "list-indent-increase",
+      "category": "documents",
+      "path": "svg/documents/list-indent-increase.svg",
+      "id": "icon-list-indent-increase",
+      "aliases": [
+        "indent",
+        "indent-increase"
+      ]
+    },
+    {
+      "name": "list-indent-decrease",
+      "category": "documents",
+      "path": "svg/documents/list-indent-decrease.svg",
+      "id": "icon-list-indent-decrease",
+      "aliases": [
+        "indent-decrease",
+        "outdent"
+      ]
+    },
+    {
+      "name": "braces",
+      "category": "documents",
+      "path": "svg/documents/braces.svg",
+      "id": "icon-braces",
+      "aliases": [
+        "curly-braces"
+      ]
+    },
+    {
+      "name": "pilcrow",
+      "category": "documents",
+      "path": "svg/documents/pilcrow.svg",
+      "id": "icon-pilcrow",
+      "aliases": []
+    },
+    {
+      "name": "square-code",
+      "category": "documents",
+      "path": "svg/documents/square-code.svg",
+      "id": "icon-square-code",
+      "aliases": [
+        "code-square"
+      ]
+    },
+    {
+      "name": "remove-formatting",
+      "category": "documents",
+      "path": "svg/documents/remove-formatting.svg",
+      "id": "icon-remove-formatting",
+      "aliases": []
+    }
+  ]
+}

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { menuKeyNav, MENU_ITEMS } from './ContextMenu';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * A dropdown menu for row and card actions.
@@ -79,7 +80,7 @@ export default function Menu({ label = 'Actions', trigger, children, align = 'ri
         aria-controls={open ? id : undefined}
         onClick={() => setOpen((v) => !v)}
       >
-        {trigger || <><span aria-hidden>⋯</span><span className="sr-only">{label}</span></>}
+        {trigger || <><Icon name="ellipsis" /><span className="sr-only">{label}</span></>}
       </button>
       {open && (
         // Clicks bubble to here rather than each item wiring its own close,

@@ -8,6 +8,7 @@ import { attentionItems } from '@/lib/admin-overview';
 import AdminPage, { AdminCard } from './_ui/AdminPage';
 import { StatTile } from './_ui/StatTile';
 import { useAdminResource } from './_ui/api';
+import Icon from '@/app/components/ui/Icon';
 
 const size = (n) => fmtSize(n) || '0 B';
 const HEALTH_WORD = { ok: 'Working', warn: 'Needs a look', fail: 'Failing' };
@@ -74,7 +75,7 @@ export default function Overview({ pending, drives, totals }) {
           <ul className="attention">
             {items.map((item) => (
               <li key={item.id} className={`attention-item check is-${item.tone === 'danger' ? 'fail' : 'warn'}`}>
-                <span className="check-glyph" aria-hidden>{item.tone === 'danger' ? '✗' : '!'}</span>
+                <Icon name={item.tone === 'danger' ? 'circle-x' : 'triangle-alert'} size={18} className="check-glyph" />
                 <div className="attention-text">
                   <div className="attention-title">
                     {item.title}

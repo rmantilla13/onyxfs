@@ -18,6 +18,7 @@ import KindBreakdown from '../../_ui/KindBreakdown';
 import { useDestructiveConfirm } from '../../_ui/DestructiveConfirm';
 import { api } from '../../_ui/api';
 import DriveLocation from '../DriveLocation';
+import Icon from '@/app/components/ui/Icon';
 
 const size = (n) => fmtSize(n) || '0 B';
 
@@ -190,7 +191,7 @@ function DriveSettings({ drive, stored, storage }) {
 
       {locked && (
         <p className="admin-lock" id="drive-lock">
-          <svg aria-hidden viewBox="0 0 16 16" width="14" height="14"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.3" /><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7" fill="none" stroke="currentColor" strokeWidth="1.3" /></svg>
+          <Icon name="lock" size={14} />
           <span>
             The bucket and folder are fixed while it holds files: {plural(stored.files, 'file')} {stored.files === 1 ? 'is' : 'are'} stored
             under <span className="admin-mono">{drive.bucket}/{drive.prefix}</span>, and pointing the drive elsewhere would strand them.

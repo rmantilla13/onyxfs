@@ -1,6 +1,7 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import Icon from '@/app/components/ui/Icon';
 
 const ToastContext = createContext(null);
 
@@ -61,7 +62,7 @@ export function ToastProvider({ children }) {
           >
             <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{t.message}</span>
             <div className="spacer" />
-            <button onClick={() => dismiss(t.id)} aria-label="Dismiss"><span aria-hidden>✕</span></button>
+            <button onClick={() => dismiss(t.id)} aria-label="Dismiss"><Icon name="x" size={14} /></button>
           </div>
         ))}
       </div>

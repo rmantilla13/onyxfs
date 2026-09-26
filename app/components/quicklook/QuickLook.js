@@ -14,6 +14,7 @@ import useQuickLook from './useQuickLook';
 import useOpenPrefetch from '@/app/files/useOpenPrefetch';
 import '@/app/components/review/review.css';
 import './quicklook.css';
+import Icon from '@/app/components/ui/Icon';
 
 function mark(name, key) {
   try { performance.mark(`onyx:ql:${name}`, { detail: { key } }); } catch {}
@@ -223,7 +224,7 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
           <button type="button" className="btn btn-sm" onClick={() => onOpen?.(key)} title="Open (Return)">Open</button>
           {file && <a className="btn btn-sm" href={`/api/files/${file.id}/download`}>Download</a>}
           <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => ql.close()} aria-label="Close" title="Close (Space)">
-            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+            <Icon name="x" />
           </button>
         </header>
         <div className="ql-stage" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} style={{ '--ratio': md.width && md.height ? md.width / md.height : 4 / 3 }}>
@@ -232,9 +233,7 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
           {kind === 'audio' && <AudioItem file={file} />}
           {kind === 'folder' && (
             <div className="ql-card">
-              <svg viewBox="0 0 24 24" width="56" height="56" aria-hidden className="ql-card-icon">
-                <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.3l2 2h8.7A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-              </svg>
+              <Icon name="folder" size={56} strokeWidth={1.25} className="ql-card-icon" />
               <p className="ql-card-name">{folder.name}</p>
               <p className="small muted">Folder{folder.count != null ? ` · ${folder.count} file${folder.count === 1 ? '' : 's'}` : ''}</p>
               <button type="button" className="btn btn-primary" onClick={() => onOpen?.(key)}>Open</button>

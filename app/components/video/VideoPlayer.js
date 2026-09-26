@@ -8,6 +8,7 @@ import {
 import { frameIndexAt, framePosition, layoutFromMetadata } from '@/lib/filmstrip';
 import { pendingSeek } from '@/lib/pending-seek';
 import useContainedRect from '@/app/components/review/useContainedRect';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * The video player.
@@ -488,7 +489,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
 
         {!started && !proxy && (
           <button className="player-bigplay" onClick={togglePlay} aria-label="Play">
-            <span aria-hidden="true">▶</span>
+            <Icon name="play" size={48} strokeWidth={1.5} fill="currentColor" />
           </button>
         )}
       </div>
@@ -560,13 +561,13 @@ const VideoPlayer = forwardRef(function VideoPlayer({
 
         <div className="player-controls">
           <button className="btn btn-icon" onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'} aria-pressed={playing}>
-            <span aria-hidden="true">{playing ? '❚❚' : '▶'}</span>
+            <Icon name={playing ? 'pause' : 'play'} /* icons: pause play */ />
           </button>
           <button className="btn btn-icon" onClick={() => step(-1)} aria-label="Previous frame">
-            <span aria-hidden="true">◀|</span>
+            <Icon name="step-back" />
           </button>
           <button className="btn btn-icon" onClick={() => step(1)} aria-label="Next frame">
-            <span aria-hidden="true">|▶</span>
+            <Icon name="step-forward" />
           </button>
 
           <span className="player-time mono small" title={rateNote}>
@@ -599,7 +600,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
           </label>
 
           <button className="btn btn-icon" onClick={() => setMuted((x) => !x)} aria-label={muted ? 'Unmute' : 'Mute'} aria-pressed={muted}>
-            <span aria-hidden="true">{muted || volume === 0 ? '🔇' : '🔊'}</span>
+            <Icon name={muted || volume === 0 ? 'volume-x' : 'volume-2'} /* icons: volume-x volume-2 */ />
           </button>
           <label className="player-volume">
             <span className="sr-only">Volume</span>
@@ -609,7 +610,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
             />
           </label>
 
-          <button className="btn btn-icon" onClick={toggleFullscreen} aria-label="Fullscreen"><span aria-hidden="true">⛶</span></button>
+          <button className="btn btn-icon" onClick={toggleFullscreen} aria-label="Fullscreen"><Icon name="maximize" /></button>
         </div>
       </div>
 

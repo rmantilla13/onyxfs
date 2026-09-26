@@ -7,6 +7,7 @@ import { fmtSize } from '@/lib/media';
 import { crumbsFor } from '@/lib/folder-ops';
 import { kindLabel } from '@/lib/file-info';
 import { thumbSources } from '@/lib/renditions';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * ⌘K: one box for finding anything and doing anything.
@@ -201,10 +202,7 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
     >
       <div className="palette-box" onKeyDown={onKeyDown}>
         <div className="palette-input-row">
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden className="palette-glass">
-            <circle cx="7" cy="7" r="4.75" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <path d="m10.5 10.5 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
+          <Icon name="search" className="palette-glass" />
           <input
             ref={input}
             className="palette-input"
@@ -259,9 +257,5 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
   );
 }
 
-const FolderGlyph = () => (
-  <svg viewBox="0 0 24 24" width="16" height="16"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.3l2 2h8.7A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /></svg>
-);
-const DriveGlyph = () => (
-  <svg viewBox="0 0 16 16" width="16" height="16"><path d="M2.5 4.5h11v3h-11zM2.5 8.5h11v3h-11z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" /><path d="M11 6h.5M11 10h.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-);
+const FolderGlyph = () => <Icon name="folder" />;
+const DriveGlyph = () => <Icon name="hard-drive" />;

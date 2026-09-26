@@ -165,17 +165,10 @@ a.stat-tile:hover {
 }
 .check:first-child { border-top: 0; padding-top: var(--s1); }
 .check:last-child { padding-bottom: 0; }
-.check-glyph {
-  display: grid; place-items: center;
-  width: 22px; height: 22px;
-  border-radius: 50%;
-  font-size: var(--t-xs); font-weight: 700; line-height: 1;
-  background: color-mix(in srgb, var(--ink) 7%, transparent);
-  color: var(--muted);
-}
-.check.is-pass .check-glyph { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-deep); }
-.check.is-warn .check-glyph { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
-.check.is-fail .check-glyph { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.check-glyph { margin-top: 1px; color: var(--muted); }
+.check.is-pass .check-glyph { color: var(--accent-deep); }
+.check.is-warn .check-glyph { color: var(--warning); }
+.check.is-fail .check-glyph { color: var(--danger); }
 .check-text { min-width: 0; }
 .check-label { font-size: var(--t-md); font-weight: 500; }
 .check-detail { margin-top: 2px; overflow-wrap: anywhere; }

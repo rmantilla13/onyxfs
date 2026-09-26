@@ -205,7 +205,7 @@ struct WorkspaceView: View {
             .overlay {
                 if let failure = web.failure {
                     VStack(spacing: 14) {
-                        Image(systemName: "wifi.exclamationmark").font(.system(size: 34)).foregroundStyle(.secondary)
+                        Image(lucide: "wifi-off", size: 34, strokeWidth: 1.5).foregroundStyle(.secondary)
                         Text(failure).multilineTextAlignment(.center).frame(maxWidth: 440)
                         Button("Try Again") { web.reload() }.keyboardShortcut(.defaultAction)
                     }
@@ -216,15 +216,15 @@ struct WorkspaceView: View {
             .navigationTitle(web.title)
             .toolbar {
                 ToolbarItemGroup(placement: .navigation) {
-                    Button { web.back() } label: { Image(systemName: "chevron.left") }
+                    Button { web.back() } label: { Image(lucide: "chevron-left") }
                         .disabled(!web.canGoBack).help("Back")
-                    Button { web.forward() } label: { Image(systemName: "chevron.right") }
+                    Button { web.forward() } label: { Image(lucide: "chevron-right") }
                         .disabled(!web.canGoForward).help("Forward")
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
                     if web.isLoading { ProgressView().controlSize(.small) }
                     FinderMenu()
-                    Button { web.reload() } label: { Image(systemName: "arrow.clockwise") }
+                    Button { web.reload() } label: { Image(lucide: "refresh-cw") }
                         .help("Reload")
                 }
             }
@@ -250,7 +250,7 @@ struct FinderMenu: View {
         Menu {
             FinderItems()
         } label: {
-            Label("Finder", systemImage: "externaldrive.connected.to.line.below")
+            Label { Text("Finder") } icon: { Image(lucide: "hard-drive") }
         }
         // Named, not just drawn: an unlabeled drive glyph beside the back and
         // forward buttons was the whole way into Finder, and it went unseen.
@@ -318,11 +318,11 @@ enum MenuBarStatus: Equatable {
 
     var symbol: String {
         switch self {
-        case .signedOut, .idle: return "externaldrive.connected.to.line.below"
-        case .mounted: return "externaldrive.fill.badge.checkmark"
-        case .syncing: return "arrow.triangle.2.circlepath"
-        case .offline: return "externaldrive.badge.xmark"
-        case .attention: return "externaldrive.badge.exclamationmark"
+        // icons: hard-drive refresh-cw cloud-off triangle-alert cloud-download
+        case .signedOut, .idle, .mounted: return "hard-drive"
+        case .syncing: return "refresh-cw"
+        case .offline: return "cloud-off"
+        case .attention: return "triangle-alert"
         }
     }
 
@@ -365,7 +365,7 @@ struct MenuBarIcon: View {
 
     var body: some View {
         let status = MenuBarStatus.of(model, finder)
-        Image(systemName: updater.available != nil && status == .idle ? "externaldrive.badge.plus" : status.symbol)
+        Image(lucide: updater.available != nil && status == .idle ? "cloud-download" : status.symbol, size: 16)
             .accessibilityLabel("Onyx: \(status.line)")
             .onReceive(NotificationCenter.default.publisher(for: .onyxOpenWindow)) { _ in
                 Background.shared.comeForward()
@@ -427,9 +427,9 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
-            AccountSettings().tabItem { Label("Account", systemImage: "person.crop.circle") }
-            FinderSettings(finder: model.finder).tabItem { Label("Finder", systemImage: "externaldrive") }
-            StorageSettings(finder: model.finder).tabItem { Label("Storage", systemImage: "internaldrive") }
+            AccountSettings().tabItem { Label { Text("Account") } icon: { Image(lucide: "circle-user") } }
+            FinderSettings(finder: model.finder).tabItem { Label { Text("Finder") } icon: { Image(lucide: "hard-drive") } }
+            StorageSettings(finder: model.finder).tabItem { Label { Text("Storage") } icon: { Image(lucide: "database") } }
         }
         .frame(width: 480, height: 420)
     }
@@ -543,7 +543,7 @@ struct FinderSettings: View {
             case .mounting?:
                 ProgressView().controlSize(.small)
             case let .failed(message)?:
-                Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange).help(message)
+                Image(lucide: "triangle-alert").foregroundStyle(.orange).help(message)
             case .mounted?:
                 Button("Show") { model.reveal(scope) }.buttonStyle(.link)
             case nil:

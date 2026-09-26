@@ -6,18 +6,19 @@ import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
 import { THEME_KEY, readThemePref, setThemePref } from '@/lib/theme';
 import { initialsFor } from '@/lib/account';
 import AvatarDialog from '@/app/components/AvatarDialog';
+import Icon from '@/app/components/ui/Icon';
 
-// ︎ asks for the text glyph, not the emoji, where a platform has both.
 // A picture changed in this tab, until the page is loaded afresh. Another
 // page's TopNav may be rendered from the router's cached payload, older than
 // the change; this keeps it from showing the old picture meanwhile. (A
 // router.refresh() would do that too, but it resets a scrolled file list.)
 let changedHere;
 
+/* icons: sun moon sun-moon */
 const THEMES = [
-  { key: 'light', label: 'Light', icon: '☀︎' },
-  { key: 'dark', label: 'Dark', icon: '☾︎' },
-  { key: 'system', label: 'System', icon: '◐︎' },
+  { key: 'light', label: 'Light', icon: 'sun' },
+  { key: 'dark', label: 'Dark', icon: 'moon' },
+  { key: 'system', label: 'System', icon: 'sun-moon' },
 ];
 
 /**
@@ -55,7 +56,7 @@ export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts
             {avatar ? <img src={avatar} alt="" /> : initialsFor(email)}
           </span>
           <span className="sr-only">Account menu for {email}</span>
-          <span aria-hidden className="muted small">▾</span>
+          <Icon name="chevron-down" size={14} className="muted" />
         </>
       )}
     >
@@ -88,9 +89,9 @@ export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts
           aria-checked={pref === t.key}
           onClick={() => { setThemePref(t.key); setPref(t.key); }}
         >
-          <span aria-hidden style={{ width: 16, textAlign: 'center' }}>{t.icon}</span>
+          <Icon name={t.icon} />
           {t.label}
-          {pref === t.key && <><span className="spacer" /><span aria-hidden>✓</span></>}
+          {pref === t.key && <><span className="spacer" /><Icon name="check" /></>}
         </button>
       ))}
       <MenuSeparator />

@@ -6,6 +6,7 @@ import FileDetailFrame from './FileDetailFrame';
 import ImageStage from './ImageStage';
 import ProgressiveImage from '@/app/components/media/ProgressiveImage';
 import '@/app/components/review/review.css';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * A file's page before the server has rendered it: the same header, the same
@@ -55,7 +56,7 @@ export default function FileOpening({ file, handoff = null, backHref = '/files',
       aria-busy="true"
       header={(
         <>
-          <a className="btn btn-ghost btn-sm" href={backHref}>← Back</a>
+          <a className="btn btn-ghost btn-sm" href={backHref}><Icon name="arrow-left" size={14} />Back</a>
           <h1 className="truncate" style={{ fontSize: 'var(--t-xl)', minWidth: 0 }} title={file.name}>{file.name}</h1>
           <div className="spacer" />
           {/* Holds the header's height, as the page's own buttons will. */}

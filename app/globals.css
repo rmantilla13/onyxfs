@@ -243,6 +243,8 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 }
 .btn-sm { padding: var(--s1) var(--s2); font-size: var(--t-sm); gap: var(--s1); }
 .btn-icon { padding: var(--s2); }
+/* <Icon>: a Lucide outline in currentColor (app/components/ui/Icon.js). */
+.icon { flex: none; vertical-align: middle; }
 
 /* One pressed state for every toggle — tabs, kind chips, folder chips — which
    were three copies of the same inline literal. Always paired with
@@ -813,6 +815,7 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
   color: var(--paper);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  display: inline-flex; align-items: center; gap: 3px;
 }
 /* Sits on a thumbnail, so it stays a dark chip in either scheme. */
 [data-theme='dark'] .filecard-badge { background: color-mix(in srgb, var(--paper) 72%, transparent); color: var(--ink); }
@@ -1385,8 +1388,8 @@ select.input.cell-input { padding-right: 2px; }
   font-size: 40px;
   cursor: pointer;
   /* No preload until this is pressed, so the whole stage is the target. */
-  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
 }
+.player-bigplay .icon { filter: drop-shadow(0 2px 12px rgba(0, 0, 0, 0.6)); }
 .player-bigplay:hover { background: rgba(0, 0, 0, 0.15); }
 
 .player-error { color: var(--danger); margin: 0; }

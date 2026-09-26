@@ -4,16 +4,13 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import FolderDrop, { startFolderDrag } from './FolderDrop';
 import { folderKey } from '@/lib/selection';
 import { overlaps } from '@/lib/marquee';
+import Icon from '@/app/components/ui/Icon';
 
 // Past this many subfolders the tree is the better way in; the items are not
 // virtualized.
 export const MAX_TILES = 300;
 
-const FolderIcon = ({ className }) => (
-  <svg className={className} viewBox="0 0 24 24" width="20" height="20" aria-hidden>
-    <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.3l2 2h8.7A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-  </svg>
-);
+const FolderIcon = ({ className }) => <Icon name="folder" size={20} strokeWidth={1.75} className={className} />;
 
 /**
  * The keyboard and the marquee's view of a set of folder items: which one

@@ -5,6 +5,7 @@ import Popover from './Popover';
 import Dialog from './Dialog';
 import { moveColumn } from '@/lib/list-columns';
 import { METADATA_FIELD_TYPES } from '@/lib/dam';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * Which columns the list shows, and in what order. Opened from the end of the
@@ -30,9 +31,7 @@ export default function ColumnPicker({ available, visible, onChange, onReset, on
       className="colpick"
       trigger={(
         <>
-          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
-            <path d="M2.5 3h11v10h-11zM6.3 3v10M9.8 3v10" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-          </svg>
+          <Icon name="table" size={14} />
           {late.size > 0 && <span className="colpick-count" aria-hidden>+{late.size}</span>}
         </>
       )}
@@ -70,7 +69,7 @@ export default function ColumnPicker({ available, visible, onChange, onReset, on
                 disabled={i === 0}
                 onClick={() => onChange(moveColumn(visible, c.key, -1))}
               >
-                ↑
+                <Icon name="arrow-up" size={14} />
               </button>
               <button
                 type="button"
@@ -80,7 +79,7 @@ export default function ColumnPicker({ available, visible, onChange, onReset, on
                 disabled={i === shown.length - 1}
                 onClick={() => onChange(moveColumn(visible, c.key, 1))}
               >
-                ↓
+                <Icon name="arrow-down" size={14} />
               </button>
             </div>
           ))}

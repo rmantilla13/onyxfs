@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef } from 'react';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * A modal dialog built on the native <dialog> element.
@@ -129,7 +130,7 @@ export default function Dialog({
           <div className="spacer" />
           {dismissable && (
             <button className="btn btn-ghost btn-sm btn-icon" onClick={() => onClose?.()} aria-label="Close">
-              <span aria-hidden>✕</span>
+              <Icon name="x" />
             </button>
           )}
         </div>

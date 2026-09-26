@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * Every admin section's frame: an h1, one plain-language line about what the
@@ -15,7 +16,7 @@ export default function AdminPage({ title, description, actions, toolbar, parent
         <div className="admin-head-text">
           {parent && (
             <Link href={parent.href} className="admin-parent">
-              <span aria-hidden>‹</span> {parent.label}
+              <Icon name="chevron-left" size={14} /> {parent.label}
             </Link>
           )}
           <h1 className="admin-title" id={titleId}>{title}</h1>
