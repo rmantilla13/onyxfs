@@ -4,20 +4,24 @@ import Testing
 
 /// A pretend server and bucket: records what was asked, holds the bytes
 /// PUT to it, fails on command.
-private actor FakeServer: UploadTransport {
+actor FakeServer: UploadTransport {
     var calls: [String] = []
     var objects: [String: Data] = [:]
     var parts: [Int: Data] = [:]
-    var failNext: [String: Error] = [:]
+    var failNext: [String: [Error]] = [:]
     var partSize: Int64 = 10
     var partCount = 0
 
     func log(_ call: String) throws {
         calls.append(call)
-        if let error = failNext.removeValue(forKey: call) { throw error }
+        if var errors = failNext[call], !errors.isEmpty {
+            let error = errors.removeFirst()
+            failNext[call] = errors.isEmpty ? nil : errors
+            throw error
+        }
     }
 
-    func setFailure(_ call: String, _ error: Error) { failNext[call] = error }
+    func setFailure(_ call: String, _ error: Error, times: Int = 1) { failNext[call] = Array(repeating: error, count: times) }
 
     func presign(_ job: UploadJob) async throws -> OnyxAPI.PresignedPut {
         try log("presign")
@@ -65,18 +69,18 @@ private actor FakeServer: UploadTransport {
     }
 }
 
-private func scratch() -> URL {
+func scratch() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent("uploads-\(UUID().uuidString)", isDirectory: true)
 }
 
-private func source(_ bytes: Data) throws -> URL {
+func source(_ bytes: Data) throws -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("src-\(UUID().uuidString)")
     try bytes.write(to: url)
     return url
 }
 
 /// Waits (briefly) until the queue has nothing left that is not done or failed.
-private func settle(_ queue: UploadQueue) async {
+func settle(_ queue: UploadQueue) async {
     for _ in 0..<500 {
         if await queue.all().allSatisfy({ $0.state == .failed }) { return }
         try? await Task.sleep(nanoseconds: 2_000_000)
@@ -215,7 +219,7 @@ private actor Recorder {
     func add(_ job: UploadJob) { jobs.append(job) }
 }
 
-private actor Gate {
+actor Gate {
     private var isOpen = false
     private var waiting: [CheckedContinuation<Void, Never>] = []
     func wait() async {
@@ -229,6 +233,6 @@ private actor Gate {
     }
 }
 
-private extension FakeServer {
+extension FakeServer {
     func setPartSize(_ size: Int64) { partSize = size }
 }

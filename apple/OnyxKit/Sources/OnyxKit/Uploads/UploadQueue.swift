@@ -61,6 +61,10 @@ public actor UploadQueue {
     private var jobs: [UUID: UploadJob] = [:]
     private var running: [UUID: Task<Void, Never>] = [:]
     private var progress: [UUID: Int64] = [:]
+    /// Jobs finished this run → the file each became. The writer asks this
+    /// rather than waiting to be told, so a rename or delete that comes
+    /// right as an upload finishes is applied to the file, not lost.
+    private var recorded: [UUID: String] = [:]
     private var onChange: (@Sendable (UploadJob) -> Void)?
     private var sleep: @Sendable (Double) async -> Void
 
@@ -113,6 +117,9 @@ public actor UploadQueue {
     public func all() -> [UploadJob] { jobs.values.sorted { $0.path < $1.path } }
 
     public func job(_ id: UUID) -> UploadJob? { jobs[id] }
+
+    /// The file a finished job became, if it has.
+    public func fileId(for id: UUID) -> String? { recorded[id] }
 
     /// Bytes sent so far, for progress.
     public func sent(_ id: UUID) -> Int64 { progress[id] ?? 0 }
@@ -179,6 +186,7 @@ public actor UploadQueue {
                 done.state = .done
                 done.fileId = file.id
                 done.lastError = nil
+                recorded[id] = file.id
                 try? FileManager.default.removeItem(atPath: done.staged)
                 jobs[id] = nil
                 save()
