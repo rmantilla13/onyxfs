@@ -20,8 +20,15 @@ import OnyxKit
 /// ~/Onyx and the mounts are private to this account (MountManager), which
 /// closes the file-system way in, not that one. Closing it needs a transport
 /// with no TCP listener (FSKit, or File Provider): ROADMAP, Phase 5.
+///
+/// The same listener answers the onyxfs extension, a drive mounted as a
+/// disk through FSKit, under `/fs/v1/` (`fs`, FSBridge in OnyxKit). Those
+/// routes take a session key the extension traded a one-time ticket for,
+/// never the token above, and the token opens none of them.
 final class DAVServer: @unchecked Sendable {
     let token: String
+    /// The onyxfs routes: sessions, and a responder per drive mounted as a disk.
+    let fs = FSBridge()
     private let queue = DispatchQueue(label: "io.onyxfs.dav", qos: .userInitiated)
     private var listener: NWListener?
     private var routes: [String: DAVResponder] = [:]
@@ -43,6 +50,13 @@ final class DAVServer: @unchecked Sendable {
     /// A keep-alive connection with no request this long is closed. rclone
     /// closes its own idle connections after a minute, so it normally goes
     /// first; this is for the ones nothing will ever use.
+    ///
+    /// Neither deadline runs while a request is being answered. So the
+    /// onyxfs extension's `changes` long-poll, which waits up to 25 s for the
+    /// drive to change, is never cut off, and nothing here had to be relaxed
+    /// for it: its wait is capped by FSBridge (FSResponder.longestWait), and
+    /// so is how many wait at once (FSBridge.maxPolls), leaving most of
+    /// `maxConnections` to everything else.
     static let idleTimeout: TimeInterval = 90
 
     init() {
@@ -135,6 +149,7 @@ final class DAVServer: @unchecked Sendable {
         weak var server: DAVServer?
         let queue: DispatchQueue
         let token: String
+        let fs: FSBridge
         var buffer = Data()
         /// Moved on by every deadline set or cleared, so only the latest one
         /// set can close the connection.
@@ -150,6 +165,7 @@ final class DAVServer: @unchecked Sendable {
             self.server = server
             self.queue = queue
             token = server.token
+            fs = server.fs
         }
 
         func readNext() {
@@ -215,8 +231,21 @@ final class DAVServer: @unchecked Sendable {
             // The token, as soon as the headers are in: whoever lacks it gets
             // no body waited for or held, and the connection closed. The
             // responder checks it again, as it does for any caller.
-            guard DAVResponder.authorizes(headers["authorization"], token: token) else {
-                fail(401); return .failed
+            let target = String(parts[1])
+            var bodyLimit = Self.maxBody
+            if FSBridge.handles(target) {
+                // onyxfs: a session key, not the token — or, to get one, a
+                // ticket in a body no bigger than a ticket needs.
+                switch fs.admit(method: String(parts[0]), target: target, authorization: headers["authorization"]) {
+                case .refuse:
+                    fail(FSBridge.unauthorized); return .failed
+                case let .accept(maxBody):
+                    bodyLimit = maxBody
+                }
+            } else {
+                guard DAVResponder.authorizes(headers["authorization"], token: token) else {
+                    fail(401); return .failed
+                }
             }
             if headers["transfer-encoding"]?.lowercased().contains("chunked") == true {
                 // The mount is read-only: nothing it sends has a chunked body
@@ -225,19 +254,31 @@ final class DAVServer: @unchecked Sendable {
                 fail(403); return .failed
             }
             let length = Int(headers["content-length"] ?? "0") ?? 0
-            guard length >= 0, length <= Self.maxBody else { fail(413); return .failed }
+            guard length >= 0, length <= bodyLimit else { fail(413); return .failed }
             let bodyStart = end.upperBound
             guard buffer.endIndex - bodyStart >= length else { return .needMore }
             let body = buffer[bodyStart..<(bodyStart + length)]
             buffer = Data(buffer[(bodyStart + length)...])
             let keepAlive = headers["connection"]?.lowercased() != "close" && parts[2] == "HTTP/1.1"
-            let request = DAVRequest(method: String(parts[0]), target: String(parts[1]),
+            let request = DAVRequest(method: String(parts[0]), target: target,
                                      headers: headers, body: Data(body))
             return .request(request, keepAlive: keepAlive)
         }
 
         private func handle(_ parsed: (DAVRequest, keepAlive: Bool)) {
             let (request, keepAlive) = parsed
+            // onyxfs, answered off this queue like any route. A `changes`
+            // long-poll waits in its task — no thread held, nothing else on
+            // this connection or any other kept waiting — and no deadline
+            // runs meanwhile (see idleTimeout).
+            if FSBridge.handles(request.target) {
+                let fs = self.fs
+                Task {
+                    let response = await fs.respond(to: request)
+                    queue.async { [self] in send(response, keepAlive: keepAlive) }
+                }
+                return
+            }
             // Routed by the first segment. The target goes on whole: the
             // responder strips its own prefix (hrefPrefix), and a request
             // outside it is its 404 to give.
@@ -343,8 +384,12 @@ final class DAVServer: @unchecked Sendable {
         /// Answer with an error and close: after a request that could not be
         /// read, where the next one starts is unknowable.
         private func fail(_ status: Int) {
+            fail(DAVResponse(status: status, headers: [("Content-Length", "0")], body: .empty))
+        }
+
+        private func fail(_ response: DAVResponse) {
             buffer.removeAll()
-            send(DAVResponse(status: status, headers: [("Content-Length", "0")], body: .empty), keepAlive: false)
+            send(response, keepAlive: false)
         }
 
         static func reason(_ status: Int) -> String {
@@ -353,11 +398,13 @@ final class DAVServer: @unchecked Sendable {
             case 206: return "Partial Content"
             case 207: return "Multi-Status"
             case 302: return "Found"
+            case 307: return "Temporary Redirect"
             case 400: return "Bad Request"
             case 401: return "Unauthorized"
             case 403: return "Forbidden"
             case 404: return "Not Found"
             case 405: return "Method Not Allowed"
+            case 409: return "Conflict"
             case 413: return "Payload Too Large"
             case 416: return "Range Not Satisfiable"
             case 500: return "Internal Server Error"
