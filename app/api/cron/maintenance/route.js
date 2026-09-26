@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { ensureSchema, listExpiredTrash, deleteFile, listAllFiles, getFileMetadataSchema, listStaleUploads, deleteUpload } from '@/lib/db';
+import { ensureSchema, listExpiredTrash, deleteFile, listAllFiles, getFileMetadataSchema, listStaleUploads, deleteUpload, purgeTarget, storageKeyInUse } from '@/lib/db';
 import { getStorageConfig, s3DeleteObject, s3AbortMultipartUpload } from '@/lib/storage';
 import { normalizeSchema, expiryState } from '@/lib/dam';
 import { notifyExpiringRights } from '@/lib/notify';
@@ -41,7 +41,13 @@ export async function GET(req) {
     const cfg = await getStorageConfig();
     for (const row of await listExpiredTrash(cutoff)) {
       try {
-        if (row.storageKey) await s3DeleteObject(cfg, row.storageKey);
+        // The trashed copy, not the file's old key: a newer upload may have
+        // that key now, and deleting it lost that file's bytes.
+        const keyInUse = !row.trashKey && row.storageKey
+          ? await storageKeyInUse(row.storageKey, { exceptId: row.id })
+          : false;
+        const target = purgeTarget(row, { keyInUse });
+        if (target) await s3DeleteObject(cfg, target);
         await deleteFile(row.id);
         out.purged++;
       } catch (e) {

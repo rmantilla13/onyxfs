@@ -83,6 +83,16 @@ export async function PATCH(req, { params }) {
   const { id } = params;
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return NextResponse.json({ error: 'Bad request' }, { status: 400 });
+  }
+  // Never from here. The listing presigns whatever a row's thumbnail points
+  // at, so a key or URL taken from the client would let anyone who can edit
+  // one file mint a download link for any object in the bucket — another
+  // drive's included. Thumbnails are recorded by PUT /api/files/[id]/thumbnail
+  // and POST /api/files, which accept only a key the server named.
+  delete body.thumbnailKey;
+  delete body.thumbnailUrl;
 
   const existing = await getFileById(id);
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
