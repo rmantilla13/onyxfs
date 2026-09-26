@@ -22,6 +22,8 @@ export const dynamic = 'force-dynamic';
  * scope a key to one drive (R2, MinIO, Spaces — see credentialPlan), only an
  * admin is ever given the deployment's own key; everyone else is refused
  * with a message saying so, and reads through the app's streaming instead.
+ * A drive with its own key is the same for anyone who may only read it: that
+ * key writes, and cannot be narrowed.
  */
 export async function POST(req) {
   const gate = await requireDesktopAuth(req);
@@ -57,10 +59,12 @@ export async function POST(req) {
 
   // Refuse up front, with the reason, rather than let the ladder fail: on a
   // provider with no per-drive credentials the only rung is the deployment's
-  // key, and that goes to admins alone.
+  // key, and that goes to admins alone; a drive's own key cannot be made
+  // read-only, so it goes only to someone whose mount may write.
   const plan = credentialPlan(cfg, fs, { role, isAdmin: principal.isAdmin });
-  if (plan.strategy === 'static' && !plan.staticAllowed) {
-    return NextResponse.json({ error: staticRefusalMessage(cfg), role: 'viewer', readOnly: true }, { status: 403 });
+  if ((plan.strategy === 'static' || plan.strategy === 'filespace-static') && !plan.staticAllowed) {
+    const message = staticRefusalMessage(cfg, plan.strategy === 'filespace-static' ? fs : null);
+    return NextResponse.json({ error: message, role: 'viewer', readOnly: true }, { status: 403 });
   }
 
   try {
