@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { sortRows, nextSort, CARD_BELOW } from '@/lib/admin-table';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * A table for an admin list: a real <thead>, headers that sort (with
@@ -84,8 +85,8 @@ export default function DataTable({ label, columns, rows, rowKey = (r) => r.id, 
               aria-label={`Order: ${sortDirWord(sortCol, sort.dir)}. Reverse it`}
               onClick={() => setSort((s) => (s ? { ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' } : s))}
             >
-              <span aria-hidden>{sort.dir === 'asc' ? '↑' : '↓'}</span>
-              {' '}{sortDirWord(sortCol, sort.dir)}
+              <Icon name={sort.dir === 'asc' ? 'arrow-up' : 'arrow-down'} size={14} />
+              {sortDirWord(sortCol, sort.dir)}
             </button>
           )}
         </div>
@@ -107,7 +108,7 @@ export default function DataTable({ label, columns, rows, rowKey = (r) => r.id, 
                   {c.actions ? <span className="sr-only">{c.label || 'Actions'}</span> : sortable ? (
                     <button type="button" className="dt-sort" tabIndex={cards ? -1 : undefined} onClick={() => setSort((s) => nextSort(s, c))}>
                       {c.label}
-                      <span className="dt-sort-mark" aria-hidden>{dir === 'asc' ? '↑' : dir === 'desc' ? '↓' : '↕'}</span>
+                      <Icon name={dir === 'asc' ? 'arrow-up' : dir === 'desc' ? 'arrow-down' : 'arrow-up-down'} size={12} className="dt-sort-mark" /* icons: arrow-up arrow-down arrow-up-down */ />
                     </button>
                   ) : c.label}
                 </th>

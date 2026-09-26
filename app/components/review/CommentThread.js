@@ -4,6 +4,7 @@ import { memo, useState } from 'react';
 import Menu, { MenuItem } from '@/app/components/ui/Menu';
 import MentionTextarea, { mentionsIn } from './MentionTextarea';
 import { ago, handleOf, initials, personLabel } from './format';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * One thread: a comment, its replies, and what the reader may do with it.
@@ -111,7 +112,7 @@ function CommentThread({
               className="btn btn-ghost btn-sm"
               onClick={() => onUpdate(comment.id, { resolved: !resolved }).catch(onError)}
             >
-              {resolved ? 'Reopen' : '✓ Resolve'}
+              {resolved ? 'Reopen' : <><Icon name="check" size={14} />Resolve</>}
             </button>
           )}
           {resolved && <span className="small muted">Resolved{comment.resolvedBy ? ` by ${handleOf(comment.resolvedBy)}` : ''}</span>}

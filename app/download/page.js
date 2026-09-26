@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { loadBrand } from '@/lib/brand-config';
 import { latestMacRelease } from '@/lib/mac-release';
 import BrandLogo from '@/app/components/BrandLogo';
+import Icon from '@/app/components/ui/Icon';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Download for Mac' };
@@ -30,9 +31,7 @@ export default async function DownloadPage() {
         {release ? (
           <>
             <a className="btn btn-primary download-button" href="/download/mac">
-              <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10" />
-              </svg>
+              <Icon name="download" />
               Download for Mac
             </a>
             <p className="small muted" style={{ margin: '10px 0 0' }}>

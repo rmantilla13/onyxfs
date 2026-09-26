@@ -1,3 +1,5 @@
+import Icon from '@/app/components/ui/Icon';
+
 /**
  * A list of checks — storage diagnostics, a drive's diagnostics, Health.
  * Each row is a glyph, a label, what was found and, when it is wrong, what
@@ -6,7 +8,7 @@
  *
  *   checks: [{ id, label, status: pass|warn|fail|off|info, detail?, fix? }]
  */
-const GLYPH = { pass: '✓', warn: '!', fail: '✗', off: '–', info: 'i' };
+const GLYPH = { pass: 'circle-check', warn: 'triangle-alert', fail: 'circle-x', off: 'circle', info: 'info' };
 const WORD = { pass: 'passed', warn: 'warning', fail: 'failed', off: 'not set up', info: 'information' };
 
 export default function CheckList({ checks = [], label }) {
@@ -16,7 +18,7 @@ export default function CheckList({ checks = [], label }) {
         const status = GLYPH[c.status] ? c.status : 'info';
         return (
           <li key={c.id || c.label} className={`check is-${status}`}>
-            <span className="check-glyph" aria-hidden>{GLYPH[status]}</span>
+            <Icon name={GLYPH[status]} size={18} className="check-glyph" /* icons: circle-check triangle-alert circle-x circle info */ />
             <div className="check-text">
               <div className="check-label">
                 {c.label}

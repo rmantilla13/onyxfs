@@ -3,6 +3,7 @@
 import Dialog from '@/app/components/ui/Dialog';
 import FilespaceMembers from '@/app/components/FilespaceMembers';
 import { fmtSize } from '@/lib/media';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * Drives: the filespaces, shown the way a computer shows its disks. Each is
@@ -21,7 +22,7 @@ export function DriveList({ drives = [], usage = {}, library = null, activeId = 
       <div className="drives-head">
         <h3 className="drives-title">Drives</h3>
         {canCreate && (
-          <button type="button" className="btn btn-ghost btn-sm drives-new" onClick={onNew} aria-label="New drive" title="New drive">+</button>
+          <button type="button" className="btn btn-ghost btn-sm drives-new" onClick={onNew} aria-label="New drive" title="New drive"><Icon name="plus" /></button>
         )}
       </div>
       <ul className="drives-list edge-scroll">
@@ -73,11 +74,7 @@ function DriveRow({ id, name, detail, role, active, pending = false, onClick, li
         title={role && !library ? `${name} — ${ROLE_WORDS[role] || role}` : name}
       >
         <span className={`drive-icon${library ? ' is-library' : ''}`} aria-hidden>
-          {library ? (
-            <svg viewBox="0 0 16 16" width="16" height="16"><path d="M2.5 3.5h4l1.2 1.5h5.8v7.5h-11z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" /></svg>
-          ) : (
-            <svg viewBox="0 0 16 16" width="16" height="16"><rect x="2" y="4" width="12" height="8" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M4.5 9.5h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" /><circle cx="11.3" cy="9.5" r=".9" fill="currentColor" /></svg>
-          )}
+          <Icon name={library ? 'folders' : 'hard-drive'} /* icons: folders hard-drive */ />
         </span>
         <span className="drive-text">
           <span className="drive-name truncate">{name}</span>

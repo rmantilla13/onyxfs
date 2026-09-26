@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { fmtSize } from '@/lib/media';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * The upload tray: every file in the queue with its own progress, the batch
@@ -82,10 +83,10 @@ export default function UploadPanel({ snapshot, onCancel, onRetry, onRetryFailed
           aria-expanded={!collapsed}
           aria-label={collapsed ? 'Show uploads' : 'Hide uploads'}
         >
-          {collapsed ? '▴' : '▾'}
+          <Icon name={collapsed ? 'chevron-up' : 'chevron-down'} size={14} /* icons: chevron-up chevron-down */ />
         </button>
         {!running && (
-          <button className="btn btn-sm" onClick={onClear} aria-label="Close uploads">✕</button>
+          <button className="btn btn-sm" onClick={onClear} aria-label="Close uploads"><Icon name="x" size={14} /></button>
         )}
       </div>
       <Bar value={total ? sent / total : 0} status={status} />
@@ -101,14 +102,14 @@ export default function UploadPanel({ snapshot, onCancel, onRetry, onRetryFailed
             {items.slice(0, MAX_ROWS).map((item) => (
               <li key={item.id} className={`upload-row is-${item.status}`}>
                 <div className="row small" style={{ gap: 'var(--s2)' }}>
-                  <span className="upload-check" aria-hidden>{item.status === 'done' ? '✓' : ''}</span>
+                  <span className="upload-check" aria-hidden>{item.status === 'done' && <Icon name="check" size={14} />}</span>
                   <span className="truncate" style={{ flex: 1, minWidth: 0 }} title={item.folder ? `${item.folder}/${item.name}` : item.name}>
                     {item.name}
                     {item.folder && <span className="muted"> · {item.folder}</span>}
                   </span>
                   <span className="muted" style={{ flex: '0 0 auto', fontVariantNumeric: 'tabular-nums' }}>{meta(item)}</span>
                   {(item.status === 'queued' || item.status === 'uploading') && (
-                    <button className="upload-action" onClick={() => onCancel(item.id)} aria-label={`Cancel ${item.name}`}>✕</button>
+                    <button className="upload-action" onClick={() => onCancel(item.id)} aria-label={`Cancel ${item.name}`}><Icon name="x" size={14} /></button>
                   )}
                   {(item.status === 'error' || item.status === 'canceled') && (
                     <button className="upload-action" onClick={() => onRetry(item.id)} aria-label={`Retry ${item.name}`}>Retry</button>

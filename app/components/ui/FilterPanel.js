@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * The facet filters, as a panel that opens under the toolbar instead of a
@@ -28,7 +29,7 @@ export default function FilterPanel({ id, defs, selected, onToggle, onClear, onC
         <div className="spacer" />
         {active > 0 && <button type="button" className="btn btn-ghost btn-sm" onClick={onClear}>Clear all</button>}
         <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={onClose} aria-label="Close filters">
-          <span aria-hidden>✕</span>
+          <Icon name="x" />
         </button>
       </div>
       {facets.length === 0 ? (
@@ -93,7 +94,7 @@ export function ActiveFilters({ defs, selected, onToggle, onClear, onEdit }) {
         >
           <span className="muted">{c.label}</span>
           <span className="truncate">{c.value}</span>
-          <span aria-hidden>✕</span>
+          <Icon name="x" size={12} />
         </button>
       ))}
       <button type="button" className="btn btn-ghost btn-sm" onClick={onEdit}>Edit</button>

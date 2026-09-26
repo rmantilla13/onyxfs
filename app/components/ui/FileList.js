@@ -9,6 +9,7 @@ import { deriveAuto } from '@/lib/dam';
 import { fileKey } from '@/lib/selection';
 import { rowsPerViewport } from '@/lib/nav-geometry';
 import { createEditIntent } from '@/lib/edit-intent';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * The library as a list: one row per file, a Name column, and whichever
@@ -111,7 +112,7 @@ function SortButton({ col, sort, onSort }) {
       onClick={() => onSort?.(nextSortFor(col.key, sort))}
     >
       <span className="truncate">{col.label}</span>
-      <span className="filelist-arrow" aria-hidden>{on ? (dir === 'asc' ? '↑' : '↓') : ''}</span>
+      <span className="filelist-arrow" aria-hidden>{on && <Icon name={dir === 'asc' ? 'arrow-up' : 'arrow-down'} size={12} />}</span>
     </button>
   );
 }
