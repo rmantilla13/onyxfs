@@ -15,9 +15,11 @@ import { useEffect, useState } from 'react';
  * pinned folder or drive); `mounted` the drives in Finder, as the app names
  * them ("drive.<id>", "library"). `nav` is the window's back and forward;
  * `finder` the drives Finder can show, with how each mount is doing (the
- * bar's Finder menu). All three are empty in an app older than they are.
+ * bar's Finder menu); `transcriber` is { enabled, busy } — busy is the id of
+ * the file this Mac is transcribing. Each is empty (or null) in an app older
+ * than it is.
  */
-const NONE = { inApp: false, pinned: new Set(), mounted: new Set(), pinnedFolders: [], nav: { canGoBack: false, canGoForward: false }, finder: { drives: [], states: {}, busy: [] } };
+const NONE = { inApp: false, pinned: new Set(), mounted: new Set(), pinnedFolders: [], nav: { canGoBack: false, canGoForward: false }, finder: { drives: [], states: {}, busy: [] }, transcriber: null };
 
 export default function useMacApp() {
   const [state, setState] = useState(NONE);
@@ -36,6 +38,9 @@ export default function useMacApp() {
         states: s?.finder?.states || {},
         busy: Array.isArray(s?.finder?.busy) ? s.finder.busy : [],
       },
+      transcriber: s?.transcriber && typeof s.transcriber === 'object'
+        ? { enabled: s.transcriber.enabled !== false, busy: s.transcriber.busy || null }
+        : null,
     });
     apply(mac.state);
     const on = (e) => apply(e.detail);
@@ -59,6 +64,8 @@ export default function useMacApp() {
     goBack: () => mac()?.goBack?.(),
     goForward: () => mac()?.goForward?.(),
     hasBar: typeof window !== 'undefined' && !!window.onyxMac?.setBar,
+    /** Look at the transcription queue now, not at the next poll. A no-op in builds without it. */
+    transcribe: (fileId) => mac()?.transcribe?.(fileId),
     folderPinned: (path, driveId) => state.pinnedFolders.some((f) =>
       f.scope === (driveId ? `drive.${driveId}` : 'library') && f.path === path),
   };

@@ -22,10 +22,13 @@ public enum FileDownload {
     /// byte is asked for. A status that is not 2xx throws OnyxError.http and
     /// writes none of that body. On any throw the caller removes what is at
     /// `destination`. Cancelling the calling task stops the transfer.
-    public static func fetch(_ url: URL, to destination: URL, session: URLSession = session) async throws {
+    /// `progress`, when given, hears the bytes written so far after each
+    /// chunk, on the session's queue.
+    public static func fetch(_ url: URL, to destination: URL, session: URLSession = session,
+                             progress: (@Sendable (Int64) -> Void)? = nil) async throws {
         FileManager.default.createFile(atPath: destination.path, contents: nil)
         let handle = try FileHandle(forWritingTo: destination)
-        let writer = Writer(handle: handle)
+        let writer = Writer(handle: handle, progress: progress)
         let task = session.dataTask(with: url)
         task.delegate = writer
         try await withTaskCancellationHandler {
@@ -43,11 +46,14 @@ private final class Writer: NSObject, URLSessionDataDelegate, @unchecked Sendabl
     // Set by start() before the task runs; after that, touched only by the
     // session's delegate queue, one callback at a time.
     private let handle: FileHandle
+    private let progress: (@Sendable (Int64) -> Void)?
+    private var written: Int64 = 0
     private var continuation: CheckedContinuation<Void, Error>?
     private var failure: Error?
 
-    init(handle: FileHandle) {
+    init(handle: FileHandle, progress: (@Sendable (Int64) -> Void)?) {
         self.handle = handle
+        self.progress = progress
     }
 
     func start(_ task: URLSessionDataTask, then continuation: CheckedContinuation<Void, Error>) {
@@ -69,7 +75,11 @@ private final class Writer: NSObject, URLSessionDataDelegate, @unchecked Sendabl
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         guard failure == nil else { return }
-        do { try handle.write(contentsOf: data) } catch {
+        do {
+            try handle.write(contentsOf: data)
+            written += Int64(data.count)
+            progress?(written)
+        } catch {
             // The disk filled, or went away: nothing more is worth fetching.
             failure = error
             dataTask.cancel()

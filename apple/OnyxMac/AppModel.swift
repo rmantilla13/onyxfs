@@ -34,6 +34,8 @@ final class AppModel: ObservableObject {
     let updater = Updater()
     /// Drives in Finder (streaming mounts) and files kept offline.
     let finder = DriveService()
+    /// Transcripts requested on the web, made on this Mac.
+    let transcriber = TranscriptionService()
     private let settings = SharedSettings()
     /// Signed in as the app opened: bringing the drives back, in the
     /// background. Launch arguments that need the drives wait for it.
@@ -50,8 +52,11 @@ final class AppModel: ObservableObject {
         if phase == .signedIn { startup = Task { await afterSignIn() } }
         // Quitting unmounts every drive, so none is left for the system to reap.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
-                                               object: nil, queue: .main) { [finder] _ in
-            MainActor.assumeIsolated { finder.quit() }
+                                               object: nil, queue: .main) { [finder, transcriber] _ in
+            MainActor.assumeIsolated {
+                transcriber.stop()
+                finder.quit()
+            }
         }
     }
 
@@ -110,6 +115,7 @@ final class AppModel: ObservableObject {
         // The server refused the sign-in (tokenRejected): signed out now,
         // so there is no one to put drives in Finder for.
         guard phase == .signedIn else { return }
+        transcriber.start(model: self)
         // A sign-in kept from before the account was recorded (0.2.0 did not
         // record it): the drive list usually names it, and if the server
         // could not be asked yet, this does.
@@ -151,6 +157,7 @@ final class AppModel: ObservableObject {
         drivesLoaded = false
         isAdmin = false
         phase = .signedOut
+        transcriber.stop()
         finder.stop()
         await web.signOut()
         // Finder locations stay: removing one deletes its downloaded copies,
@@ -209,6 +216,7 @@ final class AppModel: ObservableObject {
         drivesLoaded = false
         phase = .signedOut
         problem = "Your sign-in on this Mac has expired or was revoked. Sign in again."
+        transcriber.stop()
         finder.stop()
         await web.signOut()
     }

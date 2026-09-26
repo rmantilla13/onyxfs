@@ -42,6 +42,11 @@ export const config = {
   //                cannot follow a redirect to a sign-in page. Only this one
   //                path under api/files is excluded — the rest stay behind the
   //                cookie gate.
+  // api/files/<id>/transcript, api/transcripts
+  //                Transcripts, which Onyx for Mac claims, reports on and
+  //                submits with its bearer token while the web reads and
+  //                requests them with the cookie. Dual-guarded by resolveActor
+  //                in every handler (lib/transcript-guard.js), like the delta.
   // api/health     Has its own admin-or-CRON_SECRET check, and has to stay
   //                reachable when sign-in itself is broken so it can say why.
   // api/cron       Bearer-token authed.
@@ -61,6 +66,6 @@ export const config = {
   // unauthenticated user opening the desktop hand-off link SHOULD be sent to
   // sign in and bounced back afterwards.
   matcher: [
-    '/((?!api/auth|api/desktop|api/space|api/files/delta|api/health|api/cron|signin|verify|download|s/|_next/static|_next/image|_vercel|favicon.ico|icon.png|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
+    '/((?!api/auth|api/desktop|api/space|api/files/delta|api/files/[^/]+/transcript|api/transcripts|api/health|api/cron|signin|verify|download|s/|_next/static|_next/image|_vercel|favicon.ico|icon.png|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
   ],
 };
