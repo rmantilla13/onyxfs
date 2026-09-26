@@ -10,9 +10,10 @@ export const runtime = 'nodejs';
 const THUMB_CACHE_CONTROL = 'private, max-age=31536000, immutable';
 
 /**
- * POST /api/files/presign  Body: { filename, contentType, folder, thumb? }
+ * POST /api/files/presign  Body: { filename, contentType, folder, thumb?, poster?, strip? }
  * Returns { putUrl, publicUrl, key } for a direct browser → custom-bucket PUT,
- * plus `cacheControl` for a thumbnail, which the PUT must send.
+ * plus `cacheControl` for a preview (thumbnail, player poster or filmstrip),
+ * which the PUT must send.
  * `folder` is baked into the object key so the bucket mirrors Onyx's folders.
  * Only valid when storage mode is 's3'.
  */
@@ -49,13 +50,15 @@ export async function POST(req) {
     // recorded as a row's thumbnail, or the reverse.
     filename = `${randomUUID()}.strip.webp`;
     cacheControl = THUMB_CACHE_CONTROL;
-  } else if (body.thumb) {
+  } else if (body.thumb || body.poster) {
     if (contentType !== 'image/webp' && contentType !== 'image/jpeg') {
       return NextResponse.json({ error: 'A thumbnail must be WebP or JPEG.' }, { status: 400 });
     }
     scoped = { ...cfg, prefix: '_thumbs' };
     folder = undefined;
-    filename = `${randomUUID()}.${contentType === 'image/webp' ? 'webp' : 'jpg'}`;
+    // A video's player poster is `.poster.<ext>`, which isThumbKey does not
+    // match, so it can only ever be recorded in the poster column.
+    filename = `${randomUUID()}${body.poster ? '.poster' : ''}.${contentType === 'image/webp' ? 'webp' : 'jpg'}`;
     // Never rewritten under the same key, so the browser may keep it.
     cacheControl = THUMB_CACHE_CONTROL;
   } else if (body.filespaceId) {
@@ -73,7 +76,7 @@ export async function POST(req) {
   // an editor of that drive — an upload to All files included, should a
   // drive's prefix sit inside the library's. Previews are exempt: _thumbs/
   // is no drive's.
-  if (!body.thumb && !body.strip) {
+  if (!body.thumb && !body.poster && !body.strip) {
     const d = driveAccess(buildObjectKey(scoped, filename, folder), await driveScopeFor(session.user.email));
     if (d.inDrive && !d.write) {
       return NextResponse.json({ error: 'That folder is in a drive you can view but not add to.' }, { status: 403 });

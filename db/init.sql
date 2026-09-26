@@ -9,7 +9,7 @@
 -- GENERATED from the same statements lib/db.js executes, so the two agree by
 -- construction; regenerate it rather than hand-editing.
 --
--- Statements: 89
+-- Statements: 91
 
 CREATE TABLE IF NOT EXISTS "user" (
     id              TEXT PRIMARY KEY,
@@ -136,6 +136,12 @@ ALTER TABLE files ADD COLUMN IF NOT EXISTS thumbnail_key TEXT;
 -- metadata field because presignFileUrls signs it; its geometry is in
 -- metadata.filmstrip.
 ALTER TABLE files ADD COLUMN IF NOT EXISTS filmstrip_key TEXT;
+-- A video's player poster: the grid thumbnail's frame at up to 1920px, for the
+-- detail page's stage (lib/poster.js). Partial index for the "does any row
+-- still point at it" check before a replaced one is deleted.
+ALTER TABLE files ADD COLUMN IF NOT EXISTS poster_key TEXT;
+
+CREATE INDEX IF NOT EXISTS files_poster_key_idx ON files (poster_key) WHERE poster_key IS NOT NULL;
 
 ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_at BIGINT;
 
