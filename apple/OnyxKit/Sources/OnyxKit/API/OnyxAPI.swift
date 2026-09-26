@@ -11,6 +11,10 @@ import Foundation
 ///     /api/files/delta    sync enumeration
 ///     /api/transcripts/queue, /api/files/<id>/transcript[/claim]
 ///                         video transcripts, made on this Mac
+///     /api/files/presign, /api/files/upload/multipart, POST /api/files,
+///     /api/files/<id>, /api/files/folders
+///                         writes from a drive mounted as a disk (onyxfs,
+///                         Writes.swift) — let through only with a bearer
 ///
 /// Anything else needs a cookie. If a new endpoint is added for this client,
 /// it has to be added to that matcher too, or it will 302 and the JSON decode
@@ -28,7 +32,7 @@ public actor OnyxAPI {
         self.session = session
     }
 
-    private func request(_ url: URL, method: String = "GET", json: [String: Any]? = nil,
+    func request(_ url: URL, method: String = "GET", json: [String: Any]? = nil,
                          authenticated: Bool = true) async throws -> Data {
         let body = try json.map { try JSONSerialization.data(withJSONObject: $0) }
         let (data, status) = try await send(url, method: method, body: body, authenticated: authenticated)
@@ -37,7 +41,7 @@ public actor OnyxAPI {
     }
 
     /// The request itself, with the status left for the caller to judge.
-    private func send(_ url: URL, method: String, body: Data?, authenticated: Bool = true) async throws -> (Data, Int) {
+    func send(_ url: URL, method: String, body: Data?, authenticated: Bool = true) async throws -> (Data, Int) {
         var req = URLRequest(url: url)
         req.httpMethod = method
         if authenticated {
@@ -52,7 +56,7 @@ public actor OnyxAPI {
         return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
     }
 
-    private static func check(_ status: Int, _ data: Data) throws {
+    static func check(_ status: Int, _ data: Data) throws {
         guard (200..<300).contains(status) else {
             // The server's own message when there is one — it is written to be
             // read ("Storage is not configured for AWS S3") and is far more
@@ -63,7 +67,7 @@ public actor OnyxAPI {
         }
     }
 
-    private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+    func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         do { return try JSONDecoder().decode(type, from: data) }
         catch { throw OnyxError.decoding(String(describing: error)) }
     }
