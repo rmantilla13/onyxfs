@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { auth } from '@/auth';
+import { getSessionUser } from '@/lib/session';
 import { loadBrand } from '@/lib/brand-config';
 import PairClient from './PairClient';
 
@@ -13,8 +13,7 @@ export const metadata = { title: 'Pairing code' };
  * when it is minted, so the desktop side needs no PKCE verifier to redeem it.
  */
 export default async function PairPage() {
-  const session = await auth();
-  if (!session?.user?.email) redirect('/signin');
+  if (!(await getSessionUser())) redirect('/signin');
   const brand = await loadBrand();
   return <PairClient brandName={brand.desktop.productName} logo={brand.visual.logo} />;
 }

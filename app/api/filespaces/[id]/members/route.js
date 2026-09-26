@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
 import { isAdmin, isEmailGrantedAccess } from '@/lib/auth-allowlist';
 import {
-  getFilespaceById, getFilespaceRole, listFilespaceMembers, grantFilespaceAccess,
+  getFilespaceById, listFilespaceMembers, grantFilespaceAccess,
   revokeFilespaceAccess, listInviteRequests, filespaceMemberDecision,
 } from '@/lib/db';
+import { requirePrincipal, can, driveRoleOf } from '@/lib/authz';
+import { audit, personSubject } from '@/lib/audit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,22 +13,22 @@ export const maxDuration = 30;
 
 /**
  * Who may manage a filespace's members: admins (every filespace) and the
- * filespace's own owners. /api/admin/filespaces/[id]/access stays the admin-only
- * path; this one exists so an owner can do it from the files UI without the
- * Admin panel.
+ * filespace's own owners — owner after the ceiling their platform role sets,
+ * so a Viewer granted owner manages nothing. /api/admin/filespaces/[id]/access
+ * stays the admin-only path; this one exists so an owner can do it from the
+ * files UI without the Admin panel.
  */
 async function gate(id) {
-  const session = await auth();
-  const email = String(session?.user?.email || '').toLowerCase();
-  if (!email) return { error: NextResponse.json({ error: 'Not authenticated' }, { status: 401 }) };
-  const admin = isAdmin(email);
+  const g = await requirePrincipal();
+  if (g.error) return g;
+  const { principal, email } = g;
+  const admin = principal.isAdmin;
   const fs = id ? await getFilespaceById(id) : null;
   // A non-member learns nothing about whether the id exists.
-  const role = admin ? 'owner' : (fs ? await getFilespaceRole({ filespaceId: id, email }) : null);
-  if (!fs || (!admin && !role)) return { error: NextResponse.json({ error: 'Filespace not found' }, { status: 404 }) };
-  if (!admin && role !== 'owner') {
-    return { error: NextResponse.json({ error: 'Only admins and owners of this filespace can manage its members.' }, { status: 403 }) };
-  }
+  const role = fs ? driveRoleOf(principal, id) : null;
+  if (!fs || !role) return { error: NextResponse.json({ error: 'Filespace not found' }, { status: 404 }) };
+  const d = can(principal, 'drive.manageMembers', { driveRole: role });
+  if (!d.ok) return { error: NextResponse.json({ error: d.reason }, { status: d.status }) };
   return { email, admin, role, fs };
 }
 
@@ -77,8 +78,10 @@ export async function PATCH(req, { params }) {
 
   if (!grant) {
     await revokeFilespaceAccess({ filespaceId: g.fs.id, email });
+    await audit(g.email, 'drive.revoke', { type: 'drive', id: g.fs.id, label: g.fs.name }, { person: email });
     return NextResponse.json({ ok: true, email, revoked: true });
   }
   const member = await grantFilespaceAccess({ filespaceId: g.fs.id, email, role, grantedBy: g.email });
+  await audit(g.email, 'drive.grant', personSubject(email), { driveId: g.fs.id, drive: g.fs.name, role });
   return NextResponse.json({ ok: true, member });
 }

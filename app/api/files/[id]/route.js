@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
 import {
   updateFile, softDeleteFile, deleteFile, getFileById, getFileMetadataSchema,
-  getFeatureFlags, buildPrincipal, canModifyFile, canAccessFile,
-  setFileStorageKey, getFilespaceForWrite,
+  canModifyFile, canAccessFile, setFileStorageKey, getFilespaceForWrite, storageKeyInUse,
 } from '@/lib/db';
+import { requirePrincipal, can, refusal } from '@/lib/authz';
 import {
   getStorageConfig, storageMode, s3MoveObject, s3DeleteObject, presignFileUrls,
   cfgForFilespace, folderToKeyPath, s3UniqueKey, s3ObjectExists, safeObjectName,
@@ -25,15 +24,15 @@ const DETAIL_URL_TTL = 21600;
 
 /** GET /api/files/[id] — one file, authorized and presigned for playback. */
 export async function GET(_req, { params }) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal } = g;
 
   const file = await getFileById(params.id);
   if (!file) return NextResponse.json({ error: 'File not found' }, { status: 404 });
 
   // Authorize → presign, in that order, so a URL is never minted for a file
   // the caller may not have.
-  const principal = await buildPrincipal(session.user.email);
   if (!(await canAccessFile(file, principal))) return NextResponse.json({ error: 'No access' }, { status: 403 });
 
   const [signed] = await presignFileUrls([file], { expiresIn: DETAIL_URL_TTL });
@@ -78,8 +77,9 @@ function ifMatchVersion(raw) {
  * A folder change is a MOVE, and moves the object too — see below.
  */
 export async function PATCH(req, { params }) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal, email } = g;
   const { id } = params;
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
@@ -96,7 +96,10 @@ export async function PATCH(req, { params }) {
 
   const existing = await getFileById(id);
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  const principal = await buildPrincipal(session.user.email);
+  // The role (files.edit), the flag for a metadata edit, and then the file
+  // itself: its drive, its creator, its grants.
+  const allowed = can(principal, 'files.edit', { metadata: body.metadata !== undefined });
+  if (!allowed.ok) return refusal(allowed);
   if (!(await canModifyFile(existing, principal))) {
     return NextResponse.json({ error: 'No access' }, { status: 403 });
   }
@@ -132,6 +135,13 @@ export async function PATCH(req, { params }) {
   // the bucket to move); set to false only when the catalog moved without the
   // bytes, which is the one case a UI has to surface.
   let objectMoved;
+  // A row that shares its object with another file — recorded before POST
+  // /api/files refused a key already in use — moves in the catalog only.
+  // Moving the bytes would take them out from under the other file.
+  const renaming = body.name !== undefined && body.name !== existing.name;
+  const sharedObject = (movingTo !== null || renaming) && existing.storage === 's3' && existing.storageKey
+    ? await storageKeyInUse(existing.storageKey, { exceptId: id })
+    : false;
 
   // A rename on its own. The object's key ends in its name, so renaming only
   // the row would leave a mounted drive showing the old one; the key follows
@@ -142,12 +152,14 @@ export async function PATCH(req, { params }) {
     body.name = String(body.name).trim();
   }
   const renamingTo = movingTo === null && body.name !== undefined && body.name !== existing.name ? body.name : null;
-  if (renamingTo !== null && existing.storage === 's3' && existing.storageKey) {
+  if (renamingTo !== null && sharedObject) {
+    objectMoved = false;
+  } else if (renamingTo !== null && existing.storage === 's3' && existing.storageKey) {
     const base = await getStorageConfig();
     if (storageMode(base) === 's3') {
       const filespaceId = body.filespaceId || new URL(req.url).searchParams.get('filespace') || null;
       // Writing under a drive's prefix takes an editor of it.
-      const fs = filespaceId ? await getFilespaceForWrite(session.user.email, filespaceId) : null;
+      const fs = filespaceId ? await getFilespaceForWrite(email, filespaceId, principal) : null;
       if (filespaceId && !fs) return NextResponse.json({ error: 'You can view this drive but not change it.' }, { status: 403 });
       const cfg = fs ? cfgForFilespace(base, fs) : base;
       const root = (fs ? String(fs.prefix || '') : String(base.prefix || 'files')).replace(/^\/+|\/+$/g, '');
@@ -182,14 +194,16 @@ export async function PATCH(req, { params }) {
   }
 
   try {
-    if (movingTo !== null && existing.storage === 's3' && existing.storageKey) {
+    if (movingTo !== null && sharedObject) {
+      objectMoved = false;
+    } else if (movingTo !== null && existing.storage === 's3' && existing.storageKey) {
       const base = await getStorageConfig();
       // Scope comes from the body like the folders route; the list route spells
       // the same thing ?filespace=, so accept either rather than silently
       // downgrading a scoped move to a catalog-only one.
       const filespaceId = body.filespaceId || new URL(req.url).searchParams.get('filespace') || null;
       // Writing under a drive's prefix takes an editor of it.
-      const fs = filespaceId ? await getFilespaceForWrite(session.user.email, filespaceId) : null;
+      const fs = filespaceId ? await getFilespaceForWrite(email, filespaceId, principal) : null;
       if (filespaceId && !fs) return NextResponse.json({ error: 'You can view this drive but not change it.' }, { status: 403 });
       // Unscoped, the file is movable when its key sits where an unscoped
       // upload would have put it (`<base prefix>/<folder>/<name>`); a key in
@@ -267,23 +281,33 @@ export async function PATCH(req, { params }) {
  * disabled-trash deployment's safety net bypassable with a query string.
  */
 export async function DELETE(_req, { params }) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal, email } = g;
   const { id } = params;
   try {
     const file = await getFileById(id);
     if (!file) return NextResponse.json({ ok: true }); // already gone
 
-    // Same write gate as PATCH. A delete that only checks for a session is
-    // the most destructive version of the same hole.
-    const principal = await buildPrincipal(session.user.email);
-    if (!(await canModifyFile(file, principal))) {
+    // Same write gate as PATCH, with deleting as its own capability. A
+    // delete that only checks for a session is the most destructive
+    // version of the same hole.
+    const allowed = can(principal, 'files.delete');
+    if (!allowed.ok) return refusal(allowed);
+    if (!(await canModifyFile(file, principal, { action: 'files.delete' }))) {
       return NextResponse.json({ error: 'No access' }, { status: 403 });
     }
 
-    const flags = await getFeatureFlags();
+    // Global, and read here: see the note above. A degraded read (flags
+    // unreadable) keeps the trash, the reversible choice.
+    const flags = principal.flags;
     const cfg = await getStorageConfig();
-    const onS3 = file.storage === 's3' && file.storageKey && storageMode(cfg) === 's3';
+    // A row sharing its object with another file (recorded before POST
+    // /api/files refused a key in use) goes without it: the bytes are the
+    // other file's too, and trashing or deleting them would break it. The
+    // trash purge leaves such an object alone as well (purgeTarget).
+    const onS3 = file.storage === 's3' && file.storageKey && storageMode(cfg) === 's3'
+      && !(await storageKeyInUse(file.storageKey, { exceptId: id }));
 
     if (flags.trash === false) {
       if (onS3) {
@@ -308,7 +332,7 @@ export async function DELETE(_req, { params }) {
         return NextResponse.json({ error: `Could not move file to trash: ${e.message}` }, { status: 500 });
       }
     }
-    await softDeleteFile(id, { trashKey });
+    await softDeleteFile(id, { trashKey, deletedBy: email });
     return NextResponse.json({ ok: true, trashed: true });
   } catch (e) {
     return NextResponse.json({ error: e.message || 'Delete failed.' }, { status: 500 });

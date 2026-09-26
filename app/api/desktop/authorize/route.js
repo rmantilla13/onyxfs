@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
-import { isEmailGrantedAccess } from '@/lib/auth-allowlist';
+import { getSessionUser } from '@/lib/session';
 import { createDesktopAuthCode } from '@/lib/db';
 
 export const runtime = 'nodejs';
@@ -16,16 +15,14 @@ export const dynamic = 'force-dynamic';
  *   kind 'pairing'        → mints a short human-typable code, returns { code }.
  *
  * This route is excluded from the auth-redirect middleware (so it 401s cleanly),
- * but it self-guards with auth() — only a real browser session can mint a code,
- * which is what keeps the desktop bound to the existing NextAuth allowlist.
+ * but it self-guards with getSessionUser — only a real, still-valid browser
+ * session can mint a code (not suspended, approved, not signed out
+ * everywhere), which is what keeps the desktop bound to the web's allowlist.
  */
 export async function POST(req) {
-  const session = await auth();
-  const email = session?.user?.email;
+  const user = await getSessionUser();
+  const email = user?.email;
   if (!email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-  if (!(await isEmailGrantedAccess(email))) {
-    return NextResponse.json({ error: 'Access not approved' }, { status: 403 });
-  }
 
   let body = {};
   try { body = await req.json(); } catch {}

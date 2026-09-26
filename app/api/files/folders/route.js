@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
 import {
-  buildPrincipal, getFilespaceForUser, getFilespaceForWrite, getFeatureFlags,
+  getFilespaceForUser, getFilespaceForWrite,
   createFolder, renameFolder, deleteFolderRows, listFolderSubtreeFiles, folderPathInUse,
   canModifyFolder, softDeleteFile, deleteFile, listFolderRowsUnder, folderRowTag,
 } from '@/lib/db';
+import { requirePrincipal, can, refusal } from '@/lib/authz';
 import {
   getStorageConfig, storageMode, cfgForFilespace, s3CopyObject, s3DeleteObject, s3MoveObject,
   s3ObjectExists, s3PutFolderMarker, s3ListFolderMarkers,
@@ -35,20 +35,24 @@ const bad = (msg, status = 400) => NextResponse.json({ error: msg }, { status })
 /**
  * Where a folder's files live: a filespace's bucket and prefix, or the base
  * storage config for the unscoped library. `tag` is what folders.filespace
- * holds for this scope. Null when the filespace is not the caller's — or,
- * with `write`, when they may open it but not change it (a drive's viewer).
+ * holds for this scope, and `driveRole` the caller's role in the drive, after
+ * their platform role's ceiling — a drive's editors and owners restructure
+ * its folders (only its own: folderRoleFor). Null when the filespace is not the caller's — or, with
+ * `write`, when they may open it but not change it (a drive's viewer).
  */
-async function scopeFor(email, filespaceId, { write = false } = {}) {
+async function scopeFor(principal, filespaceId, { write = false } = {}) {
   const base = await getStorageConfig();
   const s3 = storageMode(base) === 's3';
   if (filespaceId) {
-    const fs = write ? await getFilespaceForWrite(email, filespaceId) : await getFilespaceForUser(email, filespaceId);
+    const fs = write
+      ? await getFilespaceForWrite(principal.email, filespaceId, principal)
+      : await getFilespaceForUser(principal.email, filespaceId, principal);
     if (!fs) return null;
     const prefix = cleanFolder(fs.prefix);
-    return { scoped: true, tag: prefix, prefix, cfg: s3 ? cfgForFilespace(base, fs) : null, s3 };
+    return { scoped: true, tag: prefix, prefix, cfg: s3 ? cfgForFilespace(base, fs) : null, s3, driveRole: fs.role };
   }
   // The prefix storage.buildObjectKey writes unscoped uploads under.
-  return { scoped: false, tag: '', prefix: cleanFolder(base.prefix || 'files'), cfg: s3 ? base : null, s3 };
+  return { scoped: false, tag: '', prefix: cleanFolder(base.prefix || 'files'), cfg: s3 ? base : null, s3, driveRole: null };
 }
 
 /**
@@ -64,19 +68,19 @@ async function scopeFor(email, filespaceId, { write = false } = {}) {
  * folders a delete of that folder would take with it.
  */
 export async function GET(req) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal, email } = g;
   const url = new URL(req.url);
   const filespaceId = url.searchParams.get('filespace');
-  const principal = await buildPrincipal(session.user.email);
 
   const summary = url.searchParams.get('summary');
   if (summary != null) {
     const name = cleanFolder(summary);
     if (!name) return bad('Folder required.');
-    if (!(await canModifyFolder(name, principal))) return forbidden();
-    const scope = await scopeFor(session.user.email, filespaceId);
+    const scope = await scopeFor(principal, filespaceId);
     if (!scope) return forbidden('No access to that filespace.');
+    if (!(await canModifyFolder(name, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden();
     const files = await listFolderSubtreeFiles(name);
     const plan = planRename({ from: name, to: name, prefix: scope.prefix, scoped: scope.scoped, files });
     const inScope = new Set([...plan.moves, ...plan.catalog].map((m) => m.id));
@@ -86,7 +90,7 @@ export async function GET(req) {
     return NextResponse.json({ files: inScope.size, folders: dirs.size, outside: plan.outside.length });
   }
 
-  const storagePrefix = await storagePrefixFor(session.user.email, filespaceId);
+  const storagePrefix = await storagePrefixFor(email, filespaceId, principal);
   const folders = await listFolderTree({ principal, storagePrefix });
   return NextResponse.json({ folders });
 }
@@ -94,21 +98,22 @@ export async function GET(req) {
 /**
  * POST /api/files/folders  { name, filespaceId? } → { folder }
  *
- * Create a folder path and its ancestors, empty. The bar is the one uploads
- * have — any member who is not a platform viewer — since an upload into a new
- * path creates the same folder implicitly.
+ * Create a folder path and its ancestors, empty. A role that manages
+ * folders, and write access to the drive when it is in one — the bar an
+ * upload into a new path has, since that creates the same folder implicitly.
  */
 export async function POST(req) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-  const principal = await buildPrincipal(session.user.email);
-  if (principal.roleId === 'viewer' && !principal.isAdmin) return forbidden('Your role can view files but not create folders.');
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal } = g;
+  const allowed = can(principal, 'folders.manage');
+  if (!allowed.ok) return refusal(allowed);
   let body = {};
   try { body = await req.json(); } catch { return bad('Bad request'); }
   const problem = folderPathProblem(body.name);
   if (problem) return bad(problem);
   const name = cleanFolder(body.name);
-  const scope = await scopeFor(session.user.email, body.filespaceId, { write: true });
+  const scope = await scopeFor(principal, body.filespaceId, { write: true });
   if (!scope) return forbidden('You can view this drive but not change it.');
   // folders.name is the whole primary key, so a path another filespace
   // already has cannot get a row of its own here. Say so rather than answering
@@ -152,8 +157,11 @@ export async function POST(req) {
  * at `to`, or a rename becomes a way into a folder you do not control.
  */
 export async function PATCH(req) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal } = g;
+  const allowed = can(principal, 'folders.manage');
+  if (!allowed.ok) return refusal(allowed);
   let body = {};
   try { body = await req.json(); } catch { return bad('Bad request'); }
   const from = cleanFolder(body.from);
@@ -164,11 +172,10 @@ export async function PATCH(req) {
   if (from === to) return NextResponse.json({ ok: true, from, to, files: 0, folders: 0 });
   if (isWithin(to, from)) return bad('A folder cannot be moved into itself.');
 
-  const principal = await buildPrincipal(session.user.email);
-  if (!(await canModifyFolder(from, principal))) return forbidden();
-  if (!(await canModifyFolder(to, principal))) return forbidden('No access to the destination folder.');
-  const scope = await scopeFor(session.user.email, body.filespaceId, { write: true });
+  const scope = await scopeFor(principal, body.filespaceId, { write: true });
   if (!scope) return forbidden('You can view this drive but not change it.');
+  if (!(await canModifyFolder(from, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden();
+  if (!(await canModifyFolder(to, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden('No access to the destination folder.');
   if (await folderPathInUse(to)) {
     return bad(`“${to}” already exists${scope.scoped ? ' (here or in another filespace)' : ''}. Choose another name, or move the files into it instead.`, 409);
   }
@@ -244,17 +251,23 @@ export async function PATCH(req) {
  * call again. The folder rows go once nothing in this scope is left.
  */
 export async function DELETE(req) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal, email } = g;
+  // Deleting a folder trashes every file in it: both capabilities.
+  for (const cap of ['files.delete', 'folders.manage']) {
+    const allowed = can(principal, cap);
+    if (!allowed.ok) return refusal(allowed);
+  }
   const url = new URL(req.url);
   const name = cleanFolder(url.searchParams.get('name'));
   if (!name) return bad('Folder required.');
-  const principal = await buildPrincipal(session.user.email);
-  if (!(await canModifyFolder(name, principal))) return forbidden();
-  const scope = await scopeFor(session.user.email, url.searchParams.get('filespace'), { write: true });
+  const scope = await scopeFor(principal, url.searchParams.get('filespace'), { write: true });
   if (!scope) return forbidden('You can view this drive but not change it.');
+  if (!(await canModifyFolder(name, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden();
 
-  const flags = await getFeatureFlags();
+  // Global, read here and never from the request.
+  const flags = principal.flags;
   const files = await listFolderSubtreeFiles(name);
   const plan = planRename({ from: name, to: name, prefix: scope.prefix, scoped: scope.scoped, files });
   const work = [
@@ -276,7 +289,7 @@ export async function DELETE(req) {
       // as trashed while its object stays put.
       await s3MoveObject(scope.cfg, key, trashKey);
     }
-    await softDeleteFile(id, { trashKey });
+    await softDeleteFile(id, { trashKey, deletedBy: email });
   });
   const failed = results.filter((r) => !r.ok);
   const deleted = results.length - failed.length;

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import {
-  listFileChanges, currentChangeCursor, buildPrincipal, getFilespaceForUser, listFilespaces, listSyncFolders,
+  listFileChanges, currentChangeCursor, getFilespaceForUser, listFilespaces, listSyncFolders,
 } from '@/lib/db';
 import { resolveActor } from '@/lib/desktop-guard';
 import { presignFileUrls } from '@/lib/storage';
@@ -38,13 +38,31 @@ export async function GET(req) {
   if (actor.error) return actor.error;
 
   const url = new URL(req.url);
-  const principal = await buildPrincipal(actor.email);
-  const allDrives = await listFilespaces();
-
+  // The same principal the web and the desktop's own routes use: drive roles
+  // already capped by the platform role (lib/authz.js).
+  const { principal } = actor;
+  // Degraded (the roles or flags could not be read): the principal sees less
+  // than it will once they can, and the feed is not the place for that. Its
+  // pages would carry a fingerprint that differs from the real one, so every
+  // device restarts from zero now and again on recovery; or they would move
+  // the cursor past changes this principal was only briefly unable to see.
+  // Retryable instead, like a failed read below.
+  if (principal.degraded && !principal.isAdmin) {
+    return NextResponse.json({ error: 'Changes could not be read right now.' }, { status: 503, headers: { 'retry-after': '30' } });
+  }
   const driveParam = (url.searchParams.get('drive') || '').trim();
+  // A failed read of the drives is a 503 to retry, never a 404: a device
+  // takes "No access to this drive" as the drive taken away.
+  let allDrives;
   let drive = null;
+  try {
+    allDrives = await listFilespaces();
+    if (driveParam && driveParam !== 'library') drive = await getFilespaceForUser(actor.email, driveParam, principal);
+  } catch (e) {
+    console.warn('[delta] could not read the drives:', e.message);
+    return NextResponse.json({ error: 'Changes could not be read right now.' }, { status: 503, headers: { 'retry-after': '30' } });
+  }
   if (driveParam && driveParam !== 'library') {
-    drive = await getFilespaceForUser(actor.email, driveParam);
     if (!drive) return NextResponse.json({ error: 'No access to this drive' }, { status: 404 });
   }
   const scope = syncScope({ drive, library: driveParam === 'library', allDrives });

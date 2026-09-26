@@ -1,14 +1,13 @@
 import { redirect, notFound } from 'next/navigation';
-import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
-import { isAdmin } from '@/lib/auth-allowlist';
-import { getFileById, buildPrincipal, canAccessFile, canModifyFile, listFilespacesForSpace, getAvatarUrl } from '@/lib/db';
+import { getFileById, canAccessFile, canModifyFile, listFilespacesForSpace } from '@/lib/db';
+import { getSessionUser } from '@/lib/session';
+import { getPrincipal, can } from '@/lib/authz';
 import { presignFileUrls } from '@/lib/storage';
 import TopNav from '@/app/components/TopNav';
 import FileDetail from '@/app/components/file/FileDetail';
 import { buildLabel, buildDetail } from '@/lib/version';
 import { parseTimecode } from '@/lib/video-time';
-import { flagsForUser } from '@/lib/user-flags';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,29 +36,31 @@ function startAtFrom(value) {
 }
 
 export default async function FilePage({ params, searchParams }) {
-  const session = await auth();
-  const email = session?.user?.email;
-  if (!email) redirect('/signin');
-  // The account menu's picture, or null for initials; never throws.
-  const avatarUrl = await getAvatarUrl(email);
+  const user = await getSessionUser();
+  if (!user) redirect('/signin');
+  const { email, avatarUrl } = user;
 
   const file = await getFileById(params.id);
   if (!file) notFound();
 
-  const principal = await buildPrincipal(email);
+  const principal = await getPrincipal(email, { person: user.person });
   // notFound rather than 403: a refusal that distinguishes "no access" from
   // "no such file" confirms the id exists to someone guessing.
   if (!(await canAccessFile(file, principal))) notFound();
 
-  const [brand, signedList, canWrite, filespaces, access] = await Promise.all([
+  const [brand, signedList, canWrite, canChange, filespaces] = await Promise.all([
     loadBrand(),
     // Six hours, so a paused video still seeks when it resumes.
     presignFileUrls([file], { expiresIn: 21600 }),
     canModifyFile(file, principal),
+    // The file alone, whatever the role: whether a link to it is theirs to make.
+    canModifyFile(file, principal, { action: null }),
     // For the nav's filespace switcher.
-    listFilespacesForSpace(email),
-    flagsForUser(email),
+    listFilespacesForSpace(email, principal),
   ]);
+  // Some kind of link is open to them: private, or public and password.
+  const canShare = canChange && ['shares.private', 'shares.public']
+    .some((cap) => can(principal, cap, { canModify: true, expiresInDays: principal.limits.shareMaxExpiryDays }).ok);
 
   return (
     <>
@@ -69,14 +70,15 @@ export default async function FilePage({ params, searchParams }) {
         logo={brand.visual.logo}
         email={email}
         avatarUrl={avatarUrl}
-        isAdmin={isAdmin(email)}
+        isAdmin={principal.isAdmin}
         filespaces={filespaces}
       />
       <FileDetail
         file={signedList[0]}
         canWrite={canWrite}
-        // Sharing takes the role's flag AND write access; the routes check both again.
-        canShare={canWrite && !!access.flags.shares}
+        // Sharing takes a link capability AND write access to the file; the
+        // routes check both again.
+        canShare={canShare}
         // Back to the folder the file is in, not the top of the library.
         backHref={file.folder ? `/files?folder=${encodeURIComponent(file.folder)}` : '/files'}
         // ?t= opens the player at a moment, so a timecode can be shared as a

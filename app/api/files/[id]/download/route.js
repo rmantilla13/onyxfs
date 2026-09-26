@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
-import { getFileById, canAccessFile, buildPrincipal } from '@/lib/db';
+import { getFileById, canAccessFile } from '@/lib/db';
+import { requirePrincipal } from '@/lib/authz';
 import { getStorageConfig, storageMode, s3PresignGet } from '@/lib/storage';
 
 export const runtime = 'nodejs';
@@ -12,13 +12,12 @@ export const runtime = 'nodejs';
  * origin `download` attribute on an <a> is ignored by browsers; this is the fix.
  */
 export async function GET(_req, { params }) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
 
   const file = await getFileById(params.id);
   if (!file) return NextResponse.json({ error: 'File not found' }, { status: 404 });
-  const principal = await buildPrincipal(session.user.email);
-  if (!(await canAccessFile(file, principal))) return NextResponse.json({ error: 'No access' }, { status: 403 });
+  if (!(await canAccessFile(file, g.principal))) return NextResponse.json({ error: 'No access' }, { status: 403 });
 
   if (file.storage === 's3' && file.storageKey) {
     try {

@@ -2,7 +2,8 @@
 
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { getShareRow, getFeatureFlags, recordShareFailure, clearShareFailures } from '@/lib/db';
+import { getShareRow, recordShareFailure, clearShareFailures, isLinkCreatorPaused } from '@/lib/db';
+import { readGlobalFlags } from '@/lib/authz';
 import {
   shareState, verifySharePassword, shareCookieName, shareCookieValue, SHARE_COOKIE_HOURS,
 } from '@/lib/shares';
@@ -23,8 +24,8 @@ export async function unlockShare(_prev, formData) {
   const token = String(formData.get('token') || '');
   const password = String(formData.get('password') || '');
   if (!isShareToken(token)) return { error: 'This link does not work.' };
-  const flags = await getFeatureFlags();
-  if (!flags.shares) return { error: 'Sharing is turned off.' };
+  const flags = await readGlobalFlags();
+  if (!flags?.shares) return { error: 'Sharing is turned off.' };
 
   const row = await getShareRow(token);
   const state = shareState(row);
@@ -32,6 +33,10 @@ export async function unlockShare(_prev, formData) {
     return { error: 'This link is no longer available.' };
   }
   if (state === 'locked') return { error: lockedMessage(row.pw_locked_until) };
+  // A paused link takes no guesses either: the page says why.
+  if (row.created_by && await isLinkCreatorPaused(row.created_by).catch(() => true)) {
+    return { error: 'This link is paused.' };
+  }
   if (!password) return { error: 'Enter the password.' };
 
   if (!(await verifySharePassword(password, row.password_hash))) {

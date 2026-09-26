@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
-import { createFile, buildPrincipal, getFilespaceForUser } from '@/lib/db';
+import { createFile, getFilespaceForUser, storageKeyInUse, claimUploadKey, issueUploadKey, previewKeysInUse } from '@/lib/db';
+import { requirePrincipal, uploadCheck, refusal } from '@/lib/authz';
 import { listFilesPage, listFolderTree, storagePrefixFor } from '@/lib/file-listing';
-import { driveAccess } from '@/lib/drive-access';
-import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject } from '@/lib/storage';
+import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject, s3DeleteObject } from '@/lib/storage';
 import { decodeCursor } from '@/lib/file-query';
 import { uploadFields } from '@/lib/media';
+import { parseFileRecord } from '@/lib/file-record';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,10 +23,10 @@ export const maxDuration = 30;
  * building it counts every file in the library.
  */
 export async function GET(req) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal, email } = g;
   const url = new URL(req.url);
-  const principal = await buildPrincipal(session.user.email);
 
   const folderParam = url.searchParams.get('folder');
   const folderPrefix = url.searchParams.get('folderPrefix');
@@ -34,7 +34,7 @@ export async function GET(req) {
   const kindParam = url.searchParams.get('kind');
 
   // Filespace scope (Space is filespace-aware): restrict to this filespace's prefix.
-  const storagePrefix = await storagePrefixFor(session.user.email, url.searchParams.get('filespace'));
+  const storagePrefix = await storagePrefixFor(email, url.searchParams.get('filespace'), principal);
 
   const opts = {
     folder: folderParam === null ? undefined : folderParam,
@@ -65,71 +65,144 @@ export async function GET(req) {
 
 /**
  * POST /api/files — record an uploaded asset.
- * Body: { name, url, mime, size, kind?, folder, storage, storageKey, tags, thumbnailKey?,
- *         posterKey?, media?, filmstripKey?, filmstrip? }
+ * Body: { name, url, mime, size, kind?, folder, storage, storageKey, tags, notes?,
+ *         visibility?, thumbnailKey?, posterKey?, media?, filmstripKey?, filmstrip?, filespace? }
  * `media` is { width, height, duration } read by the browser while it made the thumbnail.
+ * Only these fields are read (lib/file-record.js); anything else in the body
+ * is ignored, so who, when and what the bytes hash to stay the server's word.
+ *
+ * An S3 record names an object, and recording it makes the recorder its
+ * creator — able to open, move and delete it. So the key must be one this
+ * person was handed for an upload (presign or multipart; lib/db.js
+ * claimUploadKey), taken once, and one no other row already points at.
+ * Anything else is someone else's object, or nobody's we know of.
  */
 export async function POST(req) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal, email } = g;
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
-  if (!body.url) return NextResponse.json({ error: 'A file URL is required.' }, { status: 400 });
+  const parsed = parseFileRecord(body);
+  if (parsed.error) return NextResponse.json({ error: parsed.error }, { status: 400 });
+  const { record } = parsed;
 
   // Recording a file makes its creator able to open it, so where it points is
-  // checked like an upload: not by a platform viewer, not into our own
-  // previews or trash, and not into a drive this person cannot add to.
-  const principal = await buildPrincipal(session.user.email);
-  if (principal.roleId === 'viewer' && !principal.isAdmin) {
-    return NextResponse.json({ error: 'Your role can view files but not add them.' }, { status: 403 });
-  }
-  // For an S3 row the listing signs storageKey, or failing that a key read
-  // back out of `url` — and only storageKey is checked below. A row with a
-  // url alone could name any object in the bucket: another drive's, a
-  // preview, the trash. Both uploaders always send the key.
-  if (body.storage === 's3' && !body.storageKey) {
-    return NextResponse.json({ error: 'A storage key is required.' }, { status: 400 });
-  }
-  if (body.storageKey) {
-    const key = String(body.storageKey);
-    if (/^(_thumbs|_trash)\//.test(key)) {
-      return NextResponse.json({ error: 'Not a file key.' }, { status: 400 });
+  // checked like an upload: a role that may add files, not into our own
+  // previews or trash (parseFileRecord), and not into a drive this person
+  // cannot add to. Size waits for the bucket's answer below.
+  const allowed = await uploadCheck(principal, { key: record.storageKey });
+  if (!allowed.ok) return refusal(allowed);
+
+  const s3 = record.storage === 's3';
+  let issued = null;
+  if (s3) {
+    if (await storageKeyInUse(record.storageKey)) {
+      return NextResponse.json({ error: 'That stored object already belongs to a file in the library.' }, { status: 409 });
     }
-    const d = driveAccess(key, principal.isAdmin ? { isAdmin: true } : principal.driveScope);
-    if (d.inDrive && !d.write) {
-      return NextResponse.json({ error: 'That file is in a drive you can view but not add to.' }, { status: 403 });
+    issued = await claimUploadKey(record.storageKey, email);
+    if (!issued) {
+      return NextResponse.json({
+        error: 'This upload was not started by you, or it was too long ago. Upload the file again.',
+        code: 'not_issued',
+      }, { status: 403 });
     }
   }
+  // From here the key is taken. Should the row not get written, hand it back
+  // so the browser can try recording again.
+  const giveBack = () => (issued ? issueUploadKey(record.storageKey, email, issued).catch(() => {}) : null);
 
   try {
-    // The bucket's own word on what landed, never the client's: its ETag is
-    // the content hash duplicates are found by, and its length the size the
-    // Storage page adds up. Best-effort — a bucket that will not answer a
-    // HEAD still gets its file recorded, just without a hash.
-    const facts = await objectFacts(session.user.email, body);
+    // The store's own word on what landed, never the client's: the bucket's
+    // ETag is the content hash duplicates are found by, and its length (or
+    // Blob's) the size the Storage page adds up — and the size the quota
+    // counts. Best-effort — a store that will not answer still gets its file
+    // recorded, just without a hash, at the size the upload declared.
+    const target = s3 ? await objectTarget(email, record, principal) : null;
+    const facts = target
+      ? await s3HeadObject(target.cfg, record.storageKey).catch(() => null)
+      : record.storage === 'blob' ? await blobFacts(record.url) : null;
+    const size = facts?.size != null ? facts.size : record.size;
+
+    // Presign checked the size the browser declared; this checks the size
+    // that arrived. Over a limit, an S3 object is removed rather than left in
+    // the bucket uncounted: its key was issued to this person, for this
+    // upload, and no row uses it (both checked above), so it is theirs and
+    // nobody else's. A Blob URL proves no such thing — the store is public
+    // and its URLs are not ours to hand out — so that one is only refused.
+    if (size != null) {
+      const fits = await uploadCheck(principal, { key: record.storageKey, size });
+      if (!fits.ok) {
+        if (target && target.cfg.bucket === issued.bucket) await s3DeleteObject(target.cfg, record.storageKey).catch(() => {});
+        else await giveBack();
+        return refusal(fits);
+      }
+    }
+
+    const { filespace, media, filmstrip, ...fields } = record;
+    const previews = await ownPreviews(uploadFields(record));
     const file = await createFile({
-      ...body,
-      ...uploadFields(body),
-      ...(facts?.size != null ? { size: facts.size } : {}),
-      contentHash: facts?.etag || null,
-      createdBy: session.user.email,
+      ...fields,
+      ...previews,
+      ...(size != null ? { size } : {}),
+      contentHash: s3 ? facts?.etag || null : null,
+      createdBy: email,
     });
     // Presign so the just-uploaded file previews immediately on a private bucket.
     const [signed] = await presignFileUrls([file]);
     return NextResponse.json({ file: signed || file });
   } catch (e) {
+    await giveBack();
     return NextResponse.json({ error: e.message || 'Save failed.' }, { status: 500 });
   }
 }
 
-async function objectFacts(email, body) {
-  if (body.storage !== 's3' || !body.storageKey) return null;
+/**
+ * A Vercel Blob upload's real size, or null when the store will not say (no
+ * token, a URL that is not ours, the network). Only the size: Blob has no
+ * content hash to offer.
+ */
+async function blobFacts(url) {
   try {
-    const cfg = await getStorageConfig();
-    if (storageMode(cfg) !== 's3') return null;
-    const fs = body.filespace ? await getFilespaceForUser(email, String(body.filespace)) : null;
-    return await s3HeadObject(fs ? cfgForFilespace(cfg, fs) : cfg, String(body.storageKey));
+    const { head } = await import('@vercel/blob');
+    const r = await head(url);
+    return r?.size != null && Number.isFinite(Number(r.size)) ? { size: Number(r.size) } : null;
   } catch {
     return null;
   }
+}
+
+/** The bucket config an S3 record's object lives under, or null when there is nothing to ask. */
+async function objectTarget(email, record, principal) {
+  if (record.storage !== 's3' || !record.storageKey) return null;
+  try {
+    const cfg = await getStorageConfig();
+    if (storageMode(cfg) !== 's3') return null;
+    const fs = record.filespace ? await getFilespaceForUser(email, String(record.filespace), principal) : null;
+    return { cfg: fs ? cfgForFilespace(cfg, fs) : cfg };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The upload's preview keys, less any another row already uses (lib/db.js
+ * previewKeysInUse says why). A dropped preview does not fail the upload:
+ * the file is recorded without it, and the background queue makes one. When
+ * the check cannot be made, every preview is dropped rather than trusted.
+ */
+async function ownPreviews(fields) {
+  const keys = [fields.thumbnailKey, fields.posterKey, fields.filmstripKey].filter(Boolean);
+  if (!keys.length) return fields;
+  let taken;
+  try { taken = await previewKeysInUse(keys); } catch { taken = new Set(keys); }
+  if (!taken.size) return fields;
+  const out = { ...fields };
+  if (taken.has(out.thumbnailKey)) { out.thumbnailKey = null; out.posterKey = null; }
+  if (taken.has(out.posterKey)) out.posterKey = null;
+  if (taken.has(out.filmstripKey)) {
+    out.filmstripKey = null;
+    if (out.metadata?.filmstrip) { const { filmstrip: _drop, ...rest } = out.metadata; out.metadata = rest; }
+  }
+  return out;
 }

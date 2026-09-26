@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
-import { getFileById, buildPrincipal, canModifyFile, setFileThumbnail, unreferencedPreviewKeys } from '@/lib/db';
+import { getFileById, canModifyFile, setFileThumbnail, unreferencedPreviewKeys, previewKeysInUse } from '@/lib/db';
+import { requirePrincipal, can, refusal } from '@/lib/authz';
 import { presignFileUrls, getStorageConfig, s3DeleteObject } from '@/lib/storage';
 import { isThumbKey, isPosterKey, mediaFacts } from '@/lib/media';
 
@@ -14,14 +14,17 @@ export const runtime = 'nodejs';
  * thumbnail means downloading the original and uploading two previews, and
  * being able to write to the library is not being able to write to every
  * file in it; learning that from the PUT came after all of that work, and
- * left the uploads behind with nothing pointing at them.
+ * left the uploads behind with nothing pointing at them. The same checks as
+ * the PUT: the files.edit capability, then canModifyFile.
  */
 export async function GET(_req, { params }) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal } = g;
+  const allowed = can(principal, 'files.edit');
+  if (!allowed.ok) return refusal(allowed);
   const existing = await getFileById(params.id);
   if (!existing || existing.deletedAt) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  const principal = await buildPrincipal(session.user.email);
   if (!(await canModifyFile(existing, principal))) return NextResponse.json({ error: 'No access' }, { status: 403 });
   return new NextResponse(null, { status: 204, headers: { 'cache-control': 'no-store' } });
 }
@@ -33,11 +36,15 @@ export async function GET(_req, { params }) {
  * thumbnail is gone, or whose thumbnail is one of the old small ones — and,
  * for a video, the player poster of the same frame. The bytes went to the
  * bucket through the presign route, which named the keys; this only records
- * them. A write, so it takes the same canModifyFile check as PATCH.
+ * them. A write, so it takes the same files.edit capability and
+ * canModifyFile check as PATCH.
  */
 export async function PUT(req, { params }) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal } = g;
+  const allowed = can(principal, 'files.edit');
+  if (!allowed.ok) return refusal(allowed);
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
   if (!isThumbKey(body.thumbnailKey)) return NextResponse.json({ error: 'Not a thumbnail key.' }, { status: 400 });
@@ -45,8 +52,18 @@ export async function PUT(req, { params }) {
 
   const existing = await getFileById(params.id);
   if (!existing || existing.deletedAt) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  const principal = await buildPrincipal(session.user.email);
   if (!(await canModifyFile(existing, principal))) return NextResponse.json({ error: 'No access' }, { status: 403 });
+
+  // A key the presign route named, and no other file's: keys are not secret,
+  // and adopting another file's preview would keep it signed on this row
+  // after access to that file is gone (lib/db.js previewKeysInUse).
+  let taken;
+  try {
+    taken = await previewKeysInUse([body.thumbnailKey, body.posterKey], { exceptId: existing.id });
+  } catch (e) {
+    return NextResponse.json({ error: 'Could not check the thumbnail. Try again.' }, { status: 503 });
+  }
+  if (taken.size) return NextResponse.json({ error: 'That preview belongs to another file.' }, { status: 409 });
 
   let file;
   try {
