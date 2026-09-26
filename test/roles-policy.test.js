@@ -47,6 +47,32 @@ describe('reading roles.config', () => {
     assert.equal(roleCaps(viewer).has('desktop.mount'), true);
   });
 
+  test('v1: what an admin took away from a built-in stays taken away', () => {
+    // Main enforced a Member's `shares: false` on the share routes. Dropping
+    // the saved copy for the v2 default would have handed every Member
+    // public links at deploy, with nobody asking.
+    const cfg = parseRolesConfig({ ...V1, roles: [{ id: 'member', name: 'Member', features: { shares: false } }] });
+    const member = cfg.roles.find((r) => r.id === 'member');
+    const caps = roleCaps(member);
+    for (const cap of ['shares.private', 'shares.public', 'review.links']) assert.ok(!caps.has(cap), cap);
+    for (const cap of ['files.upload', 'files.edit', 'files.delete']) assert.ok(caps.has(cap), cap);
+    // v1's Contributor copy had shares off, and keeps them off — private
+    // links included, which is narrower than the v2 default and never wider.
+    const contributor = parseRolesConfig(V1).roles.find((r) => r.id === 'contributor');
+    assert.equal(roleCaps(contributor).has('shares.private'), false);
+    // An untouched v1 copy is exactly the v2 built-in.
+    assert.deepEqual(parseRolesConfig(V1).roles.find((r) => r.id === 'member'), BUILTIN_ROLES.find((r) => r.id === 'member'));
+  });
+
+  test('v1: a saved built-in can only take away — never add back what v2 leaves out', () => {
+    // A v1 Viewer whose features map turned nothing off is still a v2 Viewer:
+    // no uploads, a viewer ceiling. Only `false` is ever read from a v1 copy.
+    const cfg = parseRolesConfig({ roles: [{ id: 'viewer', name: 'Viewer', features: { shares: true, upload: true } }] });
+    const viewer = cfg.roles.find((r) => r.id === 'viewer');
+    assert.deepEqual(viewer, BUILTIN_ROLES.find((r) => r.id === 'viewer'));
+    assert.equal(roleCaps(viewer).has('files.upload'), false);
+  });
+
   test('v1: full roles are not roles any more', () => {
     const cfg = parseRolesConfig(V1);
     assert.equal(cfg.roles.some((r) => r.id === 'admin'), false);
@@ -74,6 +100,19 @@ describe('reading roles.config', () => {
 
   test('the people row wins over the v1 assignment', () => {
     assert.equal(resolveRole('viewer@example.com', parseRolesConfig(V1), { roleId: 'contributor' }).id, 'contributor');
+  });
+
+  test("a row's NULL role is the default role, whatever v1 said", () => {
+    // A row is born holding its v1 assignment (upsertPerson), so a NULL on
+    // one is an admin setting them back to the default — which must stick,
+    // not fall through to the assignment the row was seeded from.
+    const cfg = parseRolesConfig(V1);
+    assert.equal(resolveRole('viewer@example.com', cfg, { roleId: null, hasRow: true }).id, 'member');
+    assert.equal(resolveRole('agency@example.com', cfg, { hasRow: true }).id, 'member');
+    // With no row yet, the assignment is all there is.
+    assert.equal(resolveRole('agency@example.com', cfg, { hasRow: false }).id, 'client');
+    // The default is the config's, not Member's: change it and they follow.
+    assert.equal(resolveRole('agency@example.com', { ...V1, defaultRole: 'contributor' }, { hasRow: true }).id, 'contributor');
   });
 
   test('a holder of the retired Admin role is a Member, flagged', () => {
@@ -147,8 +186,24 @@ describe('saving roles (PUT /api/admin/roles)', () => {
     const r = validateRolesConfig(input, V1);
     assert.ok(r.config, r.error);
     assert.deepEqual(r.config.roles.find((x) => x.id === 'client').caps, { 'shares.public': false });
-    // Assignments come from what is stored, never the request.
-    assert.deepEqual(r.config.assignments, parseRolesConfig(V1).assignments);
+    // Assignments come from what is stored, never the request — less those
+    // to a role this save deletes ('ops' is not in the list sent).
+    const { 'ops@example.com': _gone, ...kept } = parseRolesConfig(V1).assignments;
+    assert.deepEqual(r.config.assignments, kept);
+    assert.deepEqual(r.removed, ['ops']);
+  });
+
+  test("deleting a role takes its v1 assignments with it, so nobody arrives in a later namesake", () => {
+    const r = validateRolesConfig({ roles: roles(), defaultRole: 'member' }, V1);
+    assert.deepEqual(r.removed.sort(), ['client', 'ops']);
+    assert.equal(Object.values(r.config.assignments).some((id) => id === 'client' || id === 'ops'), false);
+    // …and someone who never arrived resolves to the default, even once a
+    // role called "ops" exists again.
+    const again = validateRolesConfig({ roles: [...roles(), { id: 'ops', name: 'Ops again' }] }, r.config).config;
+    assert.equal(resolveRole('ops@example.com', again).id, 'member');
+    // The retired full role's holders stay flagged: that id is not a role
+    // anyone deletes.
+    assert.equal(again.assignments['old@example.com'], 'admin');
   });
 
   test('full is refused', () => {

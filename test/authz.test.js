@@ -356,6 +356,28 @@ describe('failing closed', () => {
     assert.equal(p.flags.aiGenerate, false);
   });
 
+  test('a degraded principal matches no role-subject grant — not the Viewer role’s', () => {
+    // Grants made to the Viewer role (folder_access, file_acl) are matched
+    // against roleId. Borrowing the read-only role's id during an outage
+    // would hand every Member whatever those grants reach — a read that
+    // fails open. Fewer grants, never different ones.
+    for (const role of ['member', 'contributor', 'viewer']) {
+      const p = principalFrom({
+        email: `${role}@example.com`, person: { email: `${role}@example.com`, roleId: role },
+        rolesConfig: config, globalFlags: null, grants: { drives: [DRIVE], roles: {} }, degraded: true,
+      });
+      assert.equal(p.roleId, null, role);
+      assert.equal(p.role.degradedFrom, role, role);
+      // The capabilities are still the read-only role's.
+      assert.equal(can(p, 'files.upload').status, 503);
+    }
+    // Not degraded, the id is the role's own.
+    assert.equal(principal('member').roleId, 'member');
+    // An admin is never degraded out of anything.
+    const a = principalFrom({ email: 'admin@example.com', isAdmin: true, rolesConfig: config, globalFlags: null, degraded: true });
+    assert.equal(a.roleId, 'admin');
+  });
+
   test('an admin is not locked out by a failed read', () => {
     const p = principalFrom({ email: 'admin@example.com', isAdmin: true, rolesConfig: config, globalFlags: null, degraded: true });
     assert.equal(can(p, 'files.upload').ok, true);

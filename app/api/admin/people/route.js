@@ -1,10 +1,8 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
-import {
-  listPeople, peopleCounts, peopleWithRoles, backfillPeople, getSetting, setSetting,
-} from '@/lib/db';
+import { listPeople, peopleCounts, peopleWithRoles } from '@/lib/db';
 import { getAdminEmails } from '@/lib/auth-allowlist';
-import { loadRolesAndPolicy, presentPerson } from '@/lib/people';
+import { loadRolesAndPolicy, presentPerson, backfillOnce } from '@/lib/people';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,25 +10,6 @@ export const maxDuration = 30;
 
 const STATUSES = new Set(['', 'active', 'invited', 'suspended', 'admins']);
 const SORTS = new Set(['active', 'name', 'storage']);
-const BACKFILL_KEY = 'people.backfill';
-
-/**
- * The one-time seed (backfillPeople): everyone who has signed in, every
- * approved invite and every admin gets a people row, and v1's role
- * assignments are copied onto them. Recorded in settings once done, so an
- * admin who later sets someone back to the default role does not have the
- * old assignment copied over them again.
- */
-let backfilled = false;
-async function backfillOnce(rawRoles) {
-  if (backfilled) return;
-  if (await getSetting(BACKFILL_KEY, { fresh: true, strict: true })) { backfilled = true; return; }
-  const assignments = rawRoles && typeof rawRoles === 'object' && rawRoles.assignments && typeof rawRoles.assignments === 'object'
-    ? rawRoles.assignments : {};
-  const result = await backfillPeople({ adminEmails: getAdminEmails(), assignments });
-  await setSetting(BACKFILL_KEY, { at: Date.now(), ...result }, 'system');
-  backfilled = true;
-}
 
 /**
  * GET /api/admin/people?q=&status=&role=&sort=&cursor=&limit=

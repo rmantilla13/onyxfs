@@ -41,6 +41,15 @@ export async function GET(req) {
   // The same principal the web and the desktop's own routes use: drive roles
   // already capped by the platform role (lib/authz.js).
   const { principal } = actor;
+  // Degraded (the roles or flags could not be read): the principal sees less
+  // than it will once they can, and the feed is not the place for that. Its
+  // pages would carry a fingerprint that differs from the real one, so every
+  // device restarts from zero now and again on recovery; or they would move
+  // the cursor past changes this principal was only briefly unable to see.
+  // Retryable instead, like a failed read below.
+  if (principal.degraded && !principal.isAdmin) {
+    return NextResponse.json({ error: 'Changes could not be read right now.' }, { status: 503, headers: { 'retry-after': '30' } });
+  }
   const allDrives = await listFilespaces();
 
   const driveParam = (url.searchParams.get('drive') || '').trim();

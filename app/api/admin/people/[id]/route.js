@@ -6,7 +6,9 @@ import {
 import { getAdminEmails, isSuperAdmin } from '@/lib/auth-allowlist';
 import { forgetSession } from '@/lib/session';
 import { overrideProblem } from '@/lib/policy';
-import { loadRolesAndPolicy, presentPerson, assignableRole, personActionProblem } from '@/lib/people';
+import {
+  loadRolesAndPolicy, presentPerson, assignableRole, personActionProblem, backfillOnce,
+} from '@/lib/people';
 import { audit, personSubject } from '@/lib/audit';
 
 export const runtime = 'nodejs';
@@ -86,6 +88,11 @@ export async function PATCH(req, { params }) {
       return NextResponse.json({ error: `"${body.roleId}" is not a role that can be assigned.` }, { status: 400 });
     }
     fields.roleId = body.roleId === null ? null : String(body.roleId);
+    // The seed copies v1 assignments onto rows whose role is still NULL; it
+    // runs first, so it cannot later "restore" one over this choice.
+    try { await backfillOnce(ctx.rawRoles); } catch {
+      return NextResponse.json({ error: 'Could not prepare the people list, so nothing was changed. Try again.' }, { status: 503 });
+    }
   }
   for (const key of ['quotaBytes', 'maxUploadBytes', 'aiMonthlyCents']) {
     if (!(key in body)) continue;
