@@ -36,3 +36,11 @@ test("the desktop's drive list answers 503, never an empty list, on a failed rea
   const route = await src('app/api/space/filespaces/route.js');
   assert.match(route, /catch \(e\)[\s\S]*status: 503/);
 });
+
+test("a list of drives never carries a drive's secret key", async () => {
+  // rows.map(shapeFilespace) passed map's index as includeSecret, so every
+  // drive after the first reached the admin's browser with its secret.
+  const db = await src('lib/db.js');
+  assert.ok(!/\.map\(shapeFilespace\)/.test(db), 'map with an explicit arrow, never by reference');
+  assert.match(db, /includeSecret === true \?/, 'only an explicit true includes the secret');
+});
