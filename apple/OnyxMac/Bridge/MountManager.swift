@@ -29,7 +29,24 @@ final class MountManager: ObservableObject {
     }
     private var running: [String: Running] = [:]
 
+    /// Each scope's mount under way or in place: which attempt it is, and the
+    /// folder it holds, which no other scope is given (MountFolder). unmount
+    /// and unmountAllNow take it away, and an attempt that finds it gone after
+    /// a wait stops there — rather than start rclone for a drive turned off,
+    /// or an account signed out, while it waited.
+    private struct Claim {
+        let attempt: Int
+        let mountPoint: URL
+    }
+    private var claims: [String: Claim] = [:]
+    private var attempts = 0
+
+    /// rclone's argument after the mount point, which the stale-mount search
+    /// anchors on (MountFolder.rclonePattern). Moving it moves that too.
+    nonisolated private static let flagAfterMountPoint = "--read-only"
+
     /// ~/Onyx: the folder the drives mount inside, one folder per drive.
+    /// Private to this account (0700): see prepare(_:).
     static var root: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(OnyxIdentifiers.folderName, isDirectory: true)
@@ -46,20 +63,40 @@ final class MountManager: ObservableObject {
     func mount(_ scope: SyncDomain, name: String, bridge: URL, token: String,
                cache: URL, cacheLimitGB: Int, logs: URL) async {
         let id = scope.identifier
-        if case .mounted = states[id] { return }
+        switch states[id] {
+        case .mounted?, .mounting?:
+            // In place, or on its way: one rclone per drive. A second would
+            // mount on top of the first, and only one could be stopped.
+            return
+        case .failed?, nil:
+            break
+        }
         guard let rclone = Self.rcloneURL else {
             states[id] = .failed("This copy of Onyx has no rclone inside it; build it with scripts/build-mac.sh.")
             return
         }
-        states[id] = .mounting
 
-        let mountPoint = Self.root.appendingPathComponent(Self.folderName(name), isDirectory: true)
+        // A folder no other scope holds. clearStale below unmounts whatever
+        // is at it and stops the rclone serving it, which must never be
+        // another drive's.
+        let taken = claims.filter { $0.key != id }.map(\.value.mountPoint.lastPathComponent)
+        let mountPoint = Self.root.appendingPathComponent(MountFolder.unique(for: scope, name: name, taken: taken),
+                                                          isDirectory: true)
+        attempts += 1
+        let attempt = attempts
+        claims[id] = Claim(attempt: attempt, mountPoint: mountPoint)
+        states[id] = .mounting
+        /// Still wanted: not unmounted, nor signed out, since this began.
+        func current() -> Bool { claims[id]?.attempt == attempt }
+
         await Self.clearStale(mountPoint)
+        guard current() else { return }
         do {
-            try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
+            try Self.prepare(mountPoint)
             try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
         } catch {
+            claims[id] = nil
             states[id] = .failed(error.localizedDescription)
             return
         }
@@ -92,9 +129,16 @@ final class MountManager: ObservableObject {
         process.arguments = [
             "nfsmount", "\(remote):", mountPoint.path,
             // Read-only until saving from Finder goes through Onyx (so what
-            // is saved there shows on the web too).
-            "--read-only",
+            // is saved there shows on the web too). Right after the mount
+            // point: clearStale finds a leftover rclone by the two together.
+            Self.flagAfterMountPoint,
             "--volname", name,
+            // This account's files, closed to every other (0600, folders
+            // 0700), like ~/Onyx itself. rclone's NFS server on 127.0.0.1
+            // cannot tell one local account from another (apple/README.md,
+            // "Who can read a mounted drive"); these modes at least keep the
+            // other accounts out by way of the file system.
+            "--uid", String(getuid()), "--gid", String(getgid()), "--umask", "077",
             // Streaming: read in chunks as asked, keep what was read on disk.
             "--vfs-cache-mode", "full",
             "--cache-dir", cache.path,
@@ -124,11 +168,15 @@ final class MountManager: ObservableObject {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         process.terminationHandler = { [weak self] p in
-            Task { @MainActor in self?.exited(id, status: p.terminationStatus, log: log) }
+            // Which rclone ended, by pid: a late end of one stopped before a
+            // remount must not be taken for the new one's.
+            let pid = p.processIdentifier, status = p.terminationStatus
+            Task { @MainActor in self?.exited(id, pid: pid, status: status, log: log) }
         }
         do {
             try process.run()
         } catch {
+            claims[id] = nil
             states[id] = .failed("rclone could not start: \(error.localizedDescription)")
             return
         }
@@ -138,6 +186,8 @@ final class MountManager: ObservableObject {
         // Mounted once the path is a mount point; give it a few seconds.
         for _ in 0..<40 {
             try? await Task.sleep(nanoseconds: 250_000_000)
+            // Unmounted or signed out meanwhile, which stopped rclone too.
+            guard current() else { return }
             if !process.isRunning { return } // exited() said why
             if Self.isMounted(mountPoint) {
                 states[id] = .mounted(mountPoint)
@@ -145,22 +195,32 @@ final class MountManager: ObservableObject {
                 return
             }
         }
-        states[id] = .failed("The drive did not mount. The log is at \(log.path).")
-        await unmount(scope)
+        // Stopped here rather than by unmount(), which would clear the state
+        // — and with it the only sign of why the drive is not in Finder.
+        let message = "The drive did not mount. The log is at \(log.path)."
+        if let run = running.removeValue(forKey: id) { await Self.stop(run.process, mountPoint: run.mountPoint) }
+        guard current() else { return }
+        claims[id] = nil
+        states[id] = .failed(message)
+        appLog.error("mount: \(id, privacy: .public) timed out")
     }
 
     func unmount(_ scope: SyncDomain) async {
         let id = scope.identifier
-        guard let run = running.removeValue(forKey: id) else { states[id] = nil; return }
+        // Also stops an attempt still on its way (see Claim).
+        claims[id] = nil
         states[id] = nil
+        guard let run = running.removeValue(forKey: id) else { return }
         await Self.stop(run.process, mountPoint: run.mountPoint)
     }
 
     /// On quit: every mount, synchronously, so none is left behind for the
     /// system to reap. Unmounted first, rclone stopped after (see stop()).
+    /// Attempts still on their way stop at their next step.
     func unmountAllNow() {
         let runs = Array(running.values)
         running.removeAll()
+        claims.removeAll()
         states.removeAll()
         for run in runs {
             Self.unmountPath(run.mountPoint, force: false)
@@ -178,9 +238,13 @@ final class MountManager: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
-    private func exited(_ id: String, status: Int32, log: URL) {
-        guard running[id] != nil else { return } // an unmount we asked for
+    private func exited(_ id: String, pid: Int32, status: Int32, log: URL) {
+        // An unmount we asked for, or an rclone this drive no longer has —
+        // stopped before a remount — whose end says nothing of the mount in
+        // place now.
+        guard let run = running[id], run.process.processIdentifier == pid else { return }
         running[id] = nil
+        claims[id] = nil
         let text = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
         // Ejected in Finder: rclone notices its mount went away and exits
         // cleanly. That is someone turning the drive off, not a failure.
@@ -203,11 +267,28 @@ final class MountManager: ObservableObject {
         "onyx" + scope.identifier.filter { $0.isLetter || $0.isNumber }.lowercased().prefix(40)
     }
 
-    /// A drive's folder under ~/Onyx: its name, made safe for a path.
-    static func folderName(_ name: String) -> String {
-        let cleaned = name.map { $0 == "/" || $0 == ":" ? "-" : $0 }.filter { !$0.isNewline }
-        let s = String(cleaned).trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        return s.isEmpty ? "Drive" : s
+    /// ~/Onyx and the drive's folder in it, private to this account (0700) —
+    /// folders an earlier version made readable by everyone included. With
+    /// the uid and umask rclone is given, another account on this Mac cannot
+    /// reach a mounted drive through the file system. (It can through
+    /// rclone's NFS port, which has no authentication: README.)
+    ///
+    /// A folder that is still a mount point is left alone: asking a mount
+    /// whose server has gone can hang, and its mode is the mount's anyway.
+    private static func prepare(_ mountPoint: URL) throws {
+        let fm = FileManager.default
+        let ownerOnly: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
+        for folder in [root, mountPoint] where !isMounted(folder) {
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true, attributes: ownerOnly)
+            // createDirectory leaves one that was there as it was.
+            do {
+                try fm.setAttributes(ownerOnly, ofItemAtPath: folder.path)
+            } catch {
+                // Not fatal: the mount's own files are 0600/0700 all the
+                // same, and the NFS port is open either way.
+                appLog.error("mount: could not make \(folder.path, privacy: .public) private: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     /// From the kernel's mount table, without asking the mount itself: a
@@ -241,12 +322,16 @@ final class MountManager: ObservableObject {
     /// then exits on its own. Signalled while still mounted, rclone runs
     /// `diskutil umount force` itself, which with the bridge gone hangs for
     /// ever — and keeps the folder busy, so the next launch cannot mount it.
-    /// The watch ends early if rclone does (so its pid is never reused).
+    /// The watch ends early if rclone does (so its pid is never reused) —
+    /// including once the app has gone: with rclone gone too, the app quit
+    /// and unmounted it itself, and what is at the path now may be a new
+    /// launch's mount (an update relaunches within a second or two).
     private static func watch(rclone: Int32, mountPoint: URL) {
         let app = ProcessInfo.processInfo.processIdentifier
         let script = """
         ours() { /bin/ps -p \(rclone) -o command= 2>/dev/null | /usr/bin/grep -q nfsmount; }
         while /bin/kill -0 \(app) 2>/dev/null; do ours || exit 0; /bin/sleep 2; done
+        ours || exit 0
         /sbin/umount -f "$1" 2>/dev/null
         for i in 1 2 3; do ours || break; /bin/sleep 1; done
         ours && /bin/kill -TERM \(rclone) 2>/dev/null && /bin/sleep 2
@@ -257,7 +342,7 @@ final class MountManager: ObservableObject {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
         p.arguments = ["-c", script, "onyx-mount-watch", mountPoint.path,
-                       NSRegularExpression.escapedPattern(for: mountPoint.path)]
+                       MountFolder.ereEscaped(mountPoint.path)]
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         try? p.run()
@@ -268,16 +353,19 @@ final class MountManager: ObservableObject {
     /// `diskutil umount force`, hung on a dead mount — which keeps the folder
     /// busy ("Resource busy") even once nothing is mounted there. Off the
     /// main thread: unmounting a dead mount can take a while.
+    ///
+    /// Only the rclone whose mount point is exactly this path: not a sibling
+    /// whose name begins the same ("Library Archive" beside "Library"). And
+    /// only a path no other drive holds (mount() sees to that).
     private static func clearStale(_ mountPoint: URL) async {
         let path = mountPoint.path
         let mounted = isMounted(mountPoint)
         await Task.detached {
-            let pattern = NSRegularExpression.escapedPattern(for: path)
             if mounted {
                 unmountPath(URL(fileURLWithPath: path), force: true)
-                pkill("nfsmount .* " + pattern + "( |$)")
+                pkill(MountFolder.rclonePattern(mountPoint: path, nextArgument: flagAfterMountPoint))
             }
-            pkill("diskutil umount force " + pattern + "$")
+            pkill("diskutil umount force " + MountFolder.ereEscaped(path) + "$")
         }.value
     }
 
