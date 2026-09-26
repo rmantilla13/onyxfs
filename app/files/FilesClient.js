@@ -36,6 +36,7 @@ import FolderDrop, { DRAG_FILES, DRAG_FOLDER, startFolderDrag } from './FolderDr
 import { FolderTiles, FolderRows } from './FolderItems';
 import useSelectionModel from './useSelectionModel';
 import useLongPress from './useLongPress';
+import { isTouch } from './usePointerIntent';
 import {
   folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, crumbsFor, folderStats,
 } from '@/lib/folder-ops';
@@ -1383,8 +1384,12 @@ export default function FilesClient({
     setHandoff(f.id, { row: f, currentSrc: shown, natural: null });
     rememberReturn({ href: `${window.location.pathname}${window.location.search}`, listingKey: currentKey, fileId: f.id });
     listingCache.extend(currentKey, { files, cursor });
+    // Opened by a tap, it comes back unselected: on a touch screen a tap
+    // opens rather than selects, and a selection left behind put the phone's
+    // selection bar up and was added to by the next long-press.
     returnSlot.save({
       filespaceId, folder, query, kinds, sort, facets, files, cursor, scrollY: window.scrollY, focusId: f.id,
+      select: !isTouch(),
     });
     const top = document.querySelector('.topnav')?.getBoundingClientRect().bottom || 0;
     setOpening({ file: f, handoff: getHandoff(f.id), top: Math.max(0, Math.round(top)), at: Date.now() });
@@ -1429,7 +1434,6 @@ export default function FilesClient({
   // Finder's model over the folders and files in the pane: a click selects,
   // a double-click or Return opens, arrows move the selection, ⇧ extends,
   // ⌘ toggles; on a touch screen a tap opens and a long-press selects.
-  const marqueeEnded = useRef(() => -Infinity);
   const sel = useSelectionModel({
     selected,
     setSelected,
@@ -1438,7 +1442,6 @@ export default function FilesClient({
     openFile,
     openFolder: openFolderItem,
     onQuickLook: quickLook,
-    marqueeEndedAt: () => marqueeEnded.current(),
   });
   const selRef = useRef(sel);
   selRef.current = sel;
@@ -1484,7 +1487,7 @@ export default function FilesClient({
   // over a few layouts, since the grid measures itself first; the grid's
   // window is brought to the new scroll position before the frame is
   // painted, so no blank rows show.
-  const restoring = useRef(returned ? { y: returned.scrollY || 0, focusId: returned.focusId, tries: 0 } : null);
+  const restoring = useRef(returned ? { y: returned.scrollY || 0, focusId: returned.focusId, select: returned.select !== false, tries: 0 } : null);
   // The pictures held for this return have done their job once it has painted.
   useEffect(() => {
     const t = setTimeout(releasePictures, 5000);
@@ -1498,7 +1501,7 @@ export default function FilesClient({
     restoring.current = null;
     window.scrollTo(0, Math.min(r.y, Math.max(0, max)));
     sel.navRef.current.files?.update?.();
-    const k = r.focusId != null ? fileKey(r.focusId) : null;
+    const k = r.focusId != null && r.select ? fileKey(r.focusId) : null;
     if (k && sel.order.includes(k)) {
       sel.setKeys([k], { anchor: k, focus: k });
       requestAnimationFrame(() => selRef.current?.focusItem(k));
@@ -1609,7 +1612,6 @@ export default function FilesClient({
     // The keyboard carries on from the last item the rectangle took.
     onEnd: (keys) => { if (keys.length) sel.focusItem(keys[keys.length - 1], { scroll: false }); },
   });
-  marqueeEnded.current = marquee.lastEndAt;
 
   // What the grid and the list share: the same files, selection and actions,
   // so switching views never changes what a click or a key does.

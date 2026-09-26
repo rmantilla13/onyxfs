@@ -37,11 +37,9 @@ import { MAX_TILES } from './FolderItems';
  * folders into the files and a card scrolled out of the window is reached.
  */
 const NAV_KEYS = new Set(['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'Home', 'End', 'PageUp', 'PageDown']);
-// A click this soon after a marquee ends is the release of that drag.
-const AFTER_MARQUEE_MS = 300;
 
 export default function useSelectionModel({
-  selected, setSelected, files, folders = [], openFile, openFolder, onQuickLook, marqueeEndedAt,
+  selected, setSelected, files, folders = [], openFile, openFolder, onQuickLook,
 }) {
   const isTouch = usePointerIntent();
   const [selectedFolders, setSelectedFolders] = useState(() => new Set());
@@ -78,7 +76,7 @@ export default function useSelectionModel({
   const live = useRef(null);
   live.current = {
     selected, selectedFolders, keys, order, files, shownFolders, fileIndex, folderIndex, selectionMode,
-    openFile, openFolder, onQuickLook, marqueeEndedAt,
+    openFile, openFolder, onQuickLook,
   };
 
   const current = () => ({ keys: new Set(live.current.keys), anchor: anchor.current, focus: focus.current });
@@ -174,17 +172,21 @@ export default function useSelectionModel({
   }, [apply, move, open]);
 
   const click = useCallback((e, key) => {
+    // The click a marquee's release makes never gets here: the marquee
+    // swallows that one event (useMarquee), so a real click straight after a
+    // drag counts.
     if (e.defaultPrevented) return;
+    const L = live.current;
+    if (isTouch()) {
+      // In selection mode every tap flips the item, however quickly it
+      // follows the last one (a second tap is a click with detail 2).
+      if (L.selectionMode) apply(clickSelect(current(), key, { toggle: true, order: L.order }));
+      else if (e.detail <= 1) open(key);
+      return;
+    }
     // The second click of a double-click: that opens (dblclick), and the
     // first already selected.
     if (e.detail > 1) return;
-    const L = live.current;
-    if (performance.now() - (L.marqueeEndedAt?.() ?? -Infinity) < AFTER_MARQUEE_MS) return;
-    if (isTouch()) {
-      if (L.selectionMode) apply(clickSelect(current(), key, { toggle: true, order: L.order }));
-      else open(key);
-      return;
-    }
     apply(clickSelect(current(), key, { toggle: e.metaKey || e.ctrlKey, range: e.shiftKey, order: L.order }));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apply, open, isTouch]);
