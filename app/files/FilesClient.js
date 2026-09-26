@@ -495,12 +495,22 @@ export default function FilesClient({
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
+  // Up to the enclosing folder (⌘↑, the menu's Enclosing folder, Back with
+  // no history of ours): arriving, the folder we came out of is selected and
+  // focused, as after Back.
+  const goUp = useCallback(() => {
+    if (!folder) return;
+    const up = parentOf(folder);
+    arrival.current = { key: listingKey({ filespaceId, folder: cleanFolder(up), query, kinds, sort }), from: folder, at: Date.now() };
+    navigate(up);
+  }, [folder, navigate, filespaceId, query, kinds, sort]);
+
   // Back is history when we put the previous folder there; opened from a link
   // (nothing of ours to go back through), it is the enclosing folder instead.
   const back = nav.depth > 0
     ? { label: `Back to ${nav.from ? baseName(nav.from) : rootName}`, go: () => window.history.back() }
     : folder
-      ? { label: `Up to ${parentOf(folder) ? baseName(parentOf(folder)) : rootName}`, go: () => navigate(parentOf(folder)) }
+      ? { label: `Up to ${parentOf(folder) ? baseName(parentOf(folder)) : rootName}`, go: goUp }
       : null;
 
   // Drop the selection whenever the result set changes underneath it.
@@ -1087,7 +1097,7 @@ export default function FilesClient({
     canWrite && { label: 'Upload folder…', onSelect: () => folderInputRef.current?.click() },
     canWrite && '-',
     { label: 'Get info', hint: at === folder ? `${modKey()}I` : undefined, onSelect: () => infoForFolder(at) },
-    at === folder && at && { label: 'Enclosing folder', hint: `${modKey()}↑`, onSelect: () => navigate(parentOf(at)) },
+    at === folder && at && { label: 'Enclosing folder', hint: `${modKey()}↑`, onSelect: goUp },
     { label: view === 'list' ? 'View as grid' : 'View as list', onSelect: () => changeView(view === 'list' ? 'grid' : 'list') },
     flags.metadata && { label: filtersOpen ? 'Hide filters' : 'Show filters', onSelect: () => toggleFilters() },
     '-',
@@ -1263,7 +1273,7 @@ export default function FilesClient({
     if (e.key === 'ArrowUp' && (mod || e.altKey) && !e.shiftKey) {
       if (!folder) return;
       e.preventDefault();
-      navigate(parentOf(folder));
+      goUp();
       return;
     }
     // Keys pressed with the focus on the page rather than on an item (after a
