@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef } from 'react';
 import { effectiveKind, drawableKind, fmtSize, fmtDuration } from '@/lib/media';
 import { thumbSources } from '@/lib/renditions';
-import { probedNow } from '@/lib/decode-probe';
+import { probedNow, decodeProbe } from '@/lib/decode-probe';
 import { positionLabel } from '@/lib/quicklook';
 import { parseKey } from '@/lib/selection';
 import { modKey } from '@/lib/keys';
@@ -49,6 +49,8 @@ const FOCUSABLE = 'button:not([disabled]), a[href], video[controls], audio[contr
  */
 export default function QuickLookHost({ apiRef, pending, find, onOpen, onInfo, prefetch, ...state }) {
   const ql = useQuickLook({ ...state, find });
+  // Whether this browser draws HEIC and TIFF originals, asked once, early.
+  useEffect(() => { decodeProbe().catch(() => {}); }, []);
   // Getting a file's page and preview ready while it rests selected
   // (app/files/useOpenPrefetch.js) — loaded with this, after the page.
   useOpenPrefetch(prefetch);

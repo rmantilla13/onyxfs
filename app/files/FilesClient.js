@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
 import { reviewBadges } from '@/app/components/review/badges';
@@ -1857,7 +1857,7 @@ export default function FilesClient({
                     selected={folder}
                     onSelect={navigate}
                     canWrite={canWrite}
-                    onDrop={onTreeDrop}
+                    onDrop={onItemDrop}
                     storageKey={`onyx.tree.open:${filespaceId || 'all'}`}
                   />
                 </div>
@@ -2128,7 +2128,9 @@ function readOpen(key) {
  * With write access, a folder can be dragged onto another to move it, and
  * files dragged from the grid (or the desktop) can be dropped on one.
  */
-function FolderTree({ folders, selected, onSelect, canWrite, onDrop, storageKey }) {
+// Memoized: a click or an arrow in the pane re-renders the page, and the tree
+// of a big library is hundreds of rows that have not changed.
+const FolderTree = memo(function FolderTree({ folders, selected, onSelect, canWrite, onDrop, storageKey }) {
   const [open, setOpen] = useState(() => new Set());
   const loaded = useRef(null);
 
@@ -2221,4 +2223,4 @@ function FolderTree({ folders, selected, onSelect, canWrite, onDrop, storageKey 
       </FolderDrop>
     );
   });
-}
+});

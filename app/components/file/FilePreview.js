@@ -1,8 +1,8 @@
 'use client';
 
-import { forwardRef, useState } from 'react';
+import { forwardRef, useEffect, useState } from 'react';
 import { effectiveKind, drawableKind } from '@/lib/media';
-import { probedNow } from '@/lib/decode-probe';
+import { probedNow, decodeProbe } from '@/lib/decode-probe';
 import VideoPlayer from '@/app/components/video/VideoPlayer';
 import ImageStage from './ImageStage';
 import '@/app/components/review/review.css';
@@ -51,9 +51,15 @@ const FilePreview = forwardRef(function FilePreview({
 
   // Any image with a rendition shows it, whether or not this browser could
   // draw the original (a HEIC or TIFF, say); without one, only an original
-  // it can draw.
+  // it can draw — which, for those two, a quick probe of this browser says
+  // (lib/decode-probe.js; Safari can).
   const renditions = !!(file.posterUrl || file.thumbnailUrl);
-  if (kind === 'image' && (renditions || drawableKind(file, { probe: probedNow() })) && !failed) {
+  const [probe, setProbe] = useState(probedNow);
+  const probeWorth = kind === 'image' && !renditions && !probe && /heic|heif|tiff?/i.test(`${file.mime || ''} ${file.name || ''}`);
+  useEffect(() => {
+    if (probeWorth) decodeProbe().then(setProbe, () => {});
+  }, [probeWorth]);
+  if (kind === 'image' && (renditions || drawableKind(file, { probe })) && !failed) {
     return <ImageStage file={file} overlay={overlay} handoff={handoff} onOriginalBlob={onOriginalBlob} onFailed={() => setFailed(true)} />;
   }
 
