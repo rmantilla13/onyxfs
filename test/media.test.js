@@ -62,6 +62,23 @@ test('media facts drop anything that is not a sane positive number', () => {
   assert.deepEqual(mediaFacts(null), {});
 });
 
+test('the probed frame model is kept only as a set anchored on a valid rate', () => {
+  const probed = { fps: { num: 24000, den: 1001 }, frames: 1440, tcStart: 86400, dropFrame: false };
+  assert.deepEqual(mediaFacts({ width: 1920, height: 1080, ...probed }), { width: 1920, height: 1080, ...probed });
+  // No rate, no model: a frame count or start means nothing without it.
+  assert.deepEqual(mediaFacts({ frames: 1440, tcStart: 86400, dropFrame: true }), {});
+  for (const fps of [23.976, '24000/1001', { num: 24.5, den: 1 }, { num: 0, den: 1 }, { num: 24, den: 0 }, { num: 5000, den: 1 }, { num: '24', den: '1x' }]) {
+    assert.deepEqual(mediaFacts({ fps, frames: 10 }), {}, JSON.stringify(fps));
+  }
+  // Integers and booleans only, each field on its own.
+  assert.deepEqual(
+    mediaFacts({ fps: { num: 30000, den: 1001 }, frames: 1.5, tcStart: -3, dropFrame: 'yes' }),
+    { fps: { num: 30000, den: 1001 }, tcStart: 0, dropFrame: false },
+  );
+  // And it survives the upload registration.
+  assert.deepEqual(uploadFields({ name: 'a.mov', media: probed }).metadata, probed);
+});
+
 test('durations read like a player shows them', () => {
   assert.equal(fmtDuration(42.04), '0:42');
   assert.equal(fmtDuration(83.4), '1:23');
