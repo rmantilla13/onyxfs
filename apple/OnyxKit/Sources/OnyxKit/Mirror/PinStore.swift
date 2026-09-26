@@ -274,6 +274,22 @@ public actor PinStore {
         return Self.fileSize(at: url) == copy.size ? url : nil
     }
 
+    /// Which of `entries` have a copy recorded at their etag: whether each is
+    /// kept offline, from the records alone. No disk is touched, so a listing
+    /// of thousands asks once and costs nothing even when the cache is on a
+    /// slow disk, or one not connected. Serving a copy still checks it
+    /// (`localCopy`).
+    public func keptOffline(scope: String, _ entries: [MirrorEntry]) -> Set<String> {
+        guard let copies = state.copies[scope], !copies.isEmpty else { return [] }
+        var kept = Set<String>()
+        for entry in entries {
+            guard let id = entry.fileId, let copy = copies[id] else { continue }
+            if let etag = entry.etag, copy.etag != etag { continue }
+            kept.insert(id)
+        }
+        return kept
+    }
+
     /// Bytes on disk: the recorded copies, each checked with one stat.
     public func usage() -> Int64 {
         state.copies.keys.reduce(0) { $0 + usage(scope: $1) }

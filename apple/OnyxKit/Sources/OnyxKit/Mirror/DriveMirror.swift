@@ -26,6 +26,15 @@ public actor DriveMirror {
     /// Names the replica on disk. The cursor file extends that one only.
     private var generation: String?
     public private(set) var index: MirrorIndex
+    /// Moves each time `index` changes what it shows — a pass that applied
+    /// a change, the drive withheld or shown again, forgotten — and at no
+    /// other time. The onyxfs bridge follows it to tell the extension what
+    /// changed (FSResponder), and its long-polls wait on it
+    /// (`waitForChange`). Counts from 0 for each mirror opened.
+    public private(set) var revision: UInt64 = 0
+    /// Long-polls waiting for `revision` to move, by a number of their own.
+    private var waiters: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var waitersSoFar = 0
     public private(set) var lastSynced: Date?
     public private(set) var lastError: String?
     /// The server said this account may no longer open the drive, for long
@@ -117,17 +126,29 @@ public actor DriveMirror {
 
     private struct Link {
         let url: URL
-        let freshUntil: Date
+        /// When storage stops honouring it: as the server said, or an hour
+        /// after it was asked for when it did not say.
+        let expiresAt: Date
         /// The file's version when the link was signed. A rename or a move
         /// moves the object to a new key and bumps the version, so a link
         /// signed before the version the replica has now points at a key
         /// that may be gone — or, reused by a later upload, hold other bytes.
         let version: Int
+
+        /// Handed out until then: a read that starts on it has time to run.
+        var freshUntil: Date { expiresAt.addingTimeInterval(-DriveMirror.linkMargin) }
     }
+
+    /// How long a link must have left to be handed out again (rclone).
+    static let linkMargin: TimeInterval = 10 * 60
+    /// The same for the onyxfs extension, which keeps a link itself and asks
+    /// for a new one a minute before it runs out: it is promised a quarter
+    /// of an hour.
+    static let extensionLinkMargin: TimeInterval = 15 * 60
 
     private struct Fetch {
         let id: Int
-        let task: Task<URL, Error>
+        let task: Task<Link, Error>
     }
 
     /// The mirror as it was left, read and indexed off the caller's thread:
@@ -202,6 +223,46 @@ public actor DriveMirror {
     /// fetched afresh after the access changed. Offline copies are deleted
     /// only against an index that is.
     public var isAuthoritative: Bool { index.isAuthoritative }
+
+    // MARK: - Changes
+
+    /// The index and the revision it goes with, read together.
+    public var snapshot: (revision: UInt64, index: MirrorIndex) { (revision, index) }
+
+    /// Returns once `revision` is past `seen`, or `timeout` has gone by, or
+    /// the task is cancelled, whichever is first; the caller reads what it
+    /// finds then. For the onyxfs extension's long-poll: a waiter holds no
+    /// thread and nothing of the mirror's, so any number can wait.
+    public func waitForChange(after seen: UInt64, timeout: Duration) async {
+        guard revision <= seen, timeout > .zero, !Task.isCancelled else { return }
+        waitersSoFar += 1
+        let id = waitersSoFar
+        let timer = Task { [weak self] in
+            // A tolerance of its own: left to the system, a 25 s wait can
+            // run a second or more over.
+            try? await Task.sleep(for: timeout, tolerance: .milliseconds(100))
+            await self?.release(id)
+        }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { waiters[id] = $0 }
+        } onCancel: {
+            Task { [weak self] in await self?.release(id) }
+        }
+        timer.cancel()
+    }
+
+    private func release(_ waiter: Int) {
+        waiters.removeValue(forKey: waiter)?.resume()
+    }
+
+    /// As a pass would leave the mirror after a page with `changed` and
+    /// `deleted` in it, with no network: for tests, and the onyxfs bridge's
+    /// end-to-end check. Nothing is written to disk.
+    func applyForTesting(changed: [FileItem], deleted: [String] = []) async {
+        let diff = replica.apply(changed: changed, deleted: deleted)
+        forgetLinks(for: diff)
+        await publish(rebuilding: !diff.isEmpty)
+    }
 
     // MARK: - Sync
 
@@ -379,15 +440,28 @@ public actor DriveMirror {
         if isWithheld {
             // Answers nothing, and proves nothing gone: no offline copy is
             // deleted against it.
+            let wasShowing = index.fileCount > 0 || index.folderCount > 0
             index = MirrorIndex(Replica(), authoritative: false)
+            if wasShowing { advance() }
             return
         }
         let whole = complete && staged == nil
         if rebuilding {
             index = await Self.build(replica, authoritative: whole)
+            advance()
         } else {
+            // The same tree, only vouched for or not: nothing to tell.
             index = index.authoritative(whole)
         }
+    }
+
+    /// `index` shows something new: move `revision`, and wake whoever waits
+    /// on it.
+    private func advance() {
+        revision += 1
+        let woken = waiters
+        waiters = [:]
+        for waiter in woken.values { waiter.resume() }
     }
 
     /// A 404 from the feed, for a drive, is the server saying this account
@@ -409,7 +483,9 @@ public actor DriveMirror {
         generation = nil
         unsaved = .nothing
         forgetLinks()
+        let wasShowing = index.fileCount > 0 || index.folderCount > 0
         index = MirrorIndex(replica, authoritative: false)
+        if wasShowing { advance() }
         isGone = true
         isWithheld = false
         refusals = 0
@@ -495,9 +571,21 @@ public actor DriveMirror {
     /// or whatever was uploaded to that key since. Requests for one file at
     /// once share a single fetch.
     public func contentURL(fileId: String) async throws -> URL {
+        try await link(fileId, lasting: Self.linkMargin).url
+    }
+
+    /// `contentURL`, and when the link stops working: for the onyxfs
+    /// extension, which reads storage itself and fetches a new link before
+    /// this one runs out. It has at least a quarter of an hour left.
+    public func contentLink(fileId: String) async throws -> (url: URL, expiresAt: Date) {
+        let link = try await link(fileId, lasting: Self.extensionLinkMargin)
+        return (link.url, link.expiresAt)
+    }
+
+    private func link(_ fileId: String, lasting margin: TimeInterval) async throws -> Link {
         let version = replica.file(id: fileId)?.version
-        if let link = links[fileId], link.freshUntil > Date(), let version, link.version >= version {
-            return link.url
+        if let link = links[fileId], link.expiresAt.timeIntervalSinceNow > margin, let version, link.version >= version {
+            return link
         }
         if let pending = fetching[fileId] { return try await pending.task.value }
         fetches += 1
@@ -516,22 +604,22 @@ public actor DriveMirror {
     /// How many links are kept; for tests.
     var linkCount: Int { links.count }
 
-    private func fetchLink(_ fileId: String, fetch: Int, asOf version: Int?) async throws -> URL {
+    private func fetchLink(_ fileId: String, fetch: Int, asOf version: Int?) async throws -> Link {
         defer { if fetching[fileId]?.id == fetch { fetching[fileId] = nil } }
         let asked = Date()
-        let link = try await api().contentLink(fileId: fileId)
-        let freshUntil = link.expiresAt.map { $0.date.addingTimeInterval(-10 * 60) }
-            ?? asked.addingTimeInterval(50 * 60)
+        let answer = try await api().contentLink(fileId: fileId)
+        let link = Link(url: answer.url, expiresAt: answer.expiresAt?.date ?? asked.addingTimeInterval(60 * 60),
+                        version: answer.version ?? version ?? 0)
         // Kept only if the file did not move while this was in flight: a
         // sync that changed it dropped this fetch (forgetLinks), and a link
         // signed before the version the replica has now is not reused. The
         // server says which version it signed; one that does not is taken
         // to have signed the version asked for.
-        if fetching[fileId]?.id == fetch, let signed = link.version ?? version,
+        if fetching[fileId]?.id == fetch, let signed = answer.version ?? version,
            let current = replica.file(id: fileId)?.version, signed >= current {
-            keep(Link(url: link.url, freshUntil: freshUntil, version: signed), for: fileId)
+            keep(Link(url: link.url, expiresAt: link.expiresAt, version: signed), for: fileId)
         }
-        return link.url
+        return link
     }
 
     /// Bounded: browsing a big drive touches thousands of files. At the
