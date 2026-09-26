@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { getFileById, buildPrincipal, canModifyFile, setFileFrameModel } from '@/lib/db';
-import { presignFileUrls } from '@/lib/storage';
+import { getStorageConfig, storageMode, s3PresignGet } from '@/lib/storage';
 import { effectiveKind, mediaFacts } from '@/lib/media';
 import { probeMp4, probeMetadata, rangeReader } from '@/lib/mp4-probe';
 
@@ -10,6 +10,35 @@ export const runtime = 'nodejs';
 // Long enough for a slow bucket to answer a handful of small range requests,
 // short enough that a detail page's background backfill never hangs a lambda.
 const READ_TIMEOUT_MS = 10_000;
+
+// Vercel Blob's public stores. A Blob row's url is whatever the uploader
+// recorded, so it is fetched only when it points at one of these.
+const BLOB_HOST = /(^|\.)blob\.vercel-storage\.com$/;
+
+/**
+ * Where the server may read this file from, or null.
+ *
+ * Never simply the row's `url`: for a Blob row that is whatever the client
+ * sent when it recorded the upload, and fetching it would let anyone who can
+ * add a file make the server request any address it likes. An S3 row is
+ * signed afresh from its storage key against the deployment's own bucket
+ * (the CDN shortcut in presignFileUrls hands back the stored url, so it is
+ * not used); a Blob row is read only from Vercel Blob itself.
+ */
+async function sourceFor(file) {
+  if (file.storage === 's3' && file.storageKey) {
+    const cfg = await getStorageConfig();
+    if (storageMode(cfg) !== 's3') return null;
+    return s3PresignGet(cfg, file.storageKey, { expiresIn: 600 });
+  }
+  if (file.storage === 'blob') {
+    try {
+      const u = new URL(file.url);
+      if (u.protocol === 'https:' && BLOB_HOST.test(u.hostname)) return u.href;
+    } catch { /* not a URL at all */ }
+  }
+  return null;
+}
 
 /**
  * POST /api/files/[id]/probe — read a stored video's frame model (exact rate,
@@ -22,9 +51,10 @@ const READ_TIMEOUT_MS = 10_000;
  * touching the file's version or Modified date (setFileFrameModel).
  *
  * Editors only: it writes to the row. Authorize → presign, in that order, so
- * a URL is minted only for a file the caller may change. A file this cannot
- * read (WebM, a fragmented MP4 with no sample table) is marked, so it is not
- * probed again on every visit.
+ * a URL is minted only for a file the caller may change (see sourceFor for
+ * which URLs it will read at all). A file this cannot read (WebM, a
+ * fragmented MP4 with no sample table) is marked, so it is not probed again
+ * on every visit.
  */
 export async function POST(_req, { params }) {
   const session = await auth();
@@ -40,9 +70,8 @@ export async function POST(_req, { params }) {
   const md = file.metadata || {};
   if (md.fps) return NextResponse.json({ metadata: md, probed: false });
 
-  const [signed] = await presignFileUrls([file], { expiresIn: 600 });
-  const url = signed?.url;
-  if (!url || !/^https?:\/\//.test(url)) return NextResponse.json({ error: 'This file has no readable source.' }, { status: 400 });
+  const url = await sourceFor(file).catch(() => null);
+  if (!url) return NextResponse.json({ error: 'This file is not in storage the server can read.' }, { status: 400 });
 
   let probe = null;
   try {

@@ -20,7 +20,7 @@ async function load(g, cid) {
  *                        who may change the file
  */
 export async function PATCH(req, { params }) {
-  const g = await openReview(params.id, 'read');
+  const g = await openReview(params.id, 'read', { modify: true });
   if (g.error) return g.error;
   let body;
   try { body = await req.json(); } catch { return reviewJson({ error: 'Bad request' }, 400); }
@@ -62,7 +62,7 @@ export async function PATCH(req, { params }) {
  * The author, or anyone who may change the file.
  */
 export async function DELETE(_req, { params }) {
-  const g = await openReview(params.id, 'read');
+  const g = await openReview(params.id, 'read', { modify: true });
   if (g.error) return g.error;
   const found = await load(g, params.cid);
   if (found.error) return found.error;

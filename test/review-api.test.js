@@ -299,6 +299,27 @@ describe('the review API', { skip }, () => {
     assert.equal(known.body.probed, false);
   });
 
+  test('the backfill never fetches an address a client recorded', async () => {
+    // A Blob row's url is whatever the uploader sent. Reading it would let
+    // anyone who can add a file point the server at any address at all.
+    const planted = await db.createFile({
+      name: 'planted.mp4', url: 'http://169.254.169.254/latest/meta-data/', kind: 'video', mime: 'video/mp4',
+      storage: 'blob', createdBy: OWNER,
+    });
+    made.files.push(planted.id);
+    const calls = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = async (...args) => { calls.push(String(args[0])); return real(...args); };
+    try {
+      as(OWNER);
+      const r = await call(probeRoute.POST, '/x', { id: planted.id }, { method: 'POST' });
+      assert.equal(r.status, 400);
+    } finally {
+      globalThis.fetch = real;
+    }
+    assert.deepEqual(calls, [], 'nothing was fetched');
+  });
+
   test('a trashed file has no review, and no detail', async () => {
     const trash = await db.createFile({
       name: 'old.mp4', url: 'http://s3.test/b/files/old.mp4', kind: 'video', storage: 's3',
