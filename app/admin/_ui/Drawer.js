@@ -24,17 +24,42 @@ export default function Drawer({ title, subtitle, sections = [], onClose, footer
 
   useEffect(() => {
     const hash = typeof window !== 'undefined' ? decodeURIComponent(window.location.hash.slice(1)) : '';
-    if (!hash) return;
+    const root = body.current;
+    if (!hash || !root) return undefined;
+    const target = () => root.querySelector(`#${CSS.escape(hash)}`);
+    const go = () => {
+      const el = target();
+      if (el) el.scrollIntoView({ block: 'start' });
+      return el;
+    };
     // After Dialog's own effect has called showModal (a child's effects run
     // before its parent's), on the next frame so layout has happened.
-    const t = requestAnimationFrame(() => {
-      const el = body.current?.querySelector(`#${CSS.escape(hash)}`);
+    const frame = requestAnimationFrame(() => {
+      const el = go();
       if (!el) return;
-      el.scrollIntoView({ block: 'start' });
       if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
       el.focus({ preventScroll: true });
     });
-    return () => cancelAnimationFrame(t);
+    // Sections above the target fill in as their own data arrives (the
+    // member list, say) and would push it back down; keep it in place for a
+    // moment, until the reader scrolls or types.
+    let settled = false;
+    const settle = () => { settled = true; };
+    const ro = new ResizeObserver(() => { if (!settled) go(); });
+    ro.observe(root);
+    const scroller = root.closest('.dialog-body');
+    scroller?.addEventListener('wheel', settle, { passive: true });
+    scroller?.addEventListener('touchstart', settle, { passive: true });
+    window.addEventListener('keydown', settle);
+    const stop = setTimeout(settle, 2500);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(stop);
+      ro.disconnect();
+      scroller?.removeEventListener('wheel', settle);
+      scroller?.removeEventListener('touchstart', settle);
+      window.removeEventListener('keydown', settle);
+    };
   }, []);
 
   return (

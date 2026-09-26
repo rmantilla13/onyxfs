@@ -15,7 +15,6 @@ import { DriveList, DriveMembersDialog } from '@/app/components/Drives';
 import NewDriveDialog from '@/app/components/drives/NewDriveDialog';
 import { useDeleteDrive } from '@/app/components/drives/DeleteDriveConfirm';
 import { modKey, isTyping } from '@/lib/keys';
-import { fmtSize } from '@/lib/media';
 import { listingCache, listingKey } from '@/lib/listing-cache';
 import {
   VIEW_STORAGE_KEY, parseView, availableColumns, parseColumns, resolveColumns,
