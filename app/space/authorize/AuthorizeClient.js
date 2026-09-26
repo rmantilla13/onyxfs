@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import BrandLogo from '@/app/components/BrandLogo';
 
-export default function AuthorizeClient({ brandName, logo, email, challenge, state }) {
+export default function AuthorizeClient({ brandName, logo, email, challenge, state, label }) {
   const [status, setStatus] = useState(challenge ? 'ready' : 'missing');
   const [error, setError] = useState(null);
 
@@ -14,7 +14,7 @@ export default function AuthorizeClient({ brandName, logo, email, challenge, sta
       const r = await fetch('/api/desktop/authorize', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ kind: 'pkce', code_challenge: challenge, state, label: 'Desktop' }),
+        body: JSON.stringify({ kind: 'pkce', code_challenge: challenge, state, label: label || 'Desktop' }),
       });
       const body = await r.json();
       if (!r.ok) throw new Error(body.error || 'Authorization failed');
@@ -44,14 +44,14 @@ export default function AuthorizeClient({ brandName, logo, email, challenge, sta
           </>
         ) : status === 'done' ? (
           <>
-            <h1 style={{ fontSize: 22, marginBottom: 8 }}>Connected</h1>
-            <p className="muted small" style={{ margin: 0 }}>You can close this tab and return to {brandName}.</p>
+            <h1 style={{ fontSize: 22, marginBottom: 8 }}>Approved</h1>
+            <p className="muted small" style={{ margin: 0 }}>Return to {brandName} to finish signing in. You can close this tab.</p>
           </>
         ) : (
           <>
             <h1 style={{ fontSize: 22, marginBottom: 8 }}>Connect {brandName}</h1>
             <p className="muted small" style={{ marginBottom: 20 }}>
-              This will let the desktop app on this computer access the filespaces granted to <strong>{email}</strong>.
+              This will let {label ? <strong>{label}</strong> : 'the desktop app on this computer'} access the drives granted to <strong>{email}</strong>.
               It can be revoked at any time.
             </p>
             <button className="btn btn-primary" onClick={approve} disabled={status === 'working'} style={{ width: '100%', justifyContent: 'center' }}>

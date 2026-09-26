@@ -49,6 +49,9 @@ const tag = Math.random().toString(36).slice(2, 8);
 const OWNER = `owner-${tag}@review.test`;     // uploader, and an editor of the drive
 const MEMBER = `member-${tag}@review.test`;   // a viewer of the drive
 const OUTSIDER = `out-${tag}@review.test`;    // signed in, in no drive
+const BANNED = `banned-${tag}@review.test`;   // signed in once, since banned: an account, no access
+const STRANGER = `stranger-${tag}@external.example`; // never an account at all
+const BOSS = 'boss@review.test';               // an admin (ADMIN_EMAILS), with no invite of their own
 const PREFIX = `drv-${tag}`;
 const FPS = { num: 24000, den: 1001 };
 
@@ -73,9 +76,16 @@ before(async () => {
   drive = await db.createFilespace({ name: `Review ${tag}`, bucket: 'b', prefix: PREFIX, createdBy: 'boss@review.test' });
   await db.grantFilespaceAccess({ filespaceId: drive.id, email: OWNER, role: 'editor' });
   await db.grantFilespaceAccess({ filespaceId: drive.id, email: MEMBER, role: 'viewer' });
-  for (const [email, name] of [[OWNER, 'Olive Owner'], [MEMBER, 'Mo Member'], [OUTSIDER, 'Otto Outsider']]) {
+  for (const [email, name] of [[OWNER, 'Olive Owner'], [MEMBER, 'Mo Member'], [OUTSIDER, 'Otto Outsider'], [BANNED, 'Bea Banned']]) {
     await db.adminAddApprovedInvite({ email, name, reviewedBy: 'test' });
   }
+  // Bea signed in (so has a "user" row), then was banned: the row outlives
+  // the invite. The admin has a row and no invite, and needs none.
+  for (const email of [BANNED, BOSS]) await db.getOrCreateAuthUser(email);
+  await db.sql`UPDATE "user" SET name = 'Bea Banned' WHERE email = ${BANNED}`;
+  await db.sql`UPDATE "user" SET name = ${`Boss ${tag}`} WHERE email = ${BOSS}`;
+  const [invite] = await db.sql`SELECT id FROM invite_requests WHERE email = ${BANNED}`;
+  await db.updateInviteRequest(invite.id, { status: 'banned', reviewedBy: 'test' });
   cut = await db.createFile({
     name: 'cut.mp4', url: `http://s3.test/b/${PREFIX}/cut.mp4`, mime: 'video/mp4', kind: 'video', size: 1000,
     storage: 's3', storageKey: `${PREFIX}/cut.mp4`, createdBy: OWNER,
@@ -95,6 +105,7 @@ after(async () => {
     if (drive) await db.deleteFilespace(drive.id).catch(() => {});
     await db.sql`DELETE FROM invite_requests WHERE email LIKE ${`%-${tag}@review.test`}`.catch(() => {});
     await db.sql`DELETE FROM notifications WHERE user_email LIKE ${`%-${tag}@review.test`}`.catch(() => {});
+    await db.sql`DELETE FROM "user" WHERE email = ANY(${[BANNED, BOSS]})`.catch(() => {});
   }
   await db.sql.end({ timeout: 5 }).catch(() => {});
 });
@@ -261,6 +272,55 @@ describe('the review API', { skip }, () => {
     assert.equal((await call(mentionRoute.GET, `/x?q=`, { id: cut.id })).status, 403);
   });
 
+  test('a mention names only someone who may sign in, even on a file the whole org can read', async () => {
+    // canAccessFile says yes to ANY address for an org-visible file outside
+    // every drive, so the sign-in gate is what stops these two.
+    as(MEMBER);
+    const r = await call(commentsRoute.POST, '/x', { id: still.id }, {
+      method: 'POST', body: { body: `hey @stranger @bea @otto`, mentions: [STRANGER, BANNED, OUTSIDER] },
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.deepEqual(r.body.comment.mentions, [OUTSIDER]);
+    const watching = (await db.sql`SELECT email FROM review_watchers WHERE file_id = ${still.id}`).map((w) => w.email);
+    assert.ok(watching.includes(OUTSIDER));
+    assert.ok(!watching.includes(STRANGER), 'an address that is not an account follows nothing');
+    assert.ok(!watching.includes(BANNED), 'nor does someone who was banned');
+    const told = (await db.sql`SELECT user_email FROM notifications WHERE metadata->>'commentId' = ${r.body.comment.id}`).map((n) => n.user_email);
+    assert.ok(told.includes(OUTSIDER));
+    assert.ok(!told.includes(STRANGER) && !told.includes(BANNED));
+
+    // Editing the words is held to the same rule.
+    const edited = await call(commentRoute.PATCH, '/x', { id: still.id, cid: r.body.comment.id }, {
+      method: 'PATCH', body: { body: 'hey @stranger @bea', mentions: [STRANGER, BANNED] },
+    });
+    assert.equal(edited.status, 200);
+    assert.deepEqual(edited.body.comment.mentions, []);
+  });
+
+  test('a watcher who has since been banned is not told', async () => {
+    await db.addReviewWatchers(still.id, [BANNED]);
+    as(OWNER);
+    const r = await call(commentsRoute.POST, '/x', { id: still.id }, { method: 'POST', body: { body: 'New export is up' } });
+    assert.equal(r.status, 201);
+    const told = (await db.sql`SELECT user_email FROM notifications WHERE metadata->>'commentId' = ${r.body.comment.id}`).map((n) => n.user_email);
+    assert.ok(told.includes(MEMBER), 'a commenter who may still sign in hears of it');
+    assert.ok(!told.includes(BANNED));
+  });
+
+  test('suggestions are people who are active: not a banned account, but an admin without an invite', async () => {
+    as(OWNER);
+    const lib = await call(mentionRoute.GET, `/x?q=${tag}`, { id: still.id });
+    const emails = lib.body.people.map((p) => p.email);
+    assert.ok(emails.includes(OUTSIDER));
+    assert.ok(!emails.includes(BANNED), 'a "user" row outlives the ban; it does not make its owner mentionable');
+    const boss = await call(mentionRoute.GET, `/x?q=${encodeURIComponent(`boss ${tag}`)}`, { id: still.id });
+    assert.deepEqual(boss.body.people, [{ email: BOSS, name: `Boss ${tag}` }]);
+    // Left out of the pool itself, not only filtered after: the route checks
+    // a handful of candidates, and a banned one would take a place.
+    const pool = (await db.listMentionCandidates({ q: tag })).map((p) => p.email);
+    assert.ok(pool.includes(MEMBER) && !pool.includes(BANNED));
+  });
+
   test('deleting a comment keeps its place and drops its words; only the author or an editor', async () => {
     as(OUTSIDER);
     assert.equal((await call(commentRoute.DELETE, '/x', { id: cut.id, cid: first.id }, { method: 'DELETE' })).status, 403);
@@ -272,6 +332,85 @@ describe('the review API', { skip }, () => {
     assert.ok(gone.body.comment.deletedAt);
     assert.equal(gone.body.openComments, 0);
     assert.equal((await call(commentRoute.PATCH, '/x', { id: cut.id, cid: first.id }, { method: 'PATCH', body: { body: 'back' } })).status, 404);
+  });
+
+  test('the feed pages: a full page stops at its last comment, and a decision after it waits for the next', async () => {
+    const f = await db.createFile({
+      name: 'pages.jpg', url: 'http://s3.test/b/files/pages.jpg', mime: 'image/jpeg', kind: 'image', storage: 's3',
+      storageKey: `files/pages-${tag}.jpg`, createdBy: OWNER,
+    });
+    made.files.push(f.id);
+    const post = async (body) => {
+      as(OWNER);
+      const r = await call(commentsRoute.POST, '/x', { id: f.id }, { method: 'POST', body: { body } });
+      assert.equal(r.status, 201);
+      return r.body.comment;
+    };
+    const decide = async (who, status) => {
+      as(who);
+      const r = await call(decisionRoute.PUT, '/x', { id: f.id }, { method: 'PUT', body: { status } });
+      assert.equal(r.status, 200);
+      return r.body.decision;
+    };
+    // In seq order: c1 c2 [early decision] c3 [late decision] c4.
+    const c1 = await post('one');
+    const c2 = await post('two');
+    const early = await decide(MEMBER, 'approved');
+    const c3 = await post('three');
+    const late = await decide(OUTSIDER, 'changes_requested');
+    const c4 = await post('four');
+    assert.ok(early.seq > c2.seq && early.seq < c3.seq && late.seq > c3.seq && late.seq < c4.seq);
+
+    const p1 = await db.listReviewFeed(f.id, { limit: 3 });
+    assert.deepEqual(p1.comments.map((c) => c.id), [c1.id, c2.id, c3.id]);
+    assert.equal(p1.more, true);
+    assert.equal(p1.cursor, c3.seq, 'the cursor claims only what was delivered');
+    assert.deepEqual(p1.decisions.map((d) => d.email), [MEMBER], 'the late decision is past the cursor, so it waits');
+
+    const p2 = await db.listReviewFeed(f.id, { after: p1.cursor, limit: 3 });
+    assert.deepEqual(p2.comments.map((c) => c.id), [c4.id]);
+    assert.equal(p2.more, false);
+    assert.deepEqual(p2.decisions.map((d) => d.email), [OUTSIDER]);
+    assert.equal(p2.cursor, c4.seq);
+
+    const p3 = await db.listReviewFeed(f.id, { after: p2.cursor, limit: 3 });
+    assert.deepEqual([p3.comments, p3.decisions, p3.more, p3.cursor], [[], [], false, p2.cursor]);
+
+    // The route hands the flag on, and pages no larger than REVIEW_FEED_LIMIT.
+    as(OWNER);
+    const whole = await call(feedRoute.GET, '/x', { id: f.id });
+    assert.equal(whole.body.more, false);
+    assert.equal(whole.body.comments.length, 4);
+    assert.equal(db.REVIEW_FEED_LIMIT, 500);
+    assert.equal((await db.listReviewFeed(f.id, { limit: 10_000 })).comments.length, 4);
+  });
+
+  test('writers that race leave the row behind; the next read of the feed puts it right', async () => {
+    const f = await db.createFile({
+      name: 'race.jpg', url: 'http://s3.test/b/files/race.jpg', mime: 'image/jpeg', kind: 'image', storage: 's3',
+      storageKey: `files/race-${tag}.jpg`, createdBy: OWNER,
+    });
+    made.files.push(f.id);
+    as(OWNER);
+    // Each write counts, then stores, what it counted; concurrent ones can
+    // store a count taken before another's row committed.
+    const posted = await Promise.all(Array.from({ length: 6 }, (_, i) => call(commentsRoute.POST, '/x', { id: f.id }, { method: 'POST', body: { body: `note ${i}` } })));
+    assert.ok(posted.every((r) => r.status === 201));
+    await Promise.all(posted.slice(0, 2).map((r) => call(commentRoute.PATCH, '/x', { id: f.id, cid: r.body.comment.id }, { method: 'PATCH', body: { resolved: true } })));
+    // Whatever the interleaving left, make it certainly wrong.
+    await db.sql`UPDATE files SET review_status = 'approved', open_comments = 99 WHERE id = ${f.id}`;
+
+    as(MEMBER);
+    const r = await call(feedRoute.GET, '/x', { id: f.id });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.openComments, 4, 'counted from the comments, not read off the row');
+    assert.equal(r.body.status, 'in_review');
+    const row = await db.getFileById(f.id);
+    assert.equal(row.openComments, 4);
+    assert.equal(row.reviewStatus, 'in_review');
+    // And the repair is itself not an edit a device would hear of.
+    assert.equal(row.version, f.version);
+    assert.equal(row.seq, f.seq);
   });
 
   test('the review flag is read on the server', async () => {

@@ -5,6 +5,7 @@ import { isAdmin } from '@/lib/auth-allowlist';
 import { loadBrand } from '@/lib/brand-config';
 import {
   listFilespacesForSpace, storageReport, countFilesUnderPrefix, duplicateSummary, getFeatureFlags, getAvatarUrl,
+  frameModelSummary,
 } from '@/lib/db';
 import { presignFileUrls } from '@/lib/storage';
 import { fmtSize } from '@/lib/media';
@@ -13,6 +14,7 @@ import { kindBreakdown, kindLabel, formatLabel, TRASH_RETENTION_DAYS } from '@/l
 import { buildLabel, buildDetail } from '@/lib/version';
 import TopNav from '@/app/components/TopNav';
 import { Thumb } from '@/app/components/ui/FileCard';
+import FrameRates from './FrameRates';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Storage' };
@@ -27,7 +29,8 @@ const extOf = (name) => (/\.([A-Za-z0-9]{1,8})$/.exec(String(name || '')) || [])
 
 /**
  * What is using the space: the library by type, by drive and by format, the
- * largest files, the duplicates and the trash. Admins only — it describes
+ * largest files, the duplicates and the trash — and which videos still have
+ * no exact frame rate, with "Probe all videos" to read them. Admins only — it describes
  * every file, whoever may open it, so it is gated here and the queries
  * (lib/db.js) do not filter.
  */
@@ -40,10 +43,11 @@ export default async function StoragePage() {
   const avatarUrl = await getAvatarUrl(email);
 
   const [brand, drives, flags] = await Promise.all([loadBrand(), listFilespacesForSpace(email), getFeatureFlags()]);
-  const [report, dups, driveRows] = await Promise.all([
+  const [report, dups, driveRows, rates] = await Promise.all([
     storageReport({ drivePrefixes: drives.map((d) => d.prefix) }),
     duplicateSummary(),
     Promise.all(drives.map(async (d) => ({ ...d, ...(await countFilesUnderPrefix(d.prefix).catch(() => ({ files: 0, bytes: 0 }))) }))),
+    frameModelSummary(),
   ]);
 
   const nav = (
@@ -218,6 +222,8 @@ export default async function StoragePage() {
                 : `Removed files still take space until they are purged, ${TRASH_RETENTION_DAYS} days after removal.`}
             </p>
           </section>
+
+          {rates.videos > 0 && <FrameRates summary={rates} />}
         </div>
         <p className="small muted storage-foot">Previews (thumbnails and filmstrips) are stored separately and not counted here.</p>
       </main>
