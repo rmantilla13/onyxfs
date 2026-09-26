@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Thumb, fmtSize } from './FileCard';
 import { rowWindow } from '@/lib/virtual-rows';
 import { listHits, overlaps } from '@/lib/marquee';
@@ -60,12 +60,27 @@ const timeFmt = typeof Intl !== 'undefined'
   ? new Intl.DateTimeFormat(undefined, { timeStyle: 'short' })
   : null;
 
+// The list is rendered on the server now (when it is the stored view), and
+// the server's clock is not the viewer's: dates are written in UTC there and
+// while the page hydrates, and in the viewer's own zone from the render after.
+// (A fixed locale too: the server's is not the viewer's either.)
+const utcDateFmt = typeof Intl !== 'undefined'
+  ? new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: 'UTC' })
+  : null;
+const utcTimeFmt = typeof Intl !== 'undefined'
+  ? new Intl.DateTimeFormat('en-US', { timeStyle: 'short', timeZone: 'UTC' })
+  : null;
+const noSubscribe = () => () => {};
+const useHydrated = () => useSyncExternalStore(noSubscribe, () => true, () => false);
+
 function When({ at }) {
+  const local = useHydrated();
   if (!at || !dateFmt) return <span className="muted">—</span>;
   const d = new Date(Number(at));
+  const [df, tf] = local ? [dateFmt, timeFmt] : [utcDateFmt, utcTimeFmt];
   return (
-    <time dateTime={d.toISOString()} title={d.toLocaleString()}>
-      {dateFmt.format(d)}<span className="filelist-time"> {timeFmt.format(d)}</span>
+    <time dateTime={d.toISOString()} title={local ? d.toLocaleString() : undefined}>
+      {df.format(d)}<span className="filelist-time"> {tf.format(d)}</span>
     </time>
   );
 }
@@ -468,6 +483,7 @@ function localDay(value) {
 const SOON_MS = 30 * 24 * 60 * 60 * 1000;
 
 function CellValue({ value, col, usageRights }) {
+  const local = useHydrated();
   if (canon(value) == null) return <span className="cell-empty">—</span>;
   if (isMulti(col)) {
     const list = Array.isArray(value) ? value : [value];
@@ -479,7 +495,8 @@ function CellValue({ value, col, usageRights }) {
   }
   if (col.edit === 'date') {
     const day = localDay(value);
-    if (!day || !dateFmt) return <span className="truncate">{String(value)}</span>;
+    // Until the page has hydrated, the stored value as it is (see When).
+    if (!day || !dateFmt || !local) return <span className="truncate">{String(value)}</span>;
     // The list's reading of the usage-rights rule in lib/dam.js expiryState:
     // an expiry date that has passed, or is within thirty days.
     let state = '';
