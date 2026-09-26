@@ -53,7 +53,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Closing the window leaves Onyx in the menu bar, keeping Finder in sync.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    /// A SIGTERM (a logout, launchd, `kill`) quits the normal way, so the
+    /// drives are unmounted instead of left for the next launch to clear.
+    private var sigterm: DispatchSourceSignal?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        source.setEventHandler { NSApp.terminate(nil) }
+        source.resume()
+        sigterm = source
         MainActor.assumeIsolated {
             let background = Background.shared
             background.registerOnFirstRun()

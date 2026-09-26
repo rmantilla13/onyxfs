@@ -25,6 +25,10 @@ OUT="${OUT:-build}"
 APP="$OUT/Onyx.app"
 EXT="$APP/Contents/PlugIns/OnyxFileProvider.appex"
 WITH_EXT="${ONYX_FILE_PROVIDER:-0}"
+# ONYX_DEV=1: "Onyx Dev" (io.onyxfs.app.dev), which keeps its own sign-in and
+# settings, so testing a build never disturbs the real Onyx on this Mac.
+BUNDLE_ID="io.onyxfs.app"; NAME="Onyx"
+[[ "${ONYX_DEV:-0}" == "1" ]] && { BUNDLE_ID="io.onyxfs.app.dev"; NAME="Onyx Dev"; }
 APP_PROFILE="${ONYX_APP_PROFILE:-$( [[ -f .signing/Onyx.provisionprofile ]] && echo .signing/Onyx.provisionprofile )}"
 EXT_PROFILE="${ONYX_EXT_PROFILE:-$( [[ -f .signing/OnyxFileProvider.provisionprofile ]] && echo .signing/OnyxFileProvider.provisionprofile )}"
 
@@ -61,9 +65,10 @@ set_key() { plist "$1" "Delete :$2" 2>/dev/null || true; plist "$1" "Add :$2 $3 
 
 cp OnyxMac/Info.plist "$APP/Contents/Info.plist"
 P="$APP/Contents/Info.plist"
-set_key "$P" CFBundleIdentifier string io.onyxfs.app
+set_key "$P" CFBundleIdentifier string "$BUNDLE_ID"
 set_key "$P" CFBundleExecutable string Onyx
-set_key "$P" CFBundleName string Onyx
+set_key "$P" CFBundleName string "$NAME"
+set_key "$P" CFBundleDisplayName string "$NAME"
 set_key "$P" CFBundlePackageType string APPL
 set_key "$P" CFBundleShortVersionString string "$VERSION"
 set_key "$P" CFBundleVersion string "$BUILD_NUMBER"

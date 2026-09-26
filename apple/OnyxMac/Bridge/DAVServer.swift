@@ -166,14 +166,14 @@ final class DAVServer: @unchecked Sendable {
         }
 
         private func handle(_ parsed: (DAVRequest, keepAlive: Bool)) {
-            var (request, keepAlive) = parsed
-            // Route by the first segment, and hand the responder the rest.
+            let (request, keepAlive) = parsed
+            // Routed by the first segment. The target goes on whole: the
+            // responder strips its own prefix (hrefPrefix), and a request
+            // outside it is its 404 to give.
             let target = request.target
             let pathEnd = target.firstIndex(of: "?") ?? target.endIndex
             let trimmed = target[..<pathEnd].drop(while: { $0 == "/" })
             let segment = trimmed.split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
-            let rest = trimmed.dropFirst(segment.count)
-            request.target = (rest.isEmpty ? "/" : String(rest)) + target[pathEnd...]
 
             guard let server, let responder = server.responder(for: segment) else {
                 send(DAVResponse(status: 404, headers: [("Content-Length", "0")], body: .empty), keepAlive: keepAlive)

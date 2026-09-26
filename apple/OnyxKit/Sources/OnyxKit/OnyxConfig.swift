@@ -13,6 +13,16 @@ public enum OnyxIdentifiers {
     public static let keychainAccessGroup = "group.io.onyxfs"
     /// Registered for the PKCE redirect.
     public static let urlScheme = "onyxfs"
+
+    /// A development build ("Onyx Dev", bundle id ending ".dev") keeps its
+    /// sign-in and settings apart from the real app's, so trying a build never
+    /// signs the installed Onyx out, points it at a test server, or makes the
+    /// Keychain ask whether one may read the other's token.
+    public static var isDevBuild: Bool { Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true }
+    /// The Keychain service the sign-in is stored under.
+    public static var tokenService: String { isDevBuild ? app + ".dev" : app }
+    /// Where the settings the app and its extension share are kept.
+    public static var settingsSuite: String { isDevBuild ? "io.onyxfs.dev" : appGroup }
 }
 
 public struct OnyxConfig: Sendable, Equatable {
@@ -65,7 +75,7 @@ public struct SharedSettings: @unchecked Sendable {
     // UserDefaults is thread-safe; it just predates Sendable.
     let defaults: UserDefaults
 
-    public init(suiteName: String = OnyxIdentifiers.appGroup) {
+    public init(suiteName: String = OnyxIdentifiers.settingsSuite) {
         defaults = UserDefaults(suiteName: suiteName) ?? .standard
     }
 

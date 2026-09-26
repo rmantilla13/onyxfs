@@ -19,7 +19,7 @@ public struct TokenStore: Sendable {
     let service: String
     let accessGroup: String?
 
-    public init(service: String = OnyxIdentifiers.app,
+    public init(service: String = OnyxIdentifiers.tokenService,
                 accessGroup: String? = OnyxIdentifiers.keychainAccessGroup) {
         self.service = service
         self.accessGroup = accessGroup
