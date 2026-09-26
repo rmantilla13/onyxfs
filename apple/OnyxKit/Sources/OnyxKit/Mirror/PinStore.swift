@@ -15,6 +15,7 @@ import Foundation
 /// these copies:
 ///
 ///     pins.json                       the rules, and each scope's copies
+///     .store-id                       whose folder this is (checkFolder)
 ///     <scope>/<fileId>-<etag hash>    one file's bytes, at one version
 ///     .incoming/                      downloads on their way in
 ///
@@ -88,8 +89,16 @@ public actor PinStore {
     private var lastSaved: ContinuousClock.Instant?
     /// The disk `directory` was on when the store opened it. A folder by the
     /// same path on another disk — the cache's disk unplugged, and the path
-    /// made again — is not this store's.
+    /// made again — is not this store's. The device number is cheap to
+    /// check, but the same disk mounted again may get a new one; the
+    /// volume's UUID stays (nil on a network share), and so does the mark
+    /// the store leaves in its folder (`storeID`).
     private var device: dev_t?
+    private var volume: String?
+    /// Written into the folder as `.store-id` when the store opens it or
+    /// moves to it: what shows a folder on a disk back under a new device
+    /// number, and with no UUID to go by, to be this store's still.
+    private let storeID: String
     /// Each scope's pass, and the one queued behind it; see `reconcile`.
     private var lines: [String: Line] = [:]
     /// "<scope>\n<fileId>": downloads that failed, and when to try again.
@@ -107,6 +116,7 @@ public actor PinStore {
     static let maxDownloads = 3
     static let stateFile = "pins.json"
     static let incomingFolder = ".incoming"
+    static let markFile = ".store-id"
     static let saveInterval: Duration = .milliseconds(500)
     /// Left free on the store's disk. Filled to the last byte, everything
     /// else on it stalls — on the startup disk, the whole Mac.
@@ -147,6 +157,11 @@ public actor PinStore {
         self.directory = directory
         self.state = state
         self.device = Self.device(of: directory)
+        self.volume = Self.volumeID(of: directory)
+        // The folder's own mark if it has one, so it holds across launches.
+        let storeID = Self.mark(in: directory) ?? UUID().uuidString
+        self.storeID = storeID
+        Self.leaveMark(storeID, in: directory)
         self.retryAfter = retryAfter
         self.freeSpace = freeSpace
         // Downloads a quit or a crash interrupted: never recorded, never served.
@@ -568,21 +583,39 @@ public actor PinStore {
     /// on a disk that is still here, is made again. One whose disk has gone
     /// is not made anywhere else: under /Volumes that would be a folder
     /// taking the disk's name, and macOS would mount the disk beside it.
+    ///
+    /// A disk that is mounted again — a USB disk plugged back in, a share
+    /// reconnected after sleep — may come back under a new device number.
+    /// It is still the store's if it is the same volume, or if the folder
+    /// still holds the store's mark, and the new number is taken on;
+    /// refusing it would stop every pass until the app was relaunched.
     private func checkFolder() -> Bool {
         if let now = Self.device(of: directory) {
-            if let device, now != device { return false }
+            if let device, now != device {
+                guard isSameVolume(directory) || Self.mark(in: directory) == storeID else { return false }
+                self.device = now
+            }
         } else {
             if Self.isOnMissingVolume(directory) { return false }
             var parent = directory.deletingLastPathComponent()
             while Self.device(of: parent) == nil, parent.pathComponents.count > 1 {
                 parent = parent.deletingLastPathComponent()
             }
-            if let device, Self.device(of: parent) != device { return false }
+            // The mark went with the folder: only the volume can say.
+            if let device, Self.device(of: parent) != device, !isSameVolume(parent) { return false }
             guard (try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)) != nil
             else { return false }
             device = Self.device(of: directory)
+            Self.leaveMark(storeID, in: directory)
         }
         return access(directory.path, W_OK) == 0
+    }
+
+    /// Whether `url` is on the volume the store opened its folder on, by
+    /// UUID. Not known — a network share has none — is not the same.
+    private func isSameVolume(_ url: URL) -> Bool {
+        guard let volume else { return false }
+        return Self.volumeID(of: url) == volume
     }
 
     /// Room for `entry` with the downloads under way, keeping `spareSpace`
@@ -624,6 +657,35 @@ public actor PinStore {
         var info = stat()
         let found = url.withUnsafeFileSystemRepresentation { path in path.map { stat($0, &info) == 0 } ?? false }
         return found ? info.st_dev : nil
+    }
+
+    /// The UUID of the volume holding `url`, which stays the same when the
+    /// disk is mounted again; nil when there is none, as on a network share.
+    static func volumeID(of url: URL) -> String? {
+        // A URL made afresh, as in `availableCapacity`: one asked before may
+        // answer from what it cached then, before the disk went away.
+        try? URL(fileURLWithPath: url.path).resourceValues(forKeys: [.volumeUUIDStringKey]).volumeUUIDString
+    }
+
+    /// The store id marked in `folder`, if any.
+    static func mark(in folder: URL) -> String? {
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent(markFile)) else { return nil }
+        let id = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return id.isEmpty ? nil : id
+    }
+
+    /// Best effort: a folder that cannot be written to is refused by the
+    /// next check anyway, and one with no mark still has its volume to go by.
+    static func leaveMark(_ id: String, in folder: URL) {
+        guard mark(in: folder) != id else { return }
+        try? Data(id.utf8).write(to: folder.appendingPathComponent(markFile), options: .atomic)
+    }
+
+    /// As if the store had opened its folder on another disk, or on this one
+    /// mounted again: for tests.
+    func recordDisk(device: dev_t?, volume: String?) {
+        self.device = device
+        self.volume = volume
     }
 
     private func incomingFolder() -> URL {
@@ -680,11 +742,15 @@ public actor PinStore {
         }
 
         // The old folder itself stays: the user chose it, and it may be theirs.
+        // Not the mark, though, which would go on saying it is this store's.
         try? fm.removeItem(at: directory.appendingPathComponent(Self.stateFile))
+        try? fm.removeItem(at: directory.appendingPathComponent(Self.markFile))
         for scope in state.copies.keys { Self.removeIfEmpty(folder(for: scope)) }
         Self.removeIfEmpty(directory.appendingPathComponent(Self.incomingFolder))
         directory = newDirectory
         device = Self.device(of: newDirectory)
+        volume = Self.volumeID(of: newDirectory)
+        Self.leaveMark(storeID, in: newDirectory)
         dirty = false
         lastSaved = .now
     }

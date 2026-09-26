@@ -482,6 +482,75 @@ struct PinStoreTests {
         #expect(await store.localCopy(scope: scope, fileId: "a", etag: "v1") != nil)
     }
 
+    @Test func theSameDiskMountedAgainIsStillTheStores() async throws {
+        // A share reconnected after sleep, or a USB disk plugged back in,
+        // comes back under a new device number. Refusing it would stop every
+        // pass until the app was relaunched.
+        let dir = try tempFolder()
+        let store = try PinStore(directory: dir)
+        let downloads = FakeDownloads()
+        await store.pin(pinFolder(""))
+        _ = await store.reconcile(scope: scope, index: FakeIndex([file("a", "a.txt")]), download: downloads.download)
+        let device = try #require(PinStore.device(of: dir))
+        #expect(PinStore.mark(in: dir) != nil)
+
+        // A share: no volume UUID to go by, but the folder holds the mark.
+        await store.recordDisk(device: device &+ 1, volume: nil)
+        let back = await store.reconcile(scope: scope, index: FakeIndex([file("a", "a.txt"), file("b", "b.txt")]),
+                                         download: downloads.download)
+        #expect(back.problem == nil && back.downloaded == 1)
+        #expect(await store.problem == nil)
+
+        // A local disk: the same volume, whose UUID says so even with the
+        // mark gone — or the whole folder, deleted by hand meanwhile.
+        if let volume = PinStore.volumeID(of: dir) {
+            try FileManager.default.removeItem(at: dir.appendingPathComponent(".store-id"))
+            await store.recordDisk(device: device &+ 1, volume: volume)
+            #expect(await store.removeAll(scope: "drive.other"))
+            try FileManager.default.removeItem(at: dir)
+            await store.recordDisk(device: device &+ 1, volume: volume)
+            let remade = await store.reconcile(scope: scope, index: FakeIndex([file("a", "a.txt")]),
+                                               download: downloads.download)
+            #expect(remade.problem == nil && remade.downloaded == 1)
+            #expect(PinStore.mark(in: dir) != nil, "marked again")
+        }
+
+        // The mark goes with the store when it moves, and holds across launches.
+        let moved = try tempFolder().appendingPathComponent("Moved", isDirectory: true)
+        let id = PinStore.mark(in: dir)
+        try await store.relocate(to: moved)
+        #expect(PinStore.mark(in: moved) == id && PinStore.mark(in: dir) == nil)
+        _ = try PinStore(directory: moved)
+        #expect(PinStore.mark(in: moved) == id)
+    }
+
+    @Test func anotherFolderByTheSamePathIsLeftAlone() async throws {
+        // The cache's disk unplugged, and the path made again on another:
+        // nothing is fetched into that folder or deleted on its strength.
+        let dir = try tempFolder()
+        let store = try PinStore(directory: dir)
+        let downloads = FakeDownloads()
+        await store.pin(pinFolder(""))
+        _ = await store.reconcile(scope: scope, index: FakeIndex([file("a", "a.txt")]), download: downloads.download)
+        let device = try #require(PinStore.device(of: dir))
+
+        try Data("someone-else".utf8).write(to: dir.appendingPathComponent(".store-id"))
+        await store.recordDisk(device: device &+ 1, volume: "another-volume")
+        let report = await store.reconcile(scope: scope, index: FakeIndex([file("b", "b.txt")]),
+                                           download: downloads.download)
+        #expect(report == PinStore.ReconcileReport(problem: .unavailable))
+        #expect(await downloads.calls["b"] == nil)
+        #expect(await store.localCopy(scope: scope, fileId: "a", etag: nil) != nil, "nothing deleted")
+        #expect(await store.removeAll(scope: scope) == false)
+
+        // Nor is one made again there, with no mark to go by.
+        try FileManager.default.removeItem(at: dir)
+        let none = await store.reconcile(scope: scope, index: FakeIndex([file("b", "b.txt")]),
+                                         download: downloads.download)
+        #expect(none.problem == .unavailable)
+        #expect(!FileManager.default.fileExists(atPath: dir.path))
+    }
+
     @Test func aStoreOnADiskThatIsNotConnectedIsNotMade() throws {
         let disk = URL(fileURLWithPath: "/Volumes/Onyx-Test-\(UUID().uuidString)", isDirectory: true)
         let missing = disk.appendingPathComponent("Onyx Cache/Pinned", isDirectory: true)
