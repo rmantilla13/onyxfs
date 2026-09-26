@@ -27,11 +27,19 @@ export async function GET(req) {
   const allowed = can(principal, 'desktop.mount');
   if (!allowed.ok) return NextResponse.json({ error: allowed.reason }, { status: allowed.status });
 
-  const spaces = principal.isAdmin
-    ? (await listFilespaces()).map((f) => ({ ...f, role: 'owner' }))
-    : (await listFilespacesForUser(gate.email))
-      .map((f) => ({ ...f, role: principal.driveScope?.roles?.[f.id] || null }))
-      .filter((f) => f.role);
+  let spaces;
+  try {
+    spaces = principal.isAdmin
+      ? (await listFilespaces()).map((f) => ({ ...f, role: 'owner' }))
+      : (await listFilespacesForUser(gate.email))
+        .map((f) => ({ ...f, role: principal.driveScope?.roles?.[f.id] || null }))
+        .filter((f) => f.role);
+  } catch (e) {
+    // Never an empty list for a failed read: to a device, "no drives" means
+    // its drives were taken away.
+    console.warn('[space/filespaces] could not list drives:', e.message);
+    return NextResponse.json({ error: 'Drives could not be listed right now.' }, { status: 503, headers: { 'retry-after': '30' } });
+  }
 
   const filespaces = spaces.map((f) => ({
     id: f.id, name: f.name, bucket: f.bucket, prefix: f.prefix, region: f.region || null, role: f.role || 'viewer',
