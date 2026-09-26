@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
-import { getSetting, setSetting } from '@/lib/db';
+import { getSetting, setSetting, listFilespaces } from '@/lib/db';
+import { prefixOverlap } from '@/lib/drive-access';
 import { isSuperAdmin } from '@/lib/auth-allowlist';
 import { parsePolicy, validatePolicy, DEFAULT_POLICY, SUPER_ADMIN_POLICY_KEYS } from '@/lib/policy';
 import { audit } from '@/lib/audit';
@@ -52,6 +53,15 @@ export async function PUT(req) {
   const result = validatePolicy(body, current, { superAdmin: isSuperAdmin(guard.email) });
   if (result.error) return NextResponse.json({ error: result.error }, { status: result.status || 400 });
   if (!result.changed.length) return NextResponse.json({ policy: result.policy, changed: [] });
+  if (result.changed.includes('selfServeParentPrefix')) {
+    // Every drive made there would sit inside this one, and its creator would
+    // be owner of a folder in someone else's drive. POST /api/filespaces
+    // refuses then too; saying so here is the kinder place.
+    const outer = prefixOverlap(result.policy.selfServeParentPrefix, await listFilespaces())?.inside;
+    if (outer) {
+      return NextResponse.json({ error: `“${result.policy.selfServeParentPrefix}” is inside the drive “${outer.name}”. Choose a folder outside every drive.` }, { status: 400 });
+    }
+  }
 
   await setSetting(KEY, result.policy, guard.email);
   const before = parsePolicy(current);

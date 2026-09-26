@@ -8,7 +8,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { drivesHolding, driveAccess, drivePatterns, canWriteDrive } from '../lib/drive-access.js';
+import { drivesHolding, driveAccess, drivePatterns, canWriteDrive, prefixOverlap } from '../lib/drive-access.js';
 import { buildFileQuery } from '../lib/file-query.js';
 import { drivePrefixFor } from '../lib/folder-ops.js';
 import {
@@ -154,6 +154,39 @@ describe('a new drive’s folder in the bucket', () => {
     assert.equal(drivePrefixFor('Café Déjà Vu'), 'cafe-deja-vu');
     assert.equal(drivePrefixFor('  ///  '), '');
     assert.ok(!drivePrefixFor(`${'a'.repeat(59)} b`).endsWith('-'), 'never ends on a hyphen after trimming');
+  });
+});
+
+describe('where a self-serve drive may go', () => {
+  // Its creator becomes owner of everything under the prefix, and membership
+  // of either of two nested drives counts. So a drive around another hands
+  // over the inner one, and a drive inside another sits in someone else's.
+  const admins = [{ id: 'c26', name: 'Campaigns 2026', prefix: 'drives/campaigns/2026', bucket: 'b' }];
+
+  test('around an existing drive is refused: it would own that drive’s files', () => {
+    assert.equal(prefixOverlap('drives/campaigns', admins)?.around?.id, 'c26');
+    // …and it is exactly what driveAccess would have granted.
+    const r = driveAccess('drives/campaigns/2026/x.mov', { drives: [...admins, { id: 'mine', prefix: 'drives/campaigns' }], roles: { mine: 'owner' } });
+    assert.deepEqual(r, { inDrive: true, read: true, write: true });
+  });
+
+  test('inside or equal to an existing drive is refused', () => {
+    assert.equal(prefixOverlap('drives/campaigns/2026', admins)?.inside?.id, 'c26');
+    assert.equal(prefixOverlap('drives/campaigns/2026/q1', admins)?.inside?.id, 'c26');
+    assert.equal(prefixOverlap('/drives/campaigns/2026/', admins)?.inside?.id, 'c26');
+  });
+
+  test('only at a folder boundary, and whatever the bucket', () => {
+    assert.equal(prefixOverlap('drives/campaigns-2', admins), null);
+    assert.equal(prefixOverlap('drives/campaign', admins), null);
+    // Which drive holds a key is decided from the key alone, so another
+    // bucket's drive at the same place still counts.
+    assert.equal(prefixOverlap('drives/campaigns', [{ ...admins[0], bucket: 'other' }])?.around?.id, 'c26');
+  });
+
+  test('a parent folder inside a drive is reported as inside', () => {
+    assert.equal(prefixOverlap('team', [{ id: 't', prefix: 'team' }])?.inside?.id, 't');
+    assert.equal(prefixOverlap('', admins), null);
   });
 });
 
