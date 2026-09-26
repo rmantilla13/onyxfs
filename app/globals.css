@@ -734,8 +734,18 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 /* A card is picked, not read: no text selection from a double-click, and no
    iOS image callout on a long-press (which selects, useLongPress). */
 .filecard { display: block; overflow: hidden; cursor: pointer; text-align: left; -webkit-user-select: none; user-select: none; }
-.filecard:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.filecard[aria-selected='true'] { outline: 2px solid var(--accent); outline-offset: -1px; }
+/* Focus is a ring standing off the card; selection is the card itself — an
+   accent edge on it and a tint, as a folder tile has — so the two never look
+   alike, and a card that is both shows both. */
+.filecard:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.filecard[aria-selected='true'] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  box-shadow: 0 0 0 1px var(--accent);
+}
+/* A dark surface needs more of the accent for the tint to read. */
+[data-theme='dark'] .filecard[aria-selected='true'],
+[data-theme='dark'] .folder-tile[aria-selected='true'] { background: color-mix(in srgb, var(--accent) 22%, var(--surface)); }
 .filecard-thumb {
   position: relative;
   display: grid;
@@ -1614,13 +1624,16 @@ body::before {
     color-mix(in srgb, var(--accent-alt) 13%, transparent));
 }
 .filecard[aria-selected='true'] {
-  box-shadow: 0 10px 30px -14px color-mix(in srgb, var(--aura-b) 70%, transparent);
+  box-shadow: 0 0 0 1px var(--accent), 0 10px 30px -14px color-mix(in srgb, var(--aura-b) 70%, transparent);
 }
 /* A card glows a little when a pointer rests on it. */
 @media (hover: hover) {
   .filecard, .folder-tile { transition: box-shadow var(--dur-2) var(--ease), border-color var(--dur-1); }
   .filecard:hover, .folder-tile:hover {
     box-shadow: 0 10px 28px -16px color-mix(in srgb, var(--aura-a) 60%, transparent);
+  }
+  .filecard[aria-selected='true']:hover {
+    box-shadow: 0 0 0 1px var(--accent), 0 10px 28px -16px color-mix(in srgb, var(--aura-a) 60%, transparent);
   }
 }
 
