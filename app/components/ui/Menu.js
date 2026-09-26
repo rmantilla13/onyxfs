@@ -49,7 +49,13 @@ export default function Menu({ label = 'Actions', trigger, children, align = 'ri
     if (r.right > window.innerWidth - margin) x = window.innerWidth - margin - r.right;
     if (r.left + x < margin) x = margin - r.left;
     const trigger = wrap.current.getBoundingClientRect();
-    const up = r.bottom > window.innerHeight - margin && trigger.top - r.height - margin > 0;
+    // The floor is the viewport's, or the nearest scrolling box's when the
+    // menu sits inside one (a list of comments, say): past its bottom the
+    // popup is clipped, not merely off screen.
+    const box = clippingBox(wrap.current);
+    const bottom = Math.min(window.innerHeight, box ? box.bottom : Infinity);
+    const top = box ? Math.max(0, box.top) : 0;
+    const up = r.bottom > bottom - margin && trigger.top - r.height - margin > top;
     setShift({ x: Math.round(x), up });
   }, [open]);
 
@@ -92,6 +98,15 @@ export default function Menu({ label = 'Actions', trigger, children, align = 'ri
       )}
     </div>
   );
+}
+
+/** The rectangle of the nearest ancestor that clips what overflows it, or null. */
+function clippingBox(el) {
+  for (let n = el?.parentElement; n && n !== document.body; n = n.parentElement) {
+    const { overflowY } = getComputedStyle(n);
+    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'hidden') return n.getBoundingClientRect();
+  }
+  return null;
 }
 
 export function MenuItem({ onClick, danger = false, disabled = false, children }) {

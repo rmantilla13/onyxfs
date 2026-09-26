@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
+import { reviewBadges } from '@/app/components/review/badges';
 import { createThumbnailBackfill } from '@/lib/thumbnail-client';
 import { createUploadQueue, uploadOne, filesFromDrop, filesFromInput, joinFolder } from '@/lib/upload-client';
 import FileGrid from '@/app/components/ui/FileGrid';
@@ -1263,9 +1264,11 @@ export default function FilesClient({
     labelFor: (f) => deriveAuto(f).format || f.kind,
     badgesFor: (f) => {
       const e = flags.usageRights ? expiryState(f, schema) : null;
-      if (e === 'expired') return <span className="tag tag-danger">Expired</span>;
-      if (e === 'soon') return <span className="tag tag-warning">Expiring</span>;
-      return null;
+      const expiry = e === 'expired' ? <span className="tag tag-danger">Expired</span>
+        : e === 'soon' ? <span className="tag tag-warning">Expiring</span>
+          : null;
+      const review = flags.review ? reviewBadges(f) : null;
+      return expiry || review ? <>{expiry}{review}</> : null;
     },
     emptyState: showTiles && subfolders.length > 0 && files.length === 0 ? null : (
       <div className="empty">

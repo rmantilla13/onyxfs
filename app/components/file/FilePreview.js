@@ -1,19 +1,20 @@
 'use client';
 
-import { useState } from 'react';
+import { forwardRef, useRef, useState } from 'react';
 import { effectiveKind, drawableKind } from '@/lib/media';
 import VideoPlayer from '@/app/components/video/VideoPlayer';
+import useContainedRect from '@/app/components/review/useContainedRect';
+import '@/app/components/review/review.css';
 
 /**
  * The preview pane of the detail view.
  *
  * Deliberately four narrow cases rather than one generic viewer:
  *
- *   image  a plain <img>. NOT next/image — the optimizer would cache a
- *          presigned URL and keep serving it after it expires.
- *   video  <video> with playsInline (iOS Safari otherwise takes over the
- *          screen on play) and preload="metadata" (auto-preloading a 4 GB
- *          master on a phone is a real bill, not a hypothetical one).
+ *   image  ImageStage: a plain <img> — NOT next/image, whose optimizer would
+ *          cache a presigned URL and keep serving it after it expires — with
+ *          Fit / 100% and a slot for the review overlay on the picture.
+ *   video  VideoPlayer, which owns playback, frames and its own overlay slot.
  *   audio  <audio controls>.
  *   else   the kind, and the download button that is always there anyway.
  *
@@ -24,9 +25,14 @@ import VideoPlayer from '@/app/components/video/VideoPlayer';
  * recorded as 'other', which hid the player for every uploaded video. A format
  * the browser cannot draw (TIFF, HEIC, ProRes) says so instead of showing a
  * broken image or a player that never starts.
+ *
+ * The review props (overlay, markers, onFrameChange, onRangeChange,
+ * onComment, and the ref, which reaches the player) are all optional: the
+ * share page renders this with none of them.
  */
-
-export default function FilePreview({ file, startAt = 0 }) {
+const FilePreview = forwardRef(function FilePreview({
+  file, startAt = 0, overlay = null, markers = null, onMarkerClick, onFrameChange, onRangeChange, onComment,
+}, ref) {
   const kind = effectiveKind(file);
   const [failed, setFailed] = useState(false);
   const box = {
@@ -37,14 +43,9 @@ export default function FilePreview({ file, startAt = 0 }) {
     minHeight: 280,
     overflow: 'hidden',
   };
-  const fill = { maxWidth: '100%', maxHeight: '70vh', display: 'block' };
 
   if (kind === 'image' && drawableKind(file) && !failed) {
-    return (
-      <div style={box}>
-        <img src={file.url} alt={file.name} style={{ ...fill, objectFit: 'contain' }} onError={() => setFailed(true)} />
-      </div>
-    );
+    return <ImageStage file={file} overlay={overlay} onFailed={() => setFailed(true)} />;
   }
 
   if (kind === 'video' && !failed) {
@@ -53,7 +54,19 @@ export default function FilePreview({ file, startAt = 0 }) {
     // to this component's placeholder only if it has no source at all — a
     // format the browser cannot decode is reported by the player itself, which
     // is the only thing that knows the decode failed.
-    return <VideoPlayer file={file} startAt={startAt} />;
+    return (
+      <VideoPlayer
+        ref={ref}
+        file={file}
+        startAt={startAt}
+        overlay={overlay}
+        markers={markers}
+        onMarkerClick={onMarkerClick}
+        onFrameChange={onFrameChange}
+        onRangeChange={onRangeChange}
+        onComment={onComment}
+      />
+    );
   }
 
   if (kind === 'audio') {
@@ -71,6 +84,60 @@ export default function FilePreview({ file, startAt = 0 }) {
         {(kind === 'image' || kind === 'video') && (
           <span className="small muted">This browser cannot preview this format. Download it to view.</span>
         )}
+      </div>
+    </div>
+  );
+});
+
+export default FilePreview;
+
+/**
+ * An image on a stage the shape of the image, the way the player stages a
+ * video, with Fit and 100%.
+ *
+ *   Fit   the picture contained in the stage; the frame that holds it (and
+ *         the overlay) is placed on the contained rectangle, so a pin at 0.4
+ *         is 0.4 of the picture, not of the grey around it.
+ *   100%  one image pixel to one CSS pixel, in a stage that scrolls.
+ *
+ * Either way the overlay fills the frame the picture fills, so a drawing
+ * made at Fit is on the same spot at 100%.
+ */
+function ImageStage({ file, overlay, onFailed }) {
+  const stage = useRef(null);
+  const md = file?.metadata || {};
+  const [natural, setNatural] = useState({ w: Number(md.width) || 0, h: Number(md.height) || 0 });
+  const [actual, setActual] = useState(false);
+  const rect = useContainedRect(stage, natural.w, natural.h);
+  const ratio = natural.w && natural.h ? natural.w / natural.h : 4 / 3;
+
+  const frameStyle = actual && natural.w
+    ? { width: natural.w, height: natural.h }
+    : { left: rect.x, top: rect.y, width: rect.width, height: rect.height };
+
+  return (
+    <div className="image-stage-wrap">
+      <div ref={stage} className={`image-stage${actual ? ' is-actual' : ''}`} style={{ '--ratio': ratio }}>
+        <div className="image-frame" style={frameStyle}>
+          <img
+            src={file.url}
+            alt={file.name}
+            draggable={false}
+            onLoad={(e) => {
+              const { naturalWidth: w, naturalHeight: h } = e.currentTarget;
+              if (w && h) setNatural((n) => (n.w === w && n.h === h ? n : { w, h }));
+            }}
+            onError={onFailed}
+          />
+          {overlay && <div className="image-overlay">{overlay({ width: natural.w, height: natural.h })}</div>}
+        </div>
+      </div>
+      <div className="image-stage-bar">
+        <div className="view-toggle" role="group" aria-label="Zoom">
+          <button type="button" className="btn btn-sm" aria-pressed={!actual} onClick={() => setActual(false)}>Fit</button>
+          <button type="button" className="btn btn-sm" aria-pressed={actual} onClick={() => setActual(true)}>100%</button>
+        </div>
+        {natural.w > 0 && <span className="small muted mono">{natural.w} × {natural.h}</span>}
       </div>
     </div>
   );
