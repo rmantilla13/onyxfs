@@ -188,6 +188,7 @@ final class WebController: NSObject, ObservableObject {
         // The bar and its controls, in CSS pixels: between the controls, a
         // drag moves the window.
         setBar: (bar, holes) => post({ type: 'bar', bar: bar || null, holes: holes || [] }),
+        transcribe: (fileId) => post({ type: 'transcribe', fileId: String(fileId || '') }),
         _update: (next) => {
           Object.assign(state, next);
           if (next.chrome) lay(next.chrome);
@@ -198,9 +199,10 @@ final class WebController: NSObject, ObservableObject {
     })();
     """
 
-    /// Tell the page what is pinned and mounted now.
+    /// Tell the page what is pinned and mounted now, and what this Mac is
+    /// transcribing.
     func publishOfflineState() {
-        guard let finder = model?.finder else { return }
+        guard let finder = model?.finder, let transcriber = model?.transcriber else { return }
         let folders = finder.pinRules.compactMap { rule -> [String: String]? in
             if case let .folder(path) = rule.target { return ["scope": rule.scope, "path": path] }
             return nil
@@ -211,6 +213,7 @@ final class WebController: NSObject, ObservableObject {
             "mounted": finder.wantMounted.sorted(),
             "nav": ["canGoBack": webView.canGoBack, "canGoForward": webView.canGoForward],
             "finder": finderState(),
+            "transcriber": ["enabled": transcriber.enabled, "busy": transcriber.busyFileId ?? NSNull()] as [String: Any],
         ]
         if let chrome { payload["chrome"] = chrome.json }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
@@ -296,6 +299,11 @@ final class WebController: NSObject, ObservableObject {
                 webView.bar = Self.rect(msg["bar"])
                 webView.holes = (msg["holes"] as? [Any] ?? []).prefix(200).compactMap(Self.rect)
                 return
+            case "transcribe":
+                // A nudge after the page asked for a transcript: the queue
+                // is read now instead of at the next poll. The server says
+                // which jobs there are, so the id is not needed here.
+                model.transcriber.pollNow()
             default:
                 break
             }

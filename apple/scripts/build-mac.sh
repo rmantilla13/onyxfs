@@ -29,8 +29,10 @@ WITH_EXT="${ONYX_FILE_PROVIDER:-0}"
 # settings, so testing a build never disturbs the real Onyx on this Mac.
 BUNDLE_ID="io.onyxfs.app"; NAME="Onyx"
 [[ "${ONYX_DEV:-0}" == "1" ]] && { BUNDLE_ID="io.onyxfs.app.dev"; NAME="Onyx Dev"; }
-APP_PROFILE="${ONYX_APP_PROFILE:-$( [[ -f .signing/Onyx.provisionprofile ]] && echo .signing/Onyx.provisionprofile )}"
-EXT_PROFILE="${ONYX_EXT_PROFILE:-$( [[ -f .signing/OnyxFileProvider.provisionprofile ]] && echo .signing/OnyxFileProvider.provisionprofile )}"
+# `|| true`: with no profile the test fails, and under `set -e` that failed
+# assignment would end the script silently (a fresh clone has no .signing/).
+APP_PROFILE="${ONYX_APP_PROFILE:-$( [[ -f .signing/Onyx.provisionprofile ]] && echo .signing/Onyx.provisionprofile || true )}"
+EXT_PROFILE="${ONYX_EXT_PROFILE:-$( [[ -f .signing/OnyxFileProvider.provisionprofile ]] && echo .signing/OnyxFileProvider.provisionprofile || true )}"
 
 products=(OnyxMac)
 [[ "$WITH_EXT" == "1" ]] && products+=(OnyxFileProvider)

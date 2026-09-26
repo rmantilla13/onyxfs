@@ -3,6 +3,8 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key><string>Onyx</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Onyx turns the speech in your videos into transcripts on this Mac. The audio is never sent anywhere.</string>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
