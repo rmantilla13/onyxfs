@@ -74,6 +74,10 @@ final class DriveService: ObservableObject {
     /// opening, a reconcile — checks it after each wait, and stops rather
     /// than act for an account that has signed out.
     private var generation = 0
+    /// The generation start() got as far as mounting under, until stop():
+    /// a drive list arriving before that (or after a sign-out) mounts
+    /// nothing, since start() mounts what is wanted itself.
+    private var active: Int?
     private var tickingGeneration: Int?
     private var tickAgain = false
     /// Scopes being reconciled; true when another pass is wanted after.
@@ -155,13 +159,16 @@ final class DriveService: ObservableObject {
         self.model = model
         generation += 1
         let started = generation
+        // Signed out already — the sign-in was refused as the app opened:
+        // nothing is mounted, and no problem is reported, for nobody.
+        guard model.phase == .signedIn else { return }
         do {
             _ = try await server.start()
         } catch {
             problem = "The Finder bridge could not start: \(error.localizedDescription)"
             return
         }
-        guard started == generation else { return }
+        guard started == generation, model.phase == .signedIn else { return }
         guard let account = model.email, !account.isEmpty else {
             // Mirrors and offline files are each one account's; with no
             // account known, none can be shown or kept.
@@ -173,14 +180,9 @@ final class DriveService: ObservableObject {
         // same, and each tick tries the store again.
         openPins()
         await refreshPins()
-        for drive in model.finderDrives where wantMounted.contains(SyncDomain.drive(id: drive.id).identifier) {
-            guard started == generation else { return }
-            await mount(.drive(id: drive.id), name: drive.name)
-        }
         guard started == generation else { return }
-        if wantMounted.contains(SyncDomain.library.identifier) {
-            await mount(.library, name: "Library")
-        }
+        active = started
+        await mountWanted()
         guard started == generation else { return }
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
@@ -194,6 +196,7 @@ final class DriveService: ObservableObject {
     /// other account is served them or can delete them.
     func stop() {
         generation += 1
+        active = nil
         timer?.invalidate()
         timer = nil
         mounts.unmountAllNow()
@@ -235,8 +238,30 @@ final class DriveService: ObservableObject {
         defaults.set(Array(wantMounted), forKey: Keys.mounted)
     }
 
+    /// Mount each drive that should be in Finder and is not yet: at start,
+    /// and whenever the drive list arrives (AppModel.refresh). When the
+    /// server could not be reached at launch — a login item starting before
+    /// Wi-Fi — that is only later, and the drives mount then. One whose mount
+    /// failed stays as it is, its reason on show, until turned off and on.
+    func mountWanted() async {
+        guard let model, active == generation else { return }
+        let started = generation
+        for drive in model.finderDrives {
+            let scope = SyncDomain.drive(id: drive.id)
+            guard wantMounted.contains(scope.identifier), mounts.state(of: scope) == nil else { continue }
+            await mount(scope, name: drive.name)
+            guard started == generation else { return }
+        }
+        if wantMounted.contains(SyncDomain.library.identifier), mounts.state(of: .library) == nil {
+            await mount(.library, name: MountFolder.library)
+        }
+    }
+
     private func mount(_ scope: SyncDomain, name: String) async {
+        let started = generation
         guard let mirror = await mirror(for: scope, name: name) else { return }
+        // Signed out, or turned off, while its mirror opened.
+        guard started == generation, wantMounted.contains(scope.identifier) else { return }
         let segment = MountManager.remoteName(scope)
         server.setRoute(segment, DAVResponder(source: MountSource(scope: scope.identifier, mirror: mirror,
                                                                   pins: currentPins),
@@ -278,9 +303,52 @@ final class DriveService: ObservableObject {
         if let existing = mirrors[scope.identifier] { return existing }
         mirrors[scope.identifier] = mirror
         // The first listing waits for a sync, so a new mount does not open empty.
-        if await mirror.lastSynced == nil { _ = try? await mirror.sync() }
+        if await mirror.lastSynced == nil {
+            do {
+                _ = try await mirror.sync()
+            } catch OnyxError.driveGone {
+                // Lost while the app was not looking — at a relaunch, most
+                // often, for a drive still kept offline.
+                guard started == generation else { return nil }
+                await driveGone(scope)
+                return nil
+            } catch {
+                // Offline, or a hiccup: the mirror on disk answers, and the
+                // next tick tries again.
+            }
+        }
         guard started == generation else { return nil }
         return mirror
+    }
+
+    /// The server says this account may no longer open the drive: it was
+    /// deleted, or the account was taken off it. The mirror has already
+    /// forgotten its tree (DriveMirror.sync). Nothing of it stays on this
+    /// Mac either: not in Finder, not kept offline, not mounted again at the
+    /// next launch — access taken away on the web reaches the device.
+    ///
+    /// With the offline store's disk not connected, its copies wait
+    /// (PinStore.removeAll): the store's rules still name the drive, so once
+    /// the disk is back its mirror is opened again (tick), the server says
+    /// the same, and they go then.
+    private func driveGone(_ scope: SyncDomain) async {
+        let id = scope.identifier
+        let started = generation
+        appLog.info("drive: \(id, privacy: .public) is no longer available to this account; removing it")
+        // Nothing more is answered for it, first.
+        server.setRoute(MountManager.remoteName(scope), nil)
+        mirrors[id] = nil
+        names[id] = nil
+        if wantMounted.remove(id) != nil { defaults.set(Array(wantMounted), forKey: Keys.mounted) }
+        await mounts.unmount(scope)
+        guard started == generation else { return }
+        if let pins { await pins.removeAll(scope: id) }
+        guard started == generation else { return }
+        // Shows the page and Settings what is kept and mounted now.
+        await refreshPins()
+        guard started == generation else { return }
+        // And the drive list, so it leaves the menus too.
+        await model?.refresh()
     }
 
     /// Every 15 s: bring each mirror that is mounted or pinned up to the
@@ -305,12 +373,21 @@ final class DriveService: ObservableObject {
     }
 
     private func tickOnce(_ started: Int) async {
+        // The drive list has not come yet: the server was out of reach when
+        // the app opened. Asked for again until it answers, and then the
+        // drives wanted in Finder mount (AppModel.refresh → mountWanted).
+        if let model, !model.drivesLoaded {
+            await model.refresh()
+            guard started == generation else { return }
+        }
         // A cache disk plugged back in: its store opens now.
         if pins == nil {
             openPins()
             if pins != nil { await refreshPins() }
+            guard started == generation else { return }
         }
         let pinnedScopes = Set(pinRules.map(\.scope))
+        var gone: Set<String> = []
         for (id, mirror) in mirrors where wantMounted.contains(id) || pinnedScopes.contains(id) {
             guard started == generation else { return }
             syncing.insert(id)
@@ -324,8 +401,17 @@ final class DriveService: ObservableObject {
                 }
             } catch OnyxError.notAuthenticated {
                 syncing.remove(id)
-                await model?.tokenRejected()
+                // Only for the sign-in this tick began under: signed out
+                // meanwhile, the token was simply gone, and whoever is
+                // signed in now is not to be signed out for it.
+                if started == generation { await model?.tokenRejected() }
                 return
+            } catch OnyxError.driveGone {
+                syncing.remove(id)
+                guard started == generation else { return }
+                gone.insert(id)
+                await driveGone(mirror.scope)
+                continue
             } catch is URLError {
                 // Offline: the mount keeps answering from the last good
                 // mirror, and pinned files keep working.
@@ -341,7 +427,10 @@ final class DriveService: ObservableObject {
             if pinnedScopes.contains(id) { reconcileSoon(id) }
         }
         // Pins in drives that are not mounted still need their mirror.
-        for scope in pinnedScopes where mirrors[scope] == nil {
+        for scope in pinnedScopes where mirrors[scope] == nil && !gone.contains(scope) {
+            // Checked before opening one, which would be for whoever is
+            // signed in by then.
+            guard started == generation else { return }
             guard let domain = SyncDomain(identifier: scope) else { continue }
             let opened = await mirror(for: domain, name: names[scope] ?? scope)
             guard started == generation else { return }
@@ -368,8 +457,11 @@ final class DriveService: ObservableObject {
     /// wherever a mirror holds them. Thousands at once are one change to the
     /// store and one pass per drive, not one of each per file.
     func pinFiles(_ ids: [String], scope hint: String?, _ on: Bool) async {
+        let started = generation
         var indexes: [(scope: String, index: MirrorIndex)] = []
         for (scope, mirror) in mirrors { indexes.append((scope, await mirror.index)) }
+        // Signed out meanwhile: these were the last account's files.
+        guard started == generation else { return }
         let rules = ids.map { id in
             PinRule(scope: indexes.first { $0.index.file(id: id) != nil }?.scope ?? hint ?? SyncDomain.library.identifier,
                     target: .file(id: id))
@@ -563,6 +655,7 @@ final class DriveService: ObservableObject {
         }
         relocating = true
         defer { relocating = false }
+        let started = generation
         let mounted = mounts.states.keys.compactMap(SyncDomain.init(identifier:))
         for scope in mounted { await mounts.unmount(scope) }
         // Downloads under way stop; the next tick starts them in the new place.
@@ -578,8 +671,13 @@ final class DriveService: ObservableObject {
         } catch {
             relocationProblem = "The cache could not be moved: \(error.localizedDescription)"
         }
+        // Signed out while it moved: the drives stay unmounted, as stop() left them.
+        guard started == generation else { return }
         if pins == nil, model?.phase == .signedIn { openPins() }
-        for scope in mounted { await mount(scope, name: names[scope.identifier] ?? scope.identifier) }
+        for scope in mounted {
+            await mount(scope, name: names[scope.identifier] ?? scope.identifier)
+            guard started == generation else { return }
+        }
         await refreshPins()
         await refreshUsage()
     }
@@ -609,10 +707,14 @@ final class DriveService: ObservableObject {
     }
 
     func clearStreamingCache() async {
+        let started = generation
         let mounted = mounts.states.keys.compactMap(SyncDomain.init(identifier:))
         for scope in mounted { await mounts.unmount(scope) }
         try? FileManager.default.removeItem(at: streamingDirectory)
-        for scope in mounted { await mount(scope, name: names[scope.identifier] ?? scope.identifier) }
+        for scope in mounted {
+            guard started == generation else { return }
+            await mount(scope, name: names[scope.identifier] ?? scope.identifier)
+        }
         await refreshUsage()
     }
 

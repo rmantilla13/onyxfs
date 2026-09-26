@@ -622,6 +622,32 @@ struct PinStoreTests {
         #expect(await reopened.localCopy(scope: "library", fileId: "c", etag: "v1") != nil)
     }
 
+    @Test func removeAllWaitsForTheStoresDiskToBeBack() async throws {
+        // A drive lost while the cache's disk is unplugged: dropping the
+        // records now would leave its copies on that disk with nothing to
+        // find them by. So nothing changes until the disk is back.
+        let dir = try tempFolder()
+        let store = try PinStore(directory: dir)
+        let downloads = FakeDownloads()
+        await store.pin(pinFolder(""))
+        _ = await store.reconcile(scope: scope, index: FakeIndex([file("a", "a.txt")]), download: downloads.download)
+        let a = try #require(await store.localCopy(scope: scope, fileId: "a", etag: nil))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+        #expect(await store.removeAll(scope: scope) == false)
+        #expect(await store.problem == .unavailable)
+        #expect(await store.rules(scope: scope) == [pinFolder("")])
+        #expect(FileManager.default.fileExists(atPath: a.path))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        #expect(await store.removeAll(scope: scope) == true)
+        #expect(await store.rules(scope: scope).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: a.path))
+        let reopened = try PinStore(directory: dir)
+        #expect(await reopened.rules().isEmpty)
+    }
+
     @Test func removeAllMidDownloadLeavesNothingBehind() async throws {
         // A drive the account lost while its pins were downloading: nothing
         // that lands afterwards may stay.

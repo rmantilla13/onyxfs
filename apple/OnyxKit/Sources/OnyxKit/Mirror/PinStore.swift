@@ -270,7 +270,17 @@ public actor PinStore {
 
     /// Forget a scope: its rules and its copies. For a drive the user left or
     /// turned off.
-    public func removeAll(scope: String) {
+    ///
+    /// Nothing at all while the store's folder is not there to write to —
+    /// its disk not connected — as with a pass: the records are what finds
+    /// the copies on that disk, so they stay until it is back, and the
+    /// caller asks again then. Returns whether it was done.
+    @discardableResult
+    public func removeAll(scope: String) -> Bool {
+        guard checkFolder() else {
+            problem = .unavailable
+            return false
+        }
         state.rules.removeAll { $0.scope == scope }
         for copy in (state.copies[scope] ?? [:]).values {
             try? FileManager.default.removeItem(at: location(of: copy, in: scope))
@@ -279,6 +289,7 @@ public actor PinStore {
         Self.removeIfEmpty(folder(for: scope))
         dirty = true
         save()
+        return true
     }
 
     // MARK: - Reconcile
