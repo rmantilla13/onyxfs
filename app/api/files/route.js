@@ -80,7 +80,9 @@ export async function GET(req) {
  * creator — able to open, move and delete it. So the key must be one this
  * person was handed for an upload (presign or multipart; lib/db.js
  * claimUploadKey), taken once, and one no other row already points at.
- * Anything else is someone else's object, or nobody's we know of.
+ * Anything else is someone else's object, or nobody's we know of. Nor is a
+ * key issued for new contents of an existing file (`replaceOf`): those are
+ * swapped in by POST /api/files/[id]/content and become no file of their own.
  */
 export async function POST(req) {
   const g = await requirePrincipal(req);

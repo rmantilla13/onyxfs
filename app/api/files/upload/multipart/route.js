@@ -4,6 +4,7 @@ import {
   issueUploadKey,
 } from '@/lib/db';
 import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
+import { replacementTarget, replacementKey } from '@/lib/replace-content';
 import {
   getStorageConfig, storageMode, cfgForFilespace, choosePartSize, partCount, buildObjectKey,
   s3CreateMultipartUpload, s3PresignUploadParts, s3ListParts,
@@ -30,6 +31,12 @@ export const dynamic = 'force-dynamic';
  * Every action after `create` re-loads the upload scoped to the caller's email.
  * An upload id plus a part number is enough to write bytes into an object, so
  * ownership is re-proved on each call rather than assumed from the first one.
+ *
+ * `create` with `replaceOf: <file id>` uploads new contents for that file, as
+ * the presign route does: beside its current object, in its own drive, under
+ * a key bound to it, for POST /api/files/[id]/content to swap in once
+ * `complete` has assembled it. The binding is kept on the upload and issued
+ * again with the key at `complete`.
  *
  * Both methods take the browser's session or Onyx for Mac's bearer token
  * (requirePrincipal(req)).
@@ -81,7 +88,15 @@ export async function POST(req) {
 
   try {
     if (action === 'create') {
-      if (!body.filename) return NextResponse.json({ error: 'filename required' }, { status: 400 });
+      // New contents for a file: files.edit, write access to it and to its
+      // drive — found from the file's key, not from anything sent.
+      let replacing = null;
+      if (body.replaceOf != null) {
+        replacing = await replacementTarget(principal, body.replaceOf);
+        if (replacing.error) return replacing.error;
+      } else if (!body.filename) {
+        return NextResponse.json({ error: 'filename required' }, { status: 400 });
+      }
       // The declared size is what the part plan, the largest-upload limit and
       // the quota are all checked against; POST /api/files checks again
       // against what landed.
@@ -93,7 +108,11 @@ export async function POST(req) {
       // Scope to the filespace so the object lands exactly where the desktop
       // app mounts it, not at the bucket root.
       let scoped = cfg;
-      if (body.filespaceId) {
+      let filespaceId = body.filespaceId || null;
+      if (replacing) {
+        scoped = replacing.cfg;
+        filespaceId = replacing.filespaceId;
+      } else if (body.filespaceId) {
         const fs = await getFilespaceForWrite(email, body.filespaceId, principal);
         if (!fs) return noWrite();
         scoped = cfgForFilespace(cfg, fs);
@@ -107,28 +126,40 @@ export async function POST(req) {
       const partSize = choosePartSize(size, scoped);
 
       // As in the presign route: a role that may add files, landing inside a
-      // drive takes its editor, and the size is held to the limits.
-      const d = await uploadCheck(principal, { key: buildObjectKey(scoped, body.filename, body.folder), size });
+      // drive takes its editor, and the size is held to the limits — for new
+      // contents, what they add to the file's size.
+      const d = await uploadCheck(principal, {
+        key: replacing ? replacing.file.storageKey : buildObjectKey(scoped, body.filename, body.folder),
+        size,
+        replaces: replacing ? replacing.file.size : null,
+      });
       if (!d.ok) return refusal(d);
 
       const { uploadId, key, name } = await s3CreateMultipartUpload(scoped, {
-        filename: body.filename,
+        filename: replacing ? replacing.file.name : body.filename,
         contentType: body.mime,
         folder: body.folder,
+        key: replacing ? await replacementKey(scoped, replacing.file) : null,
       });
 
       const upload = await createUpload({
-        uploadId, storageKey: key, filename: name, size,
-        mime: body.mime || null, folder: body.folder || '',
-        filespaceId: body.filespaceId || null, partSize, createdBy: email,
+        uploadId, storageKey: key,
+        // A replacement keeps the file's name, whatever its new key reads.
+        filename: replacing ? replacing.file.name : name,
+        size, mime: body.mime || null,
+        folder: replacing ? replacing.file.folder : body.folder || '',
+        filespaceId, partSize, createdBy: email,
+        replaceOf: replacing ? replacing.file.id : null,
       });
-      // Theirs to record as a file once assembled (POST /api/files). Issued
-      // again at `complete`, which is what counts: an upload may take days.
-      await issueUploadKey(key, email, { bucket: scoped.bucket });
+      // Theirs to record as a file once assembled (POST /api/files), or to
+      // swap into that one file. Issued again at `complete`, which is what
+      // counts: an upload may take days.
+      await issueUploadKey(key, email, { bucket: scoped.bucket, replaceOf: upload.replaceOf });
 
       return NextResponse.json({
-        id: upload.id, key, name, partSize,
+        id: upload.id, key, name: upload.filename, partSize,
         partCount: partCount(size, partSize),
+        ...(upload.replaceOf ? { replaceOf: upload.replaceOf } : {}),
       });
     }
 
@@ -188,12 +219,16 @@ export async function POST(req) {
       });
       // The key is theirs to record now — issued afresh, so however long the
       // upload took (and whether it began before keys were issued at all),
-      // recording it is measured from here.
-      await issueUploadKey(key, email, { bucket: scoped.bucket });
+      // recording it is measured from here. For the file it was bound to, if
+      // it is new contents.
+      await issueUploadKey(key, email, { bucket: scoped.bucket, replaceOf: upload.replaceOf });
       // Drop the resume row only after S3 confirms assembly. Losing it earlier
       // would strand an upload that still needs completing.
       await deleteUpload(upload.id);
-      return NextResponse.json({ key, publicUrl, name: upload.filename, size: upload.size, mime: upload.mime });
+      return NextResponse.json({
+        key, publicUrl, name: upload.filename, size: upload.size, mime: upload.mime,
+        ...(upload.replaceOf ? { replaceOf: upload.replaceOf } : {}),
+      });
     }
 
     if (action === 'abort') {

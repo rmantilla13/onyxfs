@@ -11,6 +11,7 @@ import {
 import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
 import { normalizeSchema, validateMetadataPatch } from '@/lib/dam';
 import { keyFor, fileNameProblem } from '@/lib/folder-ops';
+import { ifMatchVersion } from '@/lib/file-record';
 
 export const runtime = 'nodejs';
 
@@ -50,23 +51,6 @@ export async function GET(req, { params }) {
     // The detail view hides the controls it would only get a 403 from.
     canWrite: await canModifyFile(file, principal),
   });
-}
-
-/**
- * The version an `If-Match` header is asserting, or undefined when the request
- * states no condition. HTTP clients quote an entity tag by habit, so `"7"`,
- * `W/"7"` and a bare `7` all mean the same thing here. `*` is the standard
- * "any current representation", i.e. no condition at all.
- *
- * A value we cannot parse comes back NaN, which fails the equality check at
- * the call site and so lands in the 409 branch — a precondition that cannot be
- * verified must not be treated as satisfied.
- */
-function ifMatchVersion(raw) {
-  if (raw == null) return undefined;
-  const v = raw.trim().replace(/^W\//i, '').replace(/^"(.*)"$/s, '$1').trim();
-  if (!v || v === '*') return undefined;
-  return Number(v);
 }
 
 /**
