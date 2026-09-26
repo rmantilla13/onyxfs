@@ -83,6 +83,13 @@ export async function POST(req) {
   if (principal.roleId === 'viewer' && !principal.isAdmin) {
     return NextResponse.json({ error: 'Your role can view files but not add them.' }, { status: 403 });
   }
+  // For an S3 row the listing signs storageKey, or failing that a key read
+  // back out of `url` — and only storageKey is checked below. A row with a
+  // url alone could name any object in the bucket: another drive's, a
+  // preview, the trash. Both uploaders always send the key.
+  if (body.storage === 's3' && !body.storageKey) {
+    return NextResponse.json({ error: 'A storage key is required.' }, { status: 400 });
+  }
   if (body.storageKey) {
     const key = String(body.storageKey);
     if (/^(_thumbs|_trash)\//.test(key)) {
