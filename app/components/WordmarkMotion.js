@@ -16,7 +16,7 @@ import { useEffect } from 'react';
  * recalculated for it.
  */
 const IDLE_MS = 2000;
-const EVENTS = ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart', 'scroll'];
+const EVENTS = ['pointermove', 'pointerdown', 'keydown', 'touchstart'];
 let users = 0;
 let timer = null;
 let paused = false;
