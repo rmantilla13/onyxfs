@@ -66,6 +66,33 @@ describe('every admin route checks first', () => {
     }
   });
 
+  test('who is a super-admin: a subset of the admins, and every admin when unset', async () => {
+    const { isSuperAdmin } = await import('../lib/auth-allowlist.js');
+    const saved = process.env.SUPER_ADMIN_EMAILS;
+    try {
+      // Unset: every admin, and not the compiled-in bootstrap address — an
+      // owner who never set it must not find storage locked away from them.
+      process.env.SUPER_ADMIN_EMAILS = '';
+      assert.equal(isSuperAdmin('admin@example.com'), true);
+      assert.equal(isSuperAdmin('owner@example.com'), true);
+      assert.equal(isSuperAdmin('member@example.com'), false);
+      // Set: only those listed, and only if they are admins at all.
+      process.env.SUPER_ADMIN_EMAILS = 'Owner@Example.com, stranger@example.com';
+      assert.equal(isSuperAdmin('owner@example.com'), true);
+      assert.equal(isSuperAdmin('admin@example.com'), false, 'an admin who is not listed');
+      assert.equal(isSuperAdmin('stranger@example.com'), false, 'the tier narrows the admins, never adds to them');
+    } finally {
+      process.env.SUPER_ADMIN_EMAILS = saved;
+    }
+  });
+
+  test('the money settings take a super-admin on every route that writes them', () => {
+    const policy = readFileSync(join(adminDir, 'policy/route.js'), 'utf8');
+    assert.match(policy, /validatePolicy\(body, current, \{ superAdmin: isSuperAdmin\(guard\.email\) \}\)/);
+    const person = readFileSync(join(adminDir, 'people/[id]/route.js'), 'utf8');
+    assert.match(person, /key === 'aiMonthlyCents' && !isSuperAdmin\(guard\.email\)/);
+  });
+
   // Called with no session at all — as a request from outside would be.
   const CALLS = [
     ['people/route.js', 'GET'], ['people/[id]/route.js', 'GET'], ['people/[id]/route.js', 'PATCH'],
