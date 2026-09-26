@@ -65,3 +65,52 @@ test('the decode probe asks once, and says what decoded', async () => {
     globalThis.Image = prev;
   }
 });
+
+// An original shown for an image with no preview goes to the fill-in only
+// when a preview would be made from it. Every view of a GIF, a small picture
+// or one skipped before used to re-upload a thumbnail, move the row's seq
+// (every synced device pulled it again) and delete the one other browsers
+// were showing.
+test('previewWanted: only for a picture that would get a preview, and not twice', async (t) => {
+  const store = new Map();
+  // Swapped in by descriptor: reading Node's own localStorage getter warns.
+  const prev = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true, writable: true,
+    value: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) },
+  });
+  t.after(() => { if (prev) Object.defineProperty(globalThis, 'localStorage', prev); else delete globalThis.localStorage; });
+  const { previewWanted, rememberSkip } = await import('../lib/backfill.js');
+  const photo = {
+    id: 'p1', storage: 's3', name: 'a.jpg', mime: 'image/jpeg', kind: 'image', size: 9_000_000,
+    thumbnailKey: '_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.webp', metadata: { width: 6000, height: 4000 },
+  };
+  assert.equal(previewWanted(photo), true);
+  assert.equal(previewWanted({ ...photo, posterUrl: 'p' }), false, 'has one');
+  assert.equal(previewWanted({ ...photo, storage: 'blob' }), false);
+  assert.equal(previewWanted({ ...photo, name: 'a.gif', mime: 'image/gif' }), false, 'a GIF is its own preview');
+  assert.equal(previewWanted({ ...photo, size: 900_000, metadata: { width: 2000, height: 1500 } }), false, 'small: the original serves');
+  assert.equal(previewWanted({ ...photo, metadata: { width: 900, height: 600 } }), false, 'barely bigger than the grid thumbnail');
+  assert.equal(previewWanted({ ...photo, name: 'a.heic', mime: 'image/heic' }), false, 'not drawable here');
+  assert.equal(previewWanted({ ...photo, name: 'a.heic', mime: 'image/heic' }, { probe: { heic: true } }), true);
+  assert.equal(previewWanted({ ...photo, metadata: {} }), true, 'no size known: decided after the decode');
+  rememberSkip('p1', 'preview');
+  assert.equal(previewWanted(photo), false, 'skipped here once, not again');
+  // A file with no thumbnail of ours gets its whole set from the handover.
+  const bare = { ...photo, id: 'p2', thumbnailKey: null, name: 'b.gif', mime: 'image/gif' };
+  assert.equal(previewWanted(bare), true);
+  rememberSkip('p2');
+  assert.equal(previewWanted(bare), false);
+});
+
+test('the fill-in records a preview alone, and checks the thumbnail it draws sizes from', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const src = await readFile(new URL('../lib/thumbnail-client.js', import.meta.url), 'utf8');
+  const preview = src.slice(src.indexOf('async function makePreview'), src.indexOf('const previewDone'));
+  assert.match(preview, /JSON\.stringify\(\{ posterKey, media: made\.media \}\)/, 'no thumbnailKey: the thumbnail stands');
+  assert.ok(preview.indexOf('if (!large) return { skip: true }') < preview.indexOf('uploadThumbnail('), 'nothing uploaded when none is made');
+  const sizes = src.slice(src.indexOf('async function makeSizes'), src.indexOf('async function makePreview'));
+  assert.ok(sizes.indexOf('plan.thumbnailKey !== file.thumbnailKey') < sizes.indexOf('fetch(file.thumbnailUrl'), 'bails before drawing another picture');
+  const pi = await readFile(new URL('../app/components/media/ProgressiveImage.js', import.meta.url), 'utf8');
+  assert.match(pi, /fetch\(src, \{ mode: 'cors', cache: 'no-store', signal \}\)/, 'the original handed over is never a cached copy');
+});

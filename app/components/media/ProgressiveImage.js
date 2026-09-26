@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { firstLayer, isReady, markReady } from '@/lib/file-handoff';
+import { takePreloaded } from '@/lib/original-preload';
 
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 // A blob download that is still going after this shows its progress.
@@ -27,9 +28,16 @@ function decodeUrl(src) {
   return { img, done };
 }
 
-/** Fetch `src` as a blob, reporting progress (0..1, or null when the size is unknown). */
+/**
+ * Fetch `src` as a blob, reporting progress (0..1, or null when the size is
+ * unknown). With CORS, so a canvas can read it, and never from the HTTP
+ * cache: the blob goes to the fill-in, which makes a preview from it, and an
+ * original's key can be reused after a delete — a cached copy under the same
+ * URL may be another file's bytes. (A copy an <img> cached carries no CORS
+ * headers either, which failed the fetch.)
+ */
 async function fetchBlob(src, { signal, onProgress }) {
-  const r = await fetch(src, { mode: 'cors', signal });
+  const r = await fetch(src, { mode: 'cors', cache: 'no-store', signal });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const total = Number(r.headers.get('content-length')) || 0;
   if (!r.body || !total) return r.blob();
@@ -125,9 +133,13 @@ export default function ProgressiveImage({
     const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     let slow = null;
     let objectUrl = null;
-    const show = (src) => {
+    let usedPreload = false;
+    const cleanups = [];
+    // `cached: false` for a picture shown from a blob fetched past the HTTP
+    // cache: its URL is not one an <img> elsewhere would find ready.
+    const show = (src, { cached = true } = {}) => {
       if (cancelled) return;
-      markReady(layer.src);
+      if (cached) markReady(layer.src);
       if (src !== layer.src) markReady(src);
       setState((s) => (s.sig !== sig || s.shown >= next ? s : { ...s, shown: next, below: s.shown, fresh: true }));
     };
@@ -150,20 +162,33 @@ export default function ProgressiveImage({
     };
 
     if (layer.quality === 'original' && live.current.onBlob) {
+      // Quick Look may have fetched it ahead, the same way, and decoded it
+      // (lib/original-preload.js): taken, it is on screen at once.
+      const taken = takePreloaded(layer.src);
+      if (taken) cleanups.push(() => { if (!usedPreload) taken.putBack(); });
       slow = setTimeout(() => { if (!cancelled) setProgress(0); }, PROGRESS_AFTER_MS);
-      fetchBlob(layer.src, { signal: ctrl?.signal, onProgress: (p) => { if (!cancelled) setProgress((v) => (v == null ? v : p)); } })
-        .then(async (blob) => {
-          if (cancelled) return;
-          objectUrl = URL.createObjectURL(blob);
+      (taken ? taken.promise.then((p) => p, () => null) : Promise.resolve(null))
+        .then((pre) => {
+          if (cancelled) return null;
+          if (pre?.blob) { usedPreload = true; return pre; }
+          return fetchBlob(layer.src, { signal: ctrl?.signal, onProgress: (p) => { if (!cancelled) setProgress((v) => (v == null ? v : p)); } })
+            .then((blob) => ({ blob, objectUrl: null }));
+        })
+        .then(async (got) => {
+          if (!got) return;
+          const { blob } = got;
+          if (cancelled) { if (got.objectUrl) URL.revokeObjectURL(got.objectUrl); return; }
+          objectUrl = got.objectUrl || URL.createObjectURL(blob);
           const { done } = decodeUrl(objectUrl);
           await done;
           if (cancelled) return;
+          const shownUrl = objectUrl;
           setBlobUrl(objectUrl);
           objectUrl = null;
-          show(layer.src);
+          show(shownUrl, { cached: false });
           live.current.onBlob?.(blob);
         })
-        // A CORS refusal from a cached copy, say: shown as a plain image.
+        // A refused fetch (a bucket with no CORS rule, say): shown as a plain image.
         .catch(() => (cancelled ? null : decodeUrl(layer.src).done.then(() => show(layer.src), fail)))
         .finally(() => { clearTimeout(slow); if (!cancelled) setProgress(null); });
     } else {
@@ -173,6 +198,7 @@ export default function ProgressiveImage({
       cancelled = true;
       clearTimeout(slow);
       ctrl?.abort();
+      for (const fn of cleanups) fn();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
     // One load per layer: `sig` names them all.

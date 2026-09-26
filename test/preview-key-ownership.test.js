@@ -237,6 +237,36 @@ describe('the poster adopt (keeping a preview after losing access)', { skip }, (
   });
 });
 
+// The fill-in's preview-only form: an image with a thumbnail gets its large
+// preview from the original a viewer fetched, and nothing else moves.
+describe('the thumbnail PUT with a preview alone', { skip }, () => {
+  test('records the preview, keeps the thumbnail, its siblings and seq, and fills only missing sizes', async () => {
+    const T = thumb();
+    const f = await file({ createdBy: MEMBER, storageKey: `library/${MEMBER}/p-${randomUUID()}.jpg`, thumbnailKey: T, thumbSizes: ['sm', 'xs'], metadata: { width: 6000 } });
+    const before = await db.getFileById(f.id);
+    as(MEMBER);
+    const P = poster();
+    const r = await call(thumbRoute.PUT, { id: f.id }, 'PUT', { posterKey: P, media: { width: 10, height: 4000 } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const after = await db.getFileById(f.id);
+    assert.equal(after.posterKey, P);
+    assert.equal(after.thumbnailKey, T);
+    assert.deepEqual(after.thumbSizes, ['sm', 'xs']);
+    assert.equal(after.seq, before.seq, 'devices have nothing to pull');
+    assert.deepEqual([after.metadata.width, after.metadata.height], [6000, 4000], 'the row’s own width stands');
+  });
+
+  test('refuses another file’s poster, and anything that is not a poster key', async () => {
+    const PK = poster();
+    await file({ thumbnailKey: thumb(), posterKey: PK });
+    const mine = await file({ createdBy: MEMBER, storageKey: `library/${MEMBER}/q-${randomUUID()}.jpg`, thumbnailKey: thumb() });
+    as(MEMBER);
+    assert.equal((await call(thumbRoute.PUT, { id: mine.id }, 'PUT', { posterKey: PK })).status, 409);
+    assert.equal((await call(thumbRoute.PUT, { id: mine.id }, 'PUT', { posterKey: thumb() })).status, 400);
+    assert.equal((await db.getFileById(mine.id)).posterKey, null);
+  });
+});
+
 describe('POST /api/files', { skip }, () => {
   test('records the upload, without preview keys another row holds', async () => {
     const TK = thumb(); const PK = poster(); const SK = strip();

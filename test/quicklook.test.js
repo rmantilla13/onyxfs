@@ -62,11 +62,22 @@ describe('preloading', () => {
   test('a preload is the preview; the original only near, small and on a fast connection', () => {
     const withPreview = { posterUrl: 'p', url: 'o', size: 1 };
     assert.equal(preloadUrl(withPreview), 'p');
-    const bare = { url: 'o', size: 5_000_000 };
+    const bare = { url: 'o', size: 5_000_000, name: 'a.jpg', mime: 'image/jpeg', kind: 'image' };
     assert.equal(preloadUrl(bare, { distance: 1, fast: true }), 'o');
     assert.equal(preloadUrl(bare, { distance: 2, fast: true }), null);
     assert.equal(preloadUrl(bare, { distance: 1, fast: false }), null);
-    assert.equal(preloadUrl({ url: 'o', size: 30_000_000 }, { distance: 1, fast: true }), null);
+    assert.equal(preloadUrl({ ...bare, size: 30_000_000 }, { distance: 1, fast: true }), null);
+  });
+  // An original the browser cannot draw is bytes for nothing: Chrome shows a
+  // broken image for HEIC, TIFF, camera RAW and PSD.
+  test('an original is preloaded only in a format this browser draws', () => {
+    const at = (name, mime) => ({ url: 'o', size: 5_000_000, name, mime, kind: 'image' });
+    for (const [name, mime] of [['a.heic', 'image/heic'], ['a.tif', 'image/tiff'], ['a.dng', 'image/x-adobe-dng'], ['a.psd', 'image/vnd.adobe.photoshop']]) {
+      assert.equal(preloadUrl(at(name, mime), { distance: 1, fast: true }), null, name);
+    }
+    assert.equal(preloadUrl(at('a.heic', 'image/heic'), { distance: 1, fast: true, probe: { heic: true } }), 'o', 'Safari draws HEIC');
+    assert.equal(preloadUrl(at('a.tif', 'image/tiff'), { distance: 1, fast: true, probe: { heic: true, tiff: true } }), 'o');
+    assert.equal(preloadUrl({ ...at('a.dng', 'image/x-adobe-dng'), posterUrl: 'p' }, { distance: 1 }), 'p', 'its preview is always drawable');
   });
 });
 

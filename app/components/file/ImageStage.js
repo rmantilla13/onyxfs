@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { stageSources } from '@/lib/stage-sources';
 import { probedNow } from '@/lib/decode-probe';
+import { previewWanted } from '@/lib/backfill';
 import ProgressiveImage from '@/app/components/media/ProgressiveImage';
 import '@/app/components/review/review.css';
 
@@ -23,9 +24,9 @@ import '@/app/components/review/review.css';
  * `handoff` is what the files view handed over when it opened this file
  * (lib/file-handoff.js): the tile's picture, to start from. `shell` is the
  * opening shell (FileOpening), which draws the same stage before the page
- * exists. `onOriginalBlob` gets the original of a file with no preview, once
- * it has been fetched to show it — a writer's browser makes the preview from
- * it (lib/thumbnail-client.js).
+ * exists. `onOriginalBlob` gets the original of a file with no preview that
+ * would get one, once it has been fetched to show it — a writer's browser
+ * makes the preview from it (lib/thumbnail-client.js).
  */
 export default function ImageStage({ file, overlay = null, onFailed, handoff = null, shell = false, onOriginalBlob }) {
   const md = file?.metadata || {};
@@ -35,14 +36,22 @@ export default function ImageStage({ file, overlay = null, onFailed, handoff = n
   }));
   const [actual, setActual] = useState(false);
   const { thumb, preview, original } = stageSources(file, { probe: probedNow() });
+  // Once the original has been the sharp layer it stays one: a preview the
+  // fill-in makes from it while it is on screen must not send the picture
+  // back through the thumbnail.
+  const hadOriginal = useRef(false);
+  if (!preview) hadOriginal.current = true;
   const layers = [
     { src: handoff?.currentSrc || thumb, quality: 'thumb' },
     { src: preview, quality: 'preview' },
     // The original only at 100%, or as the sharp layer when there is no preview.
-    (actual || !preview) && !shell ? { src: original, quality: 'original' } : null,
+    (actual || !preview || hadOriginal.current) && !shell ? { src: original, quality: 'original' } : null,
   ].filter((l) => l && l.src);
   const ratio = natural.w && natural.h ? natural.w / natural.h : 4 / 3;
-  const blob = !preview && original && onOriginalBlob ? onOriginalBlob : undefined;
+  // Handed to the fill-in only when it would make a preview from it: not
+  // for a GIF, a small picture, one skipped here before (lib/backfill.js
+  // previewWanted) — every view of those re-made nothing but work.
+  const blob = !preview && original && onOriginalBlob && previewWanted(file, { probe: probedNow() }) ? onOriginalBlob : undefined;
 
   if (!layers.length) return null;
 
