@@ -9,6 +9,8 @@ import Foundation
 ///     /api/desktop/*      device auth (PKCE), and signing the app's web view in
 ///     /api/space/*        drives, credentials, and one file's download link
 ///     /api/files/delta    sync enumeration
+///     /api/transcripts/queue, /api/files/<id>/transcript[/claim]
+///                         video transcripts, made on this Mac
 ///
 /// Anything else needs a cookie. If a new endpoint is added for this client,
 /// it has to be added to that matcher too, or it will 302 and the JSON decode
@@ -28,18 +30,29 @@ public actor OnyxAPI {
 
     private func request(_ url: URL, method: String = "GET", json: [String: Any]? = nil,
                          authenticated: Bool = true) async throws -> Data {
+        let body = try json.map { try JSONSerialization.data(withJSONObject: $0) }
+        let (data, status) = try await send(url, method: method, body: body, authenticated: authenticated)
+        try Self.check(status, data)
+        return data
+    }
+
+    /// The request itself, with the status left for the caller to judge.
+    private func send(_ url: URL, method: String, body: Data?, authenticated: Bool = true) async throws -> (Data, Int) {
         var req = URLRequest(url: url)
         req.httpMethod = method
         if authenticated {
             guard let token = tokens.get() else { throw OnyxError.notAuthenticated }
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        if let json {
+        if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: json)
+            req.httpBody = body
         }
         let (data, response) = try await session.data(for: req)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+
+    private static func check(_ status: Int, _ data: Data) throws {
         guard (200..<300).contains(status) else {
             // The server's own message when there is one — it is written to be
             // read ("Storage is not configured for AWS S3") and is far more
@@ -48,7 +61,6 @@ public actor OnyxAPI {
             if status == 401 { throw OnyxError.notAuthenticated }
             throw OnyxError.http(status: status, message: message)
         }
-        return data
     }
 
     private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
@@ -117,6 +129,64 @@ public actor OnyxAPI {
         let data = try await request(config.url("api/space/sts"), method: "POST",
                                      json: ["filespaceId": filespaceId])
         return try decode(SpaceCredentials.self, from: data)
+    }
+
+    // MARK: - Transcripts
+
+    /// Files waiting for a transcript that this account may make: queued, or
+    /// left by a Mac whose lease ran out. Oldest first, at most ten.
+    public func transcriptionQueue() async throws -> [TranscriptionJob] {
+        struct Wrapper: Decodable { let jobs: [TranscriptionJob] }
+        let data = try await transcriptRequest(config.url("api/transcripts/queue"), method: "GET")
+        return try decode(Wrapper.self, from: data).jobs
+    }
+
+    /// Take a job, for ten minutes that every progress report extends.
+    /// Throws `TranscriptionConflict.taken` when another Mac got there first.
+    public func claimTranscription(fileId: String, device: String) async throws -> TranscriptionClaim {
+        let body = try JSONSerialization.data(withJSONObject: ["device": String(device.prefix(80))])
+        let data = try await transcriptRequest(transcriptURL(fileId, "claim"), method: "POST", body: body)
+        return try decode(TranscriptionClaim.self, from: data)
+    }
+
+    /// How far along, 0…1; also keeps the lease. Throws
+    /// `TranscriptionConflict.lost` when the job is no longer this Mac's.
+    public func reportTranscriptionProgress(fileId: String, progress: Double) async throws {
+        let rounded = (min(max(progress, 0), 1) * 1000).rounded() / 1000
+        let body = try JSONSerialization.data(withJSONObject: ["progress": rounded])
+        _ = try await transcriptRequest(transcriptURL(fileId), method: "PATCH", body: body)
+    }
+
+    /// Give the job up as failed, saying why in a sentence someone can read.
+    public func reportTranscriptionFailure(fileId: String, message: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["status": "failed", "error": String(message.prefix(500))])
+        _ = try await transcriptRequest(transcriptURL(fileId), method: "PATCH", body: body)
+    }
+
+    /// Hand in the transcript. Throws `TranscriptionConflict.lost` when the
+    /// job was taken away meanwhile; the result is then no one's to keep.
+    public func submitTranscript(fileId: String, _ submission: TranscriptSubmission) async throws {
+        let body = try JSONEncoder().encode(submission)
+        _ = try await transcriptRequest(transcriptURL(fileId), method: "PUT", body: body)
+    }
+
+    /// `api/files/<id>/transcript[/<tail>]`, the id escaped as one path
+    /// component whatever it holds (config.url escapes as well, so an id
+    /// escaped before it would arrive as "%2520").
+    private func transcriptURL(_ fileId: String, _ tail: String? = nil) -> URL {
+        var url = config.url("api/files").appending(component: fileId).appending(path: "transcript")
+        if let tail { url.append(path: tail) }
+        return url
+    }
+
+    /// As `request`, except that a 409 is told apart by its code: `taken`
+    /// and `lost` mean different things to the Mac, and neither is a failure
+    /// to report.
+    private func transcriptRequest(_ url: URL, method: String, body: Data? = nil) async throws -> Data {
+        let (data, status) = try await send(url, method: method, body: body)
+        if let conflict = TranscriptionConflict.from(status: status, data: data) { throw conflict }
+        try Self.check(status, data)
+        return data
     }
 
     // MARK: - Updates
