@@ -334,6 +334,85 @@ describe('the review API', { skip }, () => {
     assert.equal((await call(commentRoute.PATCH, '/x', { id: cut.id, cid: first.id }, { method: 'PATCH', body: { body: 'back' } })).status, 404);
   });
 
+  test('the feed pages: a full page stops at its last comment, and a decision after it waits for the next', async () => {
+    const f = await db.createFile({
+      name: 'pages.jpg', url: 'http://s3.test/b/files/pages.jpg', mime: 'image/jpeg', kind: 'image', storage: 's3',
+      storageKey: `files/pages-${tag}.jpg`, createdBy: OWNER,
+    });
+    made.files.push(f.id);
+    const post = async (body) => {
+      as(OWNER);
+      const r = await call(commentsRoute.POST, '/x', { id: f.id }, { method: 'POST', body: { body } });
+      assert.equal(r.status, 201);
+      return r.body.comment;
+    };
+    const decide = async (who, status) => {
+      as(who);
+      const r = await call(decisionRoute.PUT, '/x', { id: f.id }, { method: 'PUT', body: { status } });
+      assert.equal(r.status, 200);
+      return r.body.decision;
+    };
+    // In seq order: c1 c2 [early decision] c3 [late decision] c4.
+    const c1 = await post('one');
+    const c2 = await post('two');
+    const early = await decide(MEMBER, 'approved');
+    const c3 = await post('three');
+    const late = await decide(OUTSIDER, 'changes_requested');
+    const c4 = await post('four');
+    assert.ok(early.seq > c2.seq && early.seq < c3.seq && late.seq > c3.seq && late.seq < c4.seq);
+
+    const p1 = await db.listReviewFeed(f.id, { limit: 3 });
+    assert.deepEqual(p1.comments.map((c) => c.id), [c1.id, c2.id, c3.id]);
+    assert.equal(p1.more, true);
+    assert.equal(p1.cursor, c3.seq, 'the cursor claims only what was delivered');
+    assert.deepEqual(p1.decisions.map((d) => d.email), [MEMBER], 'the late decision is past the cursor, so it waits');
+
+    const p2 = await db.listReviewFeed(f.id, { after: p1.cursor, limit: 3 });
+    assert.deepEqual(p2.comments.map((c) => c.id), [c4.id]);
+    assert.equal(p2.more, false);
+    assert.deepEqual(p2.decisions.map((d) => d.email), [OUTSIDER]);
+    assert.equal(p2.cursor, c4.seq);
+
+    const p3 = await db.listReviewFeed(f.id, { after: p2.cursor, limit: 3 });
+    assert.deepEqual([p3.comments, p3.decisions, p3.more, p3.cursor], [[], [], false, p2.cursor]);
+
+    // The route hands the flag on, and pages no larger than REVIEW_FEED_LIMIT.
+    as(OWNER);
+    const whole = await call(feedRoute.GET, '/x', { id: f.id });
+    assert.equal(whole.body.more, false);
+    assert.equal(whole.body.comments.length, 4);
+    assert.equal(db.REVIEW_FEED_LIMIT, 500);
+    assert.equal((await db.listReviewFeed(f.id, { limit: 10_000 })).comments.length, 4);
+  });
+
+  test('writers that race leave the row behind; the next read of the feed puts it right', async () => {
+    const f = await db.createFile({
+      name: 'race.jpg', url: 'http://s3.test/b/files/race.jpg', mime: 'image/jpeg', kind: 'image', storage: 's3',
+      storageKey: `files/race-${tag}.jpg`, createdBy: OWNER,
+    });
+    made.files.push(f.id);
+    as(OWNER);
+    // Each write counts, then stores, what it counted; concurrent ones can
+    // store a count taken before another's row committed.
+    const posted = await Promise.all(Array.from({ length: 6 }, (_, i) => call(commentsRoute.POST, '/x', { id: f.id }, { method: 'POST', body: { body: `note ${i}` } })));
+    assert.ok(posted.every((r) => r.status === 201));
+    await Promise.all(posted.slice(0, 2).map((r) => call(commentRoute.PATCH, '/x', { id: f.id, cid: r.body.comment.id }, { method: 'PATCH', body: { resolved: true } })));
+    // Whatever the interleaving left, make it certainly wrong.
+    await db.sql`UPDATE files SET review_status = 'approved', open_comments = 99 WHERE id = ${f.id}`;
+
+    as(MEMBER);
+    const r = await call(feedRoute.GET, '/x', { id: f.id });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.openComments, 4, 'counted from the comments, not read off the row');
+    assert.equal(r.body.status, 'in_review');
+    const row = await db.getFileById(f.id);
+    assert.equal(row.openComments, 4);
+    assert.equal(row.reviewStatus, 'in_review');
+    // And the repair is itself not an edit a device would hear of.
+    assert.equal(row.version, f.version);
+    assert.equal(row.seq, f.seq);
+  });
+
   test('the review flag is read on the server', async () => {
     const saved = await db.getFeatureFlags({ fresh: true });
     await db.setFeatureFlags({ ...saved, review: false }, 'test');
