@@ -75,7 +75,10 @@ export async function GET(req) {
 
   // Presign only what this page carries. A client streaming a first sync of
   // 100k files pages through in chunks rather than signing them all at once.
-  const changed = await presignFileUrls(page.changed);
+  // Originals only: a device shows no thumbnails from this feed, and a row
+  // now has up to five preview URLs (thumbnail, sm, xs, poster, strip) —
+  // each only another bearer token in a response of up to 500 rows.
+  const changed = await presignFileUrls(page.changed, { previews: false });
 
   const body = { changed, deleted: page.deleted, cursor: page.cursor, done: page.done, scope: tag };
   if (url.searchParams.get('folders') === '1') {

@@ -51,7 +51,7 @@ test('a stable URL never asks for more than SigV4 allows', async () => {
   assert.equal(new URL(url).searchParams.get('X-Amz-Expires'), '604800');
 });
 
-// Previews: six-day windows, offset per key, so a library's previews do not
+// Previews: day-long windows, offset per key, so a library's previews do not
 // all change URL — and all download again — at the same moment.
 test('a phased preview URL is stable for its window, and windows differ per key', async (t) => {
   const { signingDate, keyHash, PREVIEW_URL_WINDOW, PREVIEW_URL_TTL } = await import('../lib/storage.js');
@@ -70,7 +70,7 @@ test('a phased preview URL is stable for its window, and windows differ per key'
   const c = await s3PresignGet(cfg, key, opts);
   assert.equal(a, b, 'one URL all window');
   assert.notEqual(b, c, 'a new one after it');
-  assert.equal(new URL(a).searchParams.get('X-Amz-Expires'), '604800', 'six days plus one: exactly the SigV4 limit');
+  assert.equal(new URL(a).searchParams.get('X-Amz-Expires'), '172800', 'a day, and a day after the last hand-out');
   assert.equal(signingDate(key, start + 5000, PREVIEW_URL_WINDOW, { phased: true }).getTime(), start);
   // Two keys roll over at different instants.
   const other = '_thumbs/7c9e6679-7425-40de-944b-e07fc1f90ae7.webp';
@@ -113,4 +113,28 @@ test('a stable URL is kept for its window, and is what signing afresh gives', as
   const n = signedUrlCache.size;
   await s3PresignGet(cfg, '_thumbs/k.webp', { expiresIn: 600 });
   assert.equal(signedUrlCache.size, n);
+});
+
+// A signed URL is a bearer token: one handed out before someone loses access
+// to a file keeps working until it expires. No preview — a grid thumbnail,
+// its siblings, the 2400px preview, a player poster, a strip — may outlive
+// the two days a thumbnail URL always had (a day's window plus a day).
+test('no preview URL lives longer than a thumbnail always did', async () => {
+  const { PREVIEW_URL_WINDOW, PREVIEW_URL_TTL } = await import('../lib/storage.js');
+  assert.ok(PREVIEW_URL_WINDOW + PREVIEW_URL_TTL <= 2 * 86400, `${PREVIEW_URL_WINDOW + PREVIEW_URL_TTL}s`);
+  const url = await s3PresignGet(cfg, '_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.poster.webp', {
+    expiresIn: PREVIEW_URL_TTL, stableFor: PREVIEW_URL_WINDOW, phased: true,
+  });
+  assert.ok(Number(new URL(url).searchParams.get('X-Amz-Expires')) <= 2 * 86400);
+});
+
+// The sync feed shows no pictures: a device reads the original's URL and
+// nothing else, so a row carries no preview bearer tokens there.
+test('the sync feed signs originals only', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const route = await readFile(new URL('../app/api/files/delta/route.js', import.meta.url), 'utf8');
+  assert.match(route, /presignFileUrls\(page\.changed, \{ previews: false \}\)/);
+  const lib = await readFile(new URL('../lib/storage.js', import.meta.url), 'utf8');
+  const fn = lib.slice(lib.indexOf('export async function presignFileUrls'));
+  assert.ok(fn.indexOf('if (!previews)') > 0 && fn.indexOf('if (!previews)') < fn.indexOf('thumbnailKeyToSign('), 'returns before any preview is signed');
 });
