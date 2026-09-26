@@ -79,6 +79,30 @@ test('the probed frame model is kept only as a set anchored on a valid rate', ()
   assert.deepEqual(uploadFields({ name: 'a.mov', media: probed }).metadata, probed);
 });
 
+test('a registration\'s own metadata cannot set the frame model, only the library\'s fields', () => {
+  // `metadata` goes into the row as sent, apart from what uploadFields
+  // decides. A rate or start timecode taken from it unchecked would pin
+  // every comment on the file to the wrong frame.
+  const out = uploadFields({
+    name: 'a.mov',
+    metadata: {
+      client: 'Acme',
+      fps: '24', frames: 'lots', tcStart: -3, dropFrame: 'yes', fpsUnknown: true,
+      filmstrip: { frames: 1, columns: 1, tileWidth: 1, tileHeight: 1 },
+      width: '640', height: 'tall', duration: 12.34,
+    },
+  });
+  assert.deepEqual(out.metadata, { client: 'Acme', width: 640, duration: 12.3 },
+    'the size and length checked as media facts are; the rest of the media keys dropped');
+
+  // Even a well-formed model: the frame model is the probe's, sent as `media`,
+  // and one assembled half from each would be a model no probe read.
+  const probed = { fps: { num: 24000, den: 1001 }, frames: 1440, tcStart: 86400, dropFrame: false };
+  assert.deepEqual(uploadFields({ name: 'a.mov', metadata: { ...probed } }).metadata, {});
+  const mixed = uploadFields({ name: 'a.mov', metadata: { frames: 99, tcStart: 5 }, media: { fps: probed.fps } }).metadata;
+  assert.deepEqual(mixed, { fps: probed.fps, tcStart: 0, dropFrame: false });
+});
+
 test('durations read like a player shows them', () => {
   assert.equal(fmtDuration(42.04), '0:42');
   assert.equal(fmtDuration(83.4), '1:23');

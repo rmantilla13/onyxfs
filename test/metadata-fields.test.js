@@ -18,6 +18,16 @@ test('a patch keeps known fields, coerced to their type', () => {
   assert.deepEqual(validateMetadataPatch(['author'], schema), {});
 });
 
+test('a patch never writes the media\'s own facts, even through a field of that name', () => {
+  // A schema from before these were reserved might have an "FPS" field; the
+  // frame model is still the server's, read from the container.
+  const legacy = normalizeSchema({ fields: [{ key: 'fps', label: 'FPS', type: 'text' }, { key: 'author', label: 'Author', type: 'text' }] });
+  assert.deepEqual(
+    validateMetadataPatch({ fps: '24', frames: 10, tcStart: 0, dropFrame: true, fpsUnknown: false, duration: 3, author: 'Ada' }, legacy),
+    { author: 'Ada' },
+  );
+});
+
 test('an empty value clears the field instead of being ignored', () => {
   // updateFile merges, so a skipped empty left the old value in place and a
   // set field could never be emptied again.
@@ -46,5 +56,9 @@ test('a field that would collide or say nothing is refused', () => {
   // Keys the facet rail already uses for something else.
   assert.match(addMetadataField(schema, { label: 'Format' }).error, /already exists/);
   assert.match(addMetadataField(schema, { label: 'Tags' }).error, /already exists/);
+  // Nor one named for the media's own facts, which only the server writes.
+  for (const label of ['FPS', 'Frames', 'Duration', 'Filmstrip', 'Width']) {
+    assert.match(addMetadataField(schema, { label }).error, /already exists/, label);
+  }
   assert.match(addMetadataField(schema, { label: 'Region', type: 'color' }).error, /type/);
 });
