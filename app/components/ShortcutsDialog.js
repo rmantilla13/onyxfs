@@ -63,6 +63,7 @@ function groups(mod) {
         [['Home', 'End'], 'Start or end'],
         [['M'], 'Mute'],
         [['F'], 'Fullscreen'],
+        [['C'], 'Comment on this frame'],
       ],
     },
     {

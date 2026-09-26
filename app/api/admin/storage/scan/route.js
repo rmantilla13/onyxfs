@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
-import { listFilesMissingHash, setFileContentHash, duplicateSummary, listFilespaces, getFilespace } from '@/lib/db';
-import { getStorageConfig, storageMode, cfgForFilespace, s3HeadObject } from '@/lib/storage';
+import { listFilesMissingHash, setFileContentHash, duplicateSummary } from '@/lib/db';
+import { getStorageConfig, storageMode, s3HeadObject } from '@/lib/storage';
+import { storageForKeys } from '@/lib/drive-storage';
 import { mapLimit } from '@/lib/folder-ops';
 
 export const runtime = 'nodejs';
@@ -33,7 +34,8 @@ export async function POST(req) {
   if (storageMode(cfg) !== 's3') {
     return NextResponse.json({ error: 'No bucket is configured, so there is nothing to scan.' }, { status: 400 });
   }
-  const cfgFor = await drivesWithOwnKeys(cfg);
+  // A drive with keys of its own is read with them.
+  const cfgFor = await storageForKeys(cfg);
 
   const started = Date.now();
   let after = typeof body.after === 'string' ? body.after : '';
@@ -54,21 +56,4 @@ export async function POST(req) {
   }
 
   return NextResponse.json({ checked, hashed, after, done, summary: await duplicateSummary() });
-}
-
-/**
- * A drive (filespace) with keys of its own lives in a bucket the Storage keys
- * may not open; its files are HEADed with its keys. Longest prefix first, so
- * a drive nested in another is matched before the one around it.
- */
-async function drivesWithOwnKeys(cfg) {
-  const own = [];
-  for (const f of await listFilespaces()) {
-    if (!f.accessKeyId || !f.hasSecret) continue;
-    const full = await getFilespace(f.id);
-    const prefix = String(full?.prefix || '').replace(/^\/+|\/+$/g, '');
-    if (full && prefix) own.push({ prefix, cfg: cfgForFilespace(cfg, full) });
-  }
-  own.sort((a, b) => b.prefix.length - a.prefix.length);
-  return (key) => own.find((o) => String(key).startsWith(`${o.prefix}/`))?.cfg || cfg;
 }

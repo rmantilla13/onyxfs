@@ -29,7 +29,9 @@ export async function GET(_req, { params }) {
   if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
 
   const file = await getFileById(params.id);
-  if (!file) return NextResponse.json({ error: 'File not found' }, { status: 404 });
+  // A trashed file is gone until it is restored: its row waits for the purge,
+  // and a URL minted for it now would outlive the decision to delete it.
+  if (!file || file.deletedAt) return NextResponse.json({ error: 'File not found' }, { status: 404 });
 
   // Authorize → presign, in that order, so a URL is never minted for a file
   // the caller may not have.
