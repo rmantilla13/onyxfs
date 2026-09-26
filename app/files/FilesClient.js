@@ -1935,7 +1935,11 @@ export default function FilesClient({
               right-click on the selection opens. */}
           <button type="button" className="btn" aria-haspopup="menu" onClick={(e) => openSelectionMenu(e.currentTarget)}>More</button>
           {selected.size > 0 && (
-            <button type="button" className="btn btn-danger" onClick={trashSelected}>Remove</button>
+            // Folders go through their own menu: with some selected, the
+            // count says how many files this removes.
+            <button type="button" className="btn btn-danger" onClick={trashSelected}>
+              {sel.selectedFolders.size ? `Remove ${selected.size}` : 'Remove'}
+            </button>
           )}
           <button type="button" className="btn btn-primary" onClick={() => sel.clear()}>Done</button>
         </div>
