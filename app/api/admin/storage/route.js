@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/admin-guard';
+import { requireSuperAdmin } from '@/lib/admin-guard';
 import { getStorageConfig, setStorageConfig, sanitizeStorageConfig, sanitizeStorageSubmission, s3TestConnection } from '@/lib/storage';
+import { audit } from '@/lib/audit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,7 +13,7 @@ export const maxDuration = 30;
 
 /** GET /api/admin/storage → sanitized config (no secret) + current mode. */
 export async function GET() {
-  const gate = await requireAdmin();
+  const gate = await requireSuperAdmin();
   if (gate.error) return gate.error;
   const cfg = await getStorageConfig({ fresh: true });
   return NextResponse.json({ config: sanitizeStorageConfig(cfg) });
@@ -25,7 +26,7 @@ export async function GET() {
  * With test=true, validates the S3 connection before saving.
  */
 export async function PUT(req) {
-  const gate = await requireAdmin();
+  const gate = await requireSuperAdmin();
   if (gate.error) return gate.error;
 
   let body = {};
@@ -65,5 +66,10 @@ export async function PUT(req) {
   }
 
   const saved = await setStorageConfig(merged, gate.email);
+  // What changed, never a secret: the provider, bucket and endpoint are what
+  // an admin reading Activity needs.
+  await audit(gate.email, 'storage.config', { type: 'storage', id: 'config', label: merged.bucket || merged.provider || 'storage' }, {
+    provider: merged.provider || null, bucket: merged.bucket || null, endpoint: merged.endpoint || null, tested: !!body.test,
+  });
   return NextResponse.json({ config: sanitizeStorageConfig(saved), tested: !!body.test });
 }

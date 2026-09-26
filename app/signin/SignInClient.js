@@ -6,7 +6,7 @@ import { useFormState, useFormStatus } from 'react-dom';
 import { requestMagicLink, requestAccess } from './actions';
 import BrandLogo from '@/app/components/BrandLogo';
 
-export default function SignInClient({ brandName, tagline, logo, oktaEnabled, linksPrinted, returnTo, error }) {
+export default function SignInClient({ brandName, tagline, logo, oktaEnabled, linksPrinted, returnTo, error, requestsEnabled = true }) {
   const [mode, setMode] = useState('signin');
   const [linkState, sendLink] = useFormState(requestMagicLink, {});
   const [accessState, askAccess] = useFormState(requestAccess, {});
@@ -66,13 +66,21 @@ export default function SignInClient({ brandName, tagline, logo, oktaEnabled, li
           </form>
         )}
 
-        <button
-          onClick={() => setMode(mode === 'signin' ? 'request' : 'signin')}
-          className="small muted"
-          style={{ background: 'none', border: 'none', padding: 0, marginTop: 24, cursor: 'pointer', textDecoration: 'underline' }}
-        >
-          {mode === 'signin' ? "Don't have access yet?" : 'Back to sign in'}
-        </button>
+        {/* With request-access off, only an admin can add someone; the
+            server refuses the action too, so this is only the offer. */}
+        {requestsEnabled ? (
+          <button
+            onClick={() => setMode(mode === 'signin' ? 'request' : 'signin')}
+            className="small muted"
+            style={{ background: 'none', border: 'none', padding: 0, marginTop: 24, cursor: 'pointer', textDecoration: 'underline' }}
+          >
+            {mode === 'signin' ? "Don't have access yet?" : 'Back to sign in'}
+          </button>
+        ) : (
+          <p className="small muted" style={{ margin: '24px 0 0' }}>
+            {`Don't have access yet? Ask an admin of ${brandName} to add you.`}
+          </p>
+        )}
       </div>
     </main>
   );

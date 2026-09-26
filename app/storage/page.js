@@ -1,10 +1,10 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import { auth } from '@/auth';
+import { getSessionUser } from '@/lib/session';
 import { isAdmin } from '@/lib/auth-allowlist';
 import { loadBrand } from '@/lib/brand-config';
 import {
-  listFilespacesForSpace, storageReport, countFilesUnderPrefix, duplicateSummary, getFeatureFlags, getAvatarUrl,
+  listFilespacesForSpace, storageReport, countFilesUnderPrefix, duplicateSummary, getFeatureFlags,
 } from '@/lib/db';
 import { presignFileUrls } from '@/lib/storage';
 import { fmtSize } from '@/lib/media';
@@ -32,12 +32,10 @@ const extOf = (name) => (/\.([A-Za-z0-9]{1,8})$/.exec(String(name || '')) || [])
  * (lib/db.js) do not filter.
  */
 export default async function StoragePage() {
-  const session = await auth();
-  const email = session?.user?.email;
-  if (!email) redirect('/signin?callbackUrl=/storage');
+  const user = await getSessionUser();
+  if (!user) redirect('/signin?callbackUrl=/storage');
+  const { email, avatarUrl } = user;
   if (!isAdmin(email)) redirect('/files');
-  // The account menu's picture, or null for initials; never throws.
-  const avatarUrl = await getAvatarUrl(email);
 
   const [brand, drives, flags] = await Promise.all([loadBrand(), listFilespacesForSpace(email), getFeatureFlags()]);
   const [report, dups, driveRows] = await Promise.all([

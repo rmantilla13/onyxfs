@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
-import { createFile, buildPrincipal, getFilespaceForUser } from '@/lib/db';
+import { createFile, getFilespaceForUser, storageKeyInUse } from '@/lib/db';
+import { requirePrincipal, uploadCheck, refusal } from '@/lib/authz';
 import { listFilesPage, listFolderTree, storagePrefixFor } from '@/lib/file-listing';
-import { driveAccess } from '@/lib/drive-access';
-import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject } from '@/lib/storage';
+import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject, s3DeleteObject } from '@/lib/storage';
 import { decodeCursor } from '@/lib/file-query';
 import { uploadFields } from '@/lib/media';
 import { parseFileRecord } from '@/lib/file-record';
@@ -24,10 +23,10 @@ export const maxDuration = 30;
  * building it counts every file in the library.
  */
 export async function GET(req) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal, email } = g;
   const url = new URL(req.url);
-  const principal = await buildPrincipal(session.user.email);
 
   const folderParam = url.searchParams.get('folder');
   const folderPrefix = url.searchParams.get('folderPrefix');
@@ -35,7 +34,7 @@ export async function GET(req) {
   const kindParam = url.searchParams.get('kind');
 
   // Filespace scope (Space is filespace-aware): restrict to this filespace's prefix.
-  const storagePrefix = await storagePrefixFor(session.user.email, url.searchParams.get('filespace'));
+  const storagePrefix = await storagePrefixFor(email, url.searchParams.get('filespace'), principal);
 
   const opts = {
     folder: folderParam === null ? undefined : folderParam,
@@ -73,8 +72,9 @@ export async function GET(req) {
  * is ignored, so who, when and what the bytes hash to stay the server's word.
  */
 export async function POST(req) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal, email } = g;
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
   const parsed = parseFileRecord(body);
@@ -82,33 +82,43 @@ export async function POST(req) {
   const { record } = parsed;
 
   // Recording a file makes its creator able to open it, so where it points is
-  // checked like an upload: not by a platform viewer, not into our own
+  // checked like an upload: a role that may add files, not into our own
   // previews or trash (parseFileRecord), and not into a drive this person
-  // cannot add to.
-  const principal = await buildPrincipal(session.user.email);
-  if (principal.roleId === 'viewer' && !principal.isAdmin) {
-    return NextResponse.json({ error: 'Your role can view files but not add them.' }, { status: 403 });
-  }
-  if (record.storageKey) {
-    const d = driveAccess(record.storageKey, principal.isAdmin ? { isAdmin: true } : principal.driveScope);
-    if (d.inDrive && !d.write) {
-      return NextResponse.json({ error: 'That file is in a drive you can view but not add to.' }, { status: 403 });
-    }
-  }
+  // cannot add to. Size waits for the bucket's answer below.
+  const allowed = await uploadCheck(principal, { key: record.storageKey });
+  if (!allowed.ok) return refusal(allowed);
 
   try {
     // The bucket's own word on what landed, never the client's: its ETag is
     // the content hash duplicates are found by, and its length the size the
-    // Storage page adds up. Best-effort — a bucket that will not answer a
-    // HEAD still gets its file recorded, just without a hash.
-    const facts = await objectFacts(session.user.email, record);
+    // Storage page adds up — and the size the quota counts. Best-effort — a
+    // bucket that will not answer a HEAD still gets its file recorded, just
+    // without a hash, at the size the upload declared.
+    const target = await objectTarget(email, record, principal);
+    const facts = target ? await s3HeadObject(target.cfg, record.storageKey).catch(() => null) : null;
+    const size = facts?.size != null ? facts.size : record.size;
+
+    // Presign checked the size the browser declared; this checks the size
+    // that arrived. Over a limit, the object is removed rather than left in
+    // the bucket uncounted — unless some other row points at that key, in
+    // which case it was never this upload's to remove.
+    if (size != null) {
+      const fits = await uploadCheck(principal, { key: record.storageKey, size });
+      if (!fits.ok) {
+        if (target && facts && !(await storageKeyInUse(record.storageKey))) {
+          await s3DeleteObject(target.cfg, record.storageKey).catch(() => {});
+        }
+        return refusal(fits);
+      }
+    }
+
     const { filespace, media, filmstrip, ...fields } = record;
     const file = await createFile({
       ...fields,
       ...uploadFields(record),
-      ...(facts?.size != null ? { size: facts.size } : {}),
+      ...(size != null ? { size } : {}),
       contentHash: facts?.etag || null,
-      createdBy: session.user.email,
+      createdBy: email,
     });
     // Presign so the just-uploaded file previews immediately on a private bucket.
     const [signed] = await presignFileUrls([file]);
@@ -118,13 +128,14 @@ export async function POST(req) {
   }
 }
 
-async function objectFacts(email, body) {
-  if (body.storage !== 's3' || !body.storageKey) return null;
+/** The bucket config an S3 record's object lives under, or null when there is nothing to ask. */
+async function objectTarget(email, record, principal) {
+  if (record.storage !== 's3' || !record.storageKey) return null;
   try {
     const cfg = await getStorageConfig();
     if (storageMode(cfg) !== 's3') return null;
-    const fs = body.filespace ? await getFilespaceForUser(email, String(body.filespace)) : null;
-    return await s3HeadObject(fs ? cfgForFilespace(cfg, fs) : cfg, String(body.storageKey));
+    const fs = record.filespace ? await getFilespaceForUser(email, String(record.filespace), principal) : null;
+    return { cfg: fs ? cfgForFilespace(cfg, fs) : cfg };
   } catch {
     return null;
   }

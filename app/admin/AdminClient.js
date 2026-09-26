@@ -11,8 +11,11 @@ import { fmtSize } from '@/app/components/ui/FileCard';
 // lib/features.js and lib/brand-config.js, and secrets are environment
 // variables again rather than rows that could be edited from the panel they
 // protect.
+// Storage is the bucket every file lives in, so it takes a super-admin
+// (SUPER_ADMIN_EMAILS, or every admin when that is unset); the routes behind
+// it refuse anyone else, and the tab is not offered to them.
 const TABS = [
-  { key: 'storage', label: 'Storage' },
+  { key: 'storage', label: 'Storage', superOnly: true },
   { key: 'filespaces', label: 'Drives' },
   { key: 'access', label: 'Access' },
   { key: 'health', label: 'Health' },
@@ -27,8 +30,8 @@ async function api(url, opts) {
 
 export default function AdminClient({ superAdmin, initialTab }) {
   // ?tab= lets the files UI's "Manage filespaces…" land on the right tab.
-  const [tab, setTab] = useState(TABS.some((t) => t.key === initialTab) ? initialTab : 'storage');
   const tabs = TABS.filter((t) => !t.superOnly || superAdmin);
+  const [tab, setTab] = useState(tabs.some((t) => t.key === initialTab) ? initialTab : tabs[0].key);
 
   return (
     <main className="shell" style={{ padding: '24px 24px 64px' }}>
@@ -417,9 +420,10 @@ function AccessTab() {
 
   const revoke = async (r) => {
     const ok = await confirm({
-      title: `Revoke access for ${r.email}?`,
-      body: 'Their invite is removed and their account deleted, which signs out any open browser session. Desktop tokens stop working on their next request. Files they uploaded stay.',
-      confirmLabel: 'Revoke',
+      title: `Remove ${r.email}?`,
+      body: 'They can no longer sign in, and lose their drive access, devices and the links they made. Any open browser session ends on its next request. Files they uploaded stay.',
+      confirmLabel: 'Remove',
+      destructive: true,
     });
     if (ok) act(() => api(`/api/admin/invites?email=${encodeURIComponent(r.email)}`, { method: 'DELETE' }));
   };
@@ -427,7 +431,7 @@ function AccessTab() {
   return (
     <Panel
       title="Who can sign in"
-      hint="Onyx is invite-only. Revoking removes the invite row and deletes the auth account, which signs out any live browser session; desktop tokens stop within one request because the allowlist is re-checked on every call."
+      hint="Sign-in is by invitation. Removing someone takes their sign-in, drive access, devices and links with it, and ends any live session on its next request; their files stay."
     >
       <div className="row" style={{ marginBottom: 16 }}>
         <input className="input" style={{ maxWidth: 280 }} placeholder="someone@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />

@@ -34,10 +34,16 @@ test('nothing in a bucket to delete is nothing', () => {
   assert.equal(purgeTarget(null), null);
 });
 
-test('the cron route deletes what purgeTarget names, not row.storageKey', async () => {
-  const src = await readFile(new URL('../app/api/cron/maintenance/route.js', import.meta.url), 'utf8');
+test('the purge deletes what purgeTarget names, not row.storageKey', async () => {
+  // The daily sweep and Admin → Trash → Purge now share purgeTrashedFile in
+  // lib/maintenance.js; the cron route and the admin route both call it.
+  const src = await readFile(new URL('../lib/maintenance.js', import.meta.url), 'utf8');
   assert.ok(!/s3DeleteObject\(cfg,\s*row\.storageKey\)/.test(src), 'purge must not delete the old key directly');
   assert.ok(/purgeTarget\(row/.test(src), 'purge goes through purgeTarget');
+  const cron = await readFile(new URL('../app/api/cron/maintenance/route.js', import.meta.url), 'utf8');
+  assert.match(cron, /runMaintenance\(/);
+  const admin = await readFile(new URL('../app/api/admin/trash/purge/route.js', import.meta.url), 'utf8');
+  assert.match(admin, /purgeTrashedFile\(/);
 });
 
 test('POST /api/files requires a storage key for an S3 row', async () => {

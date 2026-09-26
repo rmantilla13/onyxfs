@@ -1,15 +1,11 @@
 import { redirect } from 'next/navigation';
-import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
-import { isAdmin } from '@/lib/auth-allowlist';
-import {
-  getFeatureFlags, getRolesConfig, listFilespacesForSpace, getFileMetadataSchema, buildPrincipal, getAvatarUrl,
-} from '@/lib/db';
+import { listFilespacesForSpace, getFileMetadataSchema } from '@/lib/db';
+import { getSessionUser } from '@/lib/session';
+import { getPrincipal, can } from '@/lib/authz';
 import { listFilesPage, listFolderTree } from '@/lib/file-listing';
 import { listingKey } from '@/lib/listing-cache';
 import { cleanFolder } from '@/lib/folder-ops';
-import { resolveRole, effectiveFlags } from '@/lib/roles';
-import { applyBetaAdminFlags } from '@/lib/features';
 import { normalizeSchema } from '@/lib/dam';
 import { canWriteDrive } from '@/lib/drive-access';
 import TopNav from '@/app/components/TopNav';
@@ -20,35 +16,34 @@ export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Files' };
 
 export default async function FilesPage({ searchParams }) {
-  const session = await auth();
-  const email = session?.user?.email;
-  if (!email) redirect('/signin');
-  // The account menu's picture, or null for initials; never throws.
-  const avatarUrl = await getAvatarUrl(email);
+  // Signed in, and still allowed to be: not suspended, not signed out
+  // everywhere since this session began (lib/session.js). The picture comes
+  // from the same query.
+  const user = await getSessionUser();
+  if (!user) redirect('/signin');
+  const { email, avatarUrl } = user;
 
-  const admin = isAdmin(email);
-  const [brand, globalFlags, rolesConfig, filespaces, rawSchema] = await Promise.all([
+  // One principal for the whole page (lib/authz.js): the flags as this person
+  // sees them, their capabilities, and their drives with each role already
+  // capped by their platform role.
+  const principal = await getPrincipal(email, { person: user.person });
+  const admin = principal.isAdmin;
+  const [brand, filespaces, rawSchema] = await Promise.all([
     loadBrand(),
-    getFeatureFlags(),
-    getRolesConfig(),
     // Admins see every filespace (as owner), others their grants. The old
     // listFilespacesForUser left admins with an empty switcher: env-admins are
     // never stored as grant rows.
-    listFilespacesForSpace(email),
+    listFilespacesForSpace(email, principal),
     getFileMetadataSchema(),
   ]);
-
-  // Global flags → admin beta overrides → narrowed by role. The role can only
-  // take features away, never grant one the platform has off.
-  const role = resolveRole(email, rolesConfig, { isAdmin: admin });
-  const flags = effectiveFlags(applyBetaAdminFlags(globalFlags, admin), role);
+  const { flags } = principal;
 
   // In a drive, the drive's role decides as well: its viewers see the upload
   // and edit controls go, as the routes behind them now refuse
   // (lib/drive-access.js).
   const filespaceId = searchParams?.filespace || '';
   const activeDrive = filespaces.find((f) => f.id === filespaceId) || null;
-  const canWrite = (role.full || role.id !== 'viewer') && (!activeDrive || canWriteDrive(activeDrive.role, admin));
+  const canWrite = can(principal, 'files.upload').ok && (!activeDrive || canWriteDrive(activeDrive.role, admin));
 
   // The folder in the URL, first page and folder tree, rendered with the
   // page: the directory is in the first paint rather than two requests after
@@ -61,7 +56,6 @@ export default async function FilesPage({ searchParams }) {
   // the page is on screen (/api/filespaces/usage).
   const folder = cleanFolder(searchParams?.folder || '');
   const storagePrefix = activeDrive ? String(activeDrive.prefix || '').replace(/^\/+|\/+$/g, '') : undefined;
-  const principal = await buildPrincipal(email);
   const [page, tree] = await Promise.all([
     // The folder's own files, the top level included — what the client asks
     // for with no search or filter on (fetchListing), which this answers.

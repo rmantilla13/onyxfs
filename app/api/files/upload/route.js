@@ -1,20 +1,44 @@
 import { NextResponse } from 'next/server';
 import { handleUpload } from '@vercel/blob/client';
-import { auth } from '@/auth';
+import { usedBytesBy } from '@/lib/db';
+import { requirePrincipal, can, refusal, uploadAllowance } from '@/lib/authz';
 
 export const runtime = 'nodejs';
+
+// Vercel Blob's own ceiling for a client upload through this route.
+const BLOB_MAX_BYTES = 1024 * 1024 * 1024; // 1 GB
 
 /**
  * POST /api/files/upload — Vercel Blob client-upload token for the library
  * (default backend). Broad content types, large size cap. Used when storage
  * mode is 'blob'; the S3 path uses /api/files/presign instead.
+ *
+ * The token carries the most this person may upload right now:
+ * min(1 GB, their largest upload, what is left of their quota). Blob mode
+ * has no drives, so that and the role's files.upload are the whole check;
+ * POST /api/files checks the recorded size again.
  */
 export async function POST(req) {
-  const session = await auth();
-  if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal, email } = g;
+  const allowed = can(principal, 'files.upload');
+  if (!allowed.ok) return refusal(allowed);
 
   let body;
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
+
+  const needsUsage = !principal.isAdmin && principal.limits?.storageQuotaBytes != null;
+  const allowance = uploadAllowance(principal, { usedBytes: needsUsage ? await usedBytesBy(email) : 0 });
+  if (allowance === 0) {
+    return NextResponse.json({
+      error: principal.limits?.maxUploadBytes === 0
+        ? 'Your role cannot upload files.'
+        : 'You have reached your storage quota. Remove some files, or ask an admin for more room.',
+      code: 'quota',
+    }, { status: 413 });
+  }
+  const maximumSizeInBytes = allowance == null ? BLOB_MAX_BYTES : Math.min(BLOB_MAX_BYTES, allowance);
 
   try {
     const json = await handleUpload({
@@ -34,7 +58,7 @@ export async function POST(req) {
           'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
           'application/zip',
         ],
-        maximumSizeInBytes: 1024 * 1024 * 1024, // 1 GB
+        maximumSizeInBytes,
         addRandomSuffix: true,
         validUntil: Date.now() + 30 * 60 * 1000,
       }),

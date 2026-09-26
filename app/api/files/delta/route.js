@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import {
-  listFileChanges, currentChangeCursor, buildPrincipal, getFilespaceForUser, listFilespaces, listSyncFolders,
+  listFileChanges, currentChangeCursor, getFilespaceForUser, listFilespaces, listSyncFolders,
 } from '@/lib/db';
 import { resolveActor } from '@/lib/desktop-guard';
 import { presignFileUrls } from '@/lib/storage';
@@ -38,13 +38,15 @@ export async function GET(req) {
   if (actor.error) return actor.error;
 
   const url = new URL(req.url);
-  const principal = await buildPrincipal(actor.email);
+  // The same principal the web and the desktop's own routes use: drive roles
+  // already capped by the platform role (lib/authz.js).
+  const { principal } = actor;
   const allDrives = await listFilespaces();
 
   const driveParam = (url.searchParams.get('drive') || '').trim();
   let drive = null;
   if (driveParam && driveParam !== 'library') {
-    drive = await getFilespaceForUser(actor.email, driveParam);
+    drive = await getFilespaceForUser(actor.email, driveParam, principal);
     if (!drive) return NextResponse.json({ error: 'No access to this drive' }, { status: 404 });
   }
   const scope = syncScope({ drive, library: driveParam === 'library', allDrives });

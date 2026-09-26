@@ -71,10 +71,20 @@ describe('credential ladder', () => {
       assert.equal(plan.staticAllowed, false);
     });
 
-    test('editors and owners may use a static key', () => {
+    test('only an admin may use the deployment key', () => {
+      // The static key reaches every drive in the bucket. An admin owns all
+      // of it anyway; an editor of one drive would be handed every other.
       for (const role of ['editor', 'owner']) {
-        assert.equal(credentialPlan(r2, { id: 'f' }, { role }).staticAllowed, true);
+        assert.equal(credentialPlan(r2, { id: 'f' }, { role }).staticAllowed, false, `non-admin ${role}`);
+        assert.equal(credentialPlan(r2, { id: 'f' }, { role, isAdmin: true }).staticAllowed, true, `admin ${role}`);
       }
+      // …on every rung that could fall back to it.
+      assert.equal(credentialPlan(aws, { id: 'f' }, { role: 'editor' }).staticAllowed, false);
+      assert.equal(credentialPlan({ ...aws, endpoint: 'https://s3.us-west-004.backblazeb2.com' }, { id: 'f' }, { role: 'editor' }).staticAllowed, false);
+    });
+
+    test('an admin viewer role still never gets the static key', () => {
+      assert.equal(credentialPlan(r2, { id: 'f' }, { role: 'viewer', isAdmin: true }).staticAllowed, false);
     });
 
     test('an unspecified role defaults to viewer, the least privileged', () => {
@@ -174,11 +184,12 @@ describe('Backblaze B2', () => {
     }
   });
 
-  test('a viewer still may not fall back to the master key', () => {
-    // The scoped rung is tried first, but if minting fails the viewer rule
-    // is what stops a read-only member being handed the deployment's key.
+  test('nobody but an admin may fall back to the master key', () => {
+    // The scoped rung is tried first, but if minting fails the admin rule
+    // is what stops a member being handed the deployment's key.
     assert.equal(credentialPlan(b2, { id: 'f' }, { role: 'viewer' }).staticAllowed, false);
-    assert.equal(credentialPlan(b2, { id: 'f' }, { role: 'editor' }).staticAllowed, true);
+    assert.equal(credentialPlan(b2, { id: 'f' }, { role: 'editor' }).staticAllowed, false);
+    assert.equal(credentialPlan(b2, { id: 'f' }, { role: 'owner', isAdmin: true }).staticAllowed, true);
   });
 
   test('the refusal names the B2 capability, not an AWS IAM action', () => {

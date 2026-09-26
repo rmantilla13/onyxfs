@@ -1,10 +1,8 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
 import {
   createUpload, getUpload, deleteUpload, touchUpload, listUploads, getFilespaceForUser, getFilespaceForWrite,
-  driveScopeFor,
 } from '@/lib/db';
-import { driveAccess } from '@/lib/drive-access';
+import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 import {
   getStorageConfig, storageMode, cfgForFilespace, choosePartSize, partCount, buildObjectKey,
   s3CreateMultipartUpload, s3PresignUploadParts, s3ListParts,
@@ -40,13 +38,13 @@ export const dynamic = 'force-dynamic';
  * reading its parts or abandoning it only takes membership.
  * → { cfg } | { denied: true }
  */
-async function configFor(upload, email, { write = true } = {}) {
+async function configFor(upload, email, { write = true, principal } = {}) {
   const base = await getStorageConfig();
   if (storageMode(base) !== 's3') return { cfg: null };
   if (!upload?.filespaceId) return { cfg: base };
   const fs = write
-    ? await getFilespaceForWrite(email, upload.filespaceId)
-    : await getFilespaceForUser(email, upload.filespaceId);
+    ? await getFilespaceForWrite(email, upload.filespaceId, principal)
+    : await getFilespaceForUser(email, upload.filespaceId, principal);
   if (!fs) return write ? { denied: true } : { cfg: base };
   return { cfg: cfgForFilespace(base, fs) };
 }
@@ -56,16 +54,15 @@ const noWrite = () => NextResponse.json({ error: 'You can view this drive but no
 
 /** GET → this user's resumable uploads, for a "pick up where you left off" UI. */
 export async function GET() {
-  const session = await auth();
-  const email = session?.user?.email;
-  if (!email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-  return NextResponse.json({ uploads: await listUploads(email) });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  return NextResponse.json({ uploads: await listUploads(g.email) });
 }
 
 export async function POST(req) {
-  const session = await auth();
-  const email = session?.user?.email;
-  if (!email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal, email } = g;
 
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
@@ -80,14 +77,20 @@ export async function POST(req) {
 
   try {
     if (action === 'create') {
-      const size = Number(body.size) || 0;
       if (!body.filename) return NextResponse.json({ error: 'filename required' }, { status: 400 });
+      // The declared size is what the part plan, the largest-upload limit and
+      // the quota are all checked against; POST /api/files checks again
+      // against what landed.
+      const size = Number(body.size);
+      if (body.size == null || !Number.isFinite(size) || size < 0) {
+        return NextResponse.json({ error: 'The upload needs its size in bytes.' }, { status: 400 });
+      }
 
       // Scope to the filespace so the object lands exactly where the desktop
       // app mounts it, not at the bucket root.
       let scoped = cfg;
       if (body.filespaceId) {
-        const fs = await getFilespaceForWrite(email, body.filespaceId);
+        const fs = await getFilespaceForWrite(email, body.filespaceId, principal);
         if (!fs) return noWrite();
         scoped = cfgForFilespace(cfg, fs);
       }
@@ -99,9 +102,10 @@ export async function POST(req) {
       // filespace on a different provider gets that provider's limit.
       const partSize = choosePartSize(size, scoped);
 
-      // As in the presign route: landing inside a drive takes its editor.
-      const d = driveAccess(buildObjectKey(scoped, body.filename, body.folder), await driveScopeFor(email));
-      if (d.inDrive && !d.write) return noWrite();
+      // As in the presign route: a role that may add files, landing inside a
+      // drive takes its editor, and the size is held to the limits.
+      const d = await uploadCheck(principal, { key: buildObjectKey(scoped, body.filename, body.folder), size });
+      if (!d.ok) return refusal(d);
 
       const { uploadId, key, name } = await s3CreateMultipartUpload(scoped, {
         filename: body.filename,
@@ -123,7 +127,14 @@ export async function POST(req) {
 
     const upload = await getUpload(body.id, email);
     if (!upload) return NextResponse.json({ error: 'Upload not found' }, { status: 404 });
-    const { cfg: scoped, denied } = await configFor(upload, email, { write: !readOnly.has(action) });
+    // Signing more parts or assembling them is still adding a file: a role
+    // that lost files.upload mid-upload cannot finish it. Reading its parts
+    // or abandoning it can.
+    if (!readOnly.has(action)) {
+      const d = can(principal, 'files.upload');
+      if (!d.ok) return refusal(d);
+    }
+    const { cfg: scoped, denied } = await configFor(upload, email, { write: !readOnly.has(action), principal });
     if (denied) return noWrite();
     if (!scoped) return NextResponse.json({ error: 'Storage is not configured for S3.' }, { status: 400 });
 

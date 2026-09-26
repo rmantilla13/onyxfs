@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
-import { isAdmin } from '@/lib/auth-allowlist';
 import { listFilespacesForSpace, countFilesUnderPrefix, libraryUsage } from '@/lib/db';
+import { requirePrincipal } from '@/lib/authz';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,11 +17,12 @@ export const maxDuration = 30;
  * for admins alone, for the same reason.
  */
 export async function GET() {
-  const session = await auth();
-  const email = session?.user?.email;
-  if (!email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
-  const admin = isAdmin(email);
-  const drives = (await listFilespacesForSpace(email)).filter((d) => admin || d.role === 'owner');
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal, email } = g;
+  const admin = principal.isAdmin;
+  // Owner after the ceiling: a Viewer granted owner looks after nothing.
+  const drives = (await listFilespacesForSpace(email, principal)).filter((d) => admin || d.role === 'owner');
   const [rows, library] = await Promise.all([
     Promise.all(drives.map(async (d) => [d.id, await countFilesUnderPrefix(d.prefix).catch(() => null)])),
     admin ? libraryUsage().catch(() => null) : null,

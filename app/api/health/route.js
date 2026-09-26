@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
 import { isAdmin } from '@/lib/auth-allowlist';
+import { getSessionUser } from '@/lib/session';
 import { sql, hasConnectionString } from '@/lib/db';
 import { getStorageConfig, storageMode, s3TestConnection } from '@/lib/storage';
 import { allIntegrationStatuses } from '@/lib/integrations';
@@ -27,8 +27,7 @@ async function authorize(req) {
   const header = req.headers.get('authorization') || '';
   if (secret && header === `Bearer ${secret}`) return true;
   try {
-    const session = await auth();
-    return isAdmin(session?.user?.email);
+    return isAdmin((await getSessionUser())?.email);
   } catch {
     // auth() itself failing is precisely the case this endpoint exists for.
     return false;
