@@ -1,4 +1,4 @@
-import { requireAdminPage } from '../_lib/guard';
+import { requireSuperAdminPage } from '../_lib/guard';
 import BackendClient from './BackendClient';
 
 export const dynamic = 'force-dynamic';
@@ -11,6 +11,6 @@ export const metadata = { title: 'Backend · Admin' };
  * working bucket. Admins for now; super-admins only with Phase 1.
  */
 export default async function BackendPage() {
-  await requireAdminPage('/admin/storage');
+  await requireSuperAdminPage('/admin/storage');
   return <BackendClient />;
 }

@@ -62,6 +62,47 @@ test('media facts drop anything that is not a sane positive number', () => {
   assert.deepEqual(mediaFacts(null), {});
 });
 
+test('the probed frame model is kept only as a set anchored on a valid rate', () => {
+  const probed = { fps: { num: 24000, den: 1001 }, frames: 1440, tcStart: 86400, dropFrame: false };
+  assert.deepEqual(mediaFacts({ width: 1920, height: 1080, ...probed }), { width: 1920, height: 1080, ...probed });
+  // No rate, no model: a frame count or start means nothing without it.
+  assert.deepEqual(mediaFacts({ frames: 1440, tcStart: 86400, dropFrame: true }), {});
+  for (const fps of [23.976, '24000/1001', { num: 24.5, den: 1 }, { num: 0, den: 1 }, { num: 24, den: 0 }, { num: 5000, den: 1 }, { num: '24', den: '1x' }]) {
+    assert.deepEqual(mediaFacts({ fps, frames: 10 }), {}, JSON.stringify(fps));
+  }
+  // Integers and booleans only, each field on its own.
+  assert.deepEqual(
+    mediaFacts({ fps: { num: 30000, den: 1001 }, frames: 1.5, tcStart: -3, dropFrame: 'yes' }),
+    { fps: { num: 30000, den: 1001 }, tcStart: 0, dropFrame: false },
+  );
+  // And it survives the upload registration.
+  assert.deepEqual(uploadFields({ name: 'a.mov', media: probed }).metadata, probed);
+});
+
+test('a registration\'s own metadata cannot set the frame model, only the library\'s fields', () => {
+  // `metadata` goes into the row as sent, apart from what uploadFields
+  // decides. A rate or start timecode taken from it unchecked would pin
+  // every comment on the file to the wrong frame.
+  const out = uploadFields({
+    name: 'a.mov',
+    metadata: {
+      client: 'Acme',
+      fps: '24', frames: 'lots', tcStart: -3, dropFrame: 'yes', fpsUnknown: true,
+      filmstrip: { frames: 1, columns: 1, tileWidth: 1, tileHeight: 1 },
+      width: '640', height: 'tall', duration: 12.34,
+    },
+  });
+  assert.deepEqual(out.metadata, { client: 'Acme', width: 640, duration: 12.3 },
+    'the size and length checked as media facts are; the rest of the media keys dropped');
+
+  // Even a well-formed model: the frame model is the probe's, sent as `media`,
+  // and one assembled half from each would be a model no probe read.
+  const probed = { fps: { num: 24000, den: 1001 }, frames: 1440, tcStart: 86400, dropFrame: false };
+  assert.deepEqual(uploadFields({ name: 'a.mov', metadata: { ...probed } }).metadata, {});
+  const mixed = uploadFields({ name: 'a.mov', metadata: { frames: 99, tcStart: 5 }, media: { fps: probed.fps } }).metadata;
+  assert.deepEqual(mixed, { fps: probed.fps, tcStart: 0, dropFrame: false });
+});
+
 test('durations read like a player shows them', () => {
   assert.equal(fmtDuration(42.04), '0:42');
   assert.equal(fmtDuration(83.4), '1:23');
@@ -196,4 +237,48 @@ test('a poster is recorded only alongside a thumbnail, and only under a key the 
   assert.equal(uploadFields({ thumbnailKey: KEY, posterKey: 'files/someone-else.jpg' }).posterKey, null);
   assert.equal(uploadFields({ thumbnailKey: KEY, posterKey: KEY }).posterKey, null, 'a thumbnail key is not a poster');
   assert.equal(uploadFields({ thumbnailKey: KEY }).posterKey, null);
+});
+
+// The thumbnail's smaller siblings: keys derived on the server, never taken
+// from a client, and never accepted in another preview column.
+test('a sibling key is the thumbnail key with its size before the extension', async () => {
+  const { thumbSiblingKey, isThumbSiblingKey, isPosterKey, isFilmstripKey } = await import('../lib/media.js');
+  assert.equal(thumbSiblingKey(KEY, 'sm'), '_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.sm.webp');
+  assert.equal(thumbSiblingKey('_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.jpg', 'xs'), '_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.xs.jpg');
+  assert.ok(isThumbSiblingKey(thumbSiblingKey(KEY, 'sm')));
+  // Only from a key the presign route named, and only for a known size.
+  assert.equal(thumbSiblingKey('files/Campaign/x-thumb-a.jpg', 'sm'), null);
+  assert.equal(thumbSiblingKey('drives/finance/salaries.pdf', 'sm'), null);
+  assert.equal(thumbSiblingKey(KEY, 'lg'), null);
+  assert.equal(thumbSiblingKey(null, 'sm'), null);
+  // No other column accepts a sibling, and a sibling is not any other key.
+  const sib = thumbSiblingKey(KEY, 'xs');
+  assert.equal(isThumbKey(sib), false);
+  assert.equal(isPosterKey(sib), false);
+  assert.equal(isFilmstripKey(sib), false);
+  assert.equal(isThumbSiblingKey(KEY), false);
+  assert.equal(isThumbSiblingKey('_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.poster.webp'), false);
+  assert.equal(isThumbSiblingKey('_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.lg.webp'), false);
+});
+
+test('an upload keeps only known sibling sizes, and only with its thumbnail', async () => {
+  const { thumbSizesFrom } = await import('../lib/media.js');
+  assert.deepEqual(thumbSizesFrom(['xs', 'sm', 'sm', 'lg']), ['sm', 'xs']);
+  assert.deepEqual(thumbSizesFrom('xs'), ['xs']);
+  assert.equal(thumbSizesFrom([]), null);
+  assert.equal(thumbSizesFrom({ sm: true }), null);
+  assert.deepEqual(uploadFields({ thumbnailKey: KEY, thumbSizes: ['sm', 'xs'] }).thumbSizes, ['sm', 'xs']);
+  assert.equal(uploadFields({ thumbSizes: ['sm', 'xs'] }).thumbSizes, null, 'no siblings without the thumbnail they derive from');
+  assert.equal(uploadFields({ thumbnailKey: 'files/x.jpg', thumbSizes: ['sm'] }).thumbSizes, null);
+});
+
+test('HEIC and TIFF are drawable only where the browser was seen to decode them', () => {
+  const heic = { mime: 'image/heic', name: 'IMG_1.HEIC' };
+  const tiff = { mime: 'image/tiff', name: 'scan.tif' };
+  assert.equal(drawableKind(heic), null);
+  assert.equal(drawableKind(tiff), null);
+  assert.equal(drawableKind(heic, { probe: { heic: true } }), 'image');
+  assert.equal(drawableKind(tiff, { probe: { tiff: true } }), 'image');
+  assert.equal(drawableKind(tiff, { probe: { heic: true } }), null);
+  assert.equal(drawableKind({ mime: '', name: 'a.heif' }, { probe: { heic: true } }), 'image');
 });

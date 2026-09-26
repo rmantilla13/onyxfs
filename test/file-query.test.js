@@ -9,7 +9,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildFileQuery, buildFolderCountQuery, artifactClauses, nextCursor, sortSpec, encodeCursor, decodeCursor, SORT_KEYS,
+  buildFileQuery, buildFolderCountQuery, artifactClauses, nextCursor, sortSpec, encodeCursor, decodeCursor, SORT_KEYS, FILE_COLUMNS,
 } from '../lib/file-query.js';
 import { drivePatterns } from '../lib/drive-access.js';
 
@@ -431,4 +431,16 @@ describe('cursors', () => {
     assert.equal(decodeCursor(null), null);
     assert.equal(decodeCursor(Buffer.from('{"no":"id"}').toString('base64url')), null);
   });
+});
+
+// A listing row carries what Quick Look and the grid's renditions need: the
+// large preview's key and which thumbnail siblings exist. Both are signed by
+// presignFileUrls from the row, so without them in the SELECT the grid falls
+// back to the grid poster and Quick Look to the original.
+test('the listing selects the preview and sibling columns', () => {
+  const cols = FILE_COLUMNS.split(', ');
+  assert.ok(cols.includes('poster_key'));
+  assert.ok(cols.includes('thumb_sizes'));
+  const { text } = buildFileQuery({ opts: {}, principal: { isAdmin: true } });
+  assert.ok(text.includes('f.poster_key') && text.includes('f.thumb_sizes'));
 });

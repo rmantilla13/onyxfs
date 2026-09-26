@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/admin-guard';
+import { requireSuperAdmin } from '@/lib/admin-guard';
 import {
   getStorageConfig, setStorageConfig, sanitizeStorageConfig, sanitizeStorageSubmission, s3TestConnection, s3SetAccelerate,
 } from '@/lib/storage';
@@ -7,6 +7,7 @@ import { deploymentOrigins } from './origins';
 import { storageLocationChange } from '@/lib/storage-presets';
 import { libraryUsage } from '@/lib/db';
 import { guardMove } from '@/lib/move-guard';
+import { audit } from '@/lib/audit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,12 +22,13 @@ export const maxDuration = 30;
  * much the library holds — what a change of bucket or provider would leave
  * behind, for the confirm in front of it — and the origins Apply CORS
  * would allow, so the page can say which before anything is applied.
+ * Super-admins only: the bucket every file lives in.
  *
  * Strict: a failed read is an error the page shows, not defaults that look
  * like "nothing is configured" and invite someone to fill the form in again.
  */
 export async function GET(req) {
-  const gate = await requireAdmin();
+  const gate = await requireSuperAdmin();
   if (gate.error) return gate.error;
   let cfg;
   try {
@@ -60,7 +62,7 @@ export async function GET(req) {
  * for anything that skipped the question.
  */
 export async function PUT(req) {
-  const gate = await requireAdmin();
+  const gate = await requireSuperAdmin();
   if (gate.error) return gate.error;
 
   let body = {};
@@ -129,5 +131,10 @@ export async function PUT(req) {
   }
 
   const saved = await setStorageConfig(merged, gate.email);
+  // What changed, never a secret: the provider, bucket and endpoint are what
+  // an admin reading Activity needs.
+  await audit(gate.email, 'storage.config', { type: 'storage', id: 'config', label: merged.bucket || merged.provider || 'storage' }, {
+    provider: merged.provider || null, bucket: merged.bucket || null, endpoint: merged.endpoint || null, tested: !!body.test,
+  });
   return NextResponse.json({ config: sanitizeStorageConfig(saved), tested: !!body.test });
 }

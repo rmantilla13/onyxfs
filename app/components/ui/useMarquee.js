@@ -1,7 +1,39 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { rectFrom, movedPast, edgeScroll } from '@/lib/marquee';
+
+/**
+ * The rectangle, outside React state: a drag moves it on every pointer move,
+ * and as page state that re-rendered the whole files page each time. It
+ * lives in this small store instead, and only <MarqueeRect> reads it.
+ */
+function createBoxStore() {
+  let box = null;
+  const subs = new Set();
+  return {
+    get: () => box,
+    set(next) {
+      if (next === box || (next && box && next.left === box.left && next.top === box.top && next.right === box.right && next.bottom === box.bottom)) return;
+      box = next;
+      subs.forEach((fn) => fn());
+    },
+    subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
+  };
+}
+
+/** The selection rectangle while a marquee is being drawn; nothing otherwise. */
+export function MarqueeRect({ store }) {
+  const box = useSyncExternalStore(store.subscribe, store.get, () => null);
+  if (!box) return null;
+  return (
+    <div
+      className="marquee"
+      aria-hidden
+      style={{ left: box.left, top: box.top, width: box.right - box.left, height: box.bottom - box.top }}
+    />
+  );
+}
 
 /**
  * Drag on empty space to draw a selection rectangle, as in Finder.
@@ -23,13 +55,19 @@ import { rectFrom, movedPast, edgeScroll } from '@/lib/marquee';
  * The listeners go on window for the length of a drag rather than using
  * pointer capture, so the drag keeps going over anything, including outside
  * the page. The click that ends a drag is swallowed: it lands on whatever
- * was under the pointer, and a card would otherwise toggle itself.
+ * was under the pointer, and a card would otherwise toggle itself; and
+ * `lastEndAt()` says when the last drag ended, for anything else that has to
+ * tell that release from a click. `onEnd(hits)` gets what the finished drag
+ * took — the page puts the keyboard on the last of them.
+ *
+ * `store` holds the rectangle for <MarqueeRect store={…} />.
  */
-export default function useMarquee({ canStart, hitsIn, onSelect, onClear, getSelection }) {
-  const [box, setBox] = useState(null);
+export default function useMarquee({ canStart, hitsIn, onSelect, onClear, getSelection, onEnd }) {
+  const [store] = useState(createBoxStore);
   const live = useRef(null);
-  live.current = { canStart, hitsIn, onSelect, onClear, getSelection };
+  live.current = { canStart, hitsIn, onSelect, onClear, getSelection, onEnd };
   const drag = useRef(null);
+  const endedAt = useRef(-Infinity);
 
   // Whether a menu was open when a press began. The menus close themselves on
   // that same press, from their own capture listeners, so by the time it
@@ -54,9 +92,16 @@ export default function useMarquee({ canStart, hitsIn, onSelect, onClear, getSel
       right: doc.right - window.scrollX,
       bottom: doc.bottom - window.scrollY,
     };
-    setBox((prev) => (prev && prev.left === view.left && prev.top === view.top && prev.right === view.right && prev.bottom === view.bottom ? prev : view));
-    live.current.onSelect(live.current.hitsIn(view), { base: d.base, additive: d.additive });
-  }, []);
+    store.set(view);
+    const hits = live.current.hitsIn(view);
+    d.hits = hits;
+    // Only when what it touches changes: a move within the same cards is not
+    // a new selection.
+    const sig = hits.join('\u0000');
+    if (sig === d.sig) return;
+    d.sig = sig;
+    live.current.onSelect(hits, { base: d.base, additive: d.additive });
+  }, [store]);
 
   const end = useCallback(() => {
     const d = drag.current;
@@ -69,8 +114,8 @@ export default function useMarquee({ canStart, hitsIn, onSelect, onClear, getSel
     window.removeEventListener('keydown', d.onKey, true);
     window.removeEventListener('scroll', d.onScroll);
     document.body.classList.remove('is-marqueeing');
-    setBox(null);
-  }, []);
+    store.set(null);
+  }, [store]);
 
   const onPointerDown = useCallback((e) => {
     if (e.button !== 0 || e.pointerType === 'touch' || drag.current) return;
@@ -118,6 +163,8 @@ export default function useMarquee({ canStart, hitsIn, onSelect, onClear, getSel
     d.onUp = () => {
       if (d.active) {
         update();
+        endedAt.current = performance.now();
+        live.current.onEnd?.(d.hits || []);
         // The click this release makes would land on a card and toggle it.
         const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
         window.addEventListener('click', swallow, { capture: true, once: true });
@@ -152,5 +199,6 @@ export default function useMarquee({ canStart, hitsIn, onSelect, onClear, getSel
 
   useEffect(() => end, [end]);
 
-  return { onPointerDown, box };
+  const lastEndAt = useCallback(() => endedAt.current, []);
+  return { onPointerDown, store, lastEndAt };
 }

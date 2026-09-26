@@ -70,3 +70,38 @@ describe('createListingCache', () => {
     assert.equal(c.get('k'), null);
   });
 });
+
+describe('extend and the return slot', () => {
+  const clock = () => { let t = 1_000_000; const now = () => t; now.tick = (ms) => { t += ms; }; return now; };
+
+  test('a listing grows as pages load, and keeps its first page\'s age', () => {
+    const now = clock();
+    const c = createListingCache({ now });
+    c.set('k', { files: [1], cursor: 'c1' });
+    now.tick(FRESH_MS - 1000);
+    assert.equal(c.extend('k', { files: [1, 2], cursor: 'c2' }), true);
+    assert.deepEqual(c.get('k'), { files: [1, 2], cursor: 'c2', fresh: true });
+    now.tick(2000);
+    assert.equal(c.get('k').fresh, false, 'loading more does not make it fresh again');
+    assert.equal(c.extend('nope', { files: [9] }), false, 'nothing to extend');
+    now.tick(KEEP_MS);
+    assert.equal(c.extend('k', { files: [1, 2, 3] }), false, 'too old to extend');
+  });
+
+  test('the return slot is for one place, taken once, and only while recent', async () => {
+    const { createReturnSlot } = await import('../lib/listing-cache.js');
+    const now = clock();
+    const r = createReturnSlot({ now });
+    r.save({ filespaceId: '', folder: 'A', scrollY: 900, focusId: 'f1' });
+    assert.equal(r.take({ filespaceId: '', folder: 'B' }), null, 'another folder');
+    assert.equal(r.take({ filespaceId: '', folder: 'A' }), null, 'used up by the miss');
+    r.save({ filespaceId: 'd', folder: 'A', scrollY: 900, focusId: 'f1' });
+    const got = r.take({ filespaceId: 'd', folder: 'A' });
+    assert.equal(got.scrollY, 900);
+    assert.equal(got.focusId, 'f1');
+    assert.equal(r.take({ filespaceId: 'd', folder: 'A' }), null, 'once');
+    r.save({ filespaceId: '', folder: '' });
+    now.tick(KEEP_MS + 1);
+    assert.equal(r.take({ filespaceId: '', folder: '' }), null, 'stale');
+  });
+});

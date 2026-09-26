@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { fmtSize } from './FileCard';
+import { fmtSize } from '@/lib/media';
 
 /**
  * The upload tray: every file in the queue with its own progress, the batch

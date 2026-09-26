@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import {
-  listFileChanges, currentChangeCursor, buildPrincipal, getFilespaceForUser, listFilespaces, listSyncFolders,
+  listFileChanges, currentChangeCursor, getFilespaceForUser, listFilespaces, listSyncFolders,
 } from '@/lib/db';
 import { resolveActor } from '@/lib/desktop-guard';
 import { presignFileUrls } from '@/lib/storage';
@@ -38,13 +38,31 @@ export async function GET(req) {
   if (actor.error) return actor.error;
 
   const url = new URL(req.url);
-  const principal = await buildPrincipal(actor.email);
-  const allDrives = await listFilespaces();
-
+  // The same principal the web and the desktop's own routes use: drive roles
+  // already capped by the platform role (lib/authz.js).
+  const { principal } = actor;
+  // Degraded (the roles or flags could not be read): the principal sees less
+  // than it will once they can, and the feed is not the place for that. Its
+  // pages would carry a fingerprint that differs from the real one, so every
+  // device restarts from zero now and again on recovery; or they would move
+  // the cursor past changes this principal was only briefly unable to see.
+  // Retryable instead, like a failed read below.
+  if (principal.degraded && !principal.isAdmin) {
+    return NextResponse.json({ error: 'Changes could not be read right now.' }, { status: 503, headers: { 'retry-after': '30' } });
+  }
   const driveParam = (url.searchParams.get('drive') || '').trim();
+  // A failed read of the drives is a 503 to retry, never a 404: a device
+  // takes "No access to this drive" as the drive taken away.
+  let allDrives;
   let drive = null;
+  try {
+    allDrives = await listFilespaces();
+    if (driveParam && driveParam !== 'library') drive = await getFilespaceForUser(actor.email, driveParam, principal);
+  } catch (e) {
+    console.warn('[delta] could not read the drives:', e.message);
+    return NextResponse.json({ error: 'Changes could not be read right now.' }, { status: 503, headers: { 'retry-after': '30' } });
+  }
   if (driveParam && driveParam !== 'library') {
-    drive = await getFilespaceForUser(actor.email, driveParam);
     if (!drive) return NextResponse.json({ error: 'No access to this drive' }, { status: 404 });
   }
   const scope = syncScope({ drive, library: driveParam === 'library', allDrives });
@@ -75,7 +93,10 @@ export async function GET(req) {
 
   // Presign only what this page carries. A client streaming a first sync of
   // 100k files pages through in chunks rather than signing them all at once.
-  const changed = await presignFileUrls(page.changed);
+  // Originals only: a device shows no thumbnails from this feed, and a row
+  // now has up to five preview URLs (thumbnail, sm, xs, poster, strip) —
+  // each only another bearer token in a response of up to 500 rows.
+  const changed = await presignFileUrls(page.changed, { previews: false });
 
   const body = { changed, deleted: page.deleted, cursor: page.cursor, done: page.done, scope: tag };
   if (url.searchParams.get('folders') === '1') {

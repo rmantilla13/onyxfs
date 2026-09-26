@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/admin-guard';
+import { requireSuperAdmin } from '@/lib/admin-guard';
 import { getStorageConfig, storageMode, s3PutBucketCors } from '@/lib/storage';
 import { corsRule } from '@/lib/storage-cors';
 import { deploymentOrigins } from '../origins';
@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
  * not change CORS, the answer carries the exact rule to paste by hand.
  */
 export async function POST(req) {
-  const gate = await requireAdmin();
+  const gate = await requireSuperAdmin();
   if (gate.error) return gate.error;
 
   const cfg = await getStorageConfig({ fresh: true });

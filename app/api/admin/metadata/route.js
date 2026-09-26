@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
 import { getFileMetadataSchema, setFileMetadataSchema } from '@/lib/db';
+import { readGlobalFlags } from '@/lib/authz';
 import { addMetadataField } from '@/lib/dam';
 
 export const runtime = 'nodejs';
@@ -18,6 +19,9 @@ export const maxDuration = 30;
 export async function POST(req) {
   const guard = await requireAdmin();
   if (guard.error) return guard.error;
+  // The `metadata` flag, read here: off, the schema is not edited either.
+  const flags = await readGlobalFlags();
+  if (!flags?.metadata) return NextResponse.json({ error: 'Metadata is turned off.' }, { status: 403 });
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
 

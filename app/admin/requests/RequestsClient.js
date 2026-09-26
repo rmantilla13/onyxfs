@@ -66,12 +66,14 @@ export default function RequestsClient({ status, rows, counts }) {
     `Denied ${r.email}.`);
 
   const revoke = async (r) => {
+    // What DELETE ?email= does now (removePerson): sign-in, drive access,
+    // devices and the links they made all go; their files stay.
     const ok = await confirm({
-      title: `Revoke access for ${r.email}?`,
-      body: 'They can no longer sign in: any open browser session ends now, and the desktop app stops on its next request. Their files, and the drives they were given, stay. They can ask again from the sign-in page.',
-      confirmLabel: 'Revoke access',
+      title: `Remove ${r.email}?`,
+      body: 'They can no longer sign in, and lose their drive access, devices and the links they made. Any open browser session ends on its next request, and the desktop app stops on its next request. Files they uploaded stay. They can ask again from the sign-in page.',
+      confirmLabel: 'Remove',
     });
-    if (ok) act(`revoke:${r.id}`, () => api(`${INVITES}?email=${encodeURIComponent(r.email)}`, { method: 'DELETE' }), `Revoked access for ${r.email}.`);
+    if (ok) act(`revoke:${r.id}`, () => api(`${INVITES}?email=${encodeURIComponent(r.email)}`, { method: 'DELETE' }), `Removed ${r.email}.`);
   };
 
   return (
@@ -141,7 +143,7 @@ export default function RequestsClient({ status, rows, counts }) {
                   <span className="small muted request-locked">{revokeBlockedReason(r)}</span>
                 ) : (
                   <button type="button" className="btn btn-ghost btn-sm" disabled={!!busy} onClick={() => revoke(r)}>
-                    {busy === `revoke:${r.id}` ? 'Revoking…' : 'Revoke…'}
+                    {busy === `revoke:${r.id}` ? 'Removing…' : 'Remove…'}
                   </button>
                 ))}
               </div>

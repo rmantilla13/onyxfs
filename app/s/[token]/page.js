@@ -76,6 +76,8 @@ export default async function SharePage({ params }) {
     gone: ['This file is no longer available', 'It was removed after the link was made.'],
     denied: ['You do not have access to this file', `You are signed in as ${access.email}. Ask whoever sent the link to give you access.`],
     off: ['Sharing is turned off', `Links to files in ${brand.name} are not being served right now.`],
+    paused: ['This link is paused', 'The person who shared it can\u2019t share files right now. Ask them, or someone else, for another way to the file.'],
+    unavailable: ['This link can\u2019t be opened right now', 'Try again in a moment.'],
     missing: ['This link does not work', 'It may have been revoked, or copied incompletely.'],
   };
   const [title, body] = MESSAGES[access.state] || MESSAGES.missing;

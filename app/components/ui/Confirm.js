@@ -14,6 +14,12 @@ import Dialog from './Dialog';
  * site reads the same way the native one did:
  *
  *   if (!(await confirm({ title: 'Delete 3 files?' }))) return;
+ *
+ * `destructive: true` is for the ones that cannot be undone — removing a
+ * person, purging the trash. Two things change, both so that the reflexive
+ * gesture is the safe one: a click on the backdrop or Escape no longer
+ * closes it, so it cannot be waved away half-read, and Cancel rather than
+ * the red button has the focus, so Enter keeps things as they are.
  */
 export function useConfirm() {
   const [state, setState] = useState(null);
@@ -26,18 +32,22 @@ export function useConfirm() {
     setState((s) => { s?.resolve(answer); return null; });
   }, []);
 
+  const destructive = !!state?.destructive;
   const element = state ? (
     <Dialog
       open
       onClose={() => settle(false)}
       title={state.title || 'Are you sure?'}
+      dismissable={!destructive}
       footer={(
         <>
-          <button className="btn" onClick={() => settle(false)}>{state.cancelLabel || 'Cancel'}</button>
+          <button className="btn" onClick={() => settle(false)} autoFocus={destructive}>
+            {state.cancelLabel || 'Cancel'}
+          </button>
           <button
-            className={`btn ${state.danger === false ? 'btn-primary' : 'btn-danger'}`}
+            className={`btn ${state.danger === false && !destructive ? 'btn-primary' : 'btn-danger'}`}
             onClick={() => settle(true)}
-            autoFocus
+            autoFocus={!destructive}
           >
             {state.confirmLabel || 'Delete'}
           </button>

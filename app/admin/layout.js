@@ -4,7 +4,7 @@ import { listFilespacesForSpace, getAvatarUrl, listInviteRequests } from '@/lib/
 import { buildLabel, buildDetail } from '@/lib/version';
 import TopNav from '@/app/components/TopNav';
 import SectionRail from '@/app/components/ui/SectionRail';
-import { requireAdminPage } from './_lib/guard';
+import { requireAdminPage, adminIsSuper } from './_lib/guard';
 import { railGroups } from './nav';
 
 export const dynamic = 'force-dynamic';
@@ -35,7 +35,7 @@ export default async function AdminLayout({ children }) {
         build={{ label: buildLabel(), detail: buildDetail() }}
       />
       <div className="shell admin-shell">
-        <SectionRail label="Admin" groups={railGroups({ pendingRequests: pending })} />
+        <SectionRail label="Admin" groups={railGroups({ pendingRequests: pending }, { isSuper: adminIsSuper(email) })} />
         <main className="admin-main" id="admin-main">{children}</main>
       </div>
     </>

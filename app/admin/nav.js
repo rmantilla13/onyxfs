@@ -36,7 +36,9 @@ export const ADMIN_NAV = [
     items: [
       { href: '/admin/usage', label: 'Usage' },
       { href: '/admin/usage/duplicates', label: 'Duplicates' },
-      { href: '/admin/storage', label: 'Backend' },
+      // The bucket every file lives in: super-admins only (SUPER_ADMIN_EMAILS,
+      // or every admin when that is unset). Its page and routes refuse the rest.
+      { href: '/admin/storage', label: 'Backend', superOnly: true },
     ],
   },
   {
@@ -57,13 +59,15 @@ export const ADMIN_NAV = [
 ];
 
 /** The rail with its badges filled in: `counts` maps a badge name to a number. */
-export function railGroups(counts = {}) {
+export function railGroups(counts = {}, { isSuper = true } = {}) {
   return ADMIN_NAV.map((g) => ({
     ...g,
-    items: g.items.map(({ badge, ...item }) => {
-      const n = badge ? Number(counts[badge]) || 0 : 0;
-      return n ? { ...item, count: n, countLabel: `${n} waiting` } : item;
-    }),
+    items: g.items
+      .filter((item) => isSuper || !item.superOnly)
+      .map(({ badge, superOnly: _superOnly, ...item }) => {
+        const n = badge ? Number(counts[badge]) || 0 : 0;
+        return n ? { ...item, count: n, countLabel: `${n} waiting` } : item;
+      }),
   }));
 }
 

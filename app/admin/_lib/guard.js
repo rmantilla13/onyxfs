@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
-import { auth } from '@/auth';
-import { isAdmin } from '@/lib/auth-allowlist';
+import { getSessionUser } from '@/lib/session';
+import { isAdmin, isSuperAdmin } from '@/lib/auth-allowlist';
 
 /**
  * The admin gate, for every admin page and data-loading layout — not only
@@ -14,11 +14,30 @@ import { isAdmin } from '@/lib/auth-allowlist';
  * Returns the admin's email.
  */
 export async function requireAdminPage(back = '/admin') {
-  const session = await auth();
-  const email = session?.user?.email;
+  // The session as every page has it (lib/session.js): signed in, not
+  // suspended, and not signed out everywhere since.
+  const user = await getSessionUser();
+  const email = user?.email;
   if (!email) redirect(`/signin?callbackUrl=${encodeURIComponent(back)}`);
   if (!isAdmin(email)) redirect('/files');
   return String(email).toLowerCase();
+}
+
+/**
+ * The same, for what only a super-admin may see: the storage backend every
+ * file lives in (SUPER_ADMIN_EMAILS, or every admin when that is unset). The
+ * routes behind it refuse anyone else too; an admin who is not one is sent
+ * to the Overview rather than shown a page that cannot load.
+ */
+export async function requireSuperAdminPage(back = '/admin') {
+  const email = await requireAdminPage(back);
+  if (!isSuperAdmin(email)) redirect('/admin');
+  return email;
+}
+
+/** Is this admin a super-admin? For the rail, which offers Backend only to them. */
+export function adminIsSuper(email) {
+  return !!email && isSuperAdmin(email);
 }
 
 /**
@@ -30,7 +49,7 @@ export async function requireAdminPage(back = '/admin') {
  * No redirect here: that is the page's job.
  */
 export async function viewerIsAdmin() {
-  const session = await auth().catch(() => null);
-  const email = session?.user?.email;
+  const user = await getSessionUser().catch(() => null);
+  const email = user?.email;
   return !!email && isAdmin(email);
 }

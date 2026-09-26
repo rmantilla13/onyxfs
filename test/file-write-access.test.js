@@ -82,16 +82,51 @@ describe('fileWriteDecision', () => {
     });
   });
 
-  describe('the platform viewer rule', () => {
+  describe('the platform role rule', () => {
     test('a platform viewer cannot write even their own file', () => {
       // The files UI hides write controls from them; this is the half a
-      // crafted request cannot route around.
+      // crafted request cannot route around. The rule is the capability
+      // (files.edit), not the literal id: a custom role without it is held
+      // the same way.
       const d = fileWriteDecision({
         file: file({ createdBy: 'viewer@example.com' }),
         principal: who({ email: 'viewer@example.com', roleId: 'viewer' }),
       });
       assert.equal(d.allowed, false);
-      assert.equal(d.reason, 'platform-viewer');
+      assert.equal(d.reason, 'role');
+    });
+
+    test('a custom role without the capability is held like a viewer', () => {
+      const d = fileWriteDecision({
+        file: file({ createdBy: 'me@example.com' }),
+        principal: who({ email: 'me@example.com', roleId: 'custom', caps: new Set(['files.upload']) }),
+      });
+      assert.equal(d.allowed, false);
+      assert.equal(d.reason, 'role');
+      // …and deleting needs its own capability, separately from editing.
+      const del = fileWriteDecision({
+        file: file({ createdBy: 'me@example.com' }), action: 'files.delete',
+        principal: who({ email: 'me@example.com', roleId: 'custom', caps: new Set(['files.edit']) }),
+      });
+      assert.equal(del.allowed, false);
+    });
+
+    test('an unknown role id with no capabilities writes nothing', () => {
+      // A principal the server did not build, with a role nobody defined:
+      // the absence of an answer is a no.
+      const d = fileWriteDecision({ file: file({ createdBy: 'me@example.com' }), principal: who({ email: 'me@example.com', roleId: 'mystery' }) });
+      assert.equal(d.allowed, false);
+    });
+
+    test('asking about the file alone skips the role', () => {
+      // What the link routes ask: could they change it, were their role to
+      // allow — each kind of link is its own capability, checked there.
+      const d = fileWriteDecision({
+        file: file({ createdBy: 'viewer@example.com' }), action: null,
+        principal: who({ email: 'viewer@example.com', roleId: 'viewer' }),
+      });
+      assert.equal(d.allowed, true);
+      assert.equal(d.reason, 'creator');
     });
 
     test('a platform viewer cannot write with an explicit editor grant either', () => {

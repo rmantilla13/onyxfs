@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { auth } from '@/auth';
+import { getSessionUser } from '@/lib/session';
 import { loadBrand } from '@/lib/brand-config';
 import { authorizeParams } from '@/lib/pkce';
 import AuthorizeClient from './AuthorizeClient';
@@ -18,8 +18,8 @@ export const metadata = { title: 'Connect the desktop app' };
  * desktop app inherits the web allowlist rather than having its own.
  */
 export default async function AuthorizePage({ searchParams }) {
-  const session = await auth();
-  if (!session?.user?.email) redirect('/signin');
+  const user = await getSessionUser();
+  if (!user) redirect('/signin');
 
   const brand = await loadBrand();
   const { challenge, state, label } = authorizeParams(searchParams || {});
@@ -28,7 +28,7 @@ export default async function AuthorizePage({ searchParams }) {
     <AuthorizeClient
       brandName={brand.desktop.productName}
       logo={brand.visual.logo}
-      email={session.user.email}
+      email={user.email}
       challenge={challenge}
       state={state}
       label={label}

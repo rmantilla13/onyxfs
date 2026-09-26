@@ -6,6 +6,7 @@ import { setThemePref } from '@/lib/theme';
 import { fmtSize } from '@/lib/media';
 import { crumbsFor } from '@/lib/folder-ops';
 import { kindLabel } from '@/lib/file-info';
+import { thumbSources } from '@/lib/renditions';
 
 /**
  * ⌘K: one box for finding anything and doing anything.
@@ -91,6 +92,14 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
   }, [q, open]);
 
   const go = useCallback((href) => { onClose(); router.push(href); }, [onClose, router]);
+  // A folder result, when the files page is showing All files, is opened in
+  // place (FilesClient handles `onyx:navigate-folder` and says so by
+  // cancelling it) — a folder switch, not a server render of the whole page.
+  const goFolder = useCallback((folder) => {
+    onClose();
+    const e = new CustomEvent('onyx:navigate-folder', { detail: { folder }, cancelable: true });
+    if (window.dispatchEvent(e)) router.push(`/files?folder=${encodeURIComponent(folder)}`);
+  }, [onClose, router]);
   const command = useCallback((name) => {
     onClose();
     window.dispatchEvent(new CustomEvent('onyx:command', { detail: { name } }));
@@ -130,7 +139,8 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
           id: `f:${f.id}`,
           label: f.name,
           hint: `${crumbsFor(f.folder || '', driveOf(f)?.name || 'All files').map((c) => c.name).join(' / ')} · ${kindLabel(f)}${f.size ? ` · ${fmtSize(f.size)}` : ''}`,
-          thumb: f.thumbnailUrl || null,
+          // The 28px icon: the xs sibling where there is one (lib/renditions.js).
+          thumb: thumbSources(f, 'palette').src,
           run: () => go(`/files/${f.id}`),
         })),
       });
@@ -144,7 +154,7 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
           label: f.name,
           hint: f.folder.includes('/') ? f.folder.slice(0, f.folder.lastIndexOf('/')) : 'All files',
           icon: 'folder',
-          run: () => go(`/files?folder=${encodeURIComponent(f.folder)}`),
+          run: () => goFolder(f.folder),
         })),
       });
     }
@@ -166,7 +176,7 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
     return out;
     // `match` closes over `term`, which is in the list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, folders, drives, actions, term, go, driveOf]);
+  }, [files, folders, drives, actions, term, go, goFolder, driveOf]);
 
   const flat = useMemo(() => sections.flatMap((s) => s.items), [sections]);
   useEffect(() => { setActive(0); }, [q]);
@@ -229,7 +239,7 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
                     onClick={() => it.run()}
                   >
                     <span className="palette-icon" aria-hidden>
-                      {it.thumb ? <img src={it.thumb} alt="" /> : it.icon === 'folder' ? <FolderGlyph /> : it.icon === 'drive' ? <DriveGlyph /> : <span className="palette-dot" />}
+                      {it.thumb ? <img src={it.thumb} alt="" loading="lazy" decoding="async" /> : it.icon === 'folder' ? <FolderGlyph /> : it.icon === 'drive' ? <DriveGlyph /> : <span className="palette-dot" />}
                     </span>
                     <span className="palette-label truncate">{it.label}</span>
                     {it.hint && <span className="palette-hint truncate">{it.hint}</span>}

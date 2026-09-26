@@ -3,6 +3,7 @@
 import { signIn } from '@/auth';
 import { isEmailGrantedAccess } from '@/lib/auth-allowlist';
 import { createOrGetInviteRequest, hasConnectionString } from '@/lib/db';
+import { readGlobalFlags } from '@/lib/authz';
 import { notifyAccessRequest } from '@/lib/notify';
 import { printsSignInLinks } from '@/lib/signin-email';
 import { safeReturnPath } from '@/lib/return-path';
@@ -37,7 +38,7 @@ export async function requestMagicLink(_prev, formData) {
     // development there is no inbox to check, so say in the terminal why no
     // link appeared rather than leave it looking like a silent failure.
     if (printsSignInLinks()) {
-      console.log(`[signin] ${email} is not approved, so no link was printed. Add it to ADMIN_EMAILS or ALLOWED_EMAILS in .env.local.`);
+      console.log(`[signin] ${email} is not approved (or is suspended), so no link was printed. Add it to ADMIN_EMAILS in .env.local, or approve an invite for it.`);
     }
     return { sent: true };
   }
@@ -68,8 +69,14 @@ export async function requestMagicLink(_prev, formData) {
   }
 }
 
-/** Ask an admin for access. Idempotent per address. */
+/**
+ * Ask an admin for access. Idempotent per address. Refused when the
+ * `inviteRequests` flag is off — read here, not taken from the page, which
+ * only hides the form.
+ */
 export async function requestAccess(_prev, formData) {
+  const flags = await readGlobalFlags();
+  if (!flags?.inviteRequests) return { error: 'Requests are not being taken. Ask an admin to add you.' };
   const email = String(formData.get('email') || '').trim().toLowerCase();
   const name = String(formData.get('name') || '').trim();
   const reason = String(formData.get('reason') || '').trim();

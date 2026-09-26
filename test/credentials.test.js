@@ -15,13 +15,36 @@ const aws = { provider: 's3', bucket: 'b', region: 'us-east-1', accessKeyId: 'AK
 const r2 = { ...aws, endpoint: 'https://acct.r2.cloudflarestorage.com', region: 'auto' };
 
 describe('credential ladder', () => {
-  test('a filespace with its own keys uses them, for every role', () => {
+  test('a filespace with its own keys uses them, for the roles that write', () => {
     const fs = { id: 'f1', accessKeyId: 'FAK', secretAccessKey: 'FSK' };
-    for (const role of ['viewer', 'editor', 'owner']) {
+    for (const role of ['editor', 'owner']) {
       const plan = credentialPlan(aws, fs, { role });
       assert.equal(plan.strategy, 'filespace-static');
       assert.equal(plan.staticAllowed, true, `${role} should be able to use a dedicated key`);
     }
+  });
+
+  test("a drive's own key is never handed to someone who may only read it", () => {
+    // The key writes and cannot be narrowed. A platform Viewer granted
+    // editor, a drive viewer, and someone at their quota all mount as
+    // 'viewer' (mountRole) — and would otherwise walk off with a key that
+    // can PUT and DELETE anything in the drive's bucket.
+    const fs = { id: 'f1', accessKeyId: 'FAK', secretAccessKey: 'FSK' };
+    for (const opts of [{ role: 'viewer' }, { role: 'viewer', isAdmin: true }, {}, { role: 'something-else' }]) {
+      const plan = credentialPlan(r2, fs, opts);
+      assert.equal(plan.strategy, 'filespace-static');
+      assert.equal(plan.staticAllowed, false, JSON.stringify(opts));
+    }
+    assert.match(staticRefusalMessage(r2, fs), /its own storage key/);
+    assert.match(staticRefusalMessage(r2, { id: 'f1', accessKeyId: 'FAK', hasSecret: true }), /read-only/);
+  });
+
+  test('minting for a reader on a drive with its own key refuses, and hands out nothing', async () => {
+    const { mintFilespaceCredentials } = await import('../lib/storage.js');
+    const fs = { id: 'f1', bucket: 'own', prefix: 'drives/x', accessKeyId: 'FAK', secretAccessKey: 'FSK' };
+    await assert.rejects(() => mintFilespaceCredentials(aws, fs, { role: 'viewer' }), /its own storage key/);
+    const creds = await mintFilespaceCredentials(aws, fs, { role: 'editor' });
+    assert.equal(creds.accessKeyId, 'FAK');
   });
 
   test('a filespace with a key but no secret does NOT count as having its own keys', () => {
@@ -71,10 +94,20 @@ describe('credential ladder', () => {
       assert.equal(plan.staticAllowed, false);
     });
 
-    test('editors and owners may use a static key', () => {
+    test('only an admin may use the deployment key', () => {
+      // The static key reaches every drive in the bucket. An admin owns all
+      // of it anyway; an editor of one drive would be handed every other.
       for (const role of ['editor', 'owner']) {
-        assert.equal(credentialPlan(r2, { id: 'f' }, { role }).staticAllowed, true);
+        assert.equal(credentialPlan(r2, { id: 'f' }, { role }).staticAllowed, false, `non-admin ${role}`);
+        assert.equal(credentialPlan(r2, { id: 'f' }, { role, isAdmin: true }).staticAllowed, true, `admin ${role}`);
       }
+      // …on every rung that could fall back to it.
+      assert.equal(credentialPlan(aws, { id: 'f' }, { role: 'editor' }).staticAllowed, false);
+      assert.equal(credentialPlan({ ...aws, endpoint: 'https://s3.us-west-004.backblazeb2.com' }, { id: 'f' }, { role: 'editor' }).staticAllowed, false);
+    });
+
+    test('an admin viewer role still never gets the static key', () => {
+      assert.equal(credentialPlan(r2, { id: 'f' }, { role: 'viewer', isAdmin: true }).staticAllowed, false);
     });
 
     test('an unspecified role defaults to viewer, the least privileged', () => {
@@ -174,11 +207,12 @@ describe('Backblaze B2', () => {
     }
   });
 
-  test('a viewer still may not fall back to the master key', () => {
-    // The scoped rung is tried first, but if minting fails the viewer rule
-    // is what stops a read-only member being handed the deployment's key.
+  test('nobody but an admin may fall back to the master key', () => {
+    // The scoped rung is tried first, but if minting fails the admin rule
+    // is what stops a member being handed the deployment's key.
     assert.equal(credentialPlan(b2, { id: 'f' }, { role: 'viewer' }).staticAllowed, false);
-    assert.equal(credentialPlan(b2, { id: 'f' }, { role: 'editor' }).staticAllowed, true);
+    assert.equal(credentialPlan(b2, { id: 'f' }, { role: 'editor' }).staticAllowed, false);
+    assert.equal(credentialPlan(b2, { id: 'f' }, { role: 'owner', isAdmin: true }).staticAllowed, true);
   });
 
   test('the refusal names the B2 capability, not an AWS IAM action', () => {

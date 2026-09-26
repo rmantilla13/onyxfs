@@ -3,7 +3,7 @@ import Resend from 'next-auth/providers/resend';
 import Okta from 'next-auth/providers/okta';
 import { DrizzleAdapter } from '@auth/drizzle-adapter';
 import { Resend as ResendClient } from 'resend';
-import { getDb, isDbConfigured, ensureAuthTables, createMagicLinkRedirect } from '@/lib/db';
+import { getDb, isDbConfigured, ensureAuthTables, createMagicLinkRedirect, upsertPerson } from '@/lib/db';
 import { unconfiguredAdapter, wrapAdapter } from '@/lib/auth-adapter';
 import { isEmailGrantedAccess } from '@/lib/auth-allowlist';
 import { loadBrand } from '@/lib/brand-config';
@@ -154,10 +154,23 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       const provider = account?.provider || 'unknown';
       const ok = await isEmailGrantedAccess(user.email);
       if (!ok) {
-        console.warn(`[auth] sign-in denied for ${user.email} via ${provider} — not approved`);
+        console.warn(`[auth] sign-in denied for ${user.email} via ${provider} — not approved or suspended`);
         return false;
       }
       return true;
+    },
+  },
+  events: {
+    // Everyone who signs in has a people row (lib/db.js, "People"): it is
+    // where their role, status and limits live. Never overwrites one, and
+    // never fails a sign-in — the session check makes the row later if this
+    // could not.
+    async signIn({ user }) {
+      try {
+        await upsertPerson(user?.email, { seen: true });
+      } catch (e) {
+        console.warn('[auth] could not record the person for', user?.email, e.message);
+      }
     },
   },
 });

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
+import { getSessionUser } from '@/lib/session';
 import { getAvatarUrl, setAvatar, deleteAvatar } from '@/lib/db';
 import { AVATAR_MAX_BYTES, AVATAR_SIZE, sniffImageType } from '@/lib/avatars';
 
@@ -21,8 +21,7 @@ export const maxDuration = 30;
  * that is not an image — to be served back to anyone.
  */
 async function signedIn() {
-  const session = await auth();
-  return session?.user?.email || null;
+  return (await getSessionUser())?.email || null;
 }
 
 export async function GET() {

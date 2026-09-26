@@ -201,7 +201,7 @@ export default function DuplicatesClient({ groups, summary, drives, trash, reten
                         onChange={() => setKeep((k) => ({ ...k, [g.key]: f.id }))}
                         aria-label={`Keep the copy in ${crumbsFor(f.folder || '', drive?.name || 'All files').map((c) => c.name).join(' / ')}`}
                       />
-                      <span className="dup-thumb"><Thumb file={f} label={kindLabel(f)} /></span>
+                      <span className="dup-thumb"><Thumb file={f} label={kindLabel(f)} surface="storage" /></span>
                       <span className="dup-text">
                         <Link href={`/files/${f.id}`} className="truncate dup-name" title={f.name}>{f.name}</Link>
                         <span className="truncate small muted">{crumbsFor(f.folder || '', drive?.name || 'All files').map((c) => c.name).join(' / ')}</span>

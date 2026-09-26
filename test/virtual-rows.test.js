@@ -23,3 +23,19 @@ test('nothing to render before the row height is known', () => {
   assert.deepEqual(rowWindow({ top: 0, viewport: 900, pitch: 0, rowCount: 50 }), { start: 0, end: 0 });
   assert.deepEqual(rowWindow({ top: 0, viewport: 900, pitch: 100, rowCount: 0 }), { start: 0, end: 0 });
 });
+
+test('before and after can differ, and default to overscan', async () => {
+  const { rowWindow } = await import('../lib/virtual-rows.js');
+  // Scrolled 10 rows down, 4 rows fit.
+  const at = { top: -1000, viewport: 400, pitch: 100, rowCount: 100 };
+  assert.deepEqual(rowWindow({ ...at, overscan: 4 }), { start: 6, end: 18 });
+  assert.deepEqual(rowWindow({ ...at, before: 1, after: 7 }), { start: 9, end: 21 });
+  assert.deepEqual(rowWindow({ ...at, overscan: 4, after: 7 }), { start: 6, end: 21 });
+});
+
+test('overscan leans the way the list is moving, keeping the same number of rows', async () => {
+  const { overscanFor } = await import('../lib/virtual-rows.js');
+  assert.deepEqual(overscanFor(0, { overscan: 4 }), { before: 4, after: 4 });
+  assert.deepEqual(overscanFor(1, { overscan: 4 }), { before: 1, after: 7 });
+  assert.deepEqual(overscanFor(-1, { overscan: 4 }), { before: 7, after: 1 });
+});

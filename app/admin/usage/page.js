@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import {
-  storageReport, listDrivesWithUsage, duplicateSummary, getFeatureFlags, storageByPerson,
+  storageReport, listDrivesWithUsage, duplicateSummary, getFeatureFlags, storageByPerson, frameModelSummary,
 } from '@/lib/db';
 import { presignFileUrls } from '@/lib/storage';
 import { fmtSize } from '@/lib/media';
@@ -12,6 +12,7 @@ import { requireAdminPage } from '../_lib/guard';
 import AdminPage from '../_ui/AdminPage';
 import AdminState from '../_ui/AdminState';
 import KindBreakdown from '../_ui/KindBreakdown';
+import FrameRates from './FrameRates';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Usage · Admin' };
@@ -35,10 +36,12 @@ const extOf = (name) => (/\.([A-Za-z0-9]{1,8})$/.exec(String(name || '')) || [])
 export default async function UsagePage() {
   await requireAdminPage('/admin/usage');
   const [drives, flags] = await Promise.all([listDrivesWithUsage(), getFeatureFlags()]);
-  const [report, dups, people] = await Promise.all([
+  const [report, dups, people, rates] = await Promise.all([
     storageReport({ drivePrefixes: drives.map((d) => d.prefix) }),
     duplicateSummary(),
     storageByPerson({ limit: 10 }),
+    // Videos still without an exact frame rate, for "Probe all videos".
+    frameModelSummary().catch(() => ({ videos: 0 })),
   ]);
 
   if (!report) {
@@ -208,6 +211,8 @@ export default async function UsagePage() {
                 : `Removed files still take space until they are purged, ${TRASH_RETENTION_DAYS} days after removal.`}
             </p>
           </section>
+
+          {rates.videos > 0 && <FrameRates summary={rates} />}
         </div>
       </div>
 
@@ -218,7 +223,7 @@ export default async function UsagePage() {
           {largest.map((f) => (
             <li key={f.id}>
               <Link href={`/files/${f.id}`} className="big-file">
-                <span className="big-file-thumb"><Thumb file={f} label={formatLabel(extOf(f.name))} /></span>
+                <span className="big-file-thumb"><Thumb file={f} label={formatLabel(extOf(f.name))} surface="storage" /></span>
                 <span className="big-file-text">
                   <span className="truncate big-file-name">{f.name}</span>
                   <span className="truncate small muted">{crumbsFor(f.folder || '', driveForKey(drives, f.storageKey)?.name || 'All files').map((c) => c.name).join(' / ')}</span>

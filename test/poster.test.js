@@ -242,3 +242,55 @@ describe('frame selection', () => {
     assert.equal(chooseFrame([]), null);
   });
 });
+
+describe('thumbnail siblings and the image preview', async () => {
+  const {
+    smPosterSize, xsPosterSize, thumbSiblingSizes, coverWidth, imagePreviewFor, imagePreviewSize,
+    SM_POSTER_BOX, XS_POSTER_BOX, IMAGE_PREVIEW_MAX_EDGE,
+  } = await import('../lib/poster.js');
+
+  test('sm covers 512x384 and xs 160x120, whatever the shape, never enlarged', () => {
+    assert.deepEqual(smPosterSize({ width: 6000, height: 4000 }), { width: 576, height: 384 });
+    assert.deepEqual(xsPosterSize({ width: 6000, height: 4000 }), { width: 180, height: 120 });
+    assert.deepEqual(smPosterSize({ width: 3024, height: 4032 }), { width: 512, height: 683 });
+    assert.deepEqual(smPosterSize({ width: 300, height: 200 }), { width: 300, height: 200 });
+    for (const [w, h] of [[1920, 1080], [4032, 3024], [1080, 1920], [2560, 1080]]) {
+      const sm = smPosterSize({ width: w, height: h });
+      const xs = xsPosterSize({ width: w, height: h });
+      assert.ok(sm.width >= SM_POSTER_BOX.width && sm.height >= SM_POSTER_BOX.height, `${w}x${h} sm`);
+      assert.ok(xs.width >= XS_POSTER_BOX.width && xs.height >= XS_POSTER_BOX.height, `${w}x${h} xs`);
+    }
+  });
+
+  test('a desktop card at 2x and a phone card at 3x are covered by sm', () => {
+    // 207 CSS px desktop → 414 device px; 163 CSS px phone → 489.
+    const sm = smPosterSize({ width: 6000, height: 4000 });
+    assert.ok(coverWidth(sm) >= 489);
+  });
+
+  test('siblings are made only when materially smaller than the grid poster', () => {
+    assert.deepEqual(Object.keys(thumbSiblingSizes({ width: 6000, height: 4000 })), ['sm', 'xs']);
+    // A 600x400 picture's grid poster is the picture: sm would be the same.
+    assert.deepEqual(Object.keys(thumbSiblingSizes({ width: 600, height: 400 })), ['xs']);
+    assert.deepEqual(thumbSiblingSizes({ width: 150, height: 100 }), {});
+    assert.deepEqual(thumbSiblingSizes(null), {});
+  });
+
+  test('an image preview is at most 2400 on the long edge', () => {
+    assert.equal(IMAGE_PREVIEW_MAX_EDGE, 2400);
+    assert.deepEqual(imagePreviewSize({ width: 6000, height: 4000 }), { width: IMAGE_PREVIEW_MAX_EDGE, height: 1600 });
+    assert.deepEqual(imagePreviewFor({ width: 6000, height: 4000 }, { bytes: 10e6, mime: 'image/jpeg' }), { width: 2400, height: 1600 });
+  });
+
+  test('no preview where the original serves', () => {
+    // A GIF animates.
+    assert.equal(imagePreviewFor({ width: 4000, height: 3000 }, { bytes: 10e6, mime: 'image/gif' }), null);
+    // Barely bigger than its grid poster (864x576 for 3:2): within 1.25x.
+    assert.equal(imagePreviewFor({ width: 1000, height: 667 }, { bytes: 10e6 }), null);
+    // Within 2400 and small already.
+    assert.equal(imagePreviewFor({ width: 2400, height: 1600 }, { bytes: 1.2e6 }), null);
+    // Within 2400 but heavy: a preview is lighter.
+    assert.deepEqual(imagePreviewFor({ width: 2400, height: 1600 }, { bytes: 6e6 }), { width: 2400, height: 1600 });
+    assert.equal(imagePreviewFor(null), null);
+  });
+});

@@ -1,4 +1,4 @@
-import { auth } from '@/auth';
+import { getSessionUser } from '@/lib/session';
 import { getAvatarById } from '@/lib/db';
 
 export const runtime = 'nodejs';
@@ -14,8 +14,7 @@ export const dynamic = 'force-dynamic';
  * a stale link shows the new picture and does not pin the old one.
  */
 export async function GET(req, { params }) {
-  const session = await auth();
-  if (!session?.user?.email) return new Response('Not authenticated', { status: 401 });
+  if (!(await getSessionUser())) return new Response('Not authenticated', { status: 401 });
   const found = await getAvatarById(params.id).catch(() => null);
   if (!found) return new Response('Not found', { status: 404 });
   const current = new URL(req.url).searchParams.get('v') === found.version;
