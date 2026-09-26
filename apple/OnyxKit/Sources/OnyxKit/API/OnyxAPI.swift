@@ -103,12 +103,14 @@ public actor OnyxAPI {
         try await drives().drives
     }
 
-    /// The drives this account may open, and whether it is an admin.
-    public func drives() async throws -> (drives: [Filespace], isAdmin: Bool) {
-        struct Wrapper: Decodable { let filespaces: [Filespace]; let isAdmin: Bool? }
+    /// The drives this account may open, whether it is an admin, and the
+    /// account itself as the server knows it — the token's owner, which is
+    /// what an app that never recorded it (0.2.0 did not) learns it from.
+    public func drives() async throws -> (drives: [Filespace], isAdmin: Bool, email: String?) {
+        struct Wrapper: Decodable { let filespaces: [Filespace]; let isAdmin: Bool?; let email: String? }
         let data = try await request(config.url("api/space/filespaces"))
         let w = try decode(Wrapper.self, from: data)
-        return (w.filespaces, w.isAdmin ?? false)
+        return (w.filespaces, w.isAdmin ?? false, w.email)
     }
 
     public func credentials(filespaceId: String) async throws -> SpaceCredentials {
