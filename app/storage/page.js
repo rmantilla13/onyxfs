@@ -174,7 +174,7 @@ export default async function StoragePage() {
             {largest.map((f) => (
               <li key={f.id}>
                 <Link href={`/files/${f.id}`} className="big-file">
-                  <span className="big-file-thumb"><Thumb file={f} label={formatLabel(extOf(f.name))} /></span>
+                  <span className="big-file-thumb"><Thumb file={f} label={formatLabel(extOf(f.name))} surface="storage" /></span>
                   <span className="big-file-text">
                     <span className="truncate big-file-name">{f.name}</span>
                     <span className="truncate small muted">{crumbsFor(f.folder || '').map((c) => c.name).join(' / ')}</span>

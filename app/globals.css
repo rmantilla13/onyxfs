@@ -709,8 +709,41 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .kind-strip .btn { flex: 0 0 auto; }
 .files-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--s5); }
 .files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--s4); }
-.filecard { display: block; overflow: hidden; cursor: pointer; text-align: left; }
+/* A card is picked, not read: no text selection from a double-click, and no
+   iOS image callout on a long-press (which selects, useLongPress). */
+.filecard { display: block; overflow: hidden; cursor: pointer; text-align: left; -webkit-user-select: none; user-select: none; }
 .filecard:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.filecard[aria-selected='true'] { outline: 2px solid var(--accent); outline-offset: -1px; }
+.filecard-thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: var(--surface-sunken);
+}
+.filecard-thumb img { width: 100%; height: 100%; -webkit-touch-callout: none; -webkit-user-drag: none; }
+.filecard-text { padding: 10px; }
+/* A listing kept on screen while the next one loads: still real files, and
+   still usable, but plainly not the answer yet. The delay keeps a fast load
+   from flickering. */
+.is-pending > .files-grid,
+.filelist.is-pending .filelist-body {
+  opacity: var(--pending-opacity, 0.55);
+  transition: opacity var(--dur-2) var(--ease) 150ms;
+}
+/* Placeholders shaped like the cards and rows they stand in for. */
+.filecard.is-skeleton { cursor: default; box-shadow: none; }
+.skeleton-line {
+  display: block;
+  height: 10px;
+  margin: 3px 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+.skeleton-line.is-short { width: 40%; }
+.filelist-row.is-skeleton { cursor: default; }
+.filelist-row.is-skeleton .skeleton-line { width: 50%; margin: 0; }
 .filecard-badge {
   position: absolute;
   right: 6px;
@@ -763,6 +796,7 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .folder-tile {
   display: flex; align-items: center; gap: var(--s2);
   width: 100%; min-width: 0;
+  -webkit-user-select: none; user-select: none;
   padding: var(--s2) var(--s3);
   background: var(--surface);
   border: 1px solid var(--line);
@@ -774,6 +808,10 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 }
 .folder-tile:hover { border-color: color-mix(in srgb, var(--ink) 30%, var(--line)); }
 .folder-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.folder-tile[aria-selected='true'] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
 .folder-tile-icon { flex: none; color: var(--muted); }
 .folder-tile-name { flex: 1; min-width: 0; }
 .folder-tile-wrap.is-over .folder-tile { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
@@ -1045,6 +1083,22 @@ select.input.cell-input { padding-right: 2px; }
 
 .file-detail-body { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: var(--s5); align-items: start; }
 .detail-list { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--s2) var(--s3); margin: 0; }
+
+/* The opening shell (FileOpening): the file page's own geometry, drawn by
+   the files page over itself while the file page is on its way, so the
+   picture is up at once and does not move when the page replaces it. */
+.file-opening-overlay {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: calc(var(--z-nav) - 1);
+  overflow: hidden;
+}
+.files-main.is-opening > :not(.file-opening-overlay) { visibility: hidden; }
+.file-opening-hold { visibility: hidden; }
+.file-opening-aside { display: grid; gap: var(--s2); padding: var(--s4); }
+.file-opening-aside .skeleton-line { margin: 0; }
+.player-stage.is-shell { container-type: size; }
+.player-bar.is-shell { min-height: 44px; }
 
 /* One extra breakpoint, scoped to this view: the inspector beside a preview
    stops being readable well before the phone breakpoint. */

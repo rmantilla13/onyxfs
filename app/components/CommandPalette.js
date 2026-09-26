@@ -6,6 +6,7 @@ import { setThemePref } from '@/lib/theme';
 import { fmtSize } from '@/lib/media';
 import { crumbsFor } from '@/lib/folder-ops';
 import { kindLabel } from '@/lib/file-info';
+import { thumbSources } from '@/lib/renditions';
 
 /**
  * ⌘K: one box for finding anything and doing anything.
@@ -130,7 +131,8 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
           id: `f:${f.id}`,
           label: f.name,
           hint: `${crumbsFor(f.folder || '', driveOf(f)?.name || 'All files').map((c) => c.name).join(' / ')} · ${kindLabel(f)}${f.size ? ` · ${fmtSize(f.size)}` : ''}`,
-          thumb: f.thumbnailUrl || null,
+          // The 28px icon: the xs sibling where there is one (lib/renditions.js).
+          thumb: thumbSources(f, 'palette').src,
           run: () => go(`/files/${f.id}`),
         })),
       });
@@ -229,7 +231,7 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
                     onClick={() => it.run()}
                   >
                     <span className="palette-icon" aria-hidden>
-                      {it.thumb ? <img src={it.thumb} alt="" /> : it.icon === 'folder' ? <FolderGlyph /> : it.icon === 'drive' ? <DriveGlyph /> : <span className="palette-dot" />}
+                      {it.thumb ? <img src={it.thumb} alt="" loading="lazy" decoding="async" /> : it.icon === 'folder' ? <FolderGlyph /> : it.icon === 'drive' ? <DriveGlyph /> : <span className="palette-dot" />}
                     </span>
                     <span className="palette-label truncate">{it.label}</span>
                     {it.hint && <span className="palette-hint truncate">{it.hint}</span>}

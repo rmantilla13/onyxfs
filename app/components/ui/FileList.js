@@ -1,27 +1,29 @@
 'use client';
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Thumb, fmtSize } from './FileCard';
 import { rowWindow } from '@/lib/virtual-rows';
 import { listHits, overlaps } from '@/lib/marquee';
 import { LIST_COLUMNS, columnOf, nextSortFor, columnTemplate, fitColumns } from '@/lib/list-columns';
 import { deriveAuto } from '@/lib/dam';
+import { fileKey } from '@/lib/selection';
+import { rowsPerViewport } from '@/lib/nav-geometry';
+import { createEditIntent } from '@/lib/edit-intent';
 
 /**
  * The library as a list: one row per file, a Name column, and whichever
  * other columns the viewer picked (lib/list-columns.js) — facts about the
  * file, tags, and the workspace's metadata fields. The same collection as
- * FileGrid with the same rules, so the two stay interchangeable:
+ * FileGrid with the same rules, so the two stay interchangeable — a click
+ * selects (⌘ toggles, ⇧ extends), a double-click, Return or ⌘↓ opens, ↑ ↓
+ * move the selection, Space looks (app/files/useSelectionModel.js, through
+ * `handlers`).
  *
- *   click      select (toggles, so several can be picked)
- *   dbl-click  open
- *   ↑ ↓        previous / next row
- *   Home End   first / last
- *   Space      select
- *   Enter      open
- *
- * Tags and metadata cells are editable in place for someone who may write:
- * click one (or Tab to it and press Enter) to edit, Enter or clicking away
+ * Tags and metadata cells are editable in place for someone who may write,
+ * the way Finder renames: a click on a cell selects its row like a click
+ * anywhere else on it, and a second, slow click on a row that was already
+ * selected edits the cell (lib/edit-intent.js) — a double-click opens the
+ * file instead. Return or F2 on a cell edits it too. Enter or clicking away
  * saves, Escape cancels. `onEdit(file, column, value)` does the saving.
  *
  * Rows carry data-file-id, so the page's context menu and drag-to-folder
@@ -112,23 +114,22 @@ export function FileListHeader({ sort, onSort, columns = [], picker = null }) {
   );
 }
 
-export default function FileList({
+function FileList({
   files,
   selected,
-  onSelect,
-  onOpen,
+  handlers,
   badgesFor,
   labelFor,
   emptyState,
   label = 'Files',
   onMissingThumb,
-  onDragFile,
+  pending = false,
+  navRef,
   sort,
   onSort,
   before = null,
   columns = [],
   picker = null,
-  loading = false,
   canEdit = false,
   onEdit,
   suggestionsFor,
@@ -138,7 +139,6 @@ export default function FileList({
 }) {
   const outer = useRef(null);
   const ref = useRef(null);
-  const cells = useRef([]);
   const pendingFocus = useRef(null);
   const [active, setActive] = useState(0);
   const [pitch, setPitch] = useState(0);
@@ -148,6 +148,14 @@ export default function FileList({
   // otherwise turn a text selection in the field into a file drag.
   const [editing, setEditing] = useState(null);
   const narrow = useNarrow();
+  // The slow second click that edits a cell (lib/edit-intent.js), one per list.
+  const intent = useMemo(() => createEditIntent(), []);
+  useEffect(() => () => intent.cancel(), [intent]);
+  // What every cell needs from the list, as one object that only changes
+  // when one of these does — so a memoized row is not re-rendered for it.
+  const ctx = useMemo(() => ({
+    labelFor, canEdit, onEdit, suggestionsFor, onOpenFolder, usageRights, setEditing, intent,
+  }), [labelFor, canEdit, onEdit, suggestionsFor, onOpenFolder, usageRights, intent]);
 
   // The list's own width, so the columns can be fitted to it (fitColumns in
   // lib/list-columns.js). A callback ref, because the element comes and goes
@@ -224,63 +232,62 @@ export default function FileList({
     };
   }, [measure, updateRange]);
 
+  const filesRef = useRef(files);
+  filesRef.current = files;
+  const cellAt = (i) => {
+    const f = filesRef.current[i];
+    return f && ref.current ? ref.current.querySelector(`[data-file-id="${CSS.escape(String(f.id))}"]`) : null;
+  };
+
   useEffect(() => {
-    const i = pendingFocus.current;
-    if (i == null) return;
-    const el = cells.current[i];
+    const p = pendingFocus.current;
+    if (p == null) return;
+    const el = cellAt(p.i);
     if (!el) return;
     pendingFocus.current = null;
     el.focus({ preventScroll: true });
-    el.scrollIntoView({ block: 'nearest' });
+    if (p.scroll) el.scrollIntoView({ block: 'nearest' });
   });
 
-  const focusRow = useCallback((i) => {
-    const next = Math.min(Math.max(0, i), files.length - 1);
+  const focusRow = useCallback((i, { scroll = true } = {}) => {
+    const n = filesRef.current.length;
+    if (!n) return;
+    const next = Math.min(Math.max(0, i), n - 1);
     setActive(next);
-    pendingFocus.current = next;
-    const el = cells.current[next];
+    pendingFocus.current = { i: next, scroll };
+    const el = cellAt(next);
     if (el) {
       pendingFocus.current = null;
       el.focus({ preventScroll: true });
-      el.scrollIntoView({ block: 'nearest' });
+      if (scroll) el.scrollIntoView({ block: 'nearest' });
     } else if (outer.current && pitch) {
       const top = outer.current.getBoundingClientRect().top + window.scrollY + next * pitch;
       const bottom = top + pitch;
-      if (top < window.scrollY) window.scrollTo(0, top);
+      if (top < window.scrollY + 64) window.scrollTo(0, Math.max(0, top - 64));
       else if (bottom > window.scrollY + window.innerHeight) window.scrollTo(0, bottom - window.innerHeight);
     }
-  }, [files.length, pitch]);
+  }, [pitch]);
 
-  const onKeyDown = useCallback((e, index) => {
-    if (e.target.closest('input, textarea, select, [contenteditable]')) return;
-    // A shortcut, not a move: ⌘↑ is "up to the enclosing folder".
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    const moves = { ArrowDown: index + 1, ArrowUp: index - 1, Home: 0, End: files.length - 1 };
-    if (e.key in moves) {
-      e.preventDefault();
-      focusRow(moves[e.key]);
-      return;
-    }
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      onOpen?.(files[index]);
-      return;
-    }
-    if (e.key === ' ' || e.key === 'Spacebar') {
-      e.preventDefault();
-      onSelect?.(files[index]);
-    }
-  }, [files, focusRow, onOpen, onSelect]);
+  if (navRef) {
+    navRef.current.files = {
+      cols: 1,
+      rowsPerPage: rowsPerViewport(typeof window === 'undefined' ? 0 : window.innerHeight, pitch),
+      focus: focusRow,
+      // Bring the rendered window to the scroll position now, not on the
+      // next scroll event (the page restoring a scroll position).
+      update: updateRange,
+    };
+  }
+
+  // The roving tab stop follows focus, however it got there.
+  const onFocus = (e) => {
+    const id = e.target?.closest?.('[data-file-id]')?.getAttribute('data-file-id');
+    if (id == null) return;
+    const i = filesRef.current.findIndex((f) => String(f.id) === id);
+    if (i >= 0) setActive((a) => (a === i ? a : i));
+  };
 
   const head = <FileListHeader sort={sort} onSort={onSort} columns={shown} picker={pickerEl} />;
-  if (loading) {
-    return (
-      <div className="filelist" style={style} ref={measureWidth}>
-        {head}
-        <div className="empty">Loading…</div>
-      </div>
-    );
-  }
 
   // Drag-to-select (useMarquee): which rows a viewport rectangle touches,
   // from the fixed row pitch — rows scrolled out of the window are not in
@@ -292,11 +299,11 @@ export default function FileList({
         if (!el) return [];
         if (!pitch) {
           const out = [];
-          cells.current.forEach((c, i) => { if (c && i < files.length && overlaps(c.getBoundingClientRect(), rect)) out.push(i); });
+          filesRef.current.forEach((_, i) => { const c = i < 60 ? cellAt(i) : null; if (c && overlaps(c.getBoundingClientRect(), rect)) out.push(i); });
           return out;
         }
         const b = el.getBoundingClientRect();
-        return listHits({ rect, box: { left: b.left, top: b.top, right: b.right, bottom: b.bottom }, pitch, count: files.length });
+        return listHits({ rect, box: { left: b.left, top: b.top, right: b.right, bottom: b.bottom }, pitch, count: filesRef.current.length });
       },
     };
   }
@@ -307,10 +314,9 @@ export default function FileList({
   const first = range.start;
   const last = Math.min(files.length, range.end);
   const tabbable = active >= first && active < last ? active : first;
-  const ctx = { labelFor, canEdit, onEdit, suggestionsFor, onOpenFolder, usageRights, editing, setEditing };
 
   return (
-    <div className="filelist" style={style} ref={measureWidth}>
+    <div className={`filelist${pending ? ' is-pending' : ''}`} style={style} ref={measureWidth} aria-busy={pending || undefined}>
       {head}
       {beforeEl}
       {files.length === 0 ? emptyState : (
@@ -320,38 +326,26 @@ export default function FileList({
             aria-label={label}
             aria-multiselectable="true"
             ref={ref}
+            onFocus={onFocus}
             style={{ position: 'absolute', top: 0, left: 0, right: 0, transform: `translateY(${first * pitch}px)` }}
           >
             {files.slice(first, Math.max(last, first + 1)).map((f, n) => {
               const i = first + n;
-              const isSel = selected?.has(f.id) || false;
-              const type = labelFor?.(f) || f.kind || '';
               const rowEditing = !!editing && editing.startsWith(`${f.id}\u0000`);
               return (
-                <div
+                <FileRow
                   key={f.id}
-                  role="option"
-                  aria-selected={isSel}
-                  data-file-id={f.id}
-                  className={`filelist-row filelist-cols${isSel ? ' is-selected' : ''}${rowEditing ? ' is-editing' : ''}`}
-                  tabIndex={i === tabbable ? 0 : -1}
-                  ref={(el) => { cells.current[i] = el; }}
-                  onKeyDown={(e) => onKeyDown(e, i)}
-                  onClick={() => { setActive(i); onSelect?.(f); }}
-                  onDoubleClick={() => onOpen?.(f)}
-                  draggable={!!onDragFile && !rowEditing}
-                  onDragStart={onDragFile ? (e) => onDragFile(f, e) : undefined}
-                >
-                  <span className="filelist-thumb">
-                    <Thumb file={f} label={type} onMissingThumb={onMissingThumb} />
-                  </span>
-                  <span className="filelist-name">
-                    <span className="truncate" title={f.name}>{f.name}</span>
-                    {badgesFor?.(f)}
-                  </span>
-                  {shown.map((c) => <Cell key={c.key} file={f} col={c} ctx={ctx} tabbable={i === tabbable} />)}
-                  <span aria-hidden />
-                </div>
+                  file={f}
+                  selected={selected?.has(f.id) || false}
+                  tabbable={i === tabbable}
+                  editing={rowEditing ? editing : null}
+                  shown={shown}
+                  ctx={ctx}
+                  handlers={handlers}
+                  labelFor={labelFor}
+                  badgesFor={badgesFor}
+                  onMissingThumb={onMissingThumb}
+                />
               );
             })}
           </div>
@@ -361,10 +355,47 @@ export default function FileList({
   );
 }
 
+export default memo(FileList);
+
+/**
+ * One row, memoized: it re-renders when its file, its selection, its tab
+ * stop, the cell being edited in it or the columns change — not when a
+ * neighbour's do.
+ */
+const FileRow = memo(function FileRow({ file: f, selected: isSel, tabbable, editing, shown, ctx, handlers, labelFor, badgesFor, onMissingThumb }) {
+  const type = labelFor?.(f) || f.kind || '';
+  const key = fileKey(f.id);
+  const drag = handlers?.dragStart;
+  return (
+    <div
+      role="option"
+      aria-selected={isSel}
+      data-file-id={f.id}
+      className={`filelist-row filelist-cols${isSel ? ' is-selected' : ''}${editing ? ' is-editing' : ''}`}
+      tabIndex={tabbable ? 0 : -1}
+      onKeyDown={handlers ? (e) => handlers.keyDown(e, key) : undefined}
+      onClick={handlers ? (e) => handlers.click(e, key) : undefined}
+      onDoubleClick={handlers ? (e) => { ctx.intent.dblclick(); handlers.dblclick(e, key); } : undefined}
+      draggable={!!drag && !editing}
+      onDragStart={drag ? (e) => drag(e, key) : undefined}
+    >
+      <span className="filelist-thumb">
+        <Thumb file={f} label={type} onMissingThumb={onMissingThumb} surface="row" />
+      </span>
+      <span className="filelist-name">
+        <span className="truncate" title={f.name}>{f.name}</span>
+        {badgesFor?.(f)}
+      </span>
+      {shown.map((c) => <Cell key={c.key} file={f} col={c} ctx={ctx} tabbable={tabbable} selected={isSel} editing={editing} />)}
+      <span aria-hidden />
+    </div>
+  );
+});
+
 // ── Cells ────────────────────────────────────────────────────────────────────
 
-function Cell({ file, col, ctx, tabbable }) {
-  if (col.edit) return <EditableCell file={file} col={col} ctx={ctx} tabbable={tabbable} />;
+function Cell({ file, col, ctx, tabbable, selected, editing }) {
+  if (col.edit) return <EditableCell file={file} col={col} ctx={ctx} tabbable={tabbable} selected={selected} editing={editing} />;
   const md = file.metadata || {};
   switch (col.key) {
     case 'size':
@@ -454,12 +485,15 @@ function CellValue({ value, col, usageRights }) {
   return <span className="truncate">{String(value)}</span>;
 }
 
-function EditableCell({ file, col, ctx, tabbable }) {
+function EditableCell({ file, col, ctx, tabbable, selected, editing: rowEditing }) {
   const value = cellValue(file, col);
   const id = `${file.id}\u0000${col.key}`;
-  const editing = ctx.editing === id;
+  const editing = rowEditing === id;
   const button = useRef(null);
   const refocus = useRef(false);
+  // Whether the row was selected when this press began — before the click
+  // it makes has selected it. Only then is a click the slow second one.
+  const wasSelected = useRef(false);
 
   // Back to the cell after a keyboard Enter or Escape, so the next Tab or
   // arrow carries on from here rather than from the top of the page.
@@ -487,7 +521,7 @@ function EditableCell({ file, col, ctx, tabbable }) {
     );
   }
 
-  const start = (e) => { e.stopPropagation(); ctx.setEditing(id); };
+  const start = () => ctx.setEditing(id);
   return (
     <span className="filelist-cell">
       <button
@@ -495,10 +529,13 @@ function EditableCell({ file, col, ctx, tabbable }) {
         type="button"
         className="cell-edit"
         tabIndex={tabbable ? 0 : -1}
-        onClick={start}
-        onDoubleClick={(e) => e.stopPropagation()}
+        onPointerDown={() => { wasSelected.current = selected; }}
+        // The click goes on to the row, which selects it. A slow second
+        // click on a row that was already selected edits this cell; a
+        // double-click cancels that and opens the file (FileRow).
+        onClick={(e) => { ctx.intent.click({ wasSelected: wasSelected.current, detail: e.detail }, start); wasSelected.current = false; }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ' || e.key === 'F2') { e.preventDefault(); start(e); }
+          if (e.key === 'Enter' || e.key === 'F2') { e.preventDefault(); e.stopPropagation(); ctx.intent.cancel(); start(); }
         }}
         aria-label={`${col.label}: ${textOf(value) || 'empty'}. Edit`}
         title={`Edit ${col.label}`}
