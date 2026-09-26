@@ -15,15 +15,16 @@ const TOOL_ICON = { pen: '✎', arrow: '↗', rect: '▭' };
  * The anchor chip says what the comment will be pinned to — "01:00:12:04",
  * "In 01:00:12:04 → Out 01:00:15:10" when the player has a range, "Pin" on an
  * image, or "General"; clicking it switches a video comment between the
- * moment and the whole file. A drawing always pins to the frame it was drawn
- * on. Internal comments are for signed-in people only: guests on a review
- * link never see them.
+ * moment and the whole file (and `onAnchor` is told when it turns to the
+ * moment, so the page can put that frame on the stage). A drawing always pins
+ * to the frame it was drawn on. Internal comments are for signed-in people
+ * only: guests on a review link never see them.
  *
  * Posting clears the composer at once — the comment appears optimistically —
  * and a failure puts everything back, with the reason.
  */
 export default function Composer({
-  fileId, kind, model, knownRate, frame, range, draftApi, onPost, onFocus, textareaRef, srcSize = { w: 0, h: 0 },
+  fileId, kind, model, knownRate, frame, range, draftApi, onPost, onFocus, onAnchor, textareaRef, srcSize = { w: 0, h: 0 },
 }) {
   const { draft, set, undo, clearDrawing, reset } = draftApi;
   const [body, setBody] = useState('');
@@ -95,7 +96,10 @@ export default function Composer({
           type="button"
           className={`review-chip${chip === 'General' ? ' is-general' : ''}`}
           onClick={() => {
-            if (video) set({ anchored: !draft.anchored });
+            if (video) {
+              set({ anchored: !draft.anchored });
+              if (!draft.anchored) onAnchor?.();
+            }
             else if (draft.pin) set({ pin: null });
             else set({ placing: true, tool: null });
           }}

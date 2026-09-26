@@ -29,7 +29,7 @@ const FILTERS = [
  */
 export default function ReviewPanel({
   file, kind, feed, me, canModify, model, knownRate, frame, range, draftApi,
-  selectedId, onSelect, composerRef, onComposerFocus, srcSize, onError,
+  selectedId, onSelect, composerRef, onComposerFocus, onAnchor, srcSize, onError,
 }) {
   const [filter, setFilter] = useState('all');
   const list = useRef(null);
@@ -157,6 +157,7 @@ export default function ReviewPanel({
         draftApi={draftApi}
         onPost={feed.post}
         onFocus={onComposerFocus}
+        onAnchor={onAnchor}
         textareaRef={composerRef}
         srcSize={srcSize}
       />

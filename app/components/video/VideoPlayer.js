@@ -6,6 +6,7 @@ import {
   timeFromPointer, percentOf, bufferedSpans, shuttleRate, seekToDigit,
 } from '@/lib/video-time';
 import { frameIndexAt, framePosition, layoutFromMetadata } from '@/lib/filmstrip';
+import { pendingSeek } from '@/lib/pending-seek';
 import useContainedRect from '@/app/components/review/useContainedRect';
 
 /**
@@ -40,8 +41,16 @@ import useContainedRect from '@/app/components/review/useContainedRect';
  * REVIEW. `markers` are comments on the scrub bar (click one to land on its
  * frame), `overlay` renders inside the stage on the picture's own rectangle —
  * so a drawing survives fullscreen and letterboxing — and a ref exposes
- * seekToFrame and pause for the review panel. All optional; the share page
- * passes none of them.
+ * seekToFrame, pause and hold for the review panel. hold() is what a comment
+ * about to be pinned to "this frame" calls: until the first seek or play the
+ * stage shows the poster, a frame from mid-clip, not the frame the label
+ * reads, so it loads and shows that frame first. All optional; the share
+ * page passes none of them.
+ *
+ * SEEKS BEFORE LOAD. A seek asked for before the source has loaded (a ?t=
+ * link, a comment marker, a frame step on a master still waiting for play)
+ * is kept and made when the metadata arrives — the latest one, not the deep
+ * link's (lib/pending-seek.js).
  *
  * HEAVY FILES. A multi-gigabyte master streamed from object storage seeks
  * badly, and every byte is egress. So while no proxy rendition exists the
@@ -64,6 +73,10 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   const shell = useRef(null);
   const stage = useRef(null);
   const shuttle = useRef({ presses: 0, direction: 1 });
+  // Seeks asked for before the source loads, and whether the stage has shown
+  // anything but the poster yet. Made once, from the first render's startAt.
+  const intent = useRef(null);
+  if (!intent.current) intent.current = pendingSeek(startAt);
 
   const [ready, setReady] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -178,8 +191,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({
     const v = video.current;
     if (!v) return undefined;
     // Until the source loads (a master waits for play) its currentTime is 0
-    // whatever ?t= asked for; the label shows where playback will start.
-    setFrame(frameAt(v.readyState > 0 ? v.currentTime : Number(startAt) || 0, fps));
+    // whatever was asked for; the label shows where playback will start.
+    setFrame(frameAt(v.readyState > 0 ? v.currentTime : intent.current.pending() ?? 0, fps));
     if (typeof v.requestVideoFrameCallback === 'function') {
       let live = true;
       let handle = 0;
@@ -198,7 +211,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
       v.removeEventListener('timeupdate', sync);
       v.removeEventListener('seeked', sync);
     };
-  }, [fps, src, startAt]);
+  }, [fps, src]);
 
   // Tell the page which frame is up. Every frame while paused or scrubbing;
   // at most five times a second while playing, so a comment list beside the
@@ -217,9 +230,21 @@ const VideoPlayer = forwardRef(function VideoPlayer({
     if (!v || !Number.isFinite(to)) return;
     const length = v.duration || duration;
     const clamped = Math.min(Math.max(0, to), length || to);
-    v.currentTime = clamped;
+    intent.current.seek(v, clamped);
     setCurrent(clamped);
-  }, [duration]);
+    // No frame will be presented to say where this landed until the source
+    // loads, so the label moves now.
+    if (v.readyState === 0) setFrame(frameAt(clamped, fps));
+  }, [duration, fps]);
+
+  // Where the player is, or will be once it has loaded: the base for a
+  // relative seek, which from a deep link not yet loaded is the link's time,
+  // not the element's 0.
+  const position = useCallback(() => {
+    const v = video.current;
+    if (!v) return 0;
+    return v.readyState > 0 ? v.currentTime : intent.current.pending() ?? 0;
+  }, []);
 
   /** Land on frame `n`, mid-frame, and show it — loading the source if it has not been yet. */
   const seekToFrame = useCallback((n) => {
@@ -234,11 +259,23 @@ const VideoPlayer = forwardRef(function VideoPlayer({
     seekToFrame(frameRef.current + dir);
   }, [seekToFrame]);
 
+  /**
+   * Pause, on a picture that is the frame the label reads. Until the first
+   * seek or play the stage shows the poster (from mid-clip), and before the
+   * source loads nothing else is there to show — so the frame is loaded and
+   * shown, as picking up a drawing tool does. Once it is, this only pauses.
+   */
+  const hold = useCallback(() => {
+    video.current?.pause();
+    if (!intent.current.presented()) seekToFrame(frameRef.current);
+  }, [seekToFrame]);
+
   useImperativeHandle(ref, () => ({
     seekToFrame: (n) => { video.current?.pause(); seekToFrame(n); },
     pause: () => video.current?.pause(),
+    hold,
     frame: () => frameRef.current,
-  }), [seekToFrame]);
+  }), [seekToFrame, hold]);
 
   const togglePlay = useCallback(() => {
     const v = video.current;
@@ -270,13 +307,13 @@ const VideoPlayer = forwardRef(function VideoPlayer({
       // Chrome and throws in Safari. Reverse shuttle is stepping instead, which
       // is what it looks like anyway at 4x and above.
       v.pause();
-      seek(v.currentTime - rate * 0.5);
+      seek(position() - rate * 0.5);
     } else {
       v.playbackRate = rate;
       setSpeed(rate);
       v.play().catch(() => {});
     }
-  }, [seek]);
+  }, [seek, position]);
 
   // Out is never at or before In: a zero-length or inverted range reads as a
   // bug everywhere downstream, so the other end is nudged instead.
@@ -291,9 +328,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   const clearRange = useCallback(() => setRange({ inFrame: null, outFrame: null }), []);
   const comment = useCallback(() => {
     if (!onComment) return;
-    video.current?.pause();
+    hold();
     onComment({ frame: frameRef.current });
-  }, [onComment]);
+  }, [onComment, hold]);
 
   const toggleFullscreen = useCallback(() => {
     const el = shell.current;
@@ -314,8 +351,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({
       l: () => doShuttle(1), L: () => doShuttle(1),
       ',': () => step(-1),
       '.': () => step(1),
-      ArrowLeft: () => seek(v.currentTime - big),
-      ArrowRight: () => seek(v.currentTime + big),
+      ArrowLeft: () => seek(position() - big),
+      ArrowRight: () => seek(position() + big),
       ArrowUp: () => setVolume((x) => Math.min(1, x + 0.1)),
       ArrowDown: () => setVolume((x) => Math.max(0, x - 0.1)),
       Home: () => seek(0),
@@ -331,7 +368,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
       const to = seekToDigit(Number(e.key), duration);
       if (to != null) { e.preventDefault(); seek(to); }
     }
-  }, [togglePlay, doShuttle, seek, step, duration, setIn, setOut, clearRange, toggleFullscreen, onComment, comment]);
+  }, [togglePlay, doShuttle, seek, position, step, duration, setIn, setOut, clearRange, toggleFullscreen, onComment, comment]);
 
   // Scrubbing uses pointer capture so a drag continues outside the bar — which
   // is most drags, because the bar is a few pixels tall.
@@ -399,10 +436,13 @@ const VideoPlayer = forwardRef(function VideoPlayer({
               setRatio(e.target.videoWidth / e.target.videoHeight);
               setPicture({ w: e.target.videoWidth, h: e.target.videoHeight });
             }
-            // The ?t= deep link, applied once metadata exists — seeking before
-            // that is discarded by every browser.
-            if (Number(startAt) > 0) seek(Number(startAt));
+            // The seek asked for while there was nothing to seek — the ?t=
+            // deep link, or anything since that overtook it — made now that
+            // there is.
+            intent.current.loaded(e.target);
           }}
+          // Either one ends the poster: from here the stage shows frames.
+          onSeeking={() => intent.current.shown()}
           onTimeUpdate={(e) => {
             const t = e.target.currentTime;
             setCurrent(t);
@@ -413,7 +453,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
             }
           }}
           onProgress={(e) => setBuffered(bufferedSpans(e.target.buffered, e.target.duration || duration))}
-          onPlay={() => setPlaying(true)}
+          onPlay={() => { intent.current.shown(); setPlaying(true); }}
           onPause={() => setPlaying(false)}
           onEnded={() => setPlaying(false)}
           onVolumeChange={(e) => { setVolume(e.target.volume); setMuted(e.target.muted); }}

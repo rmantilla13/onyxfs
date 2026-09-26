@@ -125,6 +125,17 @@ export default function FileDetail({
     return () => document.removeEventListener('keydown', onKey);
   }, [draft.tool, draft.placing, draftApi]);
 
+  // A comment about to be pinned to "this frame" needs this frame on the
+  // stage: before the first seek or play it shows the poster, a frame from
+  // mid-clip, while the label (and so the comment) reads another. hold()
+  // pauses there and, if need be, loads the frame. The player's C key does
+  // the same; a general comment only pauses.
+  const holdFrame = useCallback(() => player.current?.hold?.(), []);
+  const onComposerFocus = useCallback(() => {
+    if (draft.anchored) holdFrame();
+    else player.current?.pause();
+  }, [draft.anchored, holdFrame]);
+
   // C on the player: a comment on this frame.
   const onComment = useCallback(() => {
     setTab('comments');
@@ -338,7 +349,8 @@ export default function FileDetail({
                 selectedId={selectedId}
                 onSelect={selectComment}
                 composerRef={composer}
-                onComposerFocus={() => player.current?.pause()}
+                onComposerFocus={onComposerFocus}
+                onAnchor={holdFrame}
                 srcSize={{ w: Number(md.width) || 0, h: Number(md.height) || 0 }}
                 onError={onError}
               />
