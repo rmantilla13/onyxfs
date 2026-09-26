@@ -277,6 +277,9 @@ struct MirrorIndexTests {
         #expect(pinnable.files(under: "AA").map(\.path) == ["AA/o.png"])
         #expect(pinnable.file(id: "abc")?.path == "A/B/C/abc.png")
         #expect(pinnable.file(id: "nope") == nil)
+        // A folder with nothing in it is still a folder; a missing one is not.
+        for folder in ["", "A", "/a/b/", "A/Empty"] { #expect(pinnable.hasFolder(at: folder), "\(folder)") }
+        for other in ["A/a.png", "nowhere", "A/../AA", "A/Emp"] { #expect(!pinnable.hasFolder(at: other), "\(other)") }
     }
 
     @Test func datesComeFromTheFilesBeneath() throws {
@@ -695,6 +698,32 @@ struct DriveMirrorTests {
         let again = DriveMirror(scope: .library, directory: dir, server: server,
                                 account: "me@example.com", api: { stub.api })
         #expect(await again.isAuthoritative)
+    }
+
+    @Test func aFirstSyncCutShortDeletesNoOfflineCopy() async throws {
+        // Another account's replica on disk, or none: the drive is fetched
+        // from the start and the fetch fails partway. The copies of what it
+        // has not reached yet are what someone offline is counting on.
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pins = try PinStore(directory: dir.appendingPathComponent("Pinned"))
+        await pins.pin(PinRule(scope: "library", target: .folder(path: "")))
+        let downloads = PinStoreTests.FakeDownloads()
+        let fixtures = PinStoreTests()
+        let whole = PinStoreTests.FakeIndex(["a", "b", "c"].map { fixtures.file($0, "\($0).png") })
+        _ = await pins.reconcile(scope: "library", index: whole, download: downloads.download)
+
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 10, done: false))
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server,
+                                 account: "someone-else@example.com", api: { stub.api })
+        await #expect(throws: OnyxError.self) { try await mirror.sync() }
+        let report = await pins.reconcile(scope: "library", index: await mirror.index, download: downloads.download)
+        #expect(report.removed == 0)
+        for id in ["a", "b", "c"] {
+            #expect(await pins.localCopy(scope: "library", fileId: id, etag: nil) != nil, "\(id) kept")
+        }
     }
 
     @Test func aReplicaFromBeforeCompletenessWasKeptIsTrustedOnlyAfterAPass() async throws {

@@ -67,6 +67,70 @@ struct PinStoreTests {
         #expect(await reopened.rules() == expected)
     }
 
+    @Test func manyPinsAtOnceAreOneChange() async throws {
+        // Five thousand photos chosen in the window at once.
+        let dir = try tempFolder()
+        let store = try PinStore(directory: dir)
+        let rules = (1...5000).map { pinFile("f\($0)") }
+        await store.pin(rules + [pinFile("f1"), pinFolder("Docs"), pinFolder("docs/")])
+        #expect(await store.rules() == rules + [pinFolder("Docs")])
+        await store.unpin(Array(rules.prefix(4000)) + [pinFolder("DOCS")])
+        #expect(await store.rules() == Array(rules.suffix(1000)))
+        let reopened = try PinStore(directory: dir)
+        #expect(await reopened.rules().count == 1000)
+    }
+
+    @Test func aPassThatChangesNothingWritesNothing() async throws {
+        // pins.json lists every copy: rewriting it every fifteen seconds for
+        // nothing wears the disk.
+        let dir = try tempFolder()
+        let store = try PinStore(directory: dir)
+        let downloads = FakeDownloads()
+        await store.pin(pinFolder(""))
+        let index = FakeIndex([file("a", "a.txt")])
+        _ = await store.reconcile(scope: scope, index: index, download: downloads.download)
+        let state = dir.appendingPathComponent("pins.json")
+        try FileManager.default.removeItem(at: state)
+
+        _ = await store.reconcile(scope: scope, index: index, download: downloads.download)
+        await store.pin(pinFolder("/"))
+        await store.unpin(pinFile("never-pinned"))
+        #expect(!FileManager.default.fileExists(atPath: state.path), "nothing changed, nothing written")
+
+        await store.pin(pinFile("b"))
+        let reopened = try PinStore(directory: dir)
+        #expect(await reopened.rules() == [pinFolder(""), pinFile("b")])
+        #expect(await reopened.localCopy(scope: scope, fileId: "a", etag: "v1") != nil)
+    }
+
+    @Test func eachAccountOnEachServerHasAFolderOfItsOwn() throws {
+        let server = URL(string: "https://www.onyxfs.io")!
+        let mine = AccountFolder.name(server: server, account: "Me@Example.com")
+        #expect(mine == AccountFolder.name(server: server, account: "me@example.com"), "however it is capitalised")
+        #expect(mine != AccountFolder.name(server: server, account: "you@example.com"))
+        #expect(mine != AccountFolder.name(server: URL(string: "http://localhost:3000")!, account: "me@example.com"))
+        #expect(AccountFolder.isName(mine) && PinStore.isPlainName(mine))
+        for other in ["drive.d1", "library", "account-", "account-0123", mine + "0", mine.uppercased()] {
+            #expect(!AccountFolder.isName(other), "\(other)")
+        }
+    }
+
+    @Test func theStoresInAFolderAreItsAccountsWithSomethingSaved() async throws {
+        let pinned = try tempFolder()
+        let a = AccountFolder.name(server: URL(string: "https://a.test")!, account: "a@a.test")
+        let b = AccountFolder.name(server: URL(string: "https://a.test")!, account: "b@a.test")
+        let store = try PinStore(directory: pinned.appendingPathComponent(a))
+        await store.pin(pinFile("x"))
+        _ = try PinStore(directory: pinned.appendingPathComponent(b))
+        // A store from before stores were kept per account, and a folder of
+        // the user's own: neither is an account's.
+        try FileManager.default.createDirectory(at: pinned.appendingPathComponent("drive.d1"),
+                                                withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: pinned.appendingPathComponent("pins.json"))
+        #expect(PinStore.stores(in: pinned) == [a])
+        #expect(PinStore.stores(in: pinned.appendingPathComponent("none")).isEmpty)
+    }
+
     @Test func aFolderPinReachesWholeSegmentsInAnyCase() async throws {
         let store = try PinStore(directory: try tempFolder())
         await store.pin(pinFolder("Photos"))
@@ -195,7 +259,8 @@ struct PinStoreTests {
     }
 
     @Test func aFailedDownloadKeepsTheOldCopyAndStopsNoOther() async throws {
-        let store = try PinStore(directory: try tempFolder())
+        // Tried again at once, for this test; see aFailedDownloadWaits….
+        let store = try PinStore(directory: try tempFolder(), retryAfter: .zero)
         let downloads = FakeDownloads()
         await store.pin(pinFolder(""))
         _ = await store.reconcile(scope: scope, index: FakeIndex([file("a", "a.txt", etag: "v1")]),
@@ -273,6 +338,205 @@ struct PinStoreTests {
         let report = await pass.value
         #expect(report.downloaded == 0 && report.failed.isEmpty)
         #expect(await store.localCopy(scope: scope, fileId: "a", etag: nil) == nil)
+        #expect(await store.usage() == 0)
+    }
+
+    @Test func callsDuringAPassShareOneMoreWithTheLatestIndex() async throws {
+        // A tick every fifteen seconds through an hours-long download: one
+        // pass waits behind it, not one per tick, and it reads the latest.
+        let store = try PinStore(directory: try tempFolder())
+        let gate = Gate()
+        let downloads = FakeDownloads(gate: gate)
+        await store.pin(pinFolder(""))
+        let before = FakeIndex([file("a", "a.txt"), file("b", "b.txt"), file("c", "c.txt")])
+        let stale = FakeIndex(before.entries + [file("d", "d.txt")])
+        let latest = FakeIndex(before.entries + [file("e", "e.txt")])
+
+        let scope = self.scope
+        let first = Task { await store.reconcile(scope: scope, index: before, download: downloads.download) }
+        await until { await downloads.started == 3 }
+        let second = Task { await store.reconcile(scope: scope, index: stale, download: downloads.download) }
+        let third = Task { await store.reconcile(scope: scope, index: stale, download: downloads.download) }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let fourth = Task { await store.reconcile(scope: scope, index: latest, download: downloads.download) }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        await gate.open()
+
+        #expect(await first.value.downloaded == 3)
+        let r2 = await second.value, r3 = await third.value, r4 = await fourth.value
+        #expect(r2 == r4 && r3 == r4, "one pass, shared")
+        #expect(r4.downloaded == 1)
+        #expect(await downloads.calls == ["a": 1, "b": 1, "c": 1, "e": 1], "d was out of date before its pass began")
+    }
+
+    @Test func aStoppedPassStartsNoMoreDownloads() async throws {
+        // A sign-out mid-download: nothing more is fetched for the account,
+        // and a sign-in straight after waits for the stopped pass to end.
+        let store = try PinStore(directory: try tempFolder())
+        let gate = Gate()
+        let downloads = FakeDownloads(gate: gate)
+        await store.pin(pinFolder(""))
+        let scope = self.scope, index = FakeIndex((1...10).map { file("f\($0)", "f\($0).bin") })
+        let pass = Task { await store.reconcile(scope: scope, index: index, download: downloads.download) }
+        await until { await downloads.started == 3 }
+        await store.cancelPasses()
+        let next = Task { await store.reconcile(scope: scope, index: index, download: downloads.download) }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect(await downloads.started == 3)
+        await gate.open()
+
+        let stopped = await pass.value
+        #expect(stopped.downloaded == 3 && stopped.failed.isEmpty, "what was under way is kept")
+        let rest = await next.value
+        #expect(rest.downloaded == 7)
+        #expect(await downloads.calls.values.allSatisfy { $0 == 1 }, "nothing fetched twice")
+    }
+
+    @Test func aFailedDownloadWaitsBeforeItIsTriedAgain() async throws {
+        let store = try PinStore(directory: try tempFolder(), retryAfter: .seconds(600))
+        let downloads = FakeDownloads()
+        await store.pin(pinFolder(""))
+        await downloads.fail("a")
+        let index = FakeIndex([file("a", "a.txt"), file("b", "b.txt")])
+        let first = await store.reconcile(scope: scope, index: index, download: downloads.download)
+        #expect(Set(first.failed.keys) == ["a"] && first.downloaded == 1)
+
+        // Not fetched whole again on every pass, only to fail again.
+        await downloads.succeed("a")
+        let second = await store.reconcile(scope: scope, index: index, download: downloads.download)
+        #expect(second.waiting == 1 && second.failed.isEmpty && second.downloaded == 0)
+        #expect(await downloads.calls["a"] == 1)
+
+        // A new version is worth a try at once.
+        await downloads.fail("a")
+        let v2 = FakeIndex([file("a", "a.txt", etag: "v2"), file("b", "b.txt")])
+        let third = await store.reconcile(scope: scope, index: v2, download: downloads.download)
+        #expect(third.failed["a"] != nil)
+        #expect(await downloads.calls["a"] == 2)
+
+        // Back online, everything is.
+        await downloads.succeed("a")
+        await store.retryNow()
+        let fourth = await store.reconcile(scope: scope, index: v2, download: downloads.download)
+        #expect(fourth.downloaded == 1 && fourth.waiting == 0)
+        #expect(await store.localCopy(scope: scope, fileId: "a", etag: "v2") != nil)
+    }
+
+    @Test func aFullDiskFetchesOnlyWhatFits() async throws {
+        let free = Space(PinStore.spareSpace + 10)
+        let store = try PinStore(directory: try tempFolder(), freeSpace: { _ in free.bytes })
+        let downloads = FakeDownloads()
+        await store.pin(pinFolder(""))
+        // Four bytes each ("a@v1"): room for two beside the spare gigabyte.
+        let index = FakeIndex(["a", "b", "c", "d"].map { file($0, "\($0).txt") })
+        let report = await store.reconcile(scope: scope, index: index, download: downloads.download)
+        #expect(report.problem == .full)
+        #expect(report.downloaded == 2 && Set(report.failed.keys) == ["c", "d"])
+        #expect(await downloads.calls == ["a": 1, "b": 1], "the rest not fetched only to be thrown away")
+        #expect(await store.problem == .full)
+
+        // Room made: no wait to sit out, since nothing was tried.
+        free.bytes = PinStore.spareSpace + 1000
+        let later = await store.reconcile(scope: scope, index: index, download: downloads.download)
+        #expect(later.problem == nil && later.downloaded == 2)
+        #expect(await store.problem == nil)
+    }
+
+    @Test func aFolderItCannotWriteToIsLeftAlone() async throws {
+        // As when its disk is unplugged: fetching would throw every file
+        // away, and deleting would drop the records of copies still on it.
+        let dir = try tempFolder()
+        let store = try PinStore(directory: dir)
+        let downloads = FakeDownloads()
+        await store.pin(pinFolder(""))
+        _ = await store.reconcile(scope: scope, index: FakeIndex([file("a", "a.txt")]), download: downloads.download)
+        let other = FakeIndex([file("b", "b.txt")])
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+        let report = await store.reconcile(scope: scope, index: other, download: downloads.download)
+        #expect(report == PinStore.ReconcileReport(problem: .unavailable))
+        #expect(await store.problem == .unavailable)
+        #expect(await downloads.calls["b"] == nil, "nothing fetched")
+        #expect(await store.localCopy(scope: scope, fileId: "a", etag: nil) != nil, "nothing deleted")
+        let elsewhere = try tempFolder().appendingPathComponent("Moved")
+        await #expect(throws: PinStoreError.unavailable(dir)) { try await store.relocate(to: elsewhere) }
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        let back = await store.reconcile(scope: scope, index: other, download: downloads.download)
+        #expect(back.problem == nil && back.removed == 1 && back.downloaded == 1)
+        #expect(await store.problem == nil)
+    }
+
+    @Test func aFolderDeletedByHandIsMadeAgain() async throws {
+        let dir = try tempFolder().appendingPathComponent("Pinned", isDirectory: true)
+        let store = try PinStore(directory: dir)
+        let downloads = FakeDownloads()
+        await store.pin(pinFolder(""))
+        let index = FakeIndex([file("a", "a.txt")])
+        _ = await store.reconcile(scope: scope, index: index, download: downloads.download)
+        try FileManager.default.removeItem(at: dir)
+
+        let report = await store.reconcile(scope: scope, index: index, download: downloads.download)
+        #expect(report.problem == nil && report.downloaded == 1)
+        #expect(await store.localCopy(scope: scope, fileId: "a", etag: "v1") != nil)
+    }
+
+    @Test func aStoreOnADiskThatIsNotConnectedIsNotMade() throws {
+        let disk = URL(fileURLWithPath: "/Volumes/Onyx-Test-\(UUID().uuidString)", isDirectory: true)
+        let missing = disk.appendingPathComponent("Onyx Cache/Pinned", isDirectory: true)
+        #expect(PinStore.isOnMissingVolume(missing))
+        #expect(throws: PinStoreError.unavailable(missing)) { try PinStore(directory: missing) }
+        #expect(!FileManager.default.fileExists(atPath: disk.path))
+        #expect(!PinStore.isOnMissingVolume(try tempFolder()))
+        #expect(!PinStore.isOnMissingVolume(URL(fileURLWithPath: "/Volumes", isDirectory: true)))
+    }
+
+    @Test func downloadsAreWrittenOnTheStoresOwnDisk() async throws {
+        // Not the startup disk's temporary folder: an external cache would
+        // need room there too, for the largest files, three at once.
+        let dir = try tempFolder()
+        let store = try PinStore(directory: dir)
+        let downloads = FakeDownloads()
+        await store.pin(pinFile("a"))
+        _ = await store.reconcile(scope: scope, index: FakeIndex([file("a", "a.txt")]), download: downloads.download)
+        let destination = try #require(await downloads.destinations.first)
+        #expect(destination.deletingLastPathComponent().standardizedFileURL
+                == dir.appendingPathComponent(".incoming", isDirectory: true).standardizedFileURL)
+        #expect(!FileManager.default.fileExists(atPath: destination.path), "renamed into place")
+    }
+
+    @Test func aRenamedPinnedFolderKeepsItsCopiesAndSaysSo() async throws {
+        let store = try PinStore(directory: try tempFolder())
+        let downloads = FakeDownloads()
+        let rule = pinFolder("Projects/Client A")
+        await store.pin(rule)
+        let before = FakeIndex([file("a", "Projects/Client A/a.txt"), file("b", "Projects/Client A/Sub/b.txt"),
+                                file("c", "Other/c.txt")])
+        _ = await store.reconcile(scope: scope, index: before, download: downloads.download)
+        #expect(await store.unresolved(scope: scope, index: before).isEmpty)
+        #expect(await store.unresolved(scope: scope, index: FakeIndex([folderEntry("Projects/Client A")])).isEmpty,
+                "an empty folder is still there")
+
+        // Renamed on the web: the files move, and the rule names nothing.
+        let renamed = FakeIndex([file("a", "Projects/Client B/a.txt"), file("b", "Projects/Client B/Sub/b.txt"),
+                                 file("c", "Other/c.txt")])
+        let report = await store.reconcile(scope: scope, index: renamed, download: downloads.download)
+        #expect(report.removed == 0 && report.unresolved == [rule])
+        #expect(await store.localCopy(scope: scope, fileId: "a", etag: "v1") != nil, "still served, at its new path")
+        // A drive still being fetched proves nothing either way.
+        #expect(await store.unresolved(scope: scope, index: FakeIndex([], authoritative: false)).isEmpty)
+
+        // A file gone from the drive goes, rule or no rule.
+        let deleted = FakeIndex([file("a", "Projects/Client B/a.txt"), file("c", "Other/c.txt")])
+        let gone = await store.reconcile(scope: scope, index: deleted, download: downloads.download)
+        #expect(gone.removed == 1)
+        #expect(await store.localCopy(scope: scope, fileId: "b", etag: nil) == nil)
+
+        // The stale rule removed, what it kept goes.
+        await store.unpin(rule)
+        let cleared = await store.reconcile(scope: scope, index: deleted, download: downloads.download)
+        #expect(cleared.removed == 1 && cleared.unresolved.isEmpty)
         #expect(await store.usage() == 0)
     }
 
@@ -437,6 +701,36 @@ struct PinStoreTests {
         #expect(await store.localCopy(scope: scope, fileId: "a", etag: "v1") != nil)
     }
 
+    @Test func theCacheCannotGoWhereItWouldBreakItself() throws {
+        let home = try tempFolder()
+        let mounts = home.appendingPathComponent("Onyx", isDirectory: true)
+        try FileManager.default.createDirectory(at: mounts.appendingPathComponent("Team Drive"),
+                                                withIntermediateDirectories: true)
+        let current = home.appendingPathComponent("Library/Offline", isDirectory: true)
+        try FileManager.default.createDirectory(at: current.appendingPathComponent("Streaming"),
+                                                withIntermediateDirectories: true)
+        func refusal(_ path: String) -> String? {
+            CacheLocation.refusal(for: home.appendingPathComponent(path), current: current, mounts: mounts)
+        }
+        // In a drive's mount point: rclone will not mount over it again.
+        #expect(refusal("Onyx/Onyx Cache") != nil)
+        #expect(refusal("Onyx/Team Drive/Onyx Cache") != nil)
+        #expect(refusal("onyx/team drive/Onyx Cache") != nil, "in any case")
+        // In the cache itself: clearing the old streaming cache would delete it.
+        #expect(refusal("Library/Offline/Streaming/Onyx Cache") != nil)
+        #expect(refusal("Library/Offline/Pinned/x/Onyx Cache") != nil)
+        #expect(refusal("Onyx Cache") == nil)
+        #expect(refusal("Onyx 2/Onyx Cache") == nil, "a neighbour whose name merely starts the same")
+        #expect(refusal("Library/Offline/Elsewhere/Onyx Cache") == nil)
+
+        let link = home.appendingPathComponent("Shortcut")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: mounts.appendingPathComponent("Team Drive"))
+        #expect(refusal("Shortcut/Onyx Cache") != nil, "nor through a link")
+
+        #expect(CacheLocation.isSame(current, home.appendingPathComponent("library/offline/")))
+        #expect(!CacheLocation.isSame(current, current.appendingPathComponent("Streaming")))
+    }
+
     @Test func aCorruptStateFileStartsEmptyAndCarriesOn() async throws {
         let dir = try tempFolder()
         try Data("{ not json".utf8).write(to: dir.appendingPathComponent("pins.json"))
@@ -512,6 +806,15 @@ extension PinStoreTests {
         }
 
         func file(id: String) -> MirrorEntry? { entries.first { $0.fileId == id && !$0.isFolder } }
+
+        func hasFolder(at path: String) -> Bool {
+            let parts = path.lowercased().split(separator: "/")
+            guard !parts.isEmpty else { return true }
+            return entries.contains { entry in
+                let p = entry.path.lowercased().split(separator: "/")
+                return (entry.isFolder && p == parts) || (p.count > parts.count && Array(p.prefix(parts.count)) == parts)
+            }
+        }
     }
 
     /// Writes "<id>@<etag>" to a temporary file, counting calls and how many run
@@ -523,6 +826,8 @@ extension PinStoreTests {
         }
 
         private(set) var calls: [String: Int] = [:]
+        /// Where each download was told to write.
+        private(set) var destinations: [URL] = []
         private(set) var started = 0
         private(set) var maxInFlight = 0
         private var inFlight = 0
@@ -540,13 +845,14 @@ extension PinStoreTests {
         func succeed(_ id: String) { failing.remove(id) }
         func truncate(_ id: String) { truncating.insert(id) }
 
-        nonisolated var download: @Sendable (MirrorEntry) async throws -> URL {
-            { entry in try await self.fetch(entry) }
+        nonisolated var download: PinStore.Download {
+            { entry, destination in try await self.fetch(entry, to: destination) }
         }
 
-        private func fetch(_ entry: MirrorEntry) async throws -> URL {
+        private func fetch(_ entry: MirrorEntry, to destination: URL) async throws {
             let id = entry.fileId ?? ""
             calls[id, default: 0] += 1
+            destinations.append(destination)
             started += 1
             inFlight += 1
             maxInFlight = max(maxInFlight, inFlight)
@@ -556,9 +862,18 @@ extension PinStoreTests {
             if failing.contains(id) { throw Refused(id: id) }
             var body = PinStoreTests.body(id, entry.etag ?? "")
             if truncating.contains(id) { body = String(body.prefix(2)) }
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent("download-\(UUID().uuidString)")
-            try Data(body.utf8).write(to: url)
-            return url
+            try Data(body.utf8).write(to: destination)
+        }
+    }
+
+    /// Free bytes, as a test sets them.
+    final class Space: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: Int64
+        init(_ bytes: Int64) { value = bytes }
+        var bytes: Int64 {
+            get { lock.withLock { value } }
+            set { lock.withLock { value = newValue } }
         }
     }
 

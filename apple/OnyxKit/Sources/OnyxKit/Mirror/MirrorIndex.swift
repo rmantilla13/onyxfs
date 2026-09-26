@@ -207,6 +207,11 @@ public struct MirrorIndex: Sendable, PinnableIndex {
         byID[id].map { entries[$0] }
     }
 
+    /// "" is the drive itself; a file is not a folder.
+    public func hasFolder(at path: String) -> Bool {
+        position(of: path).map { slots[$0] != nil } ?? false
+    }
+
     /// Every file at any depth beneath a folder ("" = the whole drive): the
     /// folder's own files, then each subfolder's, in listing order. Empty
     /// when `folderPath` is not a folder.
