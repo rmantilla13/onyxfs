@@ -1,14 +1,18 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
 import { getStorageConfig, storageMode, s3PutBucketCors } from '@/lib/storage';
+import { loadBrand, defaultBrandConfig } from '@/lib/brand-config';
+import { corsOrigins, corsRule } from '@/lib/storage-cors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
  * POST — one-click bucket CORS repair for browser presigned-PUT uploads
- * (the "Failed to fetch" fix). Allows this deployment's own origin plus
- * localhost + Vercel previews so dev/preview uploads work too.
+ * (the "Failed to fetch" fix). Allows this deployment's own origins — the
+ * one this request came in on, NEXT_PUBLIC_APP_URL and the brand's — plus
+ * its Vercel previews when it runs on Vercel (corsOrigins). When the key may
+ * not change CORS, the answer carries the exact rule to paste by hand.
  */
 export async function POST(req) {
   const gate = await requireAdmin();
@@ -16,19 +20,19 @@ export async function POST(req) {
 
   const cfg = await getStorageConfig({ fresh: true });
   if (storageMode(cfg) !== 's3') {
-    return NextResponse.json({ error: 'Storage isn’t configured for a custom S3 bucket.' }, { status: 400 });
+    return NextResponse.json({ error: 'Storage is not set up with an S3 bucket yet, so there is no bucket to set CORS on.' }, { status: 400 });
   }
 
-  // The deployment's own origin first (works for any white-label domain),
-  // then the canonical prod domain, previews, and local dev.
   let reqOrigin = '';
   try { reqOrigin = new URL(req.url).origin; } catch {}
-  const origins = [...new Set([
-    reqOrigin,
-    'https://onyxfs.io',
-    'https://*.vercel.app',
-    'http://localhost:3000',
-  ].filter((o) => o && o.startsWith('http')))];
+  const brand = await loadBrand().catch(() => null);
+  const origins = corsOrigins({
+    requestOrigin: reqOrigin,
+    appUrl: process.env.NEXT_PUBLIC_APP_URL || '',
+    brandOrigin: brand?.origin || '',
+    fallbackOrigin: defaultBrandConfig().origin,
+    vercel: !!process.env.VERCEL,
+  });
 
   try {
     const result = await s3PutBucketCors(cfg, { origins });
@@ -41,13 +45,8 @@ export async function POST(req) {
         : (e.message || 'Failed to set bucket CORS.'),
       // Hand back the exact rule so it can be pasted into the S3 console →
       // bucket → Permissions → CORS if the key can't do it itself.
-      manualRule: [{
-        AllowedOrigins: origins,
-        AllowedMethods: ['PUT', 'GET', 'HEAD', 'POST'],
-        AllowedHeaders: ['*'],
-        ExposeHeaders: ['ETag'],
-        MaxAgeSeconds: 3000,
-      }],
+      origins,
+      manualRule: corsRule(origins),
     }, { status: denied ? 403 : 500 });
   }
 }

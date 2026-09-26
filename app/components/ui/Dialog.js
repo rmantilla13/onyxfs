@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useId, useRef } from 'react';
 
 /**
  * A modal dialog built on the native <dialog> element.
@@ -38,8 +38,14 @@ export default function Dialog({
   // not be dismissable by a stray click on the backdrop.
   dismissable = true,
   labelledBy,
+  // Extra classes on the <dialog>: 'dialog-sheet' makes it a side sheet
+  // (the admin drawer, app/admin/admin.css).
+  className = '',
 }) {
   const ref = useRef(null);
+  // One id per dialog: a confirm opened over another dialog must not point
+  // its aria-labelledby at the first one's title.
+  const titleId = useId();
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
@@ -72,14 +78,14 @@ export default function Dialog({
   return (
     <dialog
       ref={ref}
-      className={`dialog${wide ? ' dialog-wide' : ''}`}
+      className={`dialog${wide ? ' dialog-wide' : ''}${className ? ` ${className}` : ''}`}
       onCancel={onCancel}
       onPointerDown={onPointerDown}
-      aria-labelledby={labelledBy || (title ? 'dialog-title' : undefined)}
+      aria-labelledby={labelledBy || (title ? titleId : undefined)}
     >
       {title && (
         <div className="dialog-head">
-          <h2 id="dialog-title" className="dialog-title">{title}</h2>
+          <h2 id={titleId} className="dialog-title">{title}</h2>
           <div className="spacer" />
           {dismissable && (
             <button className="btn btn-ghost btn-sm btn-icon" onClick={() => onClose?.()} aria-label="Close">

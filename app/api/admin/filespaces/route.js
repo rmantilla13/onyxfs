@@ -2,9 +2,8 @@ import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
 import {
   listFilespaces, createFilespace, updateFilespace, deleteFilespace, listFilespaceMembers,
-  listInviteRequests, getFilespaceById, countFilesUnderPrefix, filespaceSetupProblem,
+  getFilespaceById, countFilesUnderPrefix, filespaceSetupProblem,
 } from '@/lib/db';
-import { isAdmin } from '@/lib/auth-allowlist';
 import { getStorageConfig } from '@/lib/storage';
 
 export const runtime = 'nodejs';
@@ -16,19 +15,23 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
 /**
- * GET → { filespaces: [{..., members:[{email,role,envAdmin}]}], users }
- * Filespaces with their members, plus the known-user list for the add-member
- * datalist (signed-in roster + approved invites, best-effort).
+ * GET → { filespaces } — every drive, with its member count. Nothing else:
+ * Admin → Drives renders its list on the server (listDrivesWithUsage), and
+ * members are read per drive from /api/filespaces/[id]/members. This used to
+ * look up every drive's members and every approved invite on each call, for
+ * a screen that no longer asks.
+ *
+ * GET ?summary=<id> → what deleting that drive would leave behind, for the
+ * confirm (DeleteDriveConfirm): its files and bytes, members and own keys.
  */
 export async function GET(req) {
   const gate = await requireAdmin();
   if (gate.error) return gate.error;
 
-  // ?summary=<id> → what deleting it would leave behind, for the confirm.
   const summaryId = new URL(req.url).searchParams.get('summary');
   if (summaryId) {
     const fs = await getFilespaceById(summaryId);
-    if (!fs) return NextResponse.json({ error: 'Filespace not found' }, { status: 404 });
+    if (!fs) return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     const [counts, members] = await Promise.all([countFilesUnderPrefix(fs.prefix), listFilespaceMembers(fs.id)]);
     return NextResponse.json({
       id: fs.id, name: fs.name, bucket: fs.bucket, prefix: fs.prefix,
@@ -36,22 +39,7 @@ export async function GET(req) {
     });
   }
 
-  const spaces = await listFilespaces();
-  const filespaces = await Promise.all(spaces.map(async (f) => {
-    const members = (await listFilespaceMembers(f.id)).map((m) => ({ ...m, envAdmin: isAdmin(m.email) }));
-    return { ...f, members };
-  }));
-
-  // Who can be granted a filespace: everyone with an approved invite.
-  const byEmail = new Map();
-  try {
-    for (const i of await listInviteRequests({ status: 'approved' })) {
-      const e = String(i.email || '').toLowerCase();
-      if (e && !byEmail.has(e)) byEmail.set(e, { email: i.email, name: i.name || null });
-    }
-  } catch {}
-
-  return NextResponse.json({ filespaces, users: [...byEmail.values()] });
+  return NextResponse.json({ filespaces: await listFilespaces() });
 }
 
 /**
@@ -73,12 +61,12 @@ export async function POST(req) {
   // stored as an empty (bucket-wide, unmountable) prefix.
   const prefix = String(body.prefix || '').replace(/^\/+|\/+$/g, '').trim();
   if (!bucket) {
-    return NextResponse.json({ error: 'No bucket given and no Storage bucket is configured.' }, { status: 400 });
+    return NextResponse.json({ error: 'Name a bucket for the drive: no Storage bucket is set up to default to.' }, { status: 400 });
   }
   const problem = filespaceSetupProblem({ name, bucket, prefix }, await listFilespaces());
   if (problem) return NextResponse.json({ error: problem.error }, { status: problem.status });
   if (Boolean(body.accessKeyId) !== Boolean(body.secretAccessKey)) {
-    return NextResponse.json({ error: 'Provide BOTH an access key and secret, or neither (to use the Storage config keys).' }, { status: 400 });
+    return NextResponse.json({ error: 'Give both an access key ID and its secret, or neither to use the Storage keys.' }, { status: 400 });
   }
   const filespace = await createFilespace({
     name, bucket, prefix,
@@ -103,7 +91,7 @@ export async function PATCH(req) {
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
   const id = String(body.id || '').trim();
-  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  if (!id) return NextResponse.json({ error: 'Which drive? The id is missing.' }, { status: 400 });
   const fields = {};
   if (body.name != null) fields.name = String(body.name).trim();
   if (body.bucket != null) fields.bucket = String(body.bucket).trim();
@@ -115,7 +103,7 @@ export async function PATCH(req) {
   if (body.endpoint != null) fields.endpoint = String(body.endpoint).trim() || null;
 
   const existing = await getFilespaceById(id);
-  if (!existing) return NextResponse.json({ error: 'Filespace not found' }, { status: 404 });
+  if (!existing) return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
   const next = { name: existing.name, bucket: existing.bucket, prefix: existing.prefix, ...fields };
   const others = (await listFilespaces()).filter((f) => f.id !== id);
   const problem = filespaceSetupProblem(next, others);
@@ -129,13 +117,13 @@ export async function PATCH(req) {
     const { files } = await countFilesUnderPrefix(existing.prefix);
     if (files > 0) {
       return NextResponse.json({
-        error: `${files} file${files === 1 ? ' is' : 's are'} stored under ${existing.bucket}/${existing.prefix}. Changing the bucket or prefix would strand them, so it is only allowed on an empty filespace.`,
+        error: `${files} file${files === 1 ? ' is' : 's are'} stored under ${existing.bucket}/${existing.prefix}. Changing the bucket or folder would strand them, so it is only allowed on an empty drive.`,
       }, { status: 409 });
     }
   }
 
   const filespace = await updateFilespace(id, fields);
-  if (!filespace) return NextResponse.json({ error: 'Filespace not found' }, { status: 404 });
+  if (!filespace) return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
   // Never echo the secret back.
   const { secretAccessKey, ...safe } = filespace;
   return NextResponse.json({ filespace: safe });
@@ -151,9 +139,9 @@ export async function DELETE(req) {
   const gate = await requireAdmin();
   if (gate.error) return gate.error;
   const id = new URL(req.url).searchParams.get('id');
-  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  if (!id) return NextResponse.json({ error: 'Which drive? The id is missing.' }, { status: 400 });
   const fs = await getFilespaceById(id);
-  if (!fs) return NextResponse.json({ error: 'Filespace not found' }, { status: 404 });
+  if (!fs) return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
   const { files } = await countFilesUnderPrefix(fs.prefix);
   await deleteFilespace(id);
   return NextResponse.json({ ok: true, id, filesKept: files });
