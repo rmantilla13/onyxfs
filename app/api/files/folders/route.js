@@ -37,7 +37,7 @@ const bad = (msg, status = 400) => NextResponse.json({ error: msg }, { status })
  * storage config for the unscoped library. `tag` is what folders.filespace
  * holds for this scope, and `driveRole` the caller's role in the drive, after
  * their platform role's ceiling — a drive's editors and owners restructure
- * its folders. Null when the filespace is not the caller's — or, with
+ * its folders (only its own: folderRoleFor). Null when the filespace is not the caller's — or, with
  * `write`, when they may open it but not change it (a drive's viewer).
  */
 async function scopeFor(principal, filespaceId, { write = false } = {}) {
@@ -80,7 +80,7 @@ export async function GET(req) {
     if (!name) return bad('Folder required.');
     const scope = await scopeFor(principal, filespaceId);
     if (!scope) return forbidden('No access to that filespace.');
-    if (!(await canModifyFolder(name, principal, { driveRole: scope.driveRole }))) return forbidden();
+    if (!(await canModifyFolder(name, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden();
     const files = await listFolderSubtreeFiles(name);
     const plan = planRename({ from: name, to: name, prefix: scope.prefix, scoped: scope.scoped, files });
     const inScope = new Set([...plan.moves, ...plan.catalog].map((m) => m.id));
@@ -174,8 +174,8 @@ export async function PATCH(req) {
 
   const scope = await scopeFor(principal, body.filespaceId, { write: true });
   if (!scope) return forbidden('You can view this drive but not change it.');
-  if (!(await canModifyFolder(from, principal, { driveRole: scope.driveRole }))) return forbidden();
-  if (!(await canModifyFolder(to, principal, { driveRole: scope.driveRole }))) return forbidden('No access to the destination folder.');
+  if (!(await canModifyFolder(from, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden();
+  if (!(await canModifyFolder(to, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden('No access to the destination folder.');
   if (await folderPathInUse(to)) {
     return bad(`“${to}” already exists${scope.scoped ? ' (here or in another filespace)' : ''}. Choose another name, or move the files into it instead.`, 409);
   }
@@ -264,7 +264,7 @@ export async function DELETE(req) {
   if (!name) return bad('Folder required.');
   const scope = await scopeFor(principal, url.searchParams.get('filespace'), { write: true });
   if (!scope) return forbidden('You can view this drive but not change it.');
-  if (!(await canModifyFolder(name, principal, { driveRole: scope.driveRole }))) return forbidden();
+  if (!(await canModifyFolder(name, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden();
 
   // Global, read here and never from the request.
   const flags = principal.flags;
