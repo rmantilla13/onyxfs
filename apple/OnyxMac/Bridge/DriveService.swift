@@ -307,14 +307,17 @@ final class DriveService: ObservableObject {
             do {
                 _ = try await mirror.sync()
             } catch OnyxError.driveGone {
-                // Lost while the app was not looking — at a relaunch, most
-                // often, for a drive still kept offline.
+                // Not with the thresholds as they are — a first sync is one
+                // refusal (DriveMirror.refusalsBeforeGone) — but should they
+                // allow it, the drive goes as it would on a tick.
                 guard started == generation else { return nil }
                 await driveGone(scope)
                 return nil
             } catch {
                 // Offline, or a hiccup: the mirror on disk answers, and the
-                // next tick tries again.
+                // next tick tries again. Or the server refused the drive:
+                // the mirror withholds it, and it mounts showing nothing
+                // until the ticks find it back, or lost.
             }
         }
         guard started == generation else { return nil }
@@ -326,6 +329,12 @@ final class DriveService: ObservableObject {
     /// forgotten its tree (DriveMirror.sync). Nothing of it stays on this
     /// Mac either: not in Finder, not kept offline, not mounted again at the
     /// next launch — access taken away on the web reaches the device.
+    ///
+    /// Only once the server has refused the drive for minutes on end
+    /// (DriveMirror.refusalsBeforeGone): it gives the same answer when one
+    /// of its own queries fails, and none of this can be undone. Until then
+    /// the mirror only withholds the drive, which shows empty in Finder and
+    /// keeps its offline copies.
     ///
     /// With the offline store's disk not connected, its copies wait
     /// (PinStore.removeAll): the store's rules still name the drive, so once
@@ -418,6 +427,9 @@ final class DriveService: ObservableObject {
                 isOffline = true
             } catch {
                 // A server hiccup: the same, and the next tick tries again.
+                // A refusal of the drive lands here too until it has gone on
+                // long enough to be believed; the mirror withholds the drive
+                // meanwhile, and a pass against it deletes nothing.
             }
             // Signed out while it synced: nothing more for that account.
             guard started == generation else { return }

@@ -103,9 +103,11 @@ public enum OnyxError: LocalizedError {
     case decoding(String)
     case storageUnavailable(String)
     /// This account may no longer open the drive: it was deleted, or the
-    /// account was taken off it. Not a hiccup to retry through — the drive's
-    /// mirror has already forgotten it (DriveMirror.sync), and the app should
-    /// unmount it and drop its offline copies.
+    /// account was taken off it. The server has said so for minutes on end
+    /// (DriveMirror.refusalsBeforeGone), so it is not a hiccup to retry
+    /// through — the drive's mirror has already forgotten it
+    /// (DriveMirror.sync), and the app should unmount it and drop its
+    /// offline copies.
     case driveGone
 
     public var errorDescription: String? {

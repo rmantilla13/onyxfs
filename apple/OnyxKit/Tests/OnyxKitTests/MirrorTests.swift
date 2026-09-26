@@ -476,6 +476,30 @@ private func temporaryDirectory() -> URL {
     FileManager.default.temporaryDirectory.appendingPathComponent("onyxkit-mirror-\(UUID().uuidString)")
 }
 
+/// The time of day, as a test sets it.
+private final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = Date(timeIntervalSince1970: 1_000_000)
+    var now: Date { lock.withLock { value } }
+    func advance(_ seconds: TimeInterval) { lock.withLock { value += seconds } }
+}
+
+/// What a sync threw, or nil.
+private func failure(of mirror: DriveMirror) async -> Error? {
+    do { _ = try await mirror.sync(); return nil } catch { return error }
+}
+
+/// The feed's own "no access", passed on as it came.
+private func isRefusal(_ error: Error?) -> Bool {
+    if case let OnyxError.http(status, message)? = error as? OnyxError { return status == 404 && message != nil }
+    return false
+}
+
+private func isGone(_ error: Error?) -> Bool {
+    if case OnyxError.driveGone? = error as? OnyxError { return true }
+    return false
+}
+
 // MARK: - DriveMirror
 
 /// A drive's replica, synced, kept, and read through. Against a stub server:
@@ -796,6 +820,42 @@ struct DriveMirrorTests {
         #expect(names(await mirror.index.children(of: "")) == ["Photos", "PHOTOS (2)"])
     }
 
+    @Test func aFolderNewToThisMacNeverTakesAPinnedFoldersName() async throws {
+        // Photos first appears after the Mac's first fill, and is kept
+        // offline. Then the access changes, and the fetch from the start
+        // brings an empty PHOTOS, made on the web meanwhile, on its first
+        // page — where every folder is "from the start".
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("x", "x.txt", size: 0)], cursor: 10))
+        stub.server.page(at: 10, page([item("p", "a.jpg", in: "Photos", created: 100, size: 0)], cursor: 20,
+                                      folders: ["Photos"]))
+        let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        _ = try await mirror.sync()
+        let pins = try PinStore(directory: dir.appendingPathComponent("Pinned"))
+        await pins.pin(PinRule(scope: "drive.d1", target: .folder(path: "Photos")))
+        let downloads = PinStoreTests.FakeDownloads()
+        #expect(await pins.reconcile(scope: "drive.d1", index: await mirror.index,
+                                     download: downloads.download).downloaded == 1)
+
+        stub.server.page(at: 20, page([], cursor: 21, scope: "s2"))
+        stub.server.page(at: 0, page([item("x", "x.txt", size: 0),
+                                      item("p", "a.jpg", in: "Photos", created: 100, size: 0)],
+                                     cursor: 25, scope: "s2", folders: ["Photos", "PHOTOS"]))
+        _ = try await mirror.sync()
+        let index = await mirror.index
+        #expect(index.isAuthoritative)
+        #expect(names(index.children(of: "")) == ["Photos", "PHOTOS (2)", "x.txt"])
+        #expect(index.entry(at: "Photos/a.jpg")?.fileId == "p")
+        let pass = await pins.reconcile(scope: "drive.d1", index: index, download: downloads.download)
+        #expect(pass.removed == 0)
+        #expect(await pins.localCopy(scope: "drive.d1", fileId: "p", etag: nil) != nil)
+    }
+
     @Test func aDriveTheAccountLostIsForgotten() async throws {
         let stub = try MirrorStubbedAPI()
         defer { stub.tearDown() }
@@ -803,22 +863,24 @@ struct DriveMirrorTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         stub.server.page(at: 0, page([item("a", "a.png", in: "X")], cursor: 7))
         stub.server.link("a", json: #"{"id":"a","url":"https://bucket.test/a","expiresAt":null,"version":1}"#)
+        let clock = TestClock()
         let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
-                                 account: "me@example.com", api: { stub.api })
+                                 account: "me@example.com", api: { stub.api }, clock: { clock.now })
         _ = try await mirror.sync()
         _ = try await mirror.contentURL(fileId: "a")
         let file = dir.appendingPathComponent("drive.d1.json")
         #expect(FileManager.default.fileExists(atPath: file.path))
 
+        // Refused three times running, over ten minutes, with no page between.
         stub.server.refuseDelta(404)
-        do {
-            _ = try await mirror.sync()
-            Issue.record("a drive the account lost synced")
-        } catch OnyxError.driveGone {
-        } catch {
-            Issue.record("not driveGone: \(error)")
+        for _ in 0..<2 {
+            #expect(isRefusal(await failure(of: mirror)))
+            clock.advance(5 * 60)
         }
+        #expect(await mirror.isGone == false)
+        #expect(isGone(await failure(of: mirror)))
         #expect(await mirror.isGone)
+        #expect(await mirror.isWithheld == false, "forgotten, not withheld")
         let gone = await mirror.index
         #expect(gone.fileCount == 0 && gone.entry(at: "X") == nil, "no longer listed")
         #expect(await mirror.isAuthoritative == false, "the copies are the app's call, not this index's")
@@ -857,11 +919,121 @@ struct DriveMirrorTests {
         await #expect(throws: OnyxError.self) { try await mirror.sync() }
         #expect(await mirror.index.entry(at: "a.png") != nil)
         #expect(await mirror.isGone == false)
+        #expect(await mirror.isWithheld == false)
 
         #expect(DriveMirror.meansGone(OnyxError.http(status: 404, message: "No access"), scope: .drive(id: "x")))
         #expect(!DriveMirror.meansGone(OnyxError.http(status: 404, message: "No access"), scope: .library))
         #expect(!DriveMirror.meansGone(OnyxError.http(status: 403, message: "Forbidden"), scope: .drive(id: "x")))
         #expect(!DriveMirror.meansGone(URLError(.notConnectedToInternet), scope: .drive(id: "x")))
+    }
+
+    @Test func aRefusedDriveIsWithheldNotForgotten() async throws {
+        // The server gives the same "no access" when a query of its own
+        // fails. Nothing is listed while it says so, but nothing is deleted
+        // until it has said so for long enough: the tree stays, here and on
+        // disk, and so do the offline copies.
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png", in: "X", size: 0)], cursor: 7))
+        let clock = TestClock()
+        let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api }, clock: { clock.now })
+        _ = try await mirror.sync()
+        let file = dir.appendingPathComponent("drive.d1.json")
+        let pins = try PinStore(directory: dir.appendingPathComponent("Pinned"))
+        await pins.pin(PinRule(scope: "drive.d1", target: .folder(path: "")))
+        let downloads = PinStoreTests.FakeDownloads()
+        #expect(await pins.reconcile(scope: "drive.d1", index: await mirror.index,
+                                     download: downloads.download).downloaded == 1)
+
+        // Refused on every sync for minutes, but not yet ten.
+        stub.server.refuseDelta(404)
+        for _ in 0..<5 {
+            #expect(isRefusal(await failure(of: mirror)))
+            clock.advance(60)
+        }
+        #expect(await mirror.isWithheld)
+        #expect(await mirror.isGone == false)
+        let withheld = await mirror.index
+        #expect(withheld.entry(at: "X") == nil && withheld.entry(at: "X/a.png") == nil, "nothing listed")
+        #expect(!withheld.isAuthoritative)
+        #expect(FileManager.default.fileExists(atPath: file.path), "but kept on disk")
+        let pass = await pins.reconcile(scope: "drive.d1", index: withheld, download: downloads.download)
+        #expect(pass.removed == 0)
+        #expect(await pins.localCopy(scope: "drive.d1", fileId: "a", etag: nil) != nil)
+
+        // The server answers again: the drive is back as it was.
+        stub.server.refuseDelta(nil)
+        stub.server.page(at: 7, page([], cursor: 7))
+        #expect(try await mirror.sync().isEmpty)
+        #expect(await mirror.isWithheld == false)
+        #expect(await mirror.index.entry(at: "X/a.png")?.fileId == "a")
+        #expect(await mirror.isAuthoritative)
+
+        // And the count starts over: the refusals before that page do not
+        // add to these.
+        stub.server.refuseDelta(404)
+        clock.advance(60 * 60)
+        #expect(isRefusal(await failure(of: mirror)))
+        clock.advance(20 * 60)
+        #expect(isRefusal(await failure(of: mirror)), "two refusals, however far apart, are not enough")
+        #expect(isGone(await failure(of: mirror)))
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
+    @Test func aSaveThatFailedIsOwedUntilOneSucceeds() async throws {
+        // The disk is full as a pass writes a change down. A later pass that
+        // only moves the cursor must not write a cursor file extending the
+        // replica on disk, which lacks the change: after a relaunch, the
+        // change would never come.
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 10))
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        let fm = FileManager.default
+        let file = dir.appendingPathComponent("library.json")
+        let progress = dir.appendingPathComponent("library.cursor.json")
+        let aside = dir.appendingPathComponent("aside.json")
+
+        // The replica cannot be written: a folder stands where it goes.
+        try fm.moveItem(at: file, to: aside)
+        try fm.createDirectory(at: file, withIntermediateDirectories: true)
+        try Data().write(to: file.appendingPathComponent("in-the-way"))
+        stub.server.page(at: 10, page([item("b", "b.png")], cursor: 20))
+        #expect(try await mirror.sync().updated == ["b"])
+        #expect(await mirror.lastError?.hasPrefix("Could not save") == true)
+
+        // Only the cursor moves now; the whole replica is still owed.
+        stub.server.page(at: 20, page([], deleted: ["elsewhere"], cursor: 30))
+        #expect(try await mirror.sync().isEmpty)
+        #expect(await mirror.lastError?.hasPrefix("Could not save") == true, "still owed")
+        #expect(!fm.fileExists(atPath: progress.path), "no cursor file past what is on disk")
+
+        // What a relaunch would find now: the replica from before b, at its
+        // own cursor, so b is fetched again.
+        try fm.removeItem(at: file)
+        try fm.moveItem(at: aside, to: file)
+        let relaunched = DriveMirror(scope: .library, directory: dir, server: server,
+                                     account: "me@example.com", api: { stub.api })
+        #expect(await relaunched.index.entry(at: "b.png") == nil)
+        let before = try JSONDecoder().decode(DriveMirror.Stored.self, from: Data(contentsOf: file))
+        #expect(before.replica.cursor == 10)
+
+        // With the way clear, the next pass writes it all, with nothing new.
+        stub.server.page(at: 30, page([], cursor: 30))
+        #expect(try await mirror.sync().isEmpty)
+        #expect(await mirror.lastError == nil)
+        let after = try JSONDecoder().decode(DriveMirror.Stored.self, from: Data(contentsOf: file))
+        #expect(after.replica.cursor == 30 && after.replica.files.keys.sorted() == ["a", "b"])
+        let again = DriveMirror(scope: .library, directory: dir, server: server,
+                                account: "me@example.com", api: { stub.api })
+        #expect(await again.index.entry(at: "b.png")?.fileId == "b")
     }
 
     @Test func aPassThatOnlyMovesTheCursorWritesOnlyTheCursor() async throws {

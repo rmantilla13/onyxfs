@@ -28,15 +28,32 @@ public actor DriveMirror {
     public private(set) var index: MirrorIndex
     public private(set) var lastSynced: Date?
     public private(set) var lastError: String?
-    /// The server said this account may no longer open the drive, and the
-    /// mirror has forgotten it (see OnyxError.driveGone). Until a sync gets
-    /// a page again.
+    /// The server said this account may no longer open the drive, for long
+    /// enough to be believed, and the mirror has forgotten it (see
+    /// OnyxError.driveGone). Until a sync gets a page again.
     public private(set) var isGone = false
+    /// The server has said this account may not open the drive, but not yet
+    /// for long enough (`refusalsBeforeGone`): nothing is listed, and nothing
+    /// deleted — the tree is kept, here and on disk, and shown again as soon
+    /// as a page comes. The server answers the same way when a query of its
+    /// own fails, and the forgetting cannot be undone.
+    public private(set) var isWithheld = false
+    /// The first of the feed's refusals since it last sent a page, and how
+    /// many there have been.
+    private var refusedSince: Date?
+    private var refusals = 0
+    private let clock: @Sendable () -> Date
 
     private var syncing: Task<Replica.Diff, Error>?
     /// Changes applied by a pass that then failed. The index already shows
     /// them, so they are owed to the next caller whose sync succeeds.
     private var unreported = Replica.Diff()
+    /// What the files on disk lack, until a save succeeds: kept across
+    /// passes, so a save that failed is tried again by the next. Were it
+    /// forgotten, a later pass that moved only the cursor would write a
+    /// cursor file extending a replica on disk that lacks the changes, and a
+    /// relaunch would skip them for good.
+    private var unsaved = Unsaved.nothing
     private var links: [String: Link] = [:]
     private var fetching: [String: Fetch] = [:]
     private var fetches = 0
@@ -46,6 +63,13 @@ public actor DriveMirror {
     /// A long first sync is written down this often, so a quit or a crash
     /// resumes near where it stopped instead of at the start.
     static let checkpointPages = 50
+    /// A drive is taken as lost only after the feed has refused it this many
+    /// times running, over at least this long, with no page between: once
+    /// could be a passing fault on the server, and what follows — its
+    /// offline copies deleted, its mount turned off for good — cannot be
+    /// undone. At a sync every 15 s, that is some forty refusals.
+    static let refusalsBeforeGone = 3
+    static let refusedForBeforeGone: TimeInterval = 10 * 60
 
     /// Whose replica this is. A replica is only good for the account and
     /// server it was fetched as: another account may see other files, and
@@ -116,26 +140,30 @@ public actor DriveMirror {
         let loaded = await Task.detached(priority: .userInitiated) {
             Self.load(files, directory: directory, identity: identity)
         }.value
-        return DriveMirror(scope: scope, files: files, identity: identity, api: api, loaded: loaded, linkLimit: 1024)
+        return DriveMirror(scope: scope, files: files, identity: identity, api: api, loaded: loaded, linkLimit: 1024,
+                           clock: { Date() })
     }
 
     /// Reads the disk on the caller's thread, which suits a test; the app
-    /// uses `open`.
+    /// uses `open`. `clock` stands in for the time of day.
     init(scope: SyncDomain, directory: URL, server: URL, account: String,
-         api: @escaping @Sendable () -> OnyxAPI, linkLimit: Int = 1024) {
+         api: @escaping @Sendable () -> OnyxAPI, linkLimit: Int = 1024,
+         clock: @escaping @Sendable () -> Date = { Date() }) {
         let identity = Identity(server: server.absoluteString, account: account.lowercased())
         let files = Files(directory: directory, scope: scope)
         self.init(scope: scope, files: files, identity: identity, api: api,
-                  loaded: Self.load(files, directory: directory, identity: identity), linkLimit: linkLimit)
+                  loaded: Self.load(files, directory: directory, identity: identity), linkLimit: linkLimit,
+                  clock: clock)
     }
 
     private init(scope: SyncDomain, files: Files, identity: Identity, api: @escaping @Sendable () -> OnyxAPI,
-                 loaded: Loaded, linkLimit: Int) {
+                 loaded: Loaded, linkLimit: Int, clock: @escaping @Sendable () -> Date) {
         self.scope = scope
         self.files = files
         self.identity = identity
         self.api = api
         self.linkLimit = linkLimit
+        self.clock = clock
         replica = loaded.replica
         complete = loaded.complete
         generation = loaded.generation
@@ -184,10 +212,12 @@ public actor DriveMirror {
     /// apply pages the other already had and race to save. A pass that fails
     /// keeps what it applied, and the next one to succeed reports it.
     ///
-    /// Throws OnyxError.driveGone when the server says this account may no
-    /// longer open the drive. The mirror has then forgotten it — tree, links
-    /// and what was on disk — and the app should unmount it and remove its
-    /// offline copies.
+    /// When the server says this account may no longer open the drive, the
+    /// drive is withheld at once (`isWithheld`) and the refusal thrown as it
+    /// came. Once the server has said so for long enough
+    /// (`refusalsBeforeGone`), it throws OnyxError.driveGone instead: the
+    /// mirror has then forgotten the drive — tree, links and what was on
+    /// disk — and the app should unmount it and remove its offline copies.
     public func sync() async throws -> Replica.Diff {
         if let syncing { return try await syncing.value }
         let task = Task { try await self.drain() }
@@ -204,7 +234,6 @@ public actor DriveMirror {
         defer { syncing = nil }
         var pages = 0
         var restarted = false
-        var unsaved = Unsaved.nothing
         var reindex = false
         var saveError: String?
 
@@ -213,6 +242,11 @@ public actor DriveMirror {
                 let page = try await api().delta(cursor: staged?.cursor ?? replica.cursor, domain: scope, folders: true)
                 pages += 1
                 isGone = false
+                // The server answers for the drive again: what was withheld
+                // is shown, and a refusal after this starts the count again.
+                refusals = 0
+                refusedSince = nil
+                if isWithheld { isWithheld = false; reindex = true }
 
                 if let scope = page.scope {
                     let held = staged?.scope ?? replica.scope
@@ -279,12 +313,11 @@ public actor DriveMirror {
                     break
                 }
                 if pages % Self.checkpointPages == 0 && unsaved != .nothing {
-                    saveError = await save(unsaved)
-                    if saveError == nil { unsaved = .nothing }
+                    saveError = await save()
                 }
             }
         } catch {
-            if Self.meansGone(error, scope: scope) {
+            if Self.meansGone(error, scope: scope), refused() {
                 forgetDrive()
                 lastError = OnyxError.driveGone.localizedDescription
                 throw OnyxError.driveGone
@@ -293,16 +326,33 @@ public actor DriveMirror {
             // whole replica stays correct as of its cursor, and a fetch from
             // the start (shown or staged) carries on where it stopped.
             await publish(rebuilding: reindex)
-            if unsaved != .nothing { _ = await save(unsaved) }
+            _ = await save()
             lastError = error.localizedDescription
             throw error
         }
 
         await publish(rebuilding: reindex)
-        if unsaved != .nothing { saveError = await save(unsaved) }
+        saveError = await save()
         lastSynced = Date()
         lastError = saveError
         return settle()
+    }
+
+    /// One more refusal from the feed. Withholds the drive at once, and says
+    /// whether it has now been refused long enough to be taken as lost.
+    private func refused() -> Bool {
+        let now = clock()
+        let since = refusedSince ?? now
+        refusedSince = since
+        refusals += 1
+        if refusals >= Self.refusalsBeforeGone && now.timeIntervalSince(since) >= Self.refusedForBeforeGone {
+            return true
+        }
+        // Nothing listed, nothing served, until the server answers again. No
+        // link from before is used again either.
+        isWithheld = true
+        forgetLinks()
+        return false
     }
 
     /// The end of the feed: the server says so, or a page with nothing in it
@@ -326,6 +376,12 @@ public actor DriveMirror {
     }
 
     private func publish(rebuilding: Bool) async {
+        if isWithheld {
+            // Answers nothing, and proves nothing gone: no offline copy is
+            // deleted against it.
+            index = MirrorIndex(Replica(), authoritative: false)
+            return
+        }
         let whole = complete && staged == nil
         if rebuilding {
             index = await Self.build(replica, authoritative: whole)
@@ -351,9 +407,13 @@ public actor DriveMirror {
         staged = nil
         complete = false
         generation = nil
+        unsaved = .nothing
         forgetLinks()
         index = MirrorIndex(replica, authoritative: false)
         isGone = true
+        isWithheld = false
+        refusals = 0
+        refusedSince = nil
         try? FileManager.default.removeItem(at: files.store)
         try? FileManager.default.removeItem(at: files.progress)
     }
@@ -383,13 +443,16 @@ public actor DriveMirror {
         MirrorIndex(replica, authoritative: authoritative)
     }
 
-    /// Nil, or why the replica could not be written. Not fatal: the mount
-    /// works from memory, and the next save tries again.
+    /// Write what `unsaved` says the disk lacks. Nil, or why it could not
+    /// be written. Not fatal: the mount works from memory, and the next pass
+    /// tries again — `unsaved` stays as it was until a save succeeds.
     ///
     /// A cursor that moved alone goes in the small cursor file, which names
     /// the replica on disk it extends; anything else rewrites the replica,
     /// under a new name, so an older cursor file no longer applies to it.
-    private func save(_ what: Unsaved) async -> String? {
+    private func save() async -> String? {
+        let what = unsaved
+        guard what != .nothing else { return nil }
         do {
             if what == .cursor, let generation {
                 try await Self.write(Progress(generation: generation, cursor: replica.cursor), to: files.progress)
@@ -400,8 +463,13 @@ public actor DriveMirror {
                 generation = next
                 try? FileManager.default.removeItem(at: files.progress)
             }
+            // Only this pass changes `unsaved`, and it waits on this save.
+            unsaved = .nothing
             return nil
         } catch {
+            // The replica on disk lacks what this was to write, so no cursor
+            // file may extend it: the next save rewrites it whole.
+            if what == .everything { generation = nil }
             return "Could not save \(scope.identifier): \(error.localizedDescription)"
         }
     }

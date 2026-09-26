@@ -26,10 +26,12 @@ public struct Replica: Codable, Sendable, Equatable {
     public var cursor: Int64 = 0
     /// The access fingerprint the replica was built under (DeltaPage.scope).
     public var scope: String?
-    /// Folder path → the cursor the replica was at when the folder appeared.
-    /// Folders do not have ids or dates on the server, so this is what says
-    /// which of two folders was here first (MirrorIndex keeps that one's
-    /// name). A folder with no stamp was here from the start.
+    /// Folder path → the cursor the replica was at when the folder appeared,
+    /// or just after the newest stamp if that is later: a folder that appears
+    /// is never dated before one already here. Folders do not have ids or
+    /// dates on the server, so this is what says which of two folders was
+    /// here first (MirrorIndex keeps that one's name). A folder with no stamp
+    /// was here from the start.
     public private(set) var folderSeen: [String: Int64] = [:]
 
     public init() {}
@@ -102,17 +104,28 @@ public struct Replica: Codable, Sendable, Equatable {
     /// When a folder appeared: 0 for one here from the start.
     public func firstSeen(_ path: String) -> Int64 { folderSeen[path] ?? 0 }
 
-    /// Take `earlier`'s stamps for the folders both have: a replica fetched
-    /// again from scratch (after a scope change) would otherwise date every
-    /// folder alike, and a folder could lose its name to a newer one that
-    /// differs only in case.
+    /// Take `earlier`'s stamps for the folders both have, and date the rest
+    /// after every one of them: a replica fetched again from scratch (after a
+    /// scope change) would otherwise date every folder alike, and a folder
+    /// could lose its name to a newer one that differs only in case. A folder
+    /// new to this Mac arrives on the first page of that fetch, stamped "from
+    /// the start" there, so it would win outright against one this Mac first
+    /// saw later on — and take its Finder paths and its pins.
     public mutating func keepFolderStamps(from earlier: Replica) {
         let had = earlier.folders
-        for path in folders where had.contains(path) {
-            let stamp = earlier.firstSeen(path)
-            if stamp == 0 { folderSeen[path] = nil } else { folderSeen[path] = stamp }
+        let later = max(earlier.cursor, earlier.newestStamp) + 1
+        for path in folders {
+            if had.contains(path) {
+                let stamp = earlier.firstSeen(path)
+                if stamp == 0 { folderSeen[path] = nil } else { folderSeen[path] = stamp }
+            } else {
+                folderSeen[path] = max(firstSeen(path), later)
+            }
         }
     }
+
+    /// The latest stamp any folder has; 0 when none has one.
+    private var newestStamp: Int64 { folderSeen.values.max() ?? 0 }
 
     // MARK: - Applying a page
 
@@ -160,8 +173,14 @@ public struct Replica: Codable, Sendable, Equatable {
         diff.deleted.append(contentsOf: vanished.sorted().map(Self.folderID))
         // Stamped with where the replica was before this page, so everything
         // in the first page of a fill is "from the start", like a folder
-        // loaded from a replica saved before stamps.
-        for path in appeared where cursor > 0 { folderSeen[path] = cursor }
+        // loaded from a replica saved before stamps. Never at or before a
+        // folder already here, though: the cursor may not have moved since
+        // it was stamped, or a fetch from scratch may have dated it after the
+        // cursor (keepFolderStamps).
+        if cursor > 0, !appeared.isEmpty {
+            let stamp = max(cursor, newestStamp + 1)
+            for path in appeared { folderSeen[path] = stamp }
+        }
         for path in vanished { folderSeen[path] = nil }
         if let newCursor { cursor = max(cursor, newCursor) }
         // Net of the whole page: an id is reported once, as what it is now. A
