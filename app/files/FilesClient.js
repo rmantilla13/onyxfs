@@ -45,10 +45,12 @@ const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayout
 // The opening shell and Quick Look are not needed to show a folder, so they
 // are not part of the page's first load. They are fetched ahead of the
 // double-click or the Space that needs them: at once on a key or a mouse
-// press; otherwise when the page comes to rest (300 ms without a scroll, a
-// touch or a pointer move) after someone has done anything at all, or ten
-// seconds after it loaded — never in the middle of a scroll. They render at
-// once from then on.
+// press; otherwise 300 ms after the mouse first moves, or after the page
+// comes to rest (300 ms without a scroll or a touch) once someone has done
+// anything at all, or ten seconds after it loaded — never in the middle of
+// a scroll. They render at once from then on. Until the shell has loaded,
+// opening a file leaves the folder on screen rather than hiding it under a
+// shell that is not there yet (a blank frame, on a slow link a long one).
 const VIEWERS_REST_MS = 300;
 const VIEWERS_IDLE_MS = 10000;
 const viewers = { FileOpening: null, QuickLook: null, promise: null };
@@ -1345,7 +1347,11 @@ export default function FilesClient({
     const since = performance.now();
     let armed = false;
     let last = since;
-    const moved = () => { armed = true; last = performance.now(); };
+    // A mouse moving over the page is someone about to point at something:
+    // it arms the load without holding it back (only scrolling and touches
+    // do), so a pointer on its way to a tile has the viewers by the time it
+    // gets there.
+    const moved = (e) => { armed = true; if (e?.type !== 'pointermove' || e.pointerType === 'touch') last = performance.now(); };
     const pressed = (e) => { if (e.type === 'keydown' || e.pointerType !== 'touch') load(); else moved(); };
     const opts = { capture: true, passive: true };
     const MOVES = ['scroll', 'wheel', 'touchstart', 'pointermove'];
@@ -1670,7 +1676,7 @@ export default function FilesClient({
   return (
     <main
       ref={mainRef}
-      className={`shell files-main${anySelected ? ' is-selecting' : ''}${sel.selectionMode ? ' is-selection-mode' : ''}${opening ? ' is-opening' : ''}`}
+      className={`shell files-main${anySelected ? ' is-selecting' : ''}${sel.selectionMode ? ' is-selection-mode' : ''}${opening && viewersReady && viewers.FileOpening ? ' is-opening' : ''}`}
       style={{ padding: '24px 24px var(--files-pad-b, 64px)' }}
       onDragOver={(e) => e.preventDefault()}
       onDragEnter={onDragEnter}
