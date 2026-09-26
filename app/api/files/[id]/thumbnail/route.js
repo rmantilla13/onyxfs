@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getFileById, canModifyFile, setFileThumbnail, unreferencedPreviewKeys } from '@/lib/db';
+import { getFileById, canModifyFile, setFileThumbnail, unreferencedPreviewKeys, previewKeysInUse } from '@/lib/db';
 import { requirePrincipal, can, refusal } from '@/lib/authz';
 import { presignFileUrls, getStorageConfig, s3DeleteObject } from '@/lib/storage';
 import { isThumbKey, isPosterKey, mediaFacts } from '@/lib/media';
@@ -53,6 +53,17 @@ export async function PUT(req, { params }) {
   const existing = await getFileById(params.id);
   if (!existing || existing.deletedAt) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   if (!(await canModifyFile(existing, principal))) return NextResponse.json({ error: 'No access' }, { status: 403 });
+
+  // A key the presign route named, and no other file's: keys are not secret,
+  // and adopting another file's preview would keep it signed on this row
+  // after access to that file is gone (lib/db.js previewKeysInUse).
+  let taken;
+  try {
+    taken = await previewKeysInUse([body.thumbnailKey, body.posterKey], { exceptId: existing.id });
+  } catch (e) {
+    return NextResponse.json({ error: 'Could not check the thumbnail. Try again.' }, { status: 503 });
+  }
+  if (taken.size) return NextResponse.json({ error: 'That preview belongs to another file.' }, { status: 409 });
 
   let file;
   try {
