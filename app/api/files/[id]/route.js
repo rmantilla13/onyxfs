@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   updateFile, softDeleteFile, deleteFile, getFileById, getFileMetadataSchema,
-  canModifyFile, canAccessFile, setFileStorageKey, getFilespaceForWrite,
+  canModifyFile, canAccessFile, setFileStorageKey, getFilespaceForWrite, storageKeyInUse,
 } from '@/lib/db';
 import { requirePrincipal, can, refusal } from '@/lib/authz';
 import {
@@ -135,6 +135,13 @@ export async function PATCH(req, { params }) {
   // the bucket to move); set to false only when the catalog moved without the
   // bytes, which is the one case a UI has to surface.
   let objectMoved;
+  // A row that shares its object with another file — recorded before POST
+  // /api/files refused a key already in use — moves in the catalog only.
+  // Moving the bytes would take them out from under the other file.
+  const renaming = body.name !== undefined && body.name !== existing.name;
+  const sharedObject = (movingTo !== null || renaming) && existing.storage === 's3' && existing.storageKey
+    ? await storageKeyInUse(existing.storageKey, { exceptId: id })
+    : false;
 
   // A rename on its own. The object's key ends in its name, so renaming only
   // the row would leave a mounted drive showing the old one; the key follows
@@ -145,7 +152,9 @@ export async function PATCH(req, { params }) {
     body.name = String(body.name).trim();
   }
   const renamingTo = movingTo === null && body.name !== undefined && body.name !== existing.name ? body.name : null;
-  if (renamingTo !== null && existing.storage === 's3' && existing.storageKey) {
+  if (renamingTo !== null && sharedObject) {
+    objectMoved = false;
+  } else if (renamingTo !== null && existing.storage === 's3' && existing.storageKey) {
     const base = await getStorageConfig();
     if (storageMode(base) === 's3') {
       const filespaceId = body.filespaceId || new URL(req.url).searchParams.get('filespace') || null;
@@ -185,7 +194,9 @@ export async function PATCH(req, { params }) {
   }
 
   try {
-    if (movingTo !== null && existing.storage === 's3' && existing.storageKey) {
+    if (movingTo !== null && sharedObject) {
+      objectMoved = false;
+    } else if (movingTo !== null && existing.storage === 's3' && existing.storageKey) {
       const base = await getStorageConfig();
       // Scope comes from the body like the folders route; the list route spells
       // the same thing ?filespace=, so accept either rather than silently
@@ -291,7 +302,12 @@ export async function DELETE(_req, { params }) {
     // unreadable) keeps the trash, the reversible choice.
     const flags = principal.flags;
     const cfg = await getStorageConfig();
-    const onS3 = file.storage === 's3' && file.storageKey && storageMode(cfg) === 's3';
+    // A row sharing its object with another file (recorded before POST
+    // /api/files refused a key in use) goes without it: the bytes are the
+    // other file's too, and trashing or deleting them would break it. The
+    // trash purge leaves such an object alone as well (purgeTarget).
+    const onS3 = file.storage === 's3' && file.storageKey && storageMode(cfg) === 's3'
+      && !(await storageKeyInUse(file.storageKey, { exceptId: id }));
 
     if (flags.trash === false) {
       if (onS3) {

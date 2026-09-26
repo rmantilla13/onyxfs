@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 103
+-- Statements: 105
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -272,6 +272,16 @@ CREATE TABLE IF NOT EXISTS uploads (
 );
 
 CREATE INDEX IF NOT EXISTS uploads_owner_idx ON uploads (created_by, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS upload_keys (
+  storage_key TEXT NOT NULL,
+  email       TEXT NOT NULL,
+  bucket      TEXT NOT NULL DEFAULT '',
+  issued_at   BIGINT NOT NULL,
+  PRIMARY KEY (storage_key, email)
+);
+
+CREATE INDEX IF NOT EXISTS upload_keys_issued_idx ON upload_keys (issued_at);
 
 CREATE TABLE IF NOT EXISTS file_tombstones (
   id          TEXT PRIMARY KEY,

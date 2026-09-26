@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createFile, getFilespaceForUser, storageKeyInUse } from '@/lib/db';
+import { createFile, getFilespaceForUser, storageKeyInUse, claimUploadKey, issueUploadKey } from '@/lib/db';
 import { requirePrincipal, uploadCheck, refusal } from '@/lib/authz';
 import { listFilesPage, listFolderTree, storagePrefixFor } from '@/lib/file-listing';
 import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject, s3DeleteObject } from '@/lib/storage';
@@ -70,6 +70,12 @@ export async function GET(req) {
  * `media` is { width, height, duration } read by the browser while it made the thumbnail.
  * Only these fields are read (lib/file-record.js); anything else in the body
  * is ignored, so who, when and what the bytes hash to stay the server's word.
+ *
+ * An S3 record names an object, and recording it makes the recorder its
+ * creator — able to open, move and delete it. So the key must be one this
+ * person was handed for an upload (presign or multipart; lib/db.js
+ * claimUploadKey), taken once, and one no other row already points at.
+ * Anything else is someone else's object, or nobody's we know of.
  */
 export async function POST(req) {
   const g = await requirePrincipal();
@@ -88,26 +94,47 @@ export async function POST(req) {
   const allowed = await uploadCheck(principal, { key: record.storageKey });
   if (!allowed.ok) return refusal(allowed);
 
+  const s3 = record.storage === 's3';
+  let issued = null;
+  if (s3) {
+    if (await storageKeyInUse(record.storageKey)) {
+      return NextResponse.json({ error: 'That stored object already belongs to a file in the library.' }, { status: 409 });
+    }
+    issued = await claimUploadKey(record.storageKey, email);
+    if (!issued) {
+      return NextResponse.json({
+        error: 'This upload was not started by you, or it was too long ago. Upload the file again.',
+        code: 'not_issued',
+      }, { status: 403 });
+    }
+  }
+  // From here the key is taken. Should the row not get written, hand it back
+  // so the browser can try recording again.
+  const giveBack = () => (issued ? issueUploadKey(record.storageKey, email, issued).catch(() => {}) : null);
+
   try {
-    // The bucket's own word on what landed, never the client's: its ETag is
-    // the content hash duplicates are found by, and its length the size the
-    // Storage page adds up — and the size the quota counts. Best-effort — a
-    // bucket that will not answer a HEAD still gets its file recorded, just
-    // without a hash, at the size the upload declared.
-    const target = await objectTarget(email, record, principal);
-    const facts = target ? await s3HeadObject(target.cfg, record.storageKey).catch(() => null) : null;
+    // The store's own word on what landed, never the client's: the bucket's
+    // ETag is the content hash duplicates are found by, and its length (or
+    // Blob's) the size the Storage page adds up — and the size the quota
+    // counts. Best-effort — a store that will not answer still gets its file
+    // recorded, just without a hash, at the size the upload declared.
+    const target = s3 ? await objectTarget(email, record, principal) : null;
+    const facts = target
+      ? await s3HeadObject(target.cfg, record.storageKey).catch(() => null)
+      : record.storage === 'blob' ? await blobFacts(record.url) : null;
     const size = facts?.size != null ? facts.size : record.size;
 
     // Presign checked the size the browser declared; this checks the size
-    // that arrived. Over a limit, the object is removed rather than left in
-    // the bucket uncounted — unless some other row points at that key, in
-    // which case it was never this upload's to remove.
+    // that arrived. Over a limit, an S3 object is removed rather than left in
+    // the bucket uncounted: its key was issued to this person, for this
+    // upload, and no row uses it (both checked above), so it is theirs and
+    // nobody else's. A Blob URL proves no such thing — the store is public
+    // and its URLs are not ours to hand out — so that one is only refused.
     if (size != null) {
       const fits = await uploadCheck(principal, { key: record.storageKey, size });
       if (!fits.ok) {
-        if (target && facts && !(await storageKeyInUse(record.storageKey))) {
-          await s3DeleteObject(target.cfg, record.storageKey).catch(() => {});
-        }
+        if (target && target.cfg.bucket === issued.bucket) await s3DeleteObject(target.cfg, record.storageKey).catch(() => {});
+        else await giveBack();
         return refusal(fits);
       }
     }
@@ -117,14 +144,30 @@ export async function POST(req) {
       ...fields,
       ...uploadFields(record),
       ...(size != null ? { size } : {}),
-      contentHash: facts?.etag || null,
+      contentHash: s3 ? facts?.etag || null : null,
       createdBy: email,
     });
     // Presign so the just-uploaded file previews immediately on a private bucket.
     const [signed] = await presignFileUrls([file]);
     return NextResponse.json({ file: signed || file });
   } catch (e) {
+    await giveBack();
     return NextResponse.json({ error: e.message || 'Save failed.' }, { status: 500 });
+  }
+}
+
+/**
+ * A Vercel Blob upload's real size, or null when the store will not say (no
+ * token, a URL that is not ours, the network). Only the size: Blob has no
+ * content hash to offer.
+ */
+async function blobFacts(url) {
+  try {
+    const { head } = await import('@vercel/blob');
+    const r = await head(url);
+    return r?.size != null && Number.isFinite(Number(r.size)) ? { size: Number(r.size) } : null;
+  } catch {
+    return null;
   }
 }
 

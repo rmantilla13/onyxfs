@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   createUpload, getUpload, deleteUpload, touchUpload, listUploads, getFilespaceForUser, getFilespaceForWrite,
+  issueUploadKey,
 } from '@/lib/db';
 import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 import {
@@ -118,6 +119,9 @@ export async function POST(req) {
         mime: body.mime || null, folder: body.folder || '',
         filespaceId: body.filespaceId || null, partSize, createdBy: email,
       });
+      // Theirs to record as a file once assembled (POST /api/files). Issued
+      // again at `complete`, which is what counts: an upload may take days.
+      await issueUploadKey(key, email, { bucket: scoped.bucket });
 
       return NextResponse.json({
         id: upload.id, key, name, partSize,
@@ -179,6 +183,10 @@ export async function POST(req) {
       const { key, publicUrl } = await s3CompleteMultipartUpload(scoped, {
         key: upload.storageKey, uploadId: upload.uploadId, parts,
       });
+      // The key is theirs to record now — issued afresh, so however long the
+      // upload took (and whether it began before keys were issued at all),
+      // recording it is measured from here.
+      await issueUploadKey(key, email, { bucket: scoped.bucket });
       // Drop the resume row only after S3 confirms assembly. Losing it earlier
       // would strand an upload that still needs completing.
       await deleteUpload(upload.id);

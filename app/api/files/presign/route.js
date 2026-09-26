@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getStorageConfig, s3PresignPut, storageMode, cfgForFilespace, buildObjectKey } from '@/lib/storage';
-import { getFilespaceForWrite } from '@/lib/db';
+import { getFilespaceForWrite, issueUploadKey } from '@/lib/db';
 import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 
 export const runtime = 'nodejs';
@@ -93,11 +93,21 @@ export async function POST(req) {
     if (!d.ok) return refusal(d);
   }
 
+  let out;
   try {
-    const out = await s3PresignPut(scoped, { filename, contentType, folder, cacheControl });
-    // S3 stores whatever Cache-Control the PUT carries, so the browser sends this.
-    return NextResponse.json(cacheControl ? { ...out, cacheControl } : out);
+    out = await s3PresignPut(scoped, { filename, contentType, folder, cacheControl });
   } catch (e) {
     return NextResponse.json({ error: e.message || 'Could not presign upload.' }, { status: 500 });
   }
+  if (!body.thumb && !body.strip) {
+    // The key is this person's to record as a file (POST /api/files takes
+    // only an issued key), and nobody else's. Unrecorded, the upload could
+    // not be added to the library, so fail now rather than after the bytes.
+    try { await issueUploadKey(out.key, email, { bucket: scoped.bucket }); } catch (e) {
+      console.warn('[presign] could not record the issued key:', e.message);
+      return NextResponse.json({ error: 'Could not start the upload. Try again.' }, { status: 503 });
+    }
+  }
+  // S3 stores whatever Cache-Control the PUT carries, so the browser sends this.
+  return NextResponse.json(cacheControl ? { ...out, cacheControl } : out);
 }
