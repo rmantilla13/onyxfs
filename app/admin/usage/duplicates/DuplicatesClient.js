@@ -10,6 +10,8 @@ import { fmtSize } from '@/lib/media';
 import { crumbsFor, mapLimit } from '@/lib/folder-ops';
 import { kindLabel } from '@/lib/file-info';
 import { copiesToRemove, bytesOf } from '@/lib/storage-report';
+import AdminPage from '../../_ui/AdminPage';
+import AdminState from '../../_ui/AdminState';
 
 const size = (n) => fmtSize(n) || '0 B';
 const plural = (n, one, many = `${one}s`) => `${Number(n).toLocaleString()} ${n === 1 ? one : many}`;
@@ -24,7 +26,9 @@ const dateFmt = typeof Intl !== 'undefined' ? new Intl.DateTimeFormat(undefined,
  *
  * Files from before hashes were taken are invisible here until checked:
  * "Check them" runs the scan route (a HEAD per file, a few seconds a call)
- * until it has seen them all, then reloads.
+ * until it has seen them all, then reloads. With storage in Vercel Blob
+ * there is no checksum to ask for, and the page says so rather than
+ * reporting a clean library.
  */
 export default function DuplicatesClient({ groups, summary, drives, trash, retentionDays, canScan }) {
   const router = useRouter();
@@ -107,34 +111,34 @@ export default function DuplicatesClient({ groups, summary, drives, trash, reten
   });
 
   return (
-    <main className="shell storage-page">
-      <header className="storage-head">
-        <div style={{ minWidth: 0 }}>
-          <nav className="crumbs" aria-label="Storage">
-            <ol>
-              <li className="crumb-item">
-                <Link href="/storage" className="crumb">Storage</Link>
-                <span className="crumb-sep" aria-hidden>/</span>
-              </li>
-              <li className="crumb-item crumb-here"><h1 className="files-title">Duplicates</h1></li>
-            </ol>
-          </nav>
-          <p className="muted storage-sub">
-            {summary.groups
-              ? <>{plural(summary.groups, 'file')} stored more than once: <strong className="storage-total">{size(summary.bytes)}</strong> in extra copies</>
-              : 'No file is stored more than once.'}
-          </p>
+    <AdminPage
+      title="Duplicates"
+      parent={{ href: '/admin/usage', label: 'Usage' }}
+      description={summary.groups
+        ? <>{plural(summary.groups, 'file')} stored more than once: <strong className="storage-total">{size(summary.bytes)}</strong> in extra copies.</>
+        : 'Files stored more than once, and what removing the extra copies would free.'}
+    >
+      {!canScan && (
+        <div className="card dup-scan" role="note">
+          <div className="dup-scan-text">
+            <strong>Duplicates are found in an S3 bucket only</strong>
+            <p className="small muted admin-note">
+              Storage is set to Vercel Blob, which keeps no checksum to compare, so files uploaded there are never matched.
+              Duplicate detection covers files kept in an S3-compatible bucket.
+            </p>
+          </div>
+          <Link href="/admin/storage" className="btn">Open storage</Link>
         </div>
-      </header>
+      )}
 
       {summary.unhashed > 0 && canScan && (
         <div className="card dup-scan" role="status">
-          <div style={{ minWidth: 0 }}>
+          <div className="dup-scan-text">
             <strong>{plural(summary.unhashed, 'file')} not checked yet</strong>
-            <p className="small muted" style={{ margin: 'var(--s1) 0 0' }}>
+            <p className="small muted admin-note">
               Files uploaded before duplicate detection have no fingerprint yet. Checking asks the bucket for each one&rsquo;s checksum; nothing is downloaded or changed.
             </p>
-            {scan?.error && <p className="small" role="alert" style={{ margin: 'var(--s2) 0 0', color: 'var(--danger)' }}>{scan.error}</p>}
+            {scan?.error && <p className="small admin-inline-error" role="alert">{scan.error}</p>}
           </div>
           <button type="button" className="btn" onClick={runScan} disabled={scan?.running}>
             {scan?.running ? `Checking… ${scan.checked.toLocaleString()}` : scan?.error ? 'Try again' : 'Check them'}
@@ -155,8 +159,8 @@ export default function DuplicatesClient({ groups, summary, drives, trash, reten
         </div>
       )}
 
-      {groups.length === 0 && summary.unhashed === 0 && (
-        <div className="empty">Nothing to clean up. New uploads are checked as they arrive.</div>
+      {canScan && groups.length === 0 && summary.unhashed === 0 && (
+        <AdminState kind="empty" title="Nothing to clean up." message="No file is stored more than once. New uploads are checked as they arrive." />
       )}
 
       <ol className="dup-groups">
@@ -173,7 +177,14 @@ export default function DuplicatesClient({ groups, summary, drives, trash, reten
                 </label>
                 <span className="small muted">frees {size(g.reclaim)}</span>
                 <span className="spacer" />
-                <button type="button" className="btn btn-ghost btn-sm" disabled={!!busy} onClick={() => remove(g.files.filter((f) => f.id !== kept))}>
+                {/* A set left out of the clean-up is left alone here too. */}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={!!busy || off}
+                  title={off ? 'This set is left alone. Tick it to include it.' : undefined}
+                  onClick={() => remove(g.files.filter((f) => f.id !== kept))}
+                >
                   Remove extras
                 </button>
               </div>
@@ -212,6 +223,6 @@ export default function DuplicatesClient({ groups, summary, drives, trash, reten
         })}
       </ol>
       {confirmElement}
-    </main>
+    </AdminPage>
   );
 }

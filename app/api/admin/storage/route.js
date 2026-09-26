@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
-import { getStorageConfig, setStorageConfig, sanitizeStorageConfig, sanitizeStorageSubmission, s3TestConnection } from '@/lib/storage';
+import {
+  getStorageConfig, setStorageConfig, sanitizeStorageConfig, sanitizeStorageSubmission, s3TestConnection, s3SetAccelerate,
+} from '@/lib/storage';
+import { deploymentOrigins } from './origins';
 import { storageLocationChange } from '@/lib/storage-presets';
 import { libraryUsage } from '@/lib/db';
 
@@ -13,14 +16,15 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
 /**
- * GET /api/admin/storage → sanitized config (no secret) + current mode, and
- * how much the library holds — what a change of bucket or provider would
- * leave behind, for the confirm in front of it.
+ * GET /api/admin/storage → sanitized config (no secret) + current mode, how
+ * much the library holds — what a change of bucket or provider would leave
+ * behind, for the confirm in front of it — and the origins Apply CORS
+ * would allow, so the page can say which before anything is applied.
  *
  * Strict: a failed read is an error the page shows, not defaults that look
  * like "nothing is configured" and invite someone to fill the form in again.
  */
-export async function GET() {
+export async function GET(req) {
   const gate = await requireAdmin();
   if (gate.error) return gate.error;
   let cfg;
@@ -33,12 +37,17 @@ export async function GET() {
       detail: e.message,
     }, { status: 503 });
   }
-  const library = await libraryUsage().catch(() => null);
-  return NextResponse.json({ config: sanitizeStorageConfig(cfg), library });
+  const [library, corsOrigins] = await Promise.all([
+    libraryUsage().catch(() => null),
+    deploymentOrigins(req).catch(() => []),
+  ]);
+  return NextResponse.json({ config: sanitizeStorageConfig(cfg), library, corsOrigins });
 }
 
 /**
  * PUT /api/admin/storage  Body: { config, test?, confirmMove? }
+ * Fields: provider, bucket, region, endpoint, accessKeyId, secretAccessKey,
+ * prefix, roleArn, publicBaseUrl, accelerate (sanitizeStorageSubmission).
  * If `config.secretAccessKey` is empty/omitted, the existing stored secret is
  * preserved (so the admin doesn't have to re-paste it on every edit).
  * With test=true, validates the S3 connection before saving.
@@ -96,6 +105,22 @@ export async function PUT(req) {
         files,
         changes: move.changes,
       }, { status: 409 });
+    }
+  }
+
+  // Transfer Acceleration is AWS's, and only for a bucket addressed without
+  // an endpoint. Turning it on in the config without turning it on at the
+  // bucket would send every upload to an accelerate endpoint that refuses
+  // them, so it is switched on at the bucket first, and not saved if that
+  // fails. Turning it off only stops using it; the bucket setting is left.
+  if (merged.accelerate && (merged.provider !== 's3' || merged.endpoint)) merged.accelerate = false;
+  if (merged.accelerate && !before.accelerate) {
+    try { await s3SetAccelerate(merged, true); }
+    catch (e) {
+      return NextResponse.json({
+        error: `Transfer Acceleration could not be turned on for the bucket, so nothing was saved: ${e.message}`,
+        code: 'accelerate_failed',
+      }, { status: 400 });
     }
   }
 

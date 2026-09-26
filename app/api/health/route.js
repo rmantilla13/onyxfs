@@ -70,7 +70,9 @@ export async function GET(req) {
   }
 
   try {
-    const cfg = await getStorageConfig();
+    // Strict: when the settings cannot be read, say so, rather than report
+    // the defaults (Vercel Blob) as if they were what is configured.
+    const cfg = await getStorageConfig({ strict: true });
     const mode = storageMode(cfg);
     checks.storage = { ok: true, mode, bucket: mode === 's3' ? cfg.bucket : null };
     if (mode === 's3') {

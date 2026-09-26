@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
 import { getStorageConfig, storageMode, s3PutBucketCors } from '@/lib/storage';
-import { loadBrand, defaultBrandConfig } from '@/lib/brand-config';
-import { corsOrigins, corsRule } from '@/lib/storage-cors';
+import { corsRule } from '@/lib/storage-cors';
+import { deploymentOrigins } from '../origins';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,16 +23,7 @@ export async function POST(req) {
     return NextResponse.json({ error: 'Storage is not set up with an S3 bucket yet, so there is no bucket to set CORS on.' }, { status: 400 });
   }
 
-  let reqOrigin = '';
-  try { reqOrigin = new URL(req.url).origin; } catch {}
-  const brand = await loadBrand().catch(() => null);
-  const origins = corsOrigins({
-    requestOrigin: reqOrigin,
-    appUrl: process.env.NEXT_PUBLIC_APP_URL || '',
-    brandOrigin: brand?.origin || '',
-    fallbackOrigin: defaultBrandConfig().origin,
-    vercel: !!process.env.VERCEL,
-  });
+  const origins = await deploymentOrigins(req);
 
   try {
     const result = await s3PutBucketCors(cfg, { origins });
