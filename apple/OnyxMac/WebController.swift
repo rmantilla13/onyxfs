@@ -150,6 +150,7 @@ final class WebController: NSObject, ObservableObject {
         unpinFiles: (ids, drive) => post({ type: 'pinFiles', ids, drive: drive || null, on: false }),
         pinFolder: (path, drive, on = true) => post({ type: 'pinFolder', path, drive: drive || null, on }),
         showInFinder: (drive, name) => post({ type: 'mount', drive: drive || null, name: name || '', on: true }),
+        transcribe: (fileId) => post({ type: 'transcribe', fileId: String(fileId || '') }),
         _update: (next) => {
           Object.assign(state, next);
           window.dispatchEvent(new CustomEvent('onyxmac:state', { detail: state }));
@@ -159,9 +160,10 @@ final class WebController: NSObject, ObservableObject {
     })();
     """
 
-    /// Tell the page what is pinned and mounted now.
+    /// Tell the page what is pinned and mounted now, and what this Mac is
+    /// transcribing.
     func publishOfflineState() {
-        guard let finder = model?.finder else { return }
+        guard let finder = model?.finder, let transcriber = model?.transcriber else { return }
         let folders = finder.pinRules.compactMap { rule -> [String: String]? in
             if case let .folder(path) = rule.target { return ["scope": rule.scope, "path": path] }
             return nil
@@ -170,6 +172,7 @@ final class WebController: NSObject, ObservableObject {
             "pinned": Array(finder.pinnedFiles),
             "pinnedFolders": folders,
             "mounted": finder.wantMounted.sorted(),
+            "transcriber": ["enabled": transcriber.enabled, "busy": transcriber.busyFileId ?? NSNull()] as [String: Any],
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8) else { return }
@@ -196,6 +199,11 @@ final class WebController: NSObject, ObservableObject {
                 let name = (msg["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                     ?? model.finderDrives.first { SyncDomain.drive(id: $0.id).identifier == scope }?.name ?? "Library"
                 await model.setMounted(SyncDomain(identifier: scope) ?? .library, name: name, true)
+            case "transcribe":
+                // A nudge after the page asked for a transcript: the queue
+                // is read now instead of at the next poll. The server says
+                // which jobs there are, so the id is not needed here.
+                model.transcriber.pollNow()
             default:
                 break
             }

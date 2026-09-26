@@ -386,6 +386,7 @@ struct MenuBarContent: View {
         if model.phase == .signedIn {
             Text(model.email ?? "Signed in")
             Text(status.line)
+            TranscriptionMenuLine(transcriber: model.transcriber)
             if finder.pinnedBytes > 0 {
                 Text("Kept offline: \(ByteCountFormatter.string(fromByteCount: finder.pinnedBytes, countStyle: .file))")
             }
@@ -480,6 +481,7 @@ struct AccountSettings: View {
                 Text("Onyx keeps running in the menu bar when its window is closed, so your drives stay in Finder and offline files stay current. Quit it from the menu bar icon.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            TranscriptionSettings(transcriber: model.transcriber)
             Section("Updates") {
                 LabeledContent("Version") {
                     Text(BuildInfo.build.map { "\(BuildInfo.version) (\($0))" } ?? BuildInfo.version)
