@@ -191,13 +191,13 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
     folder && folder.count != null ? `${folder.count} file${folder.count === 1 ? '' : 's'}` : null,
   ].filter(Boolean).join(' · ');
   const name = file?.name || folder?.name || '';
-  // An image with nothing this browser can show (a HEIC or TIFF outside
-  // Safari with no thumbnail, a RAW): the kind panel, as for a document.
   // A preview made while the original is on screen (the fill-in, from this
   // very download) must not send the picture back through the thumbnail:
   // the original stays one of the layers for as long as this file is shown.
   if (hadOriginal.current.id !== file?.id) hadOriginal.current = { id: file?.id, yes: false };
   if (file && !file.posterUrl) hadOriginal.current.yes = true;
+  // An image with no layer this browser can show (a HEIC or TIFF outside
+  // Safari with no thumbnail, a RAW) gets the kind panel, as a document does.
   const layers = kind === 'image' ? imageLayers(file, { keepOriginal: hadOriginal.current.yes }) : null;
 
   return (
