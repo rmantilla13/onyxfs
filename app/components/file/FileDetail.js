@@ -5,15 +5,13 @@ import { useRouter } from 'next/navigation';
 import FilePreview from './FilePreview';
 import FileDetailFrame from './FileDetailFrame';
 import { getHandoff, returnFor } from '@/lib/file-handoff';
-import { createThumbnailBackfill, mergeBackfilled } from '@/lib/thumbnail-client';
 import Dialog from '@/app/components/ui/Dialog';
 import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
 import { Panel, Field } from '@/app/components/ui/Layout';
 import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
-import { fmtSize } from '@/app/components/ui/FileCard';
 import { deriveAuto } from '@/lib/dam';
-import { effectiveKind } from '@/lib/media';
+import { effectiveKind, fmtSize } from '@/lib/media';
 import { toRate, rateLabel, timecode, ASSUMED_RATE } from '@/lib/video-time';
 import { anchorLabel, commentFrame, snippet } from '@/lib/review';
 import ShareDialog from '@/app/components/ShareDialog';
@@ -67,11 +65,15 @@ export default function FileDetail({
 
   // An image with no large preview is shown from its original; a writer's
   // browser makes the preview from that same download (fromBlob), so the next
-  // viewer gets it — no second download of the original.
-  const backfill = useMemo(() => (canWrite
-    ? createThumbnailBackfill((f) => setFile((x) => mergeBackfilled(x, f)))
-    : null), [canWrite]);
-  const onOriginalBlob = useCallback((blob) => { backfill?.(file, { blob }); }, [backfill, file]);
+  // viewer gets it — no second download of the original. The drawing code is
+  // loaded only then: most files have a preview and never need it.
+  const backfill = useRef(null);
+  const onOriginalBlob = useCallback((blob) => {
+    const row = file;
+    (backfill.current ||= import('@/lib/thumbnail-client').then(({ createThumbnailBackfill, mergeBackfilled }) => (
+      createThumbnailBackfill((f) => setFile((x) => mergeBackfilled(x, f)))
+    ))).then((request) => request(row, { blob })).catch(() => {});
+  }, [file]);
 
   // ← Back: through history when this page was opened from the files view,
   // so the listing comes back as it was left (its rows, scroll and
@@ -317,7 +319,7 @@ export default function FileDetail({
             onRangeChange={review ? setRange : undefined}
             onComment={review ? onComment : undefined}
             handoff={handoff}
-            onOriginalBlob={backfill ? onOriginalBlob : undefined}
+            onOriginalBlob={canWrite ? onOriginalBlob : undefined}
           />
       )}
       aside={(

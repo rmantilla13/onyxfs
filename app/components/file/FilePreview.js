@@ -2,7 +2,7 @@
 
 import { forwardRef, useState } from 'react';
 import { effectiveKind, drawableKind } from '@/lib/media';
-import { stageSources } from '@/lib/renditions';
+import { stageSources } from '@/lib/stage-sources';
 import { probedNow } from '@/lib/decode-probe';
 import VideoPlayer from '@/app/components/video/VideoPlayer';
 import ProgressiveImage from '@/app/components/media/ProgressiveImage';
@@ -106,7 +106,7 @@ export default FilePreview;
  * video, with Fit and 100%.
  *
  *   Fit   the picture contained in the stage, from the thumbnail to the
- *         large preview (lib/renditions.js stageSources); the frame that
+ *         large preview (lib/stage-sources.js); the frame that
  *         holds it — and the overlay — is shaped by CSS, so a pin at 0.4 is
  *         0.4 of the picture, not of the grey around it.
  *   100%  one image pixel to one CSS pixel, in a stage that scrolls; the

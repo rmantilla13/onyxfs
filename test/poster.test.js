@@ -276,9 +276,10 @@ describe('thumbnail siblings and the image preview', async () => {
     assert.deepEqual(thumbSiblingSizes(null), {});
   });
 
-  test('an image preview is at most 2560 on the long edge', () => {
-    assert.deepEqual(imagePreviewSize({ width: 6000, height: 4000 }), { width: IMAGE_PREVIEW_MAX_EDGE, height: 1707 });
-    assert.deepEqual(imagePreviewFor({ width: 6000, height: 4000 }, { bytes: 10e6, mime: 'image/jpeg' }), { width: 2560, height: 1707 });
+  test('an image preview is at most 2400 on the long edge', () => {
+    assert.equal(IMAGE_PREVIEW_MAX_EDGE, 2400);
+    assert.deepEqual(imagePreviewSize({ width: 6000, height: 4000 }), { width: IMAGE_PREVIEW_MAX_EDGE, height: 1600 });
+    assert.deepEqual(imagePreviewFor({ width: 6000, height: 4000 }, { bytes: 10e6, mime: 'image/jpeg' }), { width: 2400, height: 1600 });
   });
 
   test('no preview where the original serves', () => {
@@ -286,9 +287,9 @@ describe('thumbnail siblings and the image preview', async () => {
     assert.equal(imagePreviewFor({ width: 4000, height: 3000 }, { bytes: 10e6, mime: 'image/gif' }), null);
     // Barely bigger than its grid poster (864x576 for 3:2): within 1.25x.
     assert.equal(imagePreviewFor({ width: 1000, height: 667 }, { bytes: 10e6 }), null);
-    // Within 2560 and small already.
+    // Within 2400 and small already.
     assert.equal(imagePreviewFor({ width: 2400, height: 1600 }, { bytes: 1.2e6 }), null);
-    // Within 2560 but heavy: a preview is lighter.
+    // Within 2400 but heavy: a preview is lighter.
     assert.deepEqual(imagePreviewFor({ width: 2400, height: 1600 }, { bytes: 6e6 }), { width: 2400, height: 1600 });
     assert.equal(imagePreviewFor(null), null);
   });

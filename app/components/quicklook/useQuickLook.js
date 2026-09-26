@@ -139,7 +139,7 @@ export default function useQuickLook({ order, selectedKeys, find, more = false, 
   // Once the current picture is sharp (or after a moment): the previews of
   // the next, the previous and the one after next in the direction of
   // travel, two at a time. Decoded pictures are held for the neighbours only
-  // (a 2560px preview is ~17 MB decoded); the rest are let go.
+  // (a 2400px preview is ~15 MB decoded); the rest are let go.
   const held = useRef(new Map()); // url → { img, i }
   const [sharpAt, setSharpAt] = useState(null);
   const onSharp = useCallback((key) => setSharpAt(key), []);

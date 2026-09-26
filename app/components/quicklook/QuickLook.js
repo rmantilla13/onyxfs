@@ -211,6 +211,11 @@ function VideoItem({ file }) {
   const ref = useRef(null);
   const poster = file.posterUrl || file.thumbnailUrl || undefined;
   const under = tilePicture(file.id) || thumbSources(file, 'info').src;
+  const underRef = useRef(null);
+  // The tile's picture is usually decoded already: on screen with the first frame.
+  useEffect(() => {
+    if (underRef.current?.complete && underRef.current.naturalWidth) mark('thumb', file.id);
+  }, [file.id]);
   useEffect(() => {
     const v = ref.current;
     if (!v) return undefined;
@@ -225,7 +230,16 @@ function VideoItem({ file }) {
   return (
     <>
       {/* The tile's picture under the player until its poster or a frame is up. */}
-      {under && <img className="ql-under" src={under} alt="" aria-hidden />}
+      {under && (
+        <img
+          ref={underRef}
+          className="ql-under"
+          src={under}
+          alt=""
+          aria-hidden
+          onLoad={() => mark('thumb', file.id)}
+        />
+      )}
       <video
         key={file.id}
         ref={ref}
