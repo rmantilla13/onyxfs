@@ -52,7 +52,7 @@
 				<key>FSName</key>
 				<string>Onyx</string>
 				<key>FSfileObjectsAreCaseSensitive</key>
-				<true/>
+				<false/>
 			</dict>
 		</dict>
 		<!-- Needed even with no options of our own: without it probing fails. -->

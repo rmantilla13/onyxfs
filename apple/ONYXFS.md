@@ -76,7 +76,9 @@ carries only a **one-time ticket**, never a lasting secret:
 All JSON (UTF-8), `Content-Type: application/json`. Errors:
 `{ "error": "<sentence>" }` with 400/401/404/409/500/503. Paths are absolute
 within the drive, `/`-separated, NFC-normalized, no trailing slash except the
-root `/`, case-sensitive, never containing `..` or empty segments.
+root `/`, never containing `..` or empty segments. Names are matched
+case-insensitively (case-preserving), as the mirror and Finder do: a folder
+never holds two names that differ only in case.
 
 **Entry** (a file or folder):
 ```json
@@ -165,7 +167,7 @@ logic is testable with `swift test`.
 - `OnyxVolume: FSVolume` — read-only: activate (root item), lookup, enumerate
   directory (with attributes), get attributes, read, open/close, statfs
   (`volumeStatistics` from the volume object), path conf, capabilities
-  (case-sensitive, 64-bit ids, no hard links/symlinks/xattrs writes), write
+  (case-insensitive, case-preserving, 64-bit ids, no hard links/symlinks/xattrs writes), write
   operations → `EROFS`. macOS 27's data cache handler: grant `readCache` for
   files so the kernel caches pages. Items: `OnyxItem: FSItem` carrying the
   NodeTable id. Owner = the mounting user; modes 0555/0444.

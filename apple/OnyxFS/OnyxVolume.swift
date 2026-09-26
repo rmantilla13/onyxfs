@@ -4,8 +4,10 @@ import Foundation
 /// One mounted drive, as the kernel sees it: FSKit's calls, each translated
 /// into the engine's (VolumeEngine) and back. Nothing is decided here.
 ///
-/// It declares itself case-sensitive (the web allows "Cut.mov" and "cut.mov"
-/// side by side), with 64-bit ids, hidden files and fast statfs; no links.
+/// It is case-insensitive and case-preserving, like the Mac's own disks and
+/// like the drive itself (names in a folder are unique ignoring case — the
+/// mirror looks them up that way), with 64-bit ids, hidden files and fast
+/// statfs; no links.
 /// Reads are cached by the kernel (macOS 27's data cache): the engine is
 /// asked only for what the kernel does not already hold, and when the web
 /// changes a file the kernel's copy of it is dropped (`changed`).
@@ -39,7 +41,7 @@ final class OnyxVolume: FSVolume, FSVolume.Handler, FSVolume.PathConfOperations,
         c.supportsSparseFiles = false
         c.doesNotSupportImmutableFiles = true
         c.doesNotSupportSettingFilePermissions = true
-        c.caseFormat = .sensitive
+        c.caseFormat = .insensitiveCasePreserving
         return c
     }
 
