@@ -1,39 +1,36 @@
-import { redirect } from 'next/navigation';
-import { auth } from '@/auth';
-import { isAdmin, isSuperAdmin } from '@/lib/auth-allowlist';
-import { loadBrand } from '@/lib/brand-config';
-import TopNav from '@/app/components/TopNav';
-import AdminClient from './AdminClient';
-import { buildLabel, buildDetail } from '@/lib/version';
-import { listFilespacesForSpace, getAvatarUrl } from '@/lib/db';
+import { listInviteRequests, listDriveOwners, usageTotals } from '@/lib/db';
+import { requireAdminPage } from './_lib/guard';
+import Overview from './Overview';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Admin' };
+export const metadata = { title: 'Overview · Admin' };
 
-export default async function AdminPage({ searchParams }) {
-  const session = await auth();
-  const email = session?.user?.email;
-  if (!email) redirect('/signin');
-  // Admin access is env-gated (ADMIN_EMAILS), deliberately independent of the
-  // role system — a misconfigured role must never lock admins out of the panel
-  // that would let them fix it.
-  if (!isAdmin(email)) redirect('/files');
-  // The account menu's picture, or null for initials; never throws.
-  const avatarUrl = await getAvatarUrl(email);
+/**
+ * Admin → Overview: the numbers worth a glance and what needs doing.
+ *
+ * The tiles are the ones the data supports today — access requests, storage
+ * and its trash, drives, and health. Three more arrive with Phase 1 and go
+ * in Overview.js where it says so: people active in the last 7 days, AI
+ * spend this month, and live public links.
+ */
+export default async function OverviewPage() {
+  // The old tabbed panel's /admin?tab=… links are redirected by
+  // middleware.js (legacyAdminUrl), before anything here renders.
+  await requireAdminPage('/admin');
+  const [pending, drives, totals] = await Promise.all([
+    listInviteRequests({ status: 'pending' }),
+    listDriveOwners(),
+    usageTotals(),
+  ]);
 
-  const [brand, filespaces] = await Promise.all([loadBrand(), listFilespacesForSpace(email)]);
   return (
-    <>
-      <TopNav
-        brandName={brand.name}
-        logo={brand.visual.logo}
-        email={email}
-        avatarUrl={avatarUrl}
-        isAdmin
-        filespaces={filespaces}
-        build={{ label: buildLabel(), detail: buildDetail() }}
-      />
-      <AdminClient superAdmin={isSuperAdmin(email)} initialTab={searchParams?.tab} />
-    </>
+    <Overview
+      pending={pending.map((r) => ({ id: r.id, email: r.email, name: r.name || null }))}
+      drives={{
+        count: drives.length,
+        withoutOwner: drives.filter((d) => !d.ownerCount).map((d) => ({ id: d.id, name: d.name })),
+      }}
+      totals={totals}
+    />
   );
 }

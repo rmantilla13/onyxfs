@@ -1,0 +1,443 @@
+/*
+ * The admin panel's own styles, imported by app/admin/layout.js.
+ *
+ * Tokens only: spacing, type, surfaces, lines and colours all come from the
+ * custom properties the root layout emits from the brand, so the panel
+ * themes with a white-label palette and with the dark scheme for free — this
+ * file has no dark-mode rules and no colour literals. Buttons are .btn,
+ * status is .tag; the classes shared with the rest of the app (.card,
+ * .table, .meter-*, .usage-*, .storage-*) stay in globals.css.
+ */
+
+/* ── Frame: the rail beside the section ─────────────────────────────────── */
+
+.admin-shell { padding-top: var(--s5); padding-bottom: 64px; }
+.admin-main { min-width: 0; }
+
+@media (min-width: 900px) {
+  .admin-shell {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    column-gap: var(--s6);
+    align-items: start;
+  }
+}
+@media (max-width: 899.98px) {
+  .admin-shell { padding-top: 0; }
+  .admin-main { padding-top: var(--s4); }
+}
+
+/* ── A section: header, toolbar, body ───────────────────────────────────── */
+
+.admin-page { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+.admin-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s3) var(--s4); flex-wrap: wrap; }
+.admin-head-text { flex: 1 1 320px; min-width: 0; }
+.admin-parent {
+  display: inline-flex; align-items: center; gap: var(--s1);
+  margin: 0 0 var(--s1) calc(var(--s1) * -1);
+  padding: 2px var(--s1);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--t-sm);
+}
+.admin-parent:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.admin-title { font-size: var(--t-2xl); }
+.admin-desc { margin: var(--s1) 0 0; max-width: 72ch; }
+.admin-actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.admin-toolbar { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; min-width: 0; }
+
+.admin-card { padding: var(--s4) var(--s5); min-width: 0; }
+.admin-card-head { display: flex; align-items: center; gap: var(--s2) var(--s3); flex-wrap: wrap; margin-bottom: var(--s3); }
+.admin-h2 { flex: 1 1 auto; min-width: 0; margin: 0; font-size: var(--t-lg); }
+.admin-card-actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.admin-hint { margin: calc(var(--s2) * -1) 0 var(--s3); max-width: 72ch; }
+.admin-card.is-danger { border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); }
+.admin-card.is-danger .admin-h2 { color: var(--danger); }
+.admin-card > :last-child { margin-bottom: 0; }
+
+.admin-card-title { margin-bottom: var(--s3); }
+.admin-card-foot { margin: var(--s3) 0 0; }
+.admin-stack { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+
+/* Cards side by side where there is room, stacked where there is not. */
+.admin-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: var(--s4); align-items: start; }
+
+.admin-quote {
+  margin: 0;
+  padding: 2px 0 2px var(--s3);
+  border-left: 2px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.admin-mono { font-family: var(--font-mono); font-size: 0.9em; overflow-wrap: anywhere; }
+
+/* ── The three states ───────────────────────────────────────────────────── */
+
+.admin-skeleton { display: flex; flex-direction: column; gap: var(--s2); }
+.skel {
+  display: block;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  animation: admin-skel 1.4s ease-in-out infinite;
+}
+.skel-row { height: 44px; }
+.skel-title { width: 180px; height: 28px; }
+.skel-line { width: min(420px, 70%); height: 14px; margin-top: var(--s2); }
+.skel-tile { height: 96px; border-radius: var(--radius); }
+@keyframes admin-skel { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+.admin-empty {
+  display: flex; flex-direction: column; align-items: center; gap: var(--s2);
+  padding: var(--s6) var(--s5);
+  text-align: center;
+}
+.admin-empty-title { margin: 0; font-size: var(--t-lg); font-weight: 600; }
+.admin-empty-text { margin: 0; max-width: 56ch; }
+.admin-empty-action { margin-top: var(--s2); }
+
+.admin-error {
+  display: flex; flex-direction: column; gap: var(--s2);
+  padding: var(--s4) var(--s5);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+}
+.admin-error-title { margin: 0; font-weight: 600; color: var(--danger); }
+.admin-error-text { margin: 0; overflow-wrap: anywhere; }
+.admin-error-body summary { cursor: pointer; color: var(--muted); }
+.admin-error-body summary:hover { color: var(--ink); }
+.admin-error-body pre,
+.admin-pre {
+  margin: var(--s2) 0 0;
+  padding: var(--s3);
+  max-height: 320px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.admin-error-action { display: flex; gap: var(--s2); }
+.admin-error.is-inline { margin-top: var(--s3); padding: var(--s3) var(--s4); }
+.admin-form .admin-error.is-inline, .admin-form > .admin-error { margin-top: 0; padding: var(--s3) var(--s4); }
+
+/* ── Stat tiles and meters ──────────────────────────────────────────────── */
+
+.admin-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: var(--s3); }
+.stat-tile {
+  position: relative;
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 0;
+  padding: var(--s4);
+  color: inherit;
+  transition: border-color var(--dur-1), box-shadow var(--dur-2) var(--ease);
+}
+a.stat-tile:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  box-shadow: 0 10px 28px -18px color-mix(in srgb, var(--aura-a) 60%, transparent);
+}
+.stat-label { color: var(--muted); font-size: var(--t-sm); font-weight: 500; }
+.stat-value {
+  font-family: var(--font-display);
+  font-size: var(--t-2xl);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.stat-sub { color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
+/* The tone goes on the words that say what is wrong, not on the number:
+   "4" drives is not the problem, "2 have no owner" is. Only a failure
+   tints the border, so a warning and a failure never read alike. */
+.stat-tile.is-danger { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+.stat-tile.is-warning .stat-sub { color: var(--warning); }
+.stat-tile.is-danger .stat-sub { color: var(--danger); }
+.stat-tile .skel-line { width: 70%; margin: var(--s2) 0 0; }
+
+.admin-meter { display: block; min-width: 0; }
+.admin-meter .meter-track { display: block; }
+
+/* ── Check lists: diagnostics and health ────────────────────────────────── */
+
+.checklist { list-style: none; margin: 0; padding: 0; }
+.check {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: var(--s3);
+  padding: var(--s3) 0;
+  border-top: 1px solid var(--line);
+}
+.check:first-child { border-top: 0; padding-top: var(--s1); }
+.check:last-child { padding-bottom: 0; }
+.check-glyph {
+  display: grid; place-items: center;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  font-size: var(--t-xs); font-weight: 700; line-height: 1;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  color: var(--muted);
+}
+.check.is-pass .check-glyph { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-deep); }
+.check.is-warn .check-glyph { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+.check.is-fail .check-glyph { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.check-text { min-width: 0; }
+.check-label { font-size: var(--t-md); font-weight: 500; }
+.check-detail { margin-top: 2px; overflow-wrap: anywhere; }
+.check-fix { margin-top: var(--s1); overflow-wrap: anywhere; }
+.check.is-warn .check-fix { color: var(--warning); }
+.check.is-fail .check-fix { color: var(--danger); }
+
+/* A one-line verdict above a check list. */
+.admin-verdict { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin: 0 0 var(--s3); }
+
+/* ── DataTable ──────────────────────────────────────────────────────────── */
+
+/* The table's own width decides rows or cards (below), so the wrap is the
+   container. No overflow-x here: it would clip the ⋯ menus that open below
+   the last rows. The columns cannot outgrow it instead — the name column
+   takes what is left and shrinks to an ellipsis, other long text is capped,
+   and a tag never breaks inside itself. */
+.dt-wrap { min-width: 0; container-type: inline-size; }
+.dt { width: 100%; border-collapse: collapse; font-size: var(--t-sm); }
+.dt th {
+  padding: var(--s2) var(--s3) var(--s2) 0;
+  color: var(--muted);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+.dt td {
+  padding: var(--s2) var(--s3) var(--s2) 0;
+  border-top: 1px solid var(--line);
+  vertical-align: middle;
+}
+.dt th:first-child, .dt td:first-child { padding-left: var(--s3); }
+.dt th:last-child, .dt td:last-child { padding-right: var(--s3); }
+.dt .is-right { text-align: right; }
+.dt .is-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dt .is-shrink { width: 1%; white-space: nowrap; }
+.dt-sort {
+  display: inline-flex; align-items: center; gap: var(--s1);
+  margin: -2px calc(var(--s1) * -1);
+  padding: 2px var(--s1);
+  border: 0; border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.dt-sort:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.dt-sort-mark { width: 1em; text-align: center; opacity: 0.35; }
+th[aria-sort='ascending'] .dt-sort, th[aria-sort='descending'] .dt-sort { color: var(--ink); }
+th[aria-sort='ascending'] .dt-sort-mark, th[aria-sort='descending'] .dt-sort-mark { opacity: 1; }
+.dt-row.is-clickable { cursor: pointer; }
+.dt-row.is-clickable:hover > td { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.dt-primary { font-weight: 500; }
+.dt-primary a { color: inherit; }
+.dt-primary a:hover { text-decoration: underline; text-underline-offset: 2px; }
+.dt-cell-truncate { display: block; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The name takes whatever the other columns leave (width 100%), and its
+   text does not count toward the table's minimum width (max-width 0), so a
+   long name is cut short rather than pushing the row wider. */
+.dt td.dt-primary.is-truncate { width: 100%; max-width: 0; }
+.dt td.dt-primary .dt-cell-truncate { max-width: none; }
+/* One line in a row (the name column gives way first); a card wraps them. */
+.dt-tags { display: inline-flex; flex-wrap: nowrap; gap: var(--s1); }
+.dt-tags > .tag { white-space: nowrap; }
+.dt-label { display: none; }
+.dt-card-flat .dt { border-top: 0; }
+.dt-sortbar { display: none; }
+
+/* With less than 800px of its own (CARD_BELOW in lib/admin-table.js) each
+   row is a card: the primary cell as its title, then each other value under
+   its column's name. The table roles are set in the markup, so the change
+   of display does not strip them. The header is out of sight, so the
+   "Sort by" control stands in for it. */
+@container (max-width: 799.98px) {
+  .dt-sortbar { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin-bottom: var(--s3); }
+  .dt-sortbar select.input { width: auto; min-width: 0; flex: 0 1 auto; padding-top: 6px; padding-bottom: 6px; font-size: var(--t-sm); }
+  .dt td.dt-primary.is-truncate { width: auto; max-width: none; }
+  .dt, .dt tbody, .dt tr, .dt td { display: block; }
+  .dt thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .dt tbody { display: flex; flex-direction: column; gap: var(--s2); }
+  .dt-row {
+    position: relative;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px var(--s3);
+    padding: var(--s3);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .dt td, .dt td:first-child, .dt td:last-child { padding: 0; border: 0; text-align: left; }
+  .dt td { grid-column: 1 / -1; display: flex; gap: var(--s2); align-items: baseline; min-width: 0; }
+  .dt td.dt-primary { grid-column: 1; font-size: var(--t-md); }
+  .dt td.dt-actions { grid-column: 2; grid-row: 1; justify-content: flex-end; align-self: center; margin: calc(var(--s1) * -1) calc(var(--s2) * -1) 0 0; }
+  /* A card leaves out what a row would show as an empty cell. */
+  .dt td.is-blank { display: none; }
+  .dt td.is-num, .dt td.is-right { text-align: left; }
+  .dt-label { display: inline; flex: none; min-width: 72px; color: var(--muted); }
+  .dt td.dt-primary .dt-label, .dt td.dt-actions .dt-label { display: none; }
+  /* A card has the height a row does not: long text wraps instead of
+     being cut short, since there is no hover on a phone to read the rest. */
+  .dt td > * { min-width: 0; }
+  .dt-cell-truncate { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+  .dt-tags { flex-wrap: wrap; }
+  .dt-row.is-clickable:hover > td { background: none; }
+}
+
+/* ── Drawer: a side sheet over its list ─────────────────────────────────── */
+/* Built on ui/Dialog (a native modal <dialog>), so focus, escape and the
+   inert page behind come from the platform. */
+
+dialog.dialog.dialog-sheet {
+  width: min(640px, 100vw);
+  max-width: min(640px, 100vw);
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0 0 0 auto;
+  border-width: 0 0 0 1px;
+  border-radius: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+dialog.dialog.dialog-sheet:not([open]) { display: none; }
+/* Child selectors: a confirm opened from inside the drawer is a dialog in
+   its body, and must keep its own head, body and foot. */
+dialog.dialog-sheet > .dialog-head { flex: none; }
+/* Positioned, so absolutely placed text (the .sr-only status words) scrolls
+   with the body instead of stretching the dialog and dragging the header
+   out of view. */
+dialog.dialog-sheet > .dialog-body { position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-top: 0; }
+dialog.dialog-sheet > .dialog-foot { flex: none; border-top: 1px solid var(--line); padding-top: var(--s3); }
+.drawer-sub { padding-top: var(--s3); }
+/* A drawer's loading, error and not-found states, below its header. */
+.drawer-pad { padding-top: var(--s4); }
+.drawer-sub + .drawer-nav { margin-top: var(--s3); }
+.drawer-sub-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s1) var(--s3); }
+.admin-hint-flat { margin: 0 0 var(--s3); max-width: 72ch; }
+.drawer-nav {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; gap: var(--s1);
+  margin: 0 calc(var(--s5) * -1) var(--s4);
+  padding: var(--s2) var(--s5);
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.drawer-nav::-webkit-scrollbar { display: none; }
+.drawer-nav a {
+  flex: none;
+  padding: var(--s1) var(--s2);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--t-sm);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.drawer-nav a:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.drawer-nav a[aria-current] { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.drawer-section { padding: 0 0 var(--s5); scroll-margin-top: 56px; }
+.drawer-section + .drawer-section { padding-top: var(--s5); border-top: 1px solid var(--line); }
+.drawer-section > h3 { margin: 0 0 var(--s3); font-size: var(--t-md); }
+.drawer-section.is-danger > h3 { color: var(--danger); }
+/* Focus lands on a section when a link or the address picks it, so the next
+   Tab starts there; the heading says where you are, a ring would not. */
+.drawer-section:focus { outline: none; }
+
+@media (max-width: 720px) {
+  dialog.dialog.dialog-sheet {
+    width: 100vw; max-width: 100vw;
+    height: 92dvh; max-height: 92dvh;
+    margin: auto auto 0;
+    border-width: 1px 0 0;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .drawer-nav { margin: 0 calc(var(--s4) * -1) var(--s4); padding: var(--s2) var(--s4); }
+}
+
+/* ── Segmented filter (Waiting · Denied · Approved) ─────────────────────── */
+
+.admin-seg {
+  display: inline-flex; flex-wrap: wrap; gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+.admin-seg a {
+  display: inline-flex; align-items: center; gap: var(--s1);
+  min-height: 30px;
+  padding: var(--s1) var(--s3);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font-size: var(--t-sm); font-weight: 500;
+  white-space: nowrap;
+}
+.admin-seg a:hover { color: var(--ink); }
+.admin-seg a[aria-current='page'] { background: var(--ink); color: var(--paper); }
+.admin-seg-count { font-variant-numeric: tabular-nums; opacity: 0.75; }
+
+/* ── Overview ───────────────────────────────────────────────────────────── */
+
+.attention { list-style: none; margin: 0; padding: 0; }
+.attention-item {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: var(--s3);
+  padding: var(--s3) 0;
+  border-top: 1px solid var(--line);
+}
+.attention-item:first-child { border-top: 0; padding-top: var(--s1); }
+.attention-item:last-child { padding-bottom: 0; }
+.attention-text { min-width: 0; }
+.attention-item > .check-glyph { align-self: start; margin-top: 1px; }
+.attention-title { font-weight: 500; overflow-wrap: anywhere; }
+.attention-detail { margin-top: 2px; overflow-wrap: anywhere; }
+.attention-clear { margin: 0; display: flex; align-items: center; gap: var(--s2); }
+.attention-foot { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); margin: var(--s3) 0 0; }
+
+/* ── Access requests ────────────────────────────────────────────────────── */
+
+.requests { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s3); }
+.request {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s3) var(--s4); align-items: start;
+  padding: var(--s4) var(--s5);
+}
+.request-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.request-name { font-weight: 600; overflow-wrap: anywhere; }
+.request-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.request-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); margin-top: var(--s1); }
+.request-body { grid-column: 1 / -1; display: flex; flex-direction: column; gap: var(--s2); min-width: 0; }
+.request-actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; justify-content: flex-end; }
+.request-locked { padding: var(--s1) 0; }
+
+/* ── Duplicates ─────────────────────────────────────────────────────────── */
+
+.dup-scan-text { flex: 1 1 auto; min-width: 0; }
+.dup-scan-text .admin-note { margin-top: var(--s1); }
+
+/* ── Backend ────────────────────────────────────────────────────────────── */
+
+.admin-status-line { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin: 0; }
+.admin-copy-row { display: flex; align-items: center; gap: var(--s2); justify-content: space-between; margin-top: var(--s2); }
+
+/* ── Phone ──────────────────────────────────────────────────────────────── */
+
+@media (max-width: 720px) {
+  .admin-title { font-size: var(--t-xl); }
+  .admin-card { padding: var(--s3) var(--s4); }
+  .admin-head { align-items: flex-start; }
+  /* The primary action spans the phone; a secondary one keeps its size
+     rather than becoming a slab between the description and the list. */
+  .admin-actions:has(> .btn-primary) { width: 100%; }
+  .admin-actions > .btn-primary { flex: 1 1 auto; justify-content: center; }
+  .request { grid-template-columns: minmax(0, 1fr); padding: var(--s3) var(--s4); }
+  /* Two tiles a row: four stacked tiles push everything else off the screen. */
+  .admin-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
+  .stat-tile { padding: var(--s3); }
+  .stat-value { font-size: var(--t-xl); }
+  /* The action goes under its sentence instead of squeezing it. */
+  .attention-item { grid-template-columns: 22px minmax(0, 1fr); align-items: start; row-gap: var(--s2); }
+  .attention-item > .btn { grid-column: 2; justify-self: start; }
+  /* Read the reason before the buttons that answer it. */
+  .request-body { order: 2; }
+  .request-actions { order: 3; justify-content: flex-start; }
+  .admin-empty { padding: var(--s5) var(--s4); }
+}

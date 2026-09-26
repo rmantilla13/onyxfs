@@ -22,8 +22,11 @@ async function api(url, opts) {
  * (/api/filespaces/[id]/members), which admits admins and the filespace's
  * owners and enforces the rules — this component only mirrors them so it does
  * not offer a control the server will refuse.
+ *
+ * `adminNote={false}` leaves out the sentence about admins, for a host that
+ * says it already (the admin drive drawer).
  */
-export default function FilespaceMembers({ filespaceId, onChanged }) {
+export default function FilespaceMembers({ filespaceId, onChanged, adminNote = true }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -76,7 +79,9 @@ export default function FilespaceMembers({ filespaceId, onChanged }) {
   return (
     <div className="fs-members">
       {members.length === 0 ? (
-        <p className="small muted" style={{ margin: '0 0 12px' }}>No members yet. Admins reach every drive without being listed.</p>
+        <p className="small muted" style={{ margin: '0 0 12px' }}>
+          No members yet.{adminNote ? ' Admins reach every drive without being listed.' : ''}
+        </p>
       ) : (
         <table className="fs-members-table">
           <tbody>

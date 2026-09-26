@@ -1,10 +1,8 @@
 'use client';
 
-import { useEffect, useId, useRef, useState } from 'react';
 import Dialog from '@/app/components/ui/Dialog';
 import FilespaceMembers from '@/app/components/FilespaceMembers';
 import { fmtSize } from '@/lib/media';
-import { drivePrefixFor } from '@/lib/folder-ops';
 
 /**
  * Drives: the filespaces, shown the way a computer shows its disks. Each is
@@ -85,80 +83,8 @@ function DriveRow({ id, name, detail, role, active, onClick, library = false }) 
   );
 }
 
-/**
- * Make a drive. Admins only — the route (POST /api/admin/filespaces) checks.
- * The name is what people see; the prefix is where its files live in the
- * bucket, filled in from the name and editable before it exists (after
- * that it is fixed: moving a prefix would strand every file under it).
- */
-export function NewDriveDialog({ open, onClose, onCreated }) {
-  const [name, setName] = useState('');
-  const [prefix, setPrefix] = useState('');
-  const [touched, setTouched] = useState(false);
-  const [error, setError] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const id = useId();
-  const nameRef = useRef(null);
-
-  useEffect(() => {
-    if (!open) return;
-    setName(''); setPrefix(''); setTouched(false); setError(null); setBusy(false);
-    nameRef.current?.focus();
-  }, [open]);
-
-  const submit = async (e) => {
-    e.preventDefault();
-    if (busy) return;
-    const finalPrefix = (touched ? prefix : drivePrefixFor(name)).replace(/^\/+|\/+$/g, '');
-    if (!name.trim()) { setError('Give the drive a name.'); return; }
-    if (!finalPrefix) { setError('Give the drive a folder in the bucket.'); return; }
-    setBusy(true);
-    setError(null);
-    try {
-      const r = await fetch('/api/admin/filespaces', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), prefix: finalPrefix }),
-      });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) { setError(body.error || `Could not make the drive (HTTP ${r.status}).`); return; }
-      onCreated?.(body.filespace);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      title="New drive"
-      footer={(
-        <>
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button type="submit" form={id} className="btn btn-primary" disabled={busy}>{busy ? 'Making…' : 'Make drive'}</button>
-        </>
-      )}
-    >
-      <form id={id} className="stack" onSubmit={submit}>
-        <p className="small muted" style={{ margin: 0 }}>
-          A drive is a space of its own, like a disk: its own folders, its own members, and its own volume when mounted with the desktop app.
-        </p>
-        <label className="stack" style={{ gap: 'var(--s1)' }}>
-          <span className="small">Name</span>
-          <input ref={nameRef} className="input" value={name} maxLength={80} placeholder="Brand assets"
-            onChange={(e) => { setName(e.target.value); setError(null); if (!touched) setPrefix(drivePrefixFor(e.target.value)); }} />
-        </label>
-        <label className="stack" style={{ gap: 'var(--s1)' }}>
-          <span className="small">Folder in the bucket <span className="muted">(set once)</span></span>
-          <input className="input mono" value={prefix} placeholder="brand-assets"
-            onChange={(e) => { setPrefix(e.target.value); setTouched(true); setError(null); }} />
-        </label>
-        {error && <p className="small" role="alert" style={{ margin: 0, color: 'var(--danger)' }}>{error}</p>}
-      </form>
-    </Dialog>
-  );
-}
+// Making a drive: app/components/drives/NewDriveDialog.js, shared with
+// Admin → Drives so both flows make drives the same way.
 
 /** Who may use a drive, and as what. Admins, and the drive's owners. */
 export function DriveMembersDialog({ drive, open, onClose }) {

@@ -12,9 +12,8 @@ export const maxDuration = 30;
 
 /**
  * Who may manage a filespace's members: admins (every filespace) and the
- * filespace's own owners. /api/admin/filespaces/[id]/access stays the admin-only
- * path; this one exists so an owner can do it from the files UI without the
- * Admin panel.
+ * filespace's own owners — the one route for it, used by the drive menu on
+ * the files page and by the drive drawer in Admin → Drives.
  */
 async function gate(id) {
   const session = await auth();
@@ -24,9 +23,9 @@ async function gate(id) {
   const fs = id ? await getFilespaceById(id) : null;
   // A non-member learns nothing about whether the id exists.
   const role = admin ? 'owner' : (fs ? await getFilespaceRole({ filespaceId: id, email }) : null);
-  if (!fs || (!admin && !role)) return { error: NextResponse.json({ error: 'Filespace not found' }, { status: 404 }) };
+  if (!fs || (!admin && !role)) return { error: NextResponse.json({ error: 'Drive not found' }, { status: 404 }) };
   if (!admin && role !== 'owner') {
-    return { error: NextResponse.json({ error: 'Only admins and owners of this filespace can manage its members.' }, { status: 403 }) };
+    return { error: NextResponse.json({ error: 'Only admins and owners of this drive can manage its members.' }, { status: 403 }) };
   }
   return { email, admin, role, fs };
 }

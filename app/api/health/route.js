@@ -4,7 +4,7 @@ import { isAdmin } from '@/lib/auth-allowlist';
 import { sql, hasConnectionString } from '@/lib/db';
 import { getStorageConfig, storageMode, s3TestConnection } from '@/lib/storage';
 import { allIntegrationStatuses } from '@/lib/integrations';
-import { VERSION } from '@/lib/version';
+import { VERSION, buildLabel } from '@/lib/version';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -56,6 +56,9 @@ export async function GET(req) {
     AUTH_SECRET: !!process.env.AUTH_SECRET,
     RESEND_API_KEY: !!process.env.RESEND_API_KEY,
     NOTIFY_FROM: !!process.env.NOTIFY_FROM,
+    // The maintenance cron refuses every call without it, so the trash is
+    // never purged — silently, since nothing else reads it.
+    CRON_SECRET: !!process.env.CRON_SECRET,
   };
 
   try {
@@ -67,7 +70,9 @@ export async function GET(req) {
   }
 
   try {
-    const cfg = await getStorageConfig();
+    // Strict: when the settings cannot be read, say so, rather than report
+    // the defaults (Vercel Blob) as if they were what is configured.
+    const cfg = await getStorageConfig({ strict: true });
     const mode = storageMode(cfg);
     checks.storage = { ok: true, mode, bucket: mode === 's3' ? cfg.bucket : null };
     if (mode === 's3') {
@@ -82,5 +87,5 @@ export async function GET(req) {
   checks.integrations = allIntegrationStatuses();
 
   const healthy = checks.database?.ok && checks.env.DATABASE_URL && checks.env.AUTH_SECRET;
-  return NextResponse.json({ ok: !!healthy, version: VERSION, checks }, { status: healthy ? 200 : 503 });
+  return NextResponse.json({ ok: !!healthy, version: VERSION, build: buildLabel(), checks }, { status: healthy ? 200 : 503 });
 }
