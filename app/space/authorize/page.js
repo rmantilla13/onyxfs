@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getSessionUser } from '@/lib/session';
 import { loadBrand } from '@/lib/brand-config';
+import { authorizeParams } from '@/lib/pkce';
 import AuthorizeClient from './AuthorizeClient';
 
 export const dynamic = 'force-dynamic';
@@ -9,7 +10,8 @@ export const metadata = { title: 'Connect the desktop app' };
 /**
  * Browser half of the desktop PKCE hand-off.
  *
- * The desktop app opens this URL with its code_challenge and state. This page
+ * The desktop app opens this URL with its code_challenge (or `challenge`), state
+ * and label. This page
  * is INSIDE the auth middleware on purpose: an unauthenticated visitor gets
  * bounced to /signin and returned here afterwards, which is exactly the
  * behaviour we want. Only a real browser session can mint a code, so the
@@ -20,8 +22,7 @@ export default async function AuthorizePage({ searchParams }) {
   if (!user) redirect('/signin');
 
   const brand = await loadBrand();
-  const challenge = searchParams?.code_challenge || '';
-  const state = searchParams?.state || '';
+  const { challenge, state, label } = authorizeParams(searchParams || {});
 
   return (
     <AuthorizeClient
@@ -30,6 +31,7 @@ export default async function AuthorizePage({ searchParams }) {
       email={user.email}
       challenge={challenge}
       state={state}
+      label={label}
     />
   );
 }
