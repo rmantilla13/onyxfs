@@ -1,12 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
-  ASSUMED_FPS, timecode, stepFrame, timeFromPointer, percentOf,
-  bufferedSpans, clampRange, shuttleRate, seekToDigit,
+  ASSUMED_RATE, toRate, rateLabel, frameAt, secondsOfFrame, frameCount, clampFrame, timecode,
+  timeFromPointer, percentOf, bufferedSpans, shuttleRate, seekToDigit,
 } from '@/lib/video-time';
 import { frameIndexAt, framePosition, layoutFromMetadata } from '@/lib/filmstrip';
-import { fmtDuration } from '@/lib/media';
+import useContainedRect from '@/app/components/review/useContainedRect';
 
 /**
  * The video player.
@@ -25,6 +25,23 @@ import { fmtDuration } from '@/lib/media';
  *   I / O       set in / out        ⇧X      clear the range
  *   M           mute                F       fullscreen
  *   0–9         seek to N×10%       Home/End  start / end
+ *   C           comment on this frame (when the page offers review)
+ *
+ * FRAMES. The player knows which frame is on screen, not just a time: it
+ * follows the presented frame with requestVideoFrameCallback, whose
+ * `mediaTime` is the timestamp of the frame the compositor actually showed
+ * (timeupdate fires four times a second and says nothing about frames), and
+ * falls back to timeupdate/seeked where that API is missing. The rate is the
+ * file's exact one when it was probed (lib/mp4-probe.js), so the timecode
+ * reads as the NLE's does, start timecode and drop-frame included; without
+ * one it assumes 30 and says so on hover. Seeks land mid-frame
+ * (secondsOfFrame), the one instant Chrome and Safari agree on.
+ *
+ * REVIEW. `markers` are comments on the scrub bar (click one to land on its
+ * frame), `overlay` renders inside the stage on the picture's own rectangle —
+ * so a drawing survives fullscreen and letterboxing — and a ref exposes
+ * seekToFrame and pause for the review panel. All optional; the share page
+ * passes none of them.
  *
  * HEAVY FILES. A multi-gigabyte master streamed from object storage seeks
  * badly, and every byte is egress. So while no proxy rendition exists the
@@ -39,10 +56,13 @@ const HEAVY_BYTES = 500 * 1024 * 1024;
 const VOLUME_KEY = 'onyx.player.volume';
 const SPEEDS = [0.25, 0.5, 1, 1.5, 2];
 
-export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
+const VideoPlayer = forwardRef(function VideoPlayer({
+  file, startAt = 0, onRangeChange, markers = null, onMarkerClick, onFrameChange, overlay = null, onComment,
+}, ref) {
   const video = useRef(null);
   const bar = useRef(null);
   const shell = useRef(null);
+  const stage = useRef(null);
   const shuttle = useRef({ presses: 0, direction: 1 });
 
   const [ready, setReady] = useState(false);
@@ -54,7 +74,9 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
   const [volume, setVolume] = useState(1);
   const [speed, setSpeed] = useState(1);
   const [loop, setLoop] = useState(false);
-  const [range, setRange] = useState({ inPoint: null, outPoint: null });
+  // The selected range, in frames: In is the first frame of it and Out the
+  // last, both inclusive, as an editor marks them.
+  const [range, setRange] = useState({ inFrame: null, outFrame: null });
   const [hover, setHover] = useState(null);
   const [scrubbing, setScrubbing] = useState(false);
   const [error, setError] = useState(null);
@@ -92,9 +114,28 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
   const proxy = file?.proxyUrl || null;
   const src = proxy || file?.url || null;
   const heavy = !proxy && Number(file?.size) > HEAVY_BYTES;
-  const fps = Number(file?.metadata?.fps) > 0 ? Number(file.metadata.fps) : ASSUMED_FPS;
   const strip = useMemo(() => layoutFromMetadata(file?.metadata), [file?.metadata]);
   const stripUrl = file?.filmstripUrl || null;
+
+  // The frame model: the exact rate the container recorded, its start
+  // timecode and drop-frame flag — or the assumed 30, marked as a guess.
+  const md = file?.metadata || {};
+  const known = toRate(md.fps);
+  const fpsKey = known ? `${known.num}/${known.den}` : '';
+  const fps = useMemo(() => toRate(fpsKey) || ASSUMED_RATE, [fpsKey]);
+  const model = useMemo(
+    () => ({ fps, tcStart: Number.isInteger(md.tcStart) ? md.tcStart : 0, dropFrame: md.dropFrame === true }),
+    [fps, md.tcStart, md.dropFrame],
+  );
+  const total = frameCount({ frames: md.frames, duration, fps });
+  const [frame, setFrame] = useState(() => frameAt(Number(startAt) || 0, fps));
+  const frameRef = useRef(frame);
+  frameRef.current = frame;
+
+  // The picture's own size, for placing the overlay on it: recorded at
+  // upload, then the element's once its metadata arrives.
+  const [picture, setPicture] = useState({ w: Number(md.width) || 0, h: Number(md.height) || 0 });
+  const rect = useContainedRect(stage, picture.w, picture.h);
 
   // Restore the volume this viewer last chose. Wrapped because storage throws
   // in a private window and returns nothing with site data cleared, and the
@@ -120,16 +161,82 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
 
   useEffect(() => { if (video.current) video.current.playbackRate = speed; }, [speed]);
 
-  useEffect(() => { onRangeChange?.(range); }, [range, onRangeChange]);
+  // Seconds of the range, for painting it and looping it: from the start of
+  // the In frame to the end of the Out frame.
+  const inPoint = range.inFrame != null ? (range.inFrame * fps.den) / fps.num : null;
+  const outPoint = range.outFrame != null ? ((range.outFrame + 1) * fps.den) / fps.num : null;
+
+  useEffect(() => {
+    onRangeChange?.({ ...range, inPoint, outPoint });
+  }, [range, inPoint, outPoint, onRangeChange]);
+
+  // Follow the frame on screen. requestVideoFrameCallback fires once per
+  // presented frame, with that frame's timestamp — during playback, and once
+  // after each seek while paused. Where it is missing (older Firefox), the
+  // media events are the best there is.
+  useEffect(() => {
+    const v = video.current;
+    if (!v) return undefined;
+    setFrame(frameAt(v.currentTime, fps));
+    if (typeof v.requestVideoFrameCallback === 'function') {
+      let live = true;
+      let handle = 0;
+      const tick = (_now, meta) => {
+        if (!live) return;
+        setFrame(frameAt(meta.mediaTime, fps));
+        handle = v.requestVideoFrameCallback(tick);
+      };
+      handle = v.requestVideoFrameCallback(tick);
+      return () => { live = false; v.cancelVideoFrameCallback?.(handle); };
+    }
+    const sync = () => setFrame(frameAt(v.currentTime, fps));
+    v.addEventListener('timeupdate', sync);
+    v.addEventListener('seeked', sync);
+    return () => {
+      v.removeEventListener('timeupdate', sync);
+      v.removeEventListener('seeked', sync);
+    };
+  }, [fps, src]);
+
+  // Tell the page which frame is up. Every frame while paused or scrubbing;
+  // at most five times a second while playing, so a comment list beside the
+  // player is not re-rendered at 60Hz for a label nobody reads mid-play.
+  const lastEmit = useRef(0);
+  useEffect(() => {
+    if (!onFrameChange) return;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (playing && now - lastEmit.current < 200) return;
+    lastEmit.current = now;
+    onFrameChange(frame, { playing });
+  }, [frame, playing, onFrameChange]);
 
   const seek = useCallback((to) => {
     const v = video.current;
     if (!v || !Number.isFinite(to)) return;
-    const total = v.duration || duration;
-    const clamped = Math.min(Math.max(0, to), total || to);
+    const length = v.duration || duration;
+    const clamped = Math.min(Math.max(0, to), length || to);
     v.currentTime = clamped;
     setCurrent(clamped);
   }, [duration]);
+
+  /** Land on frame `n`, mid-frame, and show it — loading the source if it has not been yet. */
+  const seekToFrame = useCallback((n) => {
+    const f = clampFrame(n, total);
+    setStarted(true);
+    setFrame(f);
+    seek(secondsOfFrame(f, fps));
+  }, [seek, total, fps]);
+
+  const step = useCallback((dir) => {
+    video.current?.pause();
+    seekToFrame(frameRef.current + dir);
+  }, [seekToFrame]);
+
+  useImperativeHandle(ref, () => ({
+    seekToFrame: (n) => { video.current?.pause(); seekToFrame(n); },
+    pause: () => video.current?.pause(),
+    frame: () => frameRef.current,
+  }), [seekToFrame]);
 
   const togglePlay = useCallback(() => {
     const v = video.current;
@@ -168,13 +275,22 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
     }
   }, [seek]);
 
-  const setIn = useCallback(() => {
-    setRange((r) => clampRange({ ...r, inPoint: video.current?.currentTime ?? 0 }, duration));
-  }, [duration]);
-  const setOut = useCallback(() => {
-    setRange((r) => clampRange({ ...r, outPoint: video.current?.currentTime ?? 0 }, duration));
-  }, [duration]);
-  const clearRange = useCallback(() => setRange({ inPoint: null, outPoint: null }), []);
+  // Out is never at or before In: a zero-length or inverted range reads as a
+  // bug everywhere downstream, so the other end is nudged instead.
+  const lastFrame = Number.isFinite(total) ? total - 1 : Infinity;
+  const tidy = useCallback(({ inFrame, outFrame }) => {
+    if (inFrame == null || outFrame == null || outFrame > inFrame) return { inFrame, outFrame };
+    const out = Math.min(inFrame + 1, lastFrame);
+    return out > inFrame ? { inFrame, outFrame: out } : { inFrame: Math.max(0, out - 1), outFrame: out };
+  }, [lastFrame]);
+  const setIn = useCallback(() => setRange((r) => tidy({ ...r, inFrame: frameRef.current })), [tidy]);
+  const setOut = useCallback(() => setRange((r) => tidy({ ...r, outFrame: frameRef.current })), [tidy]);
+  const clearRange = useCallback(() => setRange({ inFrame: null, outFrame: null }), []);
+  const comment = useCallback(() => {
+    if (!onComment) return;
+    video.current?.pause();
+    onComment({ frame: frameRef.current });
+  }, [onComment]);
 
   const toggleFullscreen = useCallback(() => {
     const el = shell.current;
@@ -193,8 +309,8 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
       ' ': togglePlay, k: togglePlay, K: togglePlay,
       j: () => doShuttle(-1), J: () => doShuttle(-1),
       l: () => doShuttle(1), L: () => doShuttle(1),
-      ',': () => { v.pause(); seek(stepFrame(v.currentTime, -1, { fps, duration })); },
-      '.': () => { v.pause(); seek(stepFrame(v.currentTime, 1, { fps, duration })); },
+      ',': () => step(-1),
+      '.': () => step(1),
       ArrowLeft: () => seek(v.currentTime - big),
       ArrowRight: () => seek(v.currentTime + big),
       ArrowUp: () => setVolume((x) => Math.min(1, x + 0.1)),
@@ -205,13 +321,14 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
       X: clearRange,
       m: () => setMuted((x) => !x), M: () => setMuted((x) => !x),
       f: toggleFullscreen, F: toggleFullscreen,
+      ...(onComment ? { c: comment, C: comment } : {}),
     };
     if (keys[e.key]) { e.preventDefault(); keys[e.key](); return; }
     if (/^[0-9]$/.test(e.key)) {
       const to = seekToDigit(Number(e.key), duration);
       if (to != null) { e.preventDefault(); seek(to); }
     }
-  }, [togglePlay, doShuttle, seek, fps, duration, setIn, setOut, clearRange, toggleFullscreen]);
+  }, [togglePlay, doShuttle, seek, step, duration, setIn, setOut, clearRange, toggleFullscreen, onComment, comment]);
 
   // Scrubbing uses pointer capture so a drag continues outside the bar — which
   // is most drags, because the bar is a few pixels tall.
@@ -244,6 +361,9 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
   const spans = bufferedSpans(buffered, duration);
   const played = percentOf(current, duration);
   const hoverPct = hover == null ? null : percentOf(hover, duration);
+  const tc = (f) => timecode(f, model);
+  const rateNote = known ? `${rateLabel(fps)} fps` : 'Frame rate unknown — timecodes are approximate';
+  const frameTime = (f) => (f * fps.den) / fps.num;
   const stripStyle = strip && stripUrl && hover != null
     ? { ...framePosition(frameIndexAt(hover, duration, strip.frames), strip), backgroundImage: `url(${stripUrl})` }
     : null;
@@ -257,7 +377,7 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
       aria-label={`Video player for ${file.name}`}
       onKeyDown={onKeyDown}
     >
-      <div className="player-stage" style={{ '--ratio': ratio || 16 / 9 }}>
+      <div className="player-stage" ref={stage} style={{ '--ratio': ratio || 16 / 9 }}>
         <video
           ref={video}
           src={src}
@@ -272,7 +392,10 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
           onLoadedMetadata={(e) => {
             setReady(true);
             if (Number.isFinite(e.target.duration) && e.target.duration > 0) setDuration(e.target.duration);
-            if (e.target.videoWidth && e.target.videoHeight) setRatio(e.target.videoWidth / e.target.videoHeight);
+            if (e.target.videoWidth && e.target.videoHeight) {
+              setRatio(e.target.videoWidth / e.target.videoHeight);
+              setPicture({ w: e.target.videoWidth, h: e.target.videoHeight });
+            }
             // The ?t= deep link, applied once metadata exists — seeking before
             // that is discarded by every browser.
             if (Number(startAt) > 0) seek(Number(startAt));
@@ -282,8 +405,8 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
             setCurrent(t);
             // Loop the selected range rather than the whole clip when one is
             // set: that is what a range is for.
-            if (loop && range.inPoint != null && range.outPoint != null && t >= range.outPoint) {
-              seek(range.inPoint);
+            if (loop && inPoint != null && outPoint != null && t >= outPoint) {
+              seek(secondsOfFrame(range.inFrame, fps));
             }
           }}
           onProgress={(e) => setBuffered(bufferedSpans(e.target.buffered, e.target.duration || duration))}
@@ -292,8 +415,17 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
           onEnded={() => setPlaying(false)}
           onVolumeChange={(e) => { setVolume(e.target.volume); setMuted(e.target.muted); }}
           onError={() => setError('This browser cannot decode this video. Download it to view.')}
-          loop={loop && range.inPoint == null}
+          loop={loop && inPoint == null}
         />
+
+        {/* On the picture's own rectangle, not the stage's: the stage
+            letterboxes, and a drawing belongs to the frame. Inside the
+            stage, so it goes fullscreen with it. */}
+        {overlay && (
+          <div className="player-overlay" style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}>
+            {overlay({ frame, playing, width: picture.w, height: picture.h })}
+          </div>
+        )}
 
         {!started && !proxy && (
           <button className="player-bigplay" onClick={togglePlay} aria-label="Play">
@@ -305,6 +437,28 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
       {error && <p className="player-error small">{error}</p>}
 
       <div className="player-bar">
+        {markers?.length > 0 && duration > 0 && (
+          // Comments on the timeline, above the scrub bar rather than on it
+          // so a click lands exactly on a comment's frame instead of
+          // starting a scrub a few pixels to one side.
+          <div className="player-marks" role="group" aria-label="Comments on the timeline">
+            {markers.map((m) => {
+              const left = percentOf(frameTime(m.frameIn), duration);
+              const right = m.frameOut != null ? percentOf(frameTime(m.frameOut + 1), duration) : null;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={`player-mark is-comment${m.active ? ' is-selected' : ''}${right != null ? ' is-range' : ''}`}
+                  style={{ left: `${left}%`, ...(right != null ? { width: `${Math.max(0, right - left)}%` } : null) }}
+                  title={m.label}
+                  aria-label={m.label}
+                  onClick={() => { video.current?.pause(); seekToFrame(m.frameIn); onMarkerClick?.(m.id); }}
+                />
+              );
+            })}
+          </div>
+        )}
         <div
           className="player-scrub"
           ref={bar}
@@ -314,7 +468,7 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
           aria-valuemin={0}
           aria-valuemax={Math.round(duration) || 0}
           aria-valuenow={Math.round(current)}
-          aria-valuetext={timecode(current, fps)}
+          aria-valuetext={tc(frame)}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -323,24 +477,24 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
           {spans.map((s, i) => (
             <span key={i} className="player-buffered" style={{ left: `${s.left}%`, width: `${s.width}%` }} />
           ))}
-          {range.inPoint != null && range.outPoint != null && (
+          {inPoint != null && outPoint != null && (
             <span
               className="player-range"
               style={{
-                left: `${percentOf(range.inPoint, duration)}%`,
-                width: `${percentOf(range.outPoint, duration) - percentOf(range.inPoint, duration)}%`,
+                left: `${percentOf(inPoint, duration)}%`,
+                width: `${percentOf(outPoint, duration) - percentOf(inPoint, duration)}%`,
               }}
             />
           )}
           <span className="player-played" style={{ width: `${played}%` }} />
           <span className="player-head" style={{ left: `${played}%` }} />
-          {range.inPoint != null && <span className="player-mark in" style={{ left: `${percentOf(range.inPoint, duration)}%` }} />}
-          {range.outPoint != null && <span className="player-mark out" style={{ left: `${percentOf(range.outPoint, duration)}%` }} />}
+          {inPoint != null && <span className="player-mark in" style={{ left: `${percentOf(inPoint, duration)}%` }} />}
+          {outPoint != null && <span className="player-mark out" style={{ left: `${percentOf(outPoint, duration)}%` }} />}
 
           {hoverPct != null && (
             <div className="player-hover" style={{ left: `${hoverPct}%` }}>
               {stripStyle && <div className="player-hover-frame" style={stripStyle} />}
-              <span className="player-hover-time mono">{timecode(hover, fps)}</span>
+              <span className="player-hover-time mono">{tc(frameAt(hover, fps))}</span>
             </div>
           )}
         </div>
@@ -349,27 +503,27 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
           <button className="btn btn-icon" onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'} aria-pressed={playing}>
             <span aria-hidden="true">{playing ? '❚❚' : '▶'}</span>
           </button>
-          <button className="btn btn-icon" onClick={() => { video.current?.pause(); seek(stepFrame(current, -1, { fps, duration })); }} aria-label="Previous frame">
+          <button className="btn btn-icon" onClick={() => step(-1)} aria-label="Previous frame">
             <span aria-hidden="true">◀|</span>
           </button>
-          <button className="btn btn-icon" onClick={() => { video.current?.pause(); seek(stepFrame(current, 1, { fps, duration })); }} aria-label="Next frame">
+          <button className="btn btn-icon" onClick={() => step(1)} aria-label="Next frame">
             <span aria-hidden="true">|▶</span>
           </button>
 
-          <span className="player-time mono small">
-            {timecode(current, fps)}
-            <span className="muted"> / {duration ? timecode(duration, fps) : '—'}</span>
+          <span className="player-time mono small" title={rateNote}>
+            {tc(frame)}
+            <span className="muted"> / {Number.isFinite(total) ? timecode(total, { fps, dropFrame: model.dropFrame }) : '—'}</span>
           </span>
 
           <div className="spacer" />
 
-          <button className={`btn btn-sm${range.inPoint != null ? ' is-active' : ''}`} onClick={setIn} aria-pressed={range.inPoint != null}>In</button>
-          <button className={`btn btn-sm${range.outPoint != null ? ' is-active' : ''}`} onClick={setOut} aria-pressed={range.outPoint != null}>Out</button>
-          {(range.inPoint != null || range.outPoint != null) && (
+          <button className={`btn btn-sm${range.inFrame != null ? ' is-active' : ''}`} onClick={setIn} aria-pressed={range.inFrame != null}>In</button>
+          <button className={`btn btn-sm${range.outFrame != null ? ' is-active' : ''}`} onClick={setOut} aria-pressed={range.outFrame != null}>Out</button>
+          {(range.inFrame != null || range.outFrame != null) && (
             <>
-              <span className="small muted mono">
-                {range.inPoint != null && range.outPoint != null
-                  ? fmtDuration(range.outPoint - range.inPoint)
+              <span className="small muted mono" title="Length of the range">
+                {range.inFrame != null && range.outFrame != null
+                  ? timecode(range.outFrame - range.inFrame + 1, { fps, dropFrame: model.dropFrame })
                   : 'partial'}
               </span>
               <button className="btn btn-sm btn-ghost" onClick={clearRange} aria-label="Clear the selected range">Clear</button>
@@ -410,4 +564,6 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
       )}
     </div>
   );
-}
+});
+
+export default VideoPlayer;
