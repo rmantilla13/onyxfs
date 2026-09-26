@@ -7,9 +7,19 @@ import OnyxKit
 ///
 /// Only the wire lives here — parsing requests, writing responses, streaming
 /// a pinned file's bytes. What to answer is DAVResponder's (OnyxKit), which is
-/// tested on its own. Bound to loopback with a random port, and every request
-/// must carry the bearer token rclone was started with, so nothing else on
-/// the network — or another account on this Mac — can read through it.
+/// tested on its own. Bound to loopback with a random port, so nothing else
+/// on the network can reach it, and every request must carry the bearer
+/// token rclone was started with, so no other process on this Mac can read
+/// through this port.
+///
+/// That does not keep a mounted drive from another account on this Mac.
+/// rclone serves each mount to macOS's NFS client from a port of its own on
+/// 127.0.0.1, and that NFS server has no authentication: any local account,
+/// or any app allowed to open network connections, can mount it and read
+/// the drive, with rclone fetching through here on this account's token.
+/// ~/Onyx and the mounts are private to this account (MountManager), which
+/// closes the file-system way in, not that one. Closing it needs a transport
+/// with no TCP listener (FSKit, or File Provider): ROADMAP, Phase 5.
 final class DAVServer: @unchecked Sendable {
     let token: String
     private let queue = DispatchQueue(label: "io.onyxfs.dav", qos: .userInitiated)
@@ -17,6 +27,23 @@ final class DAVServer: @unchecked Sendable {
     private var routes: [String: DAVResponder] = [:]
     private let lock = NSLock()
     private(set) var port: UInt16 = 0
+    /// Connections open now; on `queue`.
+    private var open = 0
+
+    /// At most this many connections at once. Each rclone keeps a pool of
+    /// its own, a couple of dozen at the most and mostly idle, so this is
+    /// room for several drives — and a local process that opens hundreds of
+    /// silent connections cannot use up the app's file descriptors, which
+    /// every mount's reads, the offline copies and the sync all need too.
+    static let maxConnections = 128
+    /// A request that has begun must be whole this soon. It is never more
+    /// than a header block and a small body from a process on this Mac, so
+    /// only something trickling bytes on purpose takes longer.
+    static let requestTimeout: TimeInterval = 15
+    /// A keep-alive connection with no request this long is closed. rclone
+    /// closes its own idle connections after a minute, so it normally goes
+    /// first; this is for the ones nothing will ever use.
+    static let idleTimeout: TimeInterval = 90
 
     init() {
         var bytes = [UInt8](repeating: 0, count: 32)
@@ -78,29 +105,59 @@ final class DAVServer: @unchecked Sendable {
 
     // MARK: - Connections
 
+    /// On `queue`, as the listener delivers them.
     private func accept(_ connection: NWConnection) {
-        let session = Session(connection: connection, server: self)
+        guard open < Self.maxConnections else {
+            connection.cancel()
+            return
+        }
+        open += 1
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            switch state {
+            case .failed:
+                connection?.cancel()
+            case .cancelled:
+                // Once per connection, however it ended.
+                self?.open -= 1
+            default:
+                break
+            }
+        }
+        let session = Session(connection: connection, server: self, queue: queue)
         connection.start(queue: queue)
         session.readNext()
     }
 
     /// One keep-alive connection: read a request, answer it, read the next.
+    /// Everything but the responder's own work runs on `queue`.
     private final class Session: @unchecked Sendable {
         let connection: NWConnection
         weak var server: DAVServer?
+        let queue: DispatchQueue
+        let token: String
         var buffer = Data()
+        /// Moved on by every deadline set or cleared, so only the latest one
+        /// set can close the connection.
+        var deadline = 0
+        /// A request has begun arriving, and its deadline is set.
+        var requestStarted = false
 
         static let maxHeader = 64 * 1024
         static let maxBody = 1024 * 1024
 
-        init(connection: NWConnection, server: DAVServer) {
+        init(connection: NWConnection, server: DAVServer, queue: DispatchQueue) {
             self.connection = connection
             self.server = server
+            self.queue = queue
+            token = server.token
         }
 
         func readNext() {
             switch parse() {
             case let .request(request, keepAlive):
+                // Answering takes as long as it takes; no deadline meanwhile.
+                clearDeadline()
+                requestStarted = false
                 handle((request, keepAlive))
                 return
             case .failed:
@@ -110,6 +167,14 @@ final class DAVServer: @unchecked Sendable {
             }
             if buffer.count > Self.maxHeader + Self.maxBody {
                 fail(413); return
+            }
+            if buffer.isEmpty {
+                setDeadline(DAVServer.idleTimeout)
+            } else if !requestStarted {
+                // Set once, when the request begins: more bytes, however
+                // few at a time, do not buy it more time.
+                requestStarted = true
+                setDeadline(DAVServer.requestTimeout)
             }
             connection.receive(minimumIncompleteLength: 1, maximumLength: 256 * 1024) { [self] data, _, complete, error in
                 if let data, !data.isEmpty { buffer.append(data) }
@@ -147,6 +212,12 @@ final class DAVServer: @unchecked Sendable {
                 let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
                 headers[name] = headers[name].map { "\($0), \(value)" } ?? value
             }
+            // The token, as soon as the headers are in: whoever lacks it gets
+            // no body waited for or held, and the connection closed. The
+            // responder checks it again, as it does for any caller.
+            guard DAVResponder.authorizes(headers["authorization"], token: token) else {
+                fail(401); return .failed
+            }
             if headers["transfer-encoding"]?.lowercased().contains("chunked") == true {
                 // The mount is read-only: nothing it sends has a chunked body
                 // worth reading. Refuse, and close rather than guess where the
@@ -181,11 +252,22 @@ final class DAVServer: @unchecked Sendable {
             }
             Task {
                 let response = await responder.respond(to: request)
-                send(response, keepAlive: keepAlive)
+                queue.async { [self] in send(response, keepAlive: keepAlive) }
             }
         }
 
         private func send(_ response: DAVResponse, keepAlive: Bool) {
+            clearDeadline()
+            // A header that would end the header block early — CR, LF or NUL
+            // in a name or a value — is never written, whatever put it there:
+            // the client would take the rest for body, or for the answer to
+            // its next request. DAVResponder only sends well-formed values;
+            // this is the wire's own guarantee, for anything that gets past.
+            if response.headers.contains(where: { Self.breaksHeader($0.0) || Self.breaksHeader($0.1) }) {
+                buffer.removeAll()
+                send(DAVResponse(status: 500, headers: [("Content-Length", "0")], body: .empty), keepAlive: false)
+                return
+            }
             var head = "HTTP/1.1 \(response.status) \(Self.reason(response.status))\r\n"
             var hasLength = false
             for (name, value) in response.headers {
@@ -241,6 +323,23 @@ final class DAVServer: @unchecked Sendable {
             }
         }
 
+        static func breaksHeader(_ s: String) -> Bool {
+            s.utf8.contains { $0 == UInt8(ascii: "\r") || $0 == UInt8(ascii: "\n") || $0 == 0 }
+        }
+
+        /// Close the connection if nothing clears this first. Only the latest
+        /// deadline counts.
+        private func setDeadline(_ seconds: TimeInterval) {
+            deadline += 1
+            let set = deadline
+            queue.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                guard let self, self.deadline == set else { return }
+                self.connection.cancel()
+            }
+        }
+
+        private func clearDeadline() { deadline += 1 }
+
         /// Answer with an error and close: after a request that could not be
         /// read, where the next one starts is unknowable.
         private func fail(_ status: Int) {
@@ -261,6 +360,7 @@ final class DAVServer: @unchecked Sendable {
             case 405: return "Method Not Allowed"
             case 413: return "Payload Too Large"
             case 416: return "Range Not Satisfiable"
+            case 500: return "Internal Server Error"
             case 503: return "Service Unavailable"
             default: return "Status"
             }
