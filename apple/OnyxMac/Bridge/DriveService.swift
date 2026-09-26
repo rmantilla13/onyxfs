@@ -57,23 +57,29 @@ final class DriveService: ObservableObject {
         // A mount finishing or failing changes what this reports too (the
         // menu bar icon, Settings), so its changes are passed on.
         forwarding = mounts.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        mounts.onEjected = { [weak self] scope in
+            guard let self else { return }
+            wantMounted.remove(scope.identifier)
+            defaults.set(Array(wantMounted), forKey: Keys.mounted)
+            model?.web.publishOfflineState()
+        }
     }
 
     /// ~/Library/Application Support/Onyx/Offline: not Caches, which macOS
     /// may empty on its own — pinned files are promised to stay.
     static var defaultRoot: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Onyx/Offline", isDirectory: true)
+            .appendingPathComponent("\(OnyxIdentifiers.folderName)/Offline", isDirectory: true)
     }
 
     private static var mirrorsDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Onyx/Mirrors", isDirectory: true)
+            .appendingPathComponent("\(OnyxIdentifiers.folderName)/Mirrors", isDirectory: true)
     }
 
     private static var logsDirectory: URL {
         FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Logs/Onyx", isDirectory: true)
+            .appendingPathComponent("Logs/\(OnyxIdentifiers.folderName)", isDirectory: true)
     }
 
     var pinnedDirectory: URL { cacheRoot.appendingPathComponent("Pinned", isDirectory: true) }

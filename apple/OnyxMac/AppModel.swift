@@ -217,6 +217,10 @@ final class AppModel: ObservableObject {
         }
         if let s = value("--server") { await setServer(s) }
         if let code = value("--pair") { await pair(code: code) }
+        // `--keep-offline <drive.id|library>`: what the Offline checkbox does.
+        if let scope = value("--keep-offline") {
+            await finder.pin(PinRule(scope: scope, target: .folder(path: "")))
+        }
         // Where to look for updates, instead of the server — for trying the
         // updater against a local feed. What it installs is verified the same.
         updater.start(feed: value("--update-feed").flatMap(URL.init(string:)))

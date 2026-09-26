@@ -23,6 +23,10 @@ public enum OnyxIdentifiers {
     public static var tokenService: String { isDevBuild ? app + ".dev" : app }
     /// Where the settings the app and its extension share are kept.
     public static var settingsSuite: String { isDevBuild ? "io.onyxfs.dev" : appGroup }
+    /// The folder name for everything kept on disk — ~/Onyx for the mounts,
+    /// Application Support, Logs — so a dev build's mounts, mirrors and
+    /// offline copies never land on the real app's.
+    public static var folderName: String { isDevBuild ? "Onyx Dev" : "Onyx" }
 }
 
 public struct OnyxConfig: Sendable, Equatable {

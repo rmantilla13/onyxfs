@@ -19,6 +19,9 @@ final class MountManager: ObservableObject {
     }
 
     @Published private(set) var states: [String: State] = [:]
+    /// Told when someone ejects a drive in Finder, so it counts as turned off
+    /// (and is not mounted again at the next launch).
+    var onEjected: ((SyncDomain) -> Void)?
 
     private struct Running {
         let process: Process
@@ -28,7 +31,8 @@ final class MountManager: ObservableObject {
 
     /// ~/Onyx: the folder the drives mount inside, one folder per drive.
     static var root: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Onyx", isDirectory: true)
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(OnyxIdentifiers.folderName, isDirectory: true)
     }
 
     static var rcloneURL: URL? {
@@ -99,6 +103,13 @@ final class MountManager: ObservableObject {
             // so asking again often is cheap — and keeps Finder close to the web.
             "--dir-cache-time", "10s",
             "--attr-timeout", "5s",
+            // Soft, so a mount whose rclone is gone fails an operation after
+            // a while instead of hanging Finder for ever; 30 s per attempt is
+            // far longer than any chunk takes from storage.
+            "-o", "soft", "-o", "timeo=300", "-o", "retrans=2",
+            // Offline, a file that is neither kept offline nor cached should
+            // fail soon, not after rclone's default ten tries.
+            "--low-level-retries", "3",
             "--no-checksum",
             "--daemon=false",
             "--log-file", log.path,
@@ -116,6 +127,7 @@ final class MountManager: ObservableObject {
             return
         }
         running[id] = Running(process: process, mountPoint: mountPoint)
+        Self.watch(rclone: process.processIdentifier, mountPoint: mountPoint)
 
         // Mounted once the path is a mount point; give it a few seconds.
         for _ in 0..<40 {
@@ -139,15 +151,20 @@ final class MountManager: ObservableObject {
     }
 
     /// On quit: every mount, synchronously, so none is left behind for the
-    /// system to reap.
+    /// system to reap. Unmounted first, rclone stopped after (see stop()).
     func unmountAllNow() {
-        for (_, run) in running {
-            run.process.terminate()
+        let runs = Array(running.values)
+        running.removeAll()
+        states.removeAll()
+        for run in runs {
             Self.unmountPath(run.mountPoint, force: false)
             if Self.isMounted(run.mountPoint) { Self.unmountPath(run.mountPoint, force: true) }
         }
-        running.removeAll()
-        states.removeAll()
+        for run in runs where run.process.isRunning {
+            // Unmounted, rclone exits on its own; a moment, then make it.
+            for _ in 0..<10 where run.process.isRunning { usleep(100_000) }
+            if run.process.isRunning { run.process.terminate() }
+        }
     }
 
     func reveal(_ scope: SyncDomain) {
@@ -158,7 +175,16 @@ final class MountManager: ObservableObject {
     private func exited(_ id: String, status: Int32, log: URL) {
         guard running[id] != nil else { return } // an unmount we asked for
         running[id] = nil
-        let tail = (try? String(contentsOf: log, encoding: .utf8))?
+        let text = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+        // Ejected in Finder: rclone notices its mount went away and exits
+        // cleanly. That is someone turning the drive off, not a failure.
+        if status == 0, text.split(separator: "\n").suffix(20).contains(where: { $0.contains("unmount detected") }) {
+            states[id] = nil
+            appLog.info("mount: \(id, privacy: .public) ejected in Finder")
+            if let scope = SyncDomain(identifier: id) { onEjected?(scope) }
+            return
+        }
+        let tail = text
             .split(separator: "\n").last(where: { $0.contains("ERROR") || $0.contains("CRITICAL") })
             .map { String($0.suffix(200)) }
         states[id] = .failed(tail ?? "The mount stopped (rclone exited with \(status)).")
@@ -178,39 +204,102 @@ final class MountManager: ObservableObject {
         return s.isEmpty ? "Drive" : s
     }
 
-    static func isMounted(_ path: URL) -> Bool {
-        var info = statfs()
-        guard statfs(path.path, &info) == 0 else { return false }
-        let mountedOn = withUnsafePointer(to: &info.f_mntonname) {
-            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+    /// From the kernel's mount table, without asking the mount itself: a
+    /// statfs on a mount whose server has gone can block, and this runs on
+    /// the main thread. getfsstat into a buffer of its own (not getmntinfo's
+    /// shared one), since it is called off the main thread too.
+    nonisolated static func isMounted(_ path: URL) -> Bool {
+        let count = getfsstat(nil, 0, MNT_NOWAIT)
+        guard count > 0 else { return false }
+        let capacity = Int(count) + 4
+        let list = UnsafeMutablePointer<statfs>.allocate(capacity: capacity)
+        defer { list.deallocate() }
+        let got = getfsstat(list, Int32(capacity * MemoryLayout<statfs>.stride), MNT_NOWAIT)
+        guard got > 0 else { return false }
+        let wanted = [path.path, path.resolvingSymlinksInPath().path]
+        for i in 0..<Int(got) {
+            let on = withUnsafePointer(to: &list[i].f_mntonname) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+            }
+            if wanted.contains(on) { return true }
         }
-        return mountedOn == path.resolvingSymlinksInPath().path || mountedOn == path.path
+        return false
     }
 
-    /// A mount left by an earlier run (a crash, a force quit): unmount it and
-    /// stop the rclone still serving it, so this run can take the path.
+    /// Unmounts, and stops rclone, if Onyx dies without doing it itself — a
+    /// crash, a force quit. Otherwise the mount would outlive the bridge it
+    /// reads through, and anything touching it would wait on a server that
+    /// never answers. A small shell per mount: it outlives the app by design.
+    ///
+    /// Unmount first, as stop() does, while rclone still answers NFS: rclone
+    /// then exits on its own. Signalled while still mounted, rclone runs
+    /// `diskutil umount force` itself, which with the bridge gone hangs for
+    /// ever — and keeps the folder busy, so the next launch cannot mount it.
+    /// The watch ends early if rclone does (so its pid is never reused).
+    private static func watch(rclone: Int32, mountPoint: URL) {
+        let app = ProcessInfo.processInfo.processIdentifier
+        let script = """
+        ours() { /bin/ps -p \(rclone) -o command= 2>/dev/null | /usr/bin/grep -q nfsmount; }
+        while /bin/kill -0 \(app) 2>/dev/null; do ours || exit 0; /bin/sleep 2; done
+        /sbin/umount -f "$1" 2>/dev/null
+        for i in 1 2 3; do ours || break; /bin/sleep 1; done
+        ours && /bin/kill -TERM \(rclone) 2>/dev/null && /bin/sleep 2
+        ours && /bin/kill -9 \(rclone) 2>/dev/null
+        /usr/bin/pkill -f "diskutil umount force $2\\$" 2>/dev/null
+        exit 0
+        """
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", script, "onyx-mount-watch", mountPoint.path,
+                       NSRegularExpression.escapedPattern(for: mountPoint.path)]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try? p.run()
+    }
+
+    /// What an earlier run left (a crash the watchdog missed, a force quit
+    /// mid-launch): a mount and the rclone still serving it, or rclone's own
+    /// `diskutil umount force`, hung on a dead mount — which keeps the folder
+    /// busy ("Resource busy") even once nothing is mounted there. Off the
+    /// main thread: unmounting a dead mount can take a while.
     private static func clearStale(_ mountPoint: URL) async {
-        guard isMounted(mountPoint) else { return }
-        unmountPath(mountPoint, force: false)
-        if isMounted(mountPoint) { unmountPath(mountPoint, force: true) }
-        let kill = Process()
-        kill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        kill.arguments = ["-f", "nfsmount .* \(mountPoint.path)"]
-        try? kill.run()
-        kill.waitUntilExit()
+        let path = mountPoint.path
+        let mounted = isMounted(mountPoint)
+        await Task.detached {
+            let pattern = NSRegularExpression.escapedPattern(for: path)
+            if mounted {
+                unmountPath(URL(fileURLWithPath: path), force: true)
+                pkill("nfsmount .* " + pattern + "( |$)")
+            }
+            pkill("diskutil umount force " + pattern + "$")
+        }.value
     }
 
+    nonisolated private static func pkill(_ pattern: String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        p.arguments = ["-f", pattern]
+        try? p.run()
+        p.waitUntilExit()
+    }
+
+    /// Unmount first, then stop rclone. Unmounted, rclone exits by itself; a
+    /// signal to a still-mounted rclone has it run `diskutil umount force`,
+    /// which is slow at best and, with the bridge gone, never finishes.
     private static func stop(_ process: Process, mountPoint: URL) async {
-        process.terminate()
+        let path = mountPoint.path
+        await Task.detached {
+            if isMounted(URL(fileURLWithPath: path)) { unmountPath(URL(fileURLWithPath: path), force: false) }
+            if isMounted(URL(fileURLWithPath: path)) { unmountPath(URL(fileURLWithPath: path), force: true) }
+        }.value
         for _ in 0..<20 where process.isRunning {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
-        if isMounted(mountPoint) { unmountPath(mountPoint, force: false) }
-        if isMounted(mountPoint) { unmountPath(mountPoint, force: true) }
+        if process.isRunning { process.terminate() }
     }
 
     /// `umount` is enough for an NFS mount this user made: no password.
-    private static func unmountPath(_ path: URL, force: Bool) {
+    nonisolated private static func unmountPath(_ path: URL, force: Bool) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/sbin/umount")
         p.arguments = force ? ["-f", path.path] : [path.path]

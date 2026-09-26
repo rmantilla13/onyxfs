@@ -82,6 +82,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Quitting always quits. AppKit refuses while a sheet is open (the update
+    /// sheet, say) — which also left drives mounted after a logout — so any
+    /// open sheet is closed first.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        for window in NSApp.windows {
+            if let sheet = window.attachedSheet { window.endSheet(sheet) }
+        }
+        return .terminateNow
+    }
+
     /// Clicking Onyx in Finder or Launchpad while it runs in the menu bar
     /// opens its window, as any app would.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

@@ -38,7 +38,26 @@ public struct TokenStore: Sendable {
         return q
     }
 
+    /// A development build ("Onyx Dev") is unsigned, and each rebuild is a
+    /// new app to the Keychain — which then asks the person, on every
+    /// rebuild, whether it may read the last build's token. So a dev build
+    /// keeps its test sign-in in a file only this user can read instead.
+    private func devFile(_ account: String) -> URL? {
+        guard OnyxIdentifiers.isDevBuild, service == OnyxIdentifiers.tokenService else { return nil }
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(OnyxIdentifiers.folderName, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        return dir.appendingPathComponent("token-\(account)")
+    }
+
     public func set(_ value: String?, for account: String = "bearer") throws {
+        if let file = devFile(account) {
+            guard let value else { try? FileManager.default.removeItem(at: file); return }
+            try Data(value.utf8).write(to: file, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            return
+        }
         SecItemDelete(query(account, shared: true) as CFDictionary)
         SecItemDelete(query(account, shared: false) as CFDictionary)
         guard let value else { return }
@@ -57,6 +76,9 @@ public struct TokenStore: Sendable {
     }
 
     public func get(_ account: String = "bearer") -> String? {
+        if let file = devFile(account) {
+            return (try? String(contentsOf: file, encoding: .utf8)).flatMap { $0.isEmpty ? nil : $0 }
+        }
         for shared in [true, false] {
             var q = query(account, shared: shared)
             q[kSecReturnData as String] = true
