@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireDesktopAuth } from '@/lib/desktop-guard';
-import { getFileById, canAccessFile, buildPrincipal } from '@/lib/db';
+import { getFileById, canAccessFile } from '@/lib/db';
+import { can } from '@/lib/authz';
 import { presignFileUrls } from '@/lib/storage';
 
 export const runtime = 'nodejs';
@@ -26,9 +27,11 @@ const CONTENT_URL_TTL = 21600;
 export async function GET(req, { params }) {
   const gate = await requireDesktopAuth(req);
   if (gate.error) return gate.error;
+  const { principal } = gate;
+  const allowed = can(principal, 'desktop.mount');
+  if (!allowed.ok) return NextResponse.json({ error: allowed.reason }, { status: allowed.status });
 
   const file = await getFileById(params.id);
-  const principal = await buildPrincipal(gate.email);
   // A file you may not see and a file that does not exist answer the same, so
   // an id cannot be used to learn that something is there.
   if (!file || file.deletedAt || !(await canAccessFile(file, principal))) {

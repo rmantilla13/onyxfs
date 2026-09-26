@@ -11,7 +11,8 @@
     "start": "next start",
     "lint": "next lint",
     "test": "node --import ./test/alias-hook.mjs --test \"test/*.test.js\"",
-    "doctor": "node scripts/doctor.mjs"
+    "doctor": "node scripts/doctor.mjs",
+    "schema:sql": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/gen-init-sql.mjs"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.7.0",

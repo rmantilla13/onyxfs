@@ -6,6 +6,36 @@ import {
 } from '@/lib/db';
 import { isAdmin } from '@/lib/auth-allowlist';
 import { getStorageConfig } from '@/lib/storage';
+import { SHARE_KINDS } from '@/lib/share-kinds';
+import { audit } from '@/lib/audit';
+
+/**
+ * The per-drive settings, from a request: quota (bytes, null = no limit),
+ * whether AI tools may be used on it, and which link kinds its files may
+ * have (null = all, [] = none). Only the keys present are returned; { error } for a bad
+ * value.
+ */
+function driveSettings(body) {
+  const out = {};
+  if ('quotaBytes' in body) {
+    const q = body.quotaBytes;
+    if (!(q === null || (Number.isInteger(q) && q >= 0))) return { error: 'quotaBytes must be a whole number of bytes, or null for no limit.' };
+    out.quotaBytes = q;
+  }
+  if ('aiAllowed' in body) {
+    if (typeof body.aiAllowed !== 'boolean') return { error: 'aiAllowed must be true or false.' };
+    out.aiAllowed = body.aiAllowed;
+  }
+  if ('shareKinds' in body) {
+    const k = body.shareKinds;
+    const known = [...SHARE_KINDS.map((x) => x.id), 'review'];
+    if (!(k === null || (Array.isArray(k) && k.every((x) => known.includes(x))))) {
+      return { error: `shareKinds must be null (every kind) or a list — empty for none — of: ${known.join(', ')}.` };
+    }
+    out.shareKinds = k === null ? null : [...new Set(k)];
+  }
+  return { settings: out };
+}
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -80,7 +110,9 @@ export async function POST(req) {
   if (Boolean(body.accessKeyId) !== Boolean(body.secretAccessKey)) {
     return NextResponse.json({ error: 'Provide BOTH an access key and secret, or neither (to use the Storage config keys).' }, { status: 400 });
   }
-  const filespace = await createFilespace({
+  const extra = driveSettings(body);
+  if (extra.error) return NextResponse.json({ error: extra.error }, { status: 400 });
+  let filespace = await createFilespace({
     name, bucket, prefix,
     region: body.region ? String(body.region).trim() : null,
     roleArn: body.roleArn ? String(body.roleArn).trim() : null,
@@ -89,6 +121,11 @@ export async function POST(req) {
     endpoint: body.endpoint ? String(body.endpoint).trim() : null,
     createdBy: gate.email,
   });
+  if (Object.keys(extra.settings).length) {
+    const updated = await updateFilespace(filespace.id, extra.settings);
+    if (updated) { const { secretAccessKey, ...safe } = updated; filespace = safe; }
+  }
+  await audit(gate.email, 'drive.create', { type: 'drive', id: filespace.id, label: filespace.name }, { bucket, prefix });
   return NextResponse.json({ filespace });
 }
 
@@ -113,6 +150,9 @@ export async function PATCH(req) {
   if (body.accessKeyId != null) fields.accessKeyId = String(body.accessKeyId).trim() || null;
   if (body.secretAccessKey != null) fields.secretAccessKey = String(body.secretAccessKey); // blank = keep existing (handled in db)
   if (body.endpoint != null) fields.endpoint = String(body.endpoint).trim() || null;
+  const extra = driveSettings(body);
+  if (extra.error) return NextResponse.json({ error: extra.error }, { status: 400 });
+  Object.assign(fields, extra.settings);
 
   const existing = await getFilespaceById(id);
   if (!existing) return NextResponse.json({ error: 'Filespace not found' }, { status: 404 });
@@ -136,8 +176,12 @@ export async function PATCH(req) {
 
   const filespace = await updateFilespace(id, fields);
   if (!filespace) return NextResponse.json({ error: 'Filespace not found' }, { status: 404 });
-  // Never echo the secret back.
+  // Never echo the secret back — and never record it.
   const { secretAccessKey, ...safe } = filespace;
+  const changed = Object.keys(fields).filter((k) => k !== 'secretAccessKey');
+  await audit(gate.email, 'drive.update', { type: 'drive', id, label: safe.name }, {
+    changed: [...changed, ...(fields.secretAccessKey ? ['secretAccessKey'] : [])],
+  });
   return NextResponse.json({ filespace: safe });
 }
 
@@ -156,5 +200,6 @@ export async function DELETE(req) {
   if (!fs) return NextResponse.json({ error: 'Filespace not found' }, { status: 404 });
   const { files } = await countFilesUnderPrefix(fs.prefix);
   await deleteFilespace(id);
+  await audit(gate.email, 'drive.delete', { type: 'drive', id, label: fs.name }, { filesKept: files });
   return NextResponse.json({ ok: true, id, filesKept: files });
 }

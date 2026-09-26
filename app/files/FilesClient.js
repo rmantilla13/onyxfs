@@ -31,6 +31,7 @@ import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
 import { useContextMenu } from '@/app/components/ui/ContextMenu';
 import useMarquee, { MarqueeRect } from '@/app/components/ui/useMarquee';
 import useMacApp from '@/app/components/useMacApp';
+import { canFor, canForSome } from './can-for';
 import { fileKey, folderKey, parseKey } from '@/lib/selection';
 import FolderDrop, { DRAG_FILES, DRAG_FOLDER, startFolderDrag } from './FolderDrop';
 import { FolderTiles, FolderRows } from './FolderItems';
@@ -1026,12 +1027,16 @@ export default function FilesClient({
     type: 'folder', path, stats: folderStats(folders, path), canOpen: path !== folder,
   });
 
-  // `sel` is the selection the menu acts on: what was selected, or — for a
-  // right-click outside it — the clicked item alone (menuFor).
+  // Per file, the server's word on what may be done to it (./can-for.js):
+  // a Member is not offered Rename on a colleague's file the route refuses.
+  // `selNow` is the selection the menu acts on: what was selected, or — for
+  // a right-click outside it — the clicked item alone (menuFor).
   const fileMenu = (f, selNow = selected) => {
     const many = selNow.has(f.id) && selNow.size > 1 ? [...selNow] : null;
     if (many) {
       const allPinned = many.every((id) => mac.pinned.has(id));
+      const canMove = canForSome(many, files, 'edit', { canWrite });
+      const canDelete = canForSome(many, files, 'delete', { canWrite });
       return [
         { heading: `${many.length} files selected` },
         { label: `Quick Look ${many.length} items`, hint: 'Space', onSelect: () => quickLook(fileKey(f.id)) },
@@ -1039,12 +1044,13 @@ export default function FilesClient({
         mac.inApp && (allPinned
           ? { label: `Remove ${many.length} offline copies`, onSelect: () => mac.unpinFiles(many, filespaceId) }
           : { label: `Keep ${many.length} files offline on this Mac`, onSelect: () => mac.pinFiles(many, filespaceId) }),
-        canWrite && { label: `Move ${many.length} files…`, onSelect: () => moveFilesUI(many) },
+        canMove && { label: `Move ${many.length} files…`, onSelect: () => moveFilesUI(many) },
         { label: 'Clear selection', onSelect: () => sel.clear() },
-        canWrite && '-',
-        canWrite && { label: `Delete ${many.length} files…`, danger: true, onSelect: () => removeFiles(many) },
+        canDelete && '-',
+        canDelete && { label: `Delete ${many.length} files…`, danger: true, onSelect: () => removeFiles(many) },
       ];
     }
+    const can = canFor(f, { canWrite });
     return [
       { heading: f.name },
       { label: 'Open', hint: 'Return', onSelect: () => openFile(f) },
@@ -1057,13 +1063,13 @@ export default function FilesClient({
         : { label: 'Keep offline on this Mac', onSelect: () => mac.pinFiles([f.id], filespaceId) }),
       // The flag is the role's (the page computed it); the route checks both
       // it and write access to this file again.
-      flags.shares && canWrite && { label: 'Share…', onSelect: () => setSharing(f) },
-      canWrite && '-',
-      canWrite && { label: 'Rename…', onSelect: () => renameFileUI(f) },
-      canWrite && { label: 'Move…', onSelect: () => moveFilesUI([f.id]) },
+      flags.shares && can.share && { label: 'Share…', onSelect: () => setSharing(f) },
+      can.edit && '-',
+      can.edit && { label: 'Rename…', onSelect: () => renameFileUI(f) },
+      can.edit && { label: 'Move…', onSelect: () => moveFilesUI([f.id]) },
       { label: selNow.has(f.id) ? 'Deselect' : 'Select', hint: '⇧Space', onSelect: () => toggleSelect(f) },
-      canWrite && '-',
-      canWrite && { label: 'Delete…', danger: true, onSelect: () => removeFiles([f.id]) },
+      can.delete && '-',
+      can.delete && { label: 'Delete…', danger: true, onSelect: () => removeFiles([f.id]) },
     ];
   };
 
@@ -1727,12 +1733,12 @@ export default function FilesClient({
             {selectingAll ? 'Selecting…' : 'Select all'}
           </button>
         )}
-        {selected.size > 0 && canWrite && (
+        {selected.size > 0 && canForSome(selected, files, 'edit', { canWrite }) && (
           <button className="btn" onClick={moveSelectedUI}>
             Move {selected.size}…
           </button>
         )}
-        {selected.size > 0 && (
+        {selected.size > 0 && canForSome(selected, files, 'delete', { canWrite }) && (
           <button className="btn btn-danger" onClick={trashSelected}>
             Remove {selected.size}
           </button>
@@ -1943,7 +1949,7 @@ export default function FilesClient({
           {/* More is the menu a long-press would have opened: the one a
               right-click on the selection opens. */}
           <button type="button" className="btn" aria-haspopup="menu" onClick={(e) => openSelectionMenu(e.currentTarget)}>More</button>
-          {selected.size > 0 && (
+          {selected.size > 0 && canForSome(selected, files, 'delete', { canWrite }) && (
             // Folders go through their own menu: with some selected, the
             // count says how many files this removes.
             <button type="button" className="btn btn-danger" onClick={trashSelected}>

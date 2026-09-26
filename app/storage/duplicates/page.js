@@ -1,8 +1,8 @@
 import { redirect } from 'next/navigation';
-import { auth } from '@/auth';
+import { getSessionUser } from '@/lib/session';
 import { isAdmin } from '@/lib/auth-allowlist';
 import { loadBrand } from '@/lib/brand-config';
-import { listFilespacesForSpace, listDuplicateFiles, duplicateSummary, getFeatureFlags, getAvatarUrl } from '@/lib/db';
+import { listFilespacesForSpace, listDuplicateFiles, duplicateSummary, getFeatureFlags } from '@/lib/db';
 import { presignFileUrls, getStorageConfig, storageMode } from '@/lib/storage';
 import { groupDuplicates, TRASH_RETENTION_DAYS } from '@/lib/storage-report';
 import { buildLabel, buildDetail } from '@/lib/version';
@@ -19,12 +19,10 @@ export const metadata = { title: 'Duplicates' };
  * else, with the same checks.
  */
 export default async function DuplicatesPage() {
-  const session = await auth();
-  const email = session?.user?.email;
-  if (!email) redirect('/signin?callbackUrl=/storage/duplicates');
+  const user = await getSessionUser();
+  if (!user) redirect('/signin?callbackUrl=/storage/duplicates');
+  const { email, avatarUrl } = user;
   if (!isAdmin(email)) redirect('/files');
-  // The account menu's picture, or null for initials; never throws.
-  const avatarUrl = await getAvatarUrl(email);
 
   const [brand, drives, flags, rows, summary, cfg] = await Promise.all([
     loadBrand(),

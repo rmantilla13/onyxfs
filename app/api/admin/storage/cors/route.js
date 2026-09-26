@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/admin-guard';
+import { requireSuperAdmin } from '@/lib/admin-guard';
 import { getStorageConfig, storageMode, s3PutBucketCors } from '@/lib/storage';
 
 export const runtime = 'nodejs';
@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
  * localhost + Vercel previews so dev/preview uploads work too.
  */
 export async function POST(req) {
-  const gate = await requireAdmin();
+  const gate = await requireSuperAdmin();
   if (gate.error) return gate.error;
 
   const cfg = await getStorageConfig({ fresh: true });

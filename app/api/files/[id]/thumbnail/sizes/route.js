@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
-import { getFileById, buildPrincipal, canModifyFile, recordThumbSizes, previewKeysInUse } from '@/lib/db';
+import { getFileById, canModifyFile, recordThumbSizes, previewKeysInUse } from '@/lib/db';
+import { requirePrincipal, can, refusal } from '@/lib/authz';
 import { getStorageConfig, storageMode, s3PresignSiblingPut, presignFileUrls } from '@/lib/storage';
 import { isThumbKey, thumbSiblingKey, thumbSizesFrom, THUMB_SIZES, PREVIEW_CACHE_CONTROL } from '@/lib/media';
 
@@ -32,11 +32,13 @@ export const runtime = 'nodejs';
  * they checked may still share one.
  */
 async function authorize(id) {
-  const session = await auth();
-  if (!session?.user?.email) return { error: NextResponse.json({ error: 'Not authenticated' }, { status: 401 }) };
+  const g = await requirePrincipal();
+  if (g.error) return { error: g.error };
+  const { principal } = g;
+  const allowed = can(principal, 'files.edit');
+  if (!allowed.ok) return { error: refusal(allowed) };
   const existing = await getFileById(id);
   if (!existing || existing.deletedAt) return { error: NextResponse.json({ error: 'Not found' }, { status: 404 }) };
-  const principal = await buildPrincipal(session.user.email);
   if (!(await canModifyFile(existing, principal))) return { error: NextResponse.json({ error: 'No access' }, { status: 403 }) };
   return { existing };
 }

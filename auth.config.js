@@ -57,6 +57,12 @@ export const authConfig = {
         token.id = user.id;
         token.email = user.email;
         token.name = user.name;
+        // When this session began. lib/session.js compares it with the
+        // person's cutoff (people.sessions_valid_after): "sign out
+        // everywhere" and a suspension move the cutoff to now, and every
+        // session that began before it stops being honoured. A clock read
+        // and nothing else, so this stays Edge-safe.
+        token.authAt = Date.now();
       }
       return token;
     },
@@ -65,6 +71,11 @@ export const authConfig = {
         session.user.id = token.id;
         session.user.email = token.email;
         session.user.name = token.name;
+        // Tokens issued before authAt existed carry none and read as 0.
+        session.user.authAt = token.authAt ?? null;
+        // Set only on a web session the Mac app made from its device token
+        // (/api/desktop/web-session): revoking that device ends it too.
+        session.user.deviceTokenId = token.deviceTokenId ?? null;
       }
       return session;
     },

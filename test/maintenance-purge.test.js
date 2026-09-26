@@ -34,18 +34,28 @@ test('nothing in a bucket to delete is nothing', () => {
   assert.equal(purgeTarget(null), null);
 });
 
-test('the cron route deletes what purgeTarget names, not row.storageKey', async () => {
-  const src = await readFile(new URL('../app/api/cron/maintenance/route.js', import.meta.url), 'utf8');
+test('the purge deletes what purgeTarget names, not row.storageKey', async () => {
+  // The daily sweep and Admin → Trash → Purge now share purgeTrashedFile in
+  // lib/maintenance.js; the cron route and the admin route both call it.
+  const src = await readFile(new URL('../lib/maintenance.js', import.meta.url), 'utf8');
   assert.ok(!/s3DeleteObject\(cfg,\s*row\.storageKey\)/.test(src), 'purge must not delete the old key directly');
   assert.ok(/purgeTarget\(row/.test(src), 'purge goes through purgeTarget');
+  const cron = await readFile(new URL('../app/api/cron/maintenance/route.js', import.meta.url), 'utf8');
+  assert.match(cron, /runMaintenance\(/);
+  const admin = await readFile(new URL('../app/api/admin/trash/purge/route.js', import.meta.url), 'utf8');
+  assert.match(admin, /purgeTrashedFile\(/);
 });
 
 test('POST /api/files requires a storage key for an S3 row', async () => {
   // Without one the listing signs a key read out of `url`, which the drive
   // check never sees: a row could name any object in the bucket.
+  const { parseFileRecord } = await import('../lib/file-record.js');
+  assert.match(parseFileRecord({ url: 'https://b/x', storage: 's3' }).error, /storage key/);
+  assert.ok(parseFileRecord({ url: 'https://b/x', storage: 's3', storageKey: 'files/x' }).record);
+  // …and the route reads the body through it, before the row is written.
   const src = await readFile(new URL('../app/api/files/route.js', import.meta.url), 'utf8');
   const post = src.slice(src.indexOf('export async function POST'));
-  const guard = post.indexOf("body.storage === 's3' && !body.storageKey");
-  assert.ok(guard > 0, 'POST must refuse an S3 row without a storage key');
+  const guard = post.indexOf('parseFileRecord(body)');
+  assert.ok(guard > 0, 'POST must read its body through parseFileRecord');
   assert.ok(guard < post.indexOf('createFile('), 'refused before the row is written');
 });

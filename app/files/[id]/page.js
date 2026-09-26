@@ -1,15 +1,14 @@
 import { cache } from 'react';
 import { redirect, notFound } from 'next/navigation';
-import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
-import { isAdmin } from '@/lib/auth-allowlist';
-import { getFileById, buildPrincipal, canAccessFile, canModifyFile, listFilespacesForSpace, getAvatarUrl } from '@/lib/db';
+import { getFileById, canAccessFile, canModifyFile, listFilespacesForSpace } from '@/lib/db';
+import { getSessionUser } from '@/lib/session';
+import { getPrincipal, can } from '@/lib/authz';
 import { presignFileUrls } from '@/lib/storage';
 import TopNav from '@/app/components/TopNav';
 import FileDetail from '@/app/components/file/FileDetail';
 import { buildLabel, buildDetail } from '@/lib/version';
 import { parseTimecode, secondsOfFrame, toRate, ASSUMED_RATE } from '@/lib/video-time';
-import { flagsForUser } from '@/lib/user-flags';
 import { isFeatureEnabled } from '@/lib/features';
 import { effectiveKind } from '@/lib/media';
 import { imagePreviewFor } from '@/lib/poster';
@@ -21,8 +20,17 @@ export const dynamic = 'force-dynamic';
 const fileById = cache((id) => getFileById(id));
 
 export async function generateMetadata({ params }) {
-  const file = await fileById(params.id).catch(() => null);
-  return { title: file?.name || 'File' };
+  // The name only for someone who may see the file: the title used to name
+  // any file by its id, to anyone signed in.
+  try {
+    const user = await getSessionUser();
+    const file = user ? await fileById(params.id) : null;
+    if (!file || file.deletedAt) return { title: 'File' };
+    const principal = await getPrincipal(user.email, { person: user.person });
+    return { title: (await canAccessFile(file, principal)) ? file.name : 'File' };
+  } catch {
+    return { title: 'File' };
+  }
 }
 
 /**
@@ -68,29 +76,32 @@ function previewPossible(file) {
 }
 
 export default async function FilePage({ params, searchParams }) {
-  const session = await auth();
-  const email = session?.user?.email;
-  if (!email) redirect('/signin');
-  // The account menu's picture (null for initials; never throws), asked for
-  // alongside the row rather than before it.
-  const [avatarUrl, file] = await Promise.all([getAvatarUrl(email), fileById(params.id)]);
+  const user = await getSessionUser();
+  if (!user) redirect('/signin');
+  const { email, avatarUrl } = user;
+
+  const file = await fileById(params.id);
   // A trashed file waits for the purge, and is not a page until it is restored.
   if (!file || file.deletedAt) notFound();
 
-  const principal = await buildPrincipal(email);
+  const principal = await getPrincipal(email, { person: user.person });
   // notFound rather than 403: a refusal that distinguishes "no access" from
   // "no such file" confirms the id exists to someone guessing.
   if (!(await canAccessFile(file, principal))) notFound();
 
-  const [brand, signedList, canWrite, filespaces, access] = await Promise.all([
+  const [brand, signedList, canWrite, canChange, filespaces] = await Promise.all([
     loadBrand(),
     // Six hours, so a paused video still seeks when it resumes.
     presignFileUrls([file], { expiresIn: 21600 }),
     canModifyFile(file, principal),
+    // The file alone, whatever the role: whether a link to it is theirs to make.
+    canModifyFile(file, principal, { action: null }),
     // For the nav's filespace switcher.
-    listFilespacesForSpace(email),
-    flagsForUser(email),
+    listFilespacesForSpace(email, principal),
   ]);
+  // Some kind of link is open to them: private, or public and password.
+  const canShare = canChange && ['shares.private', 'shares.public']
+    .some((cap) => can(principal, cap, { canModify: true, expiresInDays: principal.limits.shareMaxExpiryDays }).ok);
 
   return (
     <>
@@ -100,14 +111,15 @@ export default async function FilePage({ params, searchParams }) {
         logo={brand.visual.logo}
         email={email}
         avatarUrl={avatarUrl}
-        isAdmin={isAdmin(email)}
+        isAdmin={principal.isAdmin}
         filespaces={filespaces}
       />
       <FileDetail
         file={signedList[0]}
         canWrite={canWrite}
-        // Sharing takes the role's flag AND write access; the routes check both again.
-        canShare={canWrite && !!access.flags.shares}
+        // Sharing takes a link capability AND write access to the file; the
+        // routes check both again.
+        canShare={canShare}
         // Back to the folder the file is in, not the top of the library.
         backHref={file.folder ? `/files?folder=${encodeURIComponent(file.folder)}` : '/files'}
         // ?t= opens the player at a moment, so a timecode can be shared as a
@@ -116,7 +128,7 @@ export default async function FilePage({ params, searchParams }) {
         startAt={startAtFrom(searchParams?.t, file.metadata)}
         // Review: the flag as this person has it, read here on the server;
         // the review routes read it again for themselves.
-        review={isFeatureEnabled(access.flags, 'review') && isReviewableKind(effectiveKind(file))}
+        review={isFeatureEnabled(principal.flags, 'review') && isReviewableKind(effectiveKind(file))}
         me={email.toLowerCase()}
         // ?c= is a comment to open on — a notification's link.
         focusComment={typeof searchParams?.c === 'string' ? searchParams.c.slice(0, 64) : null}

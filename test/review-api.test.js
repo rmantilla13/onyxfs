@@ -79,13 +79,14 @@ before(async () => {
   for (const [email, name] of [[OWNER, 'Olive Owner'], [MEMBER, 'Mo Member'], [OUTSIDER, 'Otto Outsider'], [BANNED, 'Bea Banned']]) {
     await db.adminAddApprovedInvite({ email, name, reviewedBy: 'test' });
   }
-  // Bea signed in (so has a "user" row), then was banned: the row outlives
-  // the invite. The admin has a row and no invite, and needs none.
+  // Bea signed in (so has a "user" row), then was suspended: her rows
+  // outlive her access (people.status, lib/session.js). The admin has a row
+  // and no invite, and needs none.
   for (const email of [BANNED, BOSS]) await db.getOrCreateAuthUser(email);
   await db.sql`UPDATE "user" SET name = 'Bea Banned' WHERE email = ${BANNED}`;
   await db.sql`UPDATE "user" SET name = ${`Boss ${tag}`} WHERE email = ${BOSS}`;
-  const [invite] = await db.sql`SELECT id FROM invite_requests WHERE email = ${BANNED}`;
-  await db.updateInviteRequest(invite.id, { status: 'banned', reviewedBy: 'test' });
+  await db.upsertPerson(BANNED);
+  await db.setPersonStatus(BANNED, { status: 'suspended', reason: 'test', by: 'test' });
   cut = await db.createFile({
     name: 'cut.mp4', url: `http://s3.test/b/${PREFIX}/cut.mp4`, mime: 'video/mp4', kind: 'video', size: 1000,
     storage: 's3', storageKey: `${PREFIX}/cut.mp4`, createdBy: OWNER,

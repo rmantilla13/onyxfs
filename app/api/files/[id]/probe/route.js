@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
-import { getFileById, buildPrincipal, canModifyFile } from '@/lib/db';
+import { getFileById, canModifyFile } from '@/lib/db';
+import { requirePrincipal, can, refusal } from '@/lib/authz';
 import { effectiveKind } from '@/lib/media';
 import { probeFrameModel } from '@/lib/frame-probe';
 
@@ -22,13 +22,14 @@ export const runtime = 'nodejs';
  * probed again on every visit.
  */
 export async function POST(_req, { params }) {
-  const session = await auth();
-  const email = session?.user?.email;
-  if (!email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  const g = await requirePrincipal();
+  if (g.error) return g.error;
+  const { principal } = g;
+  const allowed = can(principal, 'files.edit');
+  if (!allowed.ok) return refusal(allowed);
 
   const file = await getFileById(params.id);
   if (!file || file.deletedAt) return NextResponse.json({ error: 'File not found' }, { status: 404 });
-  const principal = await buildPrincipal(email);
   if (!(await canModifyFile(file, principal))) return NextResponse.json({ error: 'No access' }, { status: 403 });
   if (effectiveKind(file) !== 'video') return NextResponse.json({ error: 'Only a video has a frame rate.' }, { status: 400 });
 

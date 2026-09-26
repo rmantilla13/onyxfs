@@ -88,7 +88,8 @@ test('the thumbnail PUT refuses a key another file uses, before it writes, and f
 
 test('POST /api/files drops preview keys another file uses, and all of them when it cannot tell', async () => {
   const route = await src('app/api/files/route.js');
-  assert.match(route, /const previews = await ownPreviews\(uploadFields\(body\)\)/);
+  // The whitelisted record (lib/file-record.js), not the raw body.
+  assert.match(route, /const previews = await ownPreviews\(uploadFields\(record\)\)/);
   assert.match(route, /\.\.\.previews,/);
   assert.match(route, /try \{ taken = await previewKeysInUse\(keys\); \} catch \{ taken = new Set\(keys\); \}/);
 });
@@ -116,8 +117,9 @@ test('a delete takes its previews with it: with the trash off, and when the tras
   const del = await src('app/api/files/[id]/route.js');
   const off = del.slice(del.indexOf('if (flags.trash === false)'));
   assert.ok(off.indexOf('dropUnusedPreviews(') > off.indexOf('await deleteFile(id)'), 'after the row is gone');
-  const cron = await src('app/api/cron/maintenance/route.js');
-  assert.ok(cron.indexOf('dropUnusedPreviews(') > cron.indexOf('await deleteFile(row.id)'));
+  // The purge is lib/maintenance.js's, shared by the cron and Admin → Trash.
+  const purge = await src('lib/maintenance.js');
+  assert.ok(purge.indexOf('dropUnusedPreviews(') > purge.indexOf('await deleteFile(row.id)'), 'after the row is gone');
   const folders = await src('app/api/files/folders/route.js');
   assert.match(folders, /if \(flags\.trash === false\) \{\n\s+const gone = /);
 });
@@ -276,6 +278,9 @@ describe('POST /api/files', { skip }, () => {
       storageKey: `library/${MEMBER}/up-${randomUUID()}.mp4`, thumbnailKey: TK, posterKey: PK, thumbSizes: ['sm', 'xs'],
       filmstripKey: SK, filmstrip: { frames: 40, columns: 8, tileWidth: 160, tileHeight: 90 }, media: { width: 1920, height: 1080 },
     };
+    // POST /api/files records only a key presign issued to this person
+    // (lib/db.js claimUploadKey), as a real upload's would be.
+    await db.issueUploadKey(body.storageKey, MEMBER);
     const r = await call(filesRoute.POST, {}, 'POST', body);
     assert.equal(r.status, 200, JSON.stringify(r.body));
     made.push(r.body.file.id);
@@ -288,6 +293,7 @@ describe('POST /api/files', { skip }, () => {
     assert.equal(row.metadata.width, 1920, 'still recorded, with its facts');
 
     const fresh = { ...body, storageKey: `library/${MEMBER}/up-${randomUUID()}.mp4`, thumbnailKey: thumb(), posterKey: poster(), filmstripKey: strip() };
+    await db.issueUploadKey(fresh.storageKey, MEMBER);
     const ok = await call(filesRoute.POST, {}, 'POST', fresh);
     assert.equal(ok.status, 200);
     made.push(ok.body.file.id);

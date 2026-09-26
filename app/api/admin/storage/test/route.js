@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/admin-guard';
+import { requireSuperAdmin } from '@/lib/admin-guard';
 import { getStorageConfig, s3Diagnostics } from '@/lib/storage';
 
 export const runtime = 'nodejs';
@@ -17,7 +17,7 @@ export const maxDuration = 60;
  * re-pasted to test an unrelated edit.
  */
 export async function POST(req) {
-  const gate = await requireAdmin();
+  const gate = await requireSuperAdmin();
   if (gate.error) return gate.error;
 
   let body = {};

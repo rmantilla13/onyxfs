@@ -51,6 +51,9 @@ export async function POST(req) {
 
   const { code } = await createDesktopAuthCode({
     email: gate.email, codeChallenge: challenge, kind: 'web', label: 'web-session', ttlMs: HANDOFF_TTL_MS,
+    // The session this becomes carries the token's id, and lib/session.js
+    // ends it when the token is revoked.
+    deviceTokenId: gate.tokenId,
   });
   const query = new URLSearchParams({ code, next: safeNext(body.next) });
   return NextResponse.json({ url: `/api/desktop/web-session?${query}`, expiresAt: Date.now() + HANDOFF_TTL_MS });
@@ -84,9 +87,13 @@ export async function GET(req) {
 
   const name = sessionCookieName(secure);
   // The same claims auth.config.js's jwt callback puts in a session made by
-  // signing in, so nothing downstream can tell the two apart.
+  // signing in, so nothing downstream can tell the two apart — plus the
+  // device token it came from, so revoking that device signs this out too.
   const token = await encode({
-    token: { sub: user.id, id: user.id, email: user.email, name: user.name || null },
+    token: {
+      sub: user.id, id: user.id, email: user.email, name: user.name || null,
+      authAt: Date.now(), deviceTokenId: row.deviceTokenId || null,
+    },
     secret: process.env.AUTH_SECRET,
     salt: name,
     maxAge: WEB_SESSION_MAX_AGE,

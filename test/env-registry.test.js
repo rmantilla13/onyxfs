@@ -119,6 +119,9 @@ describe('the registry is the only list', () => {
       'VERCEL_GIT_COMMIT_MESSAGE',
       // Test-only.
       'TEST_DATABASE_URL', 'TEST_S3_ENDPOINT',
+      // Tooling: `npm run schema:sql` (scripts/gen-init-sql.mjs). Set by a
+      // developer for one command, never on a deployment.
+      'SCHEMA_SQL_SERVER_URL', 'ONYX_SCHEMA_CAPTURE',
     ]);
     const missing = new Map();
     for (const [file, text] of readAllCode()) {
