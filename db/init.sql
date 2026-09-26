@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 88
+-- Statements: 103
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -107,6 +107,58 @@ CREATE TABLE IF NOT EXISTS user_avatars (
   updated_at BIGINT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS people (
+  id                   TEXT PRIMARY KEY,
+  email                TEXT NOT NULL UNIQUE,
+  display_name         TEXT,
+  role_id              TEXT,
+  status               TEXT NOT NULL DEFAULT 'active',
+  status_reason        TEXT,
+  status_changed_at    BIGINT,
+  status_changed_by    TEXT,
+  pause_links          BOOLEAN NOT NULL DEFAULT true,
+  sessions_valid_after BIGINT,
+  quota_bytes          BIGINT,
+  max_upload_bytes     BIGINT,
+  ai_monthly_cents     INT,
+  prefs                JSONB NOT NULL DEFAULT '{}',
+  first_seen_at        BIGINT,
+  last_seen_at         BIGINT,
+  created_at           BIGINT NOT NULL,
+  updated_at           BIGINT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS people_role_idx ON people (role_id);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+  id            TEXT PRIMARY KEY,
+  at            BIGINT NOT NULL,
+  actor         TEXT,
+  action        TEXT NOT NULL,
+  subject_type  TEXT,
+  subject_id    TEXT,
+  subject_label TEXT,
+  detail        JSONB
+);
+
+CREATE INDEX IF NOT EXISTS audit_events_at_idx ON audit_events (at DESC);
+
+CREATE INDEX IF NOT EXISTS audit_events_subject_idx ON audit_events (subject_type, subject_id, at DESC);
+
+CREATE INDEX IF NOT EXISTS audit_events_actor_idx ON audit_events (actor, at DESC);
+
+CREATE TABLE IF NOT EXISTS maintenance_runs (
+  id           TEXT PRIMARY KEY,
+  trigger      TEXT NOT NULL,
+  triggered_by TEXT,
+  started_at   BIGINT NOT NULL,
+  finished_at  BIGINT,
+  ok           BOOLEAN,
+  result       JSONB
+);
+
+CREATE INDEX IF NOT EXISTS maintenance_runs_started_idx ON maintenance_runs (started_at DESC);
+
 CREATE TABLE IF NOT EXISTS files (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -143,6 +195,8 @@ ALTER TABLE files ADD COLUMN IF NOT EXISTS filmstrip_key TEXT;
 ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_at BIGINT;
 
 ALTER TABLE files ADD COLUMN IF NOT EXISTS trash_key TEXT;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_by TEXT;
 
 ALTER TABLE files ADD COLUMN IF NOT EXISTS thumb_status TEXT;
 
@@ -199,6 +253,8 @@ CREATE INDEX IF NOT EXISTS files_folder_mime_idx ON files (folder, (coalesce(mim
 CREATE INDEX IF NOT EXISTS files_live_key_idx ON files (storage_key text_pattern_ops) INCLUDE (size) WHERE deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS files_name_trgm_idx ON files USING GIN (name gin_trgm_ops) WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS files_created_by_size_idx ON files (created_by, size) WHERE deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS uploads (
   id           TEXT PRIMARY KEY,
@@ -272,6 +328,8 @@ ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS pw_failures INT NOT NULL DEFAUL
 
 ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS pw_locked_until BIGINT;
 
+CREATE INDEX IF NOT EXISTS file_shares_created_by_idx ON file_shares (created_by);
+
 CREATE TABLE IF NOT EXISTS folder_access (
   folder TEXT NOT NULL,
   subject_type TEXT NOT NULL,   -- 'user' | 'role'
@@ -329,6 +387,12 @@ ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS secret_key TEXT;
 
 ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS endpoint TEXT;
 
+ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS quota_bytes BIGINT;
+
+ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS ai_allowed BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS share_kinds TEXT;
+
 CREATE TABLE IF NOT EXISTS desktop_auth_codes (
   code TEXT PRIMARY KEY,
   email TEXT NOT NULL,
@@ -341,6 +405,8 @@ CREATE TABLE IF NOT EXISTS desktop_auth_codes (
 );
 
 CREATE INDEX IF NOT EXISTS desktop_auth_codes_expires_idx ON desktop_auth_codes (expires_at);
+
+ALTER TABLE desktop_auth_codes ADD COLUMN IF NOT EXISTS device_token_id TEXT;
 
 CREATE TABLE IF NOT EXISTS desktop_tokens (
   id TEXT PRIMARY KEY,

@@ -39,7 +39,7 @@ describe('db/init.sql', () => {
   });
 
   test('the tables this release reads are in it', () => {
-    for (const t of ['files', 'file_shares', 'filespaces']) {
+    for (const t of ['people', 'audit_events', 'maintenance_runs', 'files', 'file_shares', 'filespaces']) {
       assert.match(initSql, new RegExp(`CREATE TABLE IF NOT EXISTS ${t} `), t);
     }
   });
