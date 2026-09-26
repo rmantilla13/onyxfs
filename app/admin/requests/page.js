@@ -5,7 +5,7 @@ import { requireAdminPage } from '../_lib/guard';
 import RequestsClient from './RequestsClient';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Access requests' };
+export const metadata = { title: 'Access requests · Admin' };
 
 /**
  * Admin → Access requests: the people who asked to sign in, and the

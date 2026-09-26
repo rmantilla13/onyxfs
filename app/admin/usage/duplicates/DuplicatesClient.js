@@ -10,6 +10,7 @@ import { fmtSize } from '@/lib/media';
 import { crumbsFor, mapLimit } from '@/lib/folder-ops';
 import { kindLabel } from '@/lib/file-info';
 import { copiesToRemove, bytesOf } from '@/lib/storage-report';
+import { driveForKey } from '@/lib/admin-drives';
 import AdminPage from '../../_ui/AdminPage';
 import AdminState from '../../_ui/AdminState';
 
@@ -43,9 +44,7 @@ export default function DuplicatesClient({ groups, summary, drives, trash, reten
   const doomed = useMemo(() => copiesToRemove(included, keep), [included, keep]);
 
   // The drive a copy is in, by its place in the bucket: the innermost one.
-  const driveOf = (f) => drives
-    .filter((d) => d.prefix && String(f.storageKey || '').startsWith(`${d.prefix}/`))
-    .sort((a, b) => b.prefix.length - a.prefix.length)[0] || null;
+  const driveOf = (f) => driveForKey(drives, f.storageKey);
 
   const remove = async (list) => {
     if (!list.length || busy) return;
@@ -127,7 +126,7 @@ export default function DuplicatesClient({ groups, summary, drives, trash, reten
               Duplicate detection covers files kept in an S3-compatible bucket.
             </p>
           </div>
-          <Link href="/admin/storage" className="btn">Open storage</Link>
+          <Link href="/admin/storage" className="btn">Open backend</Link>
         </div>
       )}
 

@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import Dialog from '@/app/components/ui/Dialog';
 import { drivePrefixFor } from '@/lib/folder-ops';
 import { newDriveRequest } from '@/lib/admin-drives';
+import DriveLocationFields from './DriveLocationFields';
 
 const BLANK = {
   name: '', prefix: '', prefixTouched: false,
@@ -22,10 +23,12 @@ const BLANK = {
  *
  * "Advanced" is for a drive that lives somewhere other than the Storage
  * bucket: another bucket, region or endpoint, a role to assume, or keys of
- * its own. Left alone, the drive uses the Storage settings.
+ * its own. Left alone, the drive uses the Storage settings. Its fields are
+ * the drive drawer's (DriveLocationFields), in the same order and words.
  */
-export default function NewDriveDialog({ open, onClose, onCreated }) {
+export default function NewDriveDialog({ open, onClose, onCreated, storage = {} }) {
   const [form, setForm] = useState(BLANK);
+  const [ownKeys, setOwnKeys] = useState(false);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const id = useId();
@@ -33,11 +36,17 @@ export default function NewDriveDialog({ open, onClose, onCreated }) {
 
   useEffect(() => {
     if (!open) return;
-    setForm(BLANK); setError(null); setBusy(false);
+    setForm(BLANK); setOwnKeys(false); setError(null); setBusy(false);
     nameRef.current?.focus();
   }, [open]);
 
   const set = (k) => (e) => { setError(null); setForm((f) => ({ ...f, [k]: e.target.value })); };
+  const toggleKeys = (on) => {
+    setError(null);
+    setOwnKeys(on);
+    // Off, it uses the Storage keys: nothing typed for its own is sent.
+    if (!on) setForm((f) => ({ ...f, accessKeyId: '', secretAccessKey: '', endpoint: '' }));
+  };
   const shownPrefix = form.prefixTouched ? form.prefix : drivePrefixFor(form.name);
 
   const submit = async (e) => {
@@ -75,59 +84,41 @@ export default function NewDriveDialog({ open, onClose, onCreated }) {
         </>
       )}
     >
-      <form id={id} className="stack" onSubmit={submit} noValidate>
-        <p className="small muted" style={{ margin: 0 }}>
+      <form id={id} className="admin-form" onSubmit={submit} noValidate>
+        <p className="small muted admin-note">
           A drive is a space of its own, like a disk: its own folders, its own members, and its own volume when mounted with the desktop app.
         </p>
-        <label className="stack" style={{ gap: 'var(--s1)' }}>
-          <span className="small">Name</span>
+        <label className="admin-field">
+          <span className="admin-field-label">Name</span>
           <input ref={nameRef} className="input" value={form.name} maxLength={80} placeholder="Brand assets" onChange={set('name')} />
         </label>
-        <label className="stack" style={{ gap: 'var(--s1)' }}>
-          <span className="small">Folder in the bucket <span className="muted">(set once)</span></span>
+        <label className="admin-field">
+          <span className="admin-field-label">Folder in the bucket</span>
           <input
             className="input mono"
             value={shownPrefix}
             placeholder="brand-assets"
+            autoComplete="off"
             onChange={(e) => { setError(null); setForm((f) => ({ ...f, prefix: e.target.value, prefixTouched: true })); }}
           />
+          <span className="admin-field-hint">Set once: it is fixed while the drive holds files.</span>
         </label>
-        <details className="new-drive-advanced">
-          <summary className="small">Advanced: another bucket or its own keys</summary>
-          <div className="stack" style={{ marginTop: 'var(--s3)' }}>
-            <p className="small muted" style={{ margin: 0 }}>Leave these blank to use the Storage settings.</p>
-            <Field label="Bucket" hint="Blank uses the Storage bucket.">
-              <input className="input mono" value={form.bucket} onChange={set('bucket')} autoComplete="off" />
-            </Field>
-            <Field label="Region">
-              <input className="input mono" value={form.region} onChange={set('region')} placeholder="us-east-1" autoComplete="off" />
-            </Field>
-            <Field label="Role to assume (ARN)" hint="AWS only. Desktop credentials for this drive are minted by assuming this role.">
-              <input className="input mono" value={form.roleArn} onChange={set('roleArn')} autoComplete="off" />
-            </Field>
-            <Field label="Access key ID" hint="Only for a bucket with keys of its own. Give the secret too.">
-              <input className="input mono" value={form.accessKeyId} onChange={set('accessKeyId')} autoComplete="off" />
-            </Field>
-            <Field label="Secret access key">
-              <input className="input mono" type="password" value={form.secretAccessKey} onChange={set('secretAccessKey')} autoComplete="new-password" />
-            </Field>
-            <Field label="Endpoint" hint="With its own keys, for a service other than AWS. Blank for AWS.">
-              <input className="input mono" value={form.endpoint} onChange={set('endpoint')} placeholder="https://…" autoComplete="off" />
-            </Field>
+        <details className="admin-disclosure">
+          <summary>Advanced: another bucket or its own keys</summary>
+          <div className="admin-form">
+            <p className="small muted admin-note">Leave these blank to use the Storage settings.</p>
+            <DriveLocationFields
+              form={form}
+              onField={set}
+              ownKeys={ownKeys}
+              onOwnKeys={toggleKeys}
+              storage={storage}
+              mode="new"
+            />
           </div>
         </details>
-        {error && <p className="small" role="alert" style={{ margin: 0, color: 'var(--danger)' }}>{error}</p>}
+        {error && <p className="small admin-inline-error" role="alert">{error}</p>}
       </form>
     </Dialog>
-  );
-}
-
-function Field({ label, hint, children }) {
-  return (
-    <label className="stack" style={{ gap: 'var(--s1)' }}>
-      <span className="small">{label}</span>
-      {children}
-      {hint && <span className="small muted">{hint}</span>}
-    </label>
   );
 }

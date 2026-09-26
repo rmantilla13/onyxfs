@@ -5,16 +5,19 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { fmtSize } from '@/lib/media';
 import { plural } from '@/lib/admin-format';
-import { driveSettingsPatch } from '@/lib/admin-drives';
+import { driveSettingsPatch, driveLocationChange, driveMoveWarning, driveRow } from '@/lib/admin-drives';
 import { summarizeChecks } from '@/lib/storage-presets';
 import FilespaceMembers from '@/app/components/FilespaceMembers';
 import { useDeleteDrive } from '@/app/components/drives/DeleteDriveConfirm';
+import DriveLocationFields from '@/app/components/drives/DriveLocationFields';
 import { useToast } from '@/app/components/ui/Toast';
 import RouteDrawer from '../../_ui/RouteDrawer';
 import { DrawerSection } from '../../_ui/Drawer';
 import CheckList from '../../_ui/CheckList';
 import KindBreakdown from '../../_ui/KindBreakdown';
+import { useDestructiveConfirm } from '../../_ui/DestructiveConfirm';
 import { api } from '../../_ui/api';
+import DriveLocation from '../DriveLocation';
 
 const size = (n) => fmtSize(n) || '0 B';
 
@@ -23,7 +26,7 @@ const SECTIONS = [
   { id: 'settings', label: 'Settings' },
   { id: 'diagnostics', label: 'Diagnostics' },
   { id: 'usage', label: 'Usage' },
-  { id: 'danger', label: 'Delete' },
+  { id: 'danger', label: 'Danger zone' },
 ];
 
 /**
@@ -43,11 +46,13 @@ export default function DriveDrawer({ drive, stored, kinds, storage }) {
     const done = await deleteDrive(drive);
     if (!done) return;
     toast.success(`Deleted the drive “${drive.name}”.`);
-    router.push('/admin/drives', { scroll: false });
+    // Replace, not back: the list has to be read again without the drive,
+    // and a refresh racing a history step could land on the stale one.
+    router.replace('/admin/drives', { scroll: false });
     router.refresh();
   };
 
-  const where = `${drive.bucket || storage.bucket || '?'} / ${drive.prefix}`;
+  const row = driveRow(drive, { defaultBucket: storage.bucket });
   return (
     <RouteDrawer
       back="/admin/drives"
@@ -55,15 +60,15 @@ export default function DriveDrawer({ drive, stored, kinds, storage }) {
       sections={SECTIONS}
       subtitle={(
         <span className="drawer-sub-line">
-          <span className="admin-mono">{where}</span>
-          {drive.accessKeyId && drive.hasSecret && <span className="tag tag-accent">Own keys</span>}
+          <DriveLocation row={row} />
+          {row.ownKeys && <span className="tag tag-accent">Own keys</span>}
           <Link href={`/files?filespace=${encodeURIComponent(drive.id)}`} className="info-link">Open in Files</Link>
         </span>
       )}
     >
       <DrawerSection id="members" title="Members">
         <p className="small muted admin-hint-flat">Admins reach every drive without being listed here.</p>
-        <FilespaceMembers filespaceId={drive.id} onChanged={() => router.refresh()} />
+        <FilespaceMembers filespaceId={drive.id} onChanged={() => router.refresh()} adminNote={false} />
       </DrawerSection>
 
       <DrawerSection id="settings" title="Settings">
@@ -96,10 +101,17 @@ export default function DriveDrawer({ drive, stored, kinds, storage }) {
 /**
  * Name, where the drive lives, and its own keys. Only what changed is sent
  * (driveSettingsPatch), and a blank secret keeps the stored one.
+ *
+ * While the drive holds files its bucket and folder are fixed (the route
+ * refuses them too), and another endpoint or other keys are saved only
+ * after a confirm that says what they would do to those files — a key can
+ * be rotated for the same bucket, but keys for another account strand
+ * every file (driveLocationChange; the route asks for confirmMove too).
  */
 function DriveSettings({ drive, stored, storage }) {
   const router = useRouter();
   const toast = useToast();
+  const { confirm, confirmElement } = useDestructiveConfirm();
   const saved = {
     name: drive.name, bucket: drive.bucket, prefix: drive.prefix, region: drive.region,
     endpoint: drive.endpoint, roleArn: drive.roleArn, accessKeyId: drive.accessKeyId,
@@ -118,9 +130,25 @@ function DriveSettings({ drive, stored, storage }) {
     setError(null);
     setOwnKeys(on);
     // Turning its own keys off goes back to the Storage keys: the stored key,
-    // its secret and the endpoint that went with them are cleared on save.
+    // its secret and the endpoint that went with them are cleared on save
+    // (after a confirm, when the drive holds files).
     if (!on) setForm((f) => ({ ...f, accessKeyId: '', secretAccessKey: '', endpoint: '' }));
     else setForm((f) => ({ ...f, accessKeyId: saved.accessKeyId || '', endpoint: saved.endpoint || '' }));
+  };
+
+  const send = async (confirmMove) => {
+    await api('/api/admin/filespaces', { method: 'PATCH', json: { id: drive.id, ...patch, ...(confirmMove ? { confirmMove: true } : {}) } });
+    toast.success('Saved.');
+    router.refresh();
+  };
+
+  const ask = (changes, files) => {
+    const w = driveMoveWarning(drive, changes, files);
+    return confirm({
+      title: w.title,
+      body: <div className="admin-lines">{w.lines.map((l) => <p key={l} className="small admin-note">{l}</p>)}</div>,
+      confirmLabel: w.confirmLabel,
+    });
   };
 
   const save = async (e) => {
@@ -129,13 +157,25 @@ function DriveSettings({ drive, stored, storage }) {
     if (!String(form.name || '').trim()) { setError('Give the drive a name.'); return; }
     if (ownKeys && !String(form.accessKeyId || '').trim()) { setError('Enter its access key ID, or turn off its own keys to use the Storage keys.'); return; }
     if (ownKeys && !drive.hasSecret && !String(form.secretAccessKey || '').trim()) { setError('Enter the secret access key that goes with the key ID.'); return; }
+    const change = driveLocationChange(saved, { ...saved, ...patch });
+    let confirmMove = false;
+    if (locked && change.confirm.length) {
+      if (!(await ask(change.confirm, stored.files))) return;
+      confirmMove = true;
+    }
     setBusy(true); setError(null);
     try {
-      await api('/api/admin/filespaces', { method: 'PATCH', json: { id: drive.id, ...patch } });
-      toast.success('Saved.');
-      router.refresh();
+      await send(confirmMove);
     } catch (err) {
-      setError(err.message);
+      // Files arrived since the drawer was drawn: the server asks instead.
+      if (err.status === 409 && err.body?.code === 'confirm_move' && !confirmMove) {
+        setBusy(false);
+        if (!(await ask(err.body.changes || change.confirm, Number(err.body.files) || 0))) return;
+        setBusy(true);
+        try { await send(true); } catch (err2) { setError(err2.message); }
+      } else {
+        setError(err.message);
+      }
     } finally {
       setBusy(false);
     }
@@ -152,80 +192,39 @@ function DriveSettings({ drive, stored, storage }) {
         <p className="admin-lock" id="drive-lock">
           <svg aria-hidden viewBox="0 0 16 16" width="14" height="14"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.3" /><path d="M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7" fill="none" stroke="currentColor" strokeWidth="1.3" /></svg>
           <span>
-            Where it lives is fixed while it holds files: {plural(stored.files, 'file')} {stored.files === 1 ? 'is' : 'are'} stored
+            The bucket and folder are fixed while it holds files: {plural(stored.files, 'file')} {stored.files === 1 ? 'is' : 'are'} stored
             under <span className="admin-mono">{drive.bucket}/{drive.prefix}</span>, and pointing the drive elsewhere would strand them.
-            An empty drive can be moved.
+            Another endpoint or other keys are saved only after you confirm.
           </span>
         </p>
       )}
-      <div className="admin-form-grid">
-        <label className="admin-field">
-          <span className="admin-field-label">Bucket</span>
-          <input
-            className="input mono" value={form.bucket || ''} onChange={set('bucket')} disabled={locked}
-            placeholder={storage.bucket || ''} aria-describedby={locked ? 'drive-lock' : undefined} autoComplete="off"
-          />
-          {!locked && storage.bucket && form.bucket === storage.bucket && !ownKeys && (
-            <span className="admin-field-hint">The Storage bucket.</span>
-          )}
-        </label>
-        <label className="admin-field">
-          <span className="admin-field-label">Folder in the bucket</span>
-          <input
-            className="input mono" value={form.prefix || ''} onChange={set('prefix')} disabled={locked}
-            aria-describedby={locked ? 'drive-lock' : undefined} autoComplete="off"
-          />
-        </label>
-        <label className="admin-field">
-          <span className="admin-field-label">Region</span>
-          <input className="input mono" value={form.region || ''} onChange={set('region')} placeholder={storage.region || 'us-east-1'} autoComplete="off" />
-          <span className="admin-field-hint">Blank uses the Storage region.</span>
-        </label>
-        {!ownKeys && (
+      <DriveLocationFields
+        form={form}
+        onField={set}
+        ownKeys={ownKeys}
+        onOwnKeys={toggleKeys}
+        storage={storage}
+        mode="edit"
+        locked={locked}
+        lockId="drive-lock"
+        hasSecret={drive.hasSecret}
+        folder={(
           <label className="admin-field">
-            <span className="admin-field-label">Role to assume (ARN)</span>
-            <input className="input mono" value={form.roleArn || ''} onChange={set('roleArn')} autoComplete="off" />
-            <span className="admin-field-hint">AWS only. Desktop credentials for this drive come from assuming it.</span>
+            <span className="admin-field-label">Folder in the bucket</span>
+            <input
+              className="input mono" value={form.prefix || ''} onChange={set('prefix')} disabled={locked}
+              aria-describedby={locked ? 'drive-lock' : undefined} autoComplete="off"
+            />
           </label>
         )}
-      </div>
-
-      <label className="admin-check">
-        <input type="checkbox" checked={ownKeys} onChange={(e) => toggleKeys(e.target.checked)} />
-        <span>
-          <span className="admin-field-label">Its own access keys</span>
-          <span className="admin-field-hint">For a bucket apart from Storage, on another account or service. Off, it uses the Storage keys.</span>
-        </span>
-      </label>
-      {ownKeys && (
-        <div className="admin-form-grid">
-          <label className="admin-field">
-            <span className="admin-field-label">Access key ID</span>
-            <input className="input mono" value={form.accessKeyId || ''} onChange={set('accessKeyId')} autoComplete="off" />
-          </label>
-          <label className="admin-field">
-            <span className="admin-field-label">Secret access key</span>
-            <input
-              className="input mono" type="password" value={form.secretAccessKey} onChange={set('secretAccessKey')}
-              placeholder={drive.hasSecret ? '••••••••••••' : ''} autoComplete="new-password"
-            />
-            <span className="admin-field-hint">
-              {drive.hasSecret ? 'A secret is stored. Leave blank to keep it.' : 'Stored on the server and never shown again.'}
-            </span>
-          </label>
-          <label className="admin-field">
-            <span className="admin-field-label">Endpoint</span>
-            <input className="input mono" value={form.endpoint || ''} onChange={set('endpoint')} placeholder="https://…" autoComplete="off" />
-            <span className="admin-field-hint">Blank for AWS.</span>
-          </label>
-        </div>
-      )}
+      />
 
       {error && <p className="small admin-inline-error" role="alert">{error}</p>}
       <div className="admin-form-actions">
         <button type="submit" className="btn btn-primary" disabled={!dirty || busy}>{busy ? 'Saving…' : 'Save changes'}</button>
         {dirty && <span className="tag tag-warning">Unsaved changes</span>}
       </div>
+      {confirmElement}
     </form>
   );
 }

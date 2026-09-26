@@ -31,23 +31,20 @@ export function useDestructiveConfirm() {
     setState((s) => { s?.resolve(answer); return null; });
   }, []);
 
-  // The dialog is not dismissable, which also swallows Escape (its cancel
-  // event is prevented); give Escape back as Cancel.
   const open = !!state;
   useEffect(() => {
-    if (!open) return undefined;
     // After Dialog's showModal (a child's effect runs first): React's
     // autoFocus fires while the dialog is still closed, so it is done here.
-    cancelRef.current?.focus();
-    const onKey = (e) => { if (e.key === 'Escape') settle(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, settle]);
+    if (open) cancelRef.current?.focus();
+  }, [open]);
 
   const element = state ? (
     <Dialog
       open
       dismissable={false}
+      // Escape is Cancel, on the dialog's own cancel event: a window
+      // listener would let the same Escape close a drawer underneath too.
+      onEscape={() => settle(false)}
       onClose={() => settle(false)}
       title={state.title || 'Are you sure?'}
       footer={(

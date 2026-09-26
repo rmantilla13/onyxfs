@@ -6,6 +6,7 @@ import {
 import { deploymentOrigins } from './origins';
 import { storageLocationChange } from '@/lib/storage-presets';
 import { libraryUsage } from '@/lib/db';
+import { guardMove } from '@/lib/move-guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -94,19 +95,17 @@ export async function PUT(req) {
   const before = sanitizeStorageSubmission(current);
   const merged = { ...before, ...incoming };
 
+  // Fails closed (guardMove): a count that cannot be read saves nothing,
+  // rather than reading as an empty library and letting the move through.
   const move = storageLocationChange(before, merged);
-  if (move.changed && body.confirmMove !== true) {
-    const { files } = await libraryUsage().catch(() => ({ files: 0 }));
-    if (files > 0) {
-      return NextResponse.json({
-        error: `This library has ${files.toLocaleString('en-US')} file${files === 1 ? '' : 's'} in ${before.provider === 's3' ? `the bucket "${before.bucket}"` : 'Vercel Blob'}. `
-          + 'They will not move. Confirm the change to save it anyway.',
-        code: 'confirm_move',
-        files,
-        changes: move.changes,
-      }, { status: 409 });
-    }
-  }
+  const stop = await guardMove({
+    changed: move.changed,
+    confirmed: body.confirmMove,
+    count: libraryUsage,
+    message: (files) => `This library has ${files.toLocaleString('en-US')} file${files === 1 ? '' : 's'} in ${before.provider === 's3' ? `the bucket "${before.bucket}"` : 'Vercel Blob'}. `
+      + 'They will not move. Confirm the change to save it anyway.',
+  });
+  if (stop) return NextResponse.json({ ...stop.body, changes: move.changes }, { status: stop.status });
 
   // Transfer Acceleration is AWS's, and only for a bucket addressed without
   // an endpoint. Turning it on in the config without turning it on at the

@@ -2,7 +2,7 @@ import { requireAdminPage } from '../_lib/guard';
 import BackendClient from './BackendClient';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Storage backend' };
+export const metadata = { title: 'Backend · Admin' };
 
 /**
  * Admin → Storage → Backend. The form loads its settings from

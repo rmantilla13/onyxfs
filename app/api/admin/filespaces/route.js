@@ -5,6 +5,8 @@ import {
   getFilespaceById, countFilesUnderPrefix, filespaceSetupProblem,
 } from '@/lib/db';
 import { getStorageConfig } from '@/lib/storage';
+import { driveLocationChange, driveMoveWarning } from '@/lib/admin-drives';
+import { guardMove } from '@/lib/move-guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,7 +41,10 @@ export async function GET(req) {
     });
   }
 
-  return NextResponse.json({ filespaces: await listFilespaces() });
+  // listFilespaces() carries no secret; stripping it here as well means a
+  // regression there cannot reach a browser through this route.
+  const filespaces = (await listFilespaces()).map(({ secretAccessKey, ...f }) => f);
+  return NextResponse.json({ filespaces });
 }
 
 /**
@@ -61,7 +66,13 @@ export async function POST(req) {
   // stored as an empty (bucket-wide, unmountable) prefix.
   const prefix = String(body.prefix || '').replace(/^\/+|\/+$/g, '').trim();
   if (!bucket) {
-    return NextResponse.json({ error: 'Name a bucket for the drive: no Storage bucket is set up to default to.' }, { status: 400 });
+    // Keys of its own are for a bucket apart from Storage, so the Storage
+    // bucket is not assumed for them (newDriveRequest says so first).
+    return NextResponse.json({
+      error: body.accessKeyId
+        ? 'A drive with its own keys needs its bucket named: the Storage bucket may not be reachable with them.'
+        : 'Name a bucket for the drive: no Storage bucket is set up to default to.',
+    }, { status: 400 });
   }
   const problem = filespaceSetupProblem({ name, bucket, prefix }, await listFilespaces());
   if (problem) return NextResponse.json({ error: problem.error }, { status: problem.status });
@@ -81,9 +92,11 @@ export async function POST(req) {
 }
 
 /**
- * PATCH { id, ...fields } → edit a filespace, incl. its own bucket keys. A blank
- * secretAccessKey keeps the stored one (so admins can edit other fields without
- * re-entering the key).
+ * PATCH { id, ...fields, confirmMove? } → edit a filespace, incl. its own
+ * bucket keys. A blank secretAccessKey keeps the stored one (so admins can
+ * edit other fields without re-entering the key). On a drive that holds
+ * files, another bucket or folder is refused (409) and another endpoint or
+ * other keys need confirmMove: true (409 code 'confirm_move' without it).
  */
 export async function PATCH(req) {
   const gate = await requireAdmin();
@@ -108,18 +121,34 @@ export async function PATCH(req) {
   const others = (await listFilespaces()).filter((f) => f.id !== id);
   const problem = filespaceSetupProblem(next, others);
   if (problem) return NextResponse.json({ error: problem.error }, { status: problem.status });
-  // Renaming is metadata. Re-pointing bucket or prefix is not: the catalog's
-  // storage keys stay where they are, so every file would silently drop out of
-  // the filespace. Refuse while there is anything to lose.
-  const moved = (fields.bucket != null && fields.bucket !== existing.bucket)
-    || (fields.prefix != null && fields.prefix !== existing.prefix);
-  if (moved) {
-    const { files } = await countFilesUnderPrefix(existing.prefix);
-    if (files > 0) {
-      return NextResponse.json({
-        error: `${files} file${files === 1 ? ' is' : 's are'} stored under ${existing.bucket}/${existing.prefix}. Changing the bucket or folder would strand them, so it is only allowed on an empty drive.`,
-      }, { status: 409 });
-    }
+  // Renaming is metadata. Where the drive points is not: the catalog's
+  // storage keys stay where they are and are read from wherever the drive
+  // points now. Another bucket or folder would silently drop every file out
+  // of the drive, so it is refused while there is anything to lose. Another
+  // endpoint or other keys may be a rotation for the same bucket, so it goes
+  // through once confirmed (confirmMove: true), like Storage → Backend.
+  // Both fail closed: a count that cannot be read saves nothing.
+  // A blank bucket keeps the stored one (updateFilespace), so it is no change.
+  const change = driveLocationChange(existing, { ...existing, ...fields, bucket: fields.bucket || existing.bucket });
+  const where = `${existing.bucket}/${existing.prefix}`;
+  if (change.fixed.length) {
+    const stop = await guardMove({
+      changed: true,
+      confirmed: false,
+      count: () => countFilesUnderPrefix(existing.prefix),
+      message: (files) => `${files} file${files === 1 ? ' is' : 's are'} stored under ${where}. Changing the bucket or folder would strand them, so it is only allowed on an empty drive.`,
+    });
+    // No confirm moves these: the 409 says why, under a code of its own.
+    if (stop) return NextResponse.json(stop.status === 409 ? { ...stop.body, code: 'not_empty' } : stop.body, { status: stop.status });
+  }
+  if (change.confirm.length) {
+    const stop = await guardMove({
+      changed: true,
+      confirmed: body.confirmMove,
+      count: () => countFilesUnderPrefix(existing.prefix),
+      message: (files) => `${driveMoveWarning(existing, change.confirm, files).lines.join(' ')} Confirm the change to save it anyway.`,
+    });
+    if (stop) return NextResponse.json({ ...stop.body, changes: change.confirm }, { status: stop.status });
   }
 
   const filespace = await updateFilespace(id, fields);

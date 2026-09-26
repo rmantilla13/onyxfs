@@ -2,7 +2,7 @@ import { requireAdminPage } from '../_lib/guard';
 import HealthClient from './HealthClient';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Health' };
+export const metadata = { title: 'Health · Admin' };
 
 /**
  * Admin → Health: /api/health as a check list. The checks run in the

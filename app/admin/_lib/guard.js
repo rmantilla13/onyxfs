@@ -20,3 +20,17 @@ export async function requireAdminPage(back = '/admin') {
   if (!isAdmin(email)) redirect('/files');
   return String(email).toLowerCase();
 }
+
+/**
+ * Is the signed-in viewer an admin? For generateMetadata, which Next.js
+ * runs alongside the page — even for a request the page turns away — and
+ * whose title reaches the response before the page's redirect does. It
+ * must not read anything for a viewer who is not an admin, so a drive's
+ * name (or whether its id exists) never lands in a stranger's <title>.
+ * No redirect here: that is the page's job.
+ */
+export async function viewerIsAdmin() {
+  const session = await auth().catch(() => null);
+  const email = session?.user?.email;
+  return !!email && isAdmin(email);
+}

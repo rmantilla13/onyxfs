@@ -145,7 +145,7 @@ describe('overview: needs attention', () => {
     assert.deepEqual(attentionItems({ health: { checks: [{ id: 'database', status: 'pass', label: 'Database' }] } }), []);
   });
 
-  test('failures first, then warnings; storage goes to Backend, the rest to Health', () => {
+  test('the server\'s items keep their place, health comes after, failures first; storage goes to Backend, the rest to Health', () => {
     const items = attentionItems({
       pending: [{ email: 'a@x.com', name: 'Ann' }, { email: 'b@x.com' }],
       drivesWithoutOwner: [{ id: 'd1', name: 'Archive' }, { id: 'd2', name: 'Acme' }],
@@ -154,12 +154,21 @@ describe('overview: needs attention', () => {
         { id: 'storage', status: 'fail', label: 'Storage', detail: 'Bucket is not answering.', fix: 'Run the diagnostics.' },
       ] },
     });
-    assert.deepEqual(items.map((i) => i.id), ['health-storage', 'health-cron', 'requests', 'drives-no-owner']);
-    assert.equal(items[0].href, '/admin/storage');
-    assert.equal(items[0].detail, 'Bucket is not answering. Run the diagnostics.');
-    assert.equal(items[1].href, '/admin/health');
-    assert.equal(items[2].title, '2 people are waiting for access');
-    assert.equal(items[2].detail, 'Ann, b@x.com');
+    assert.deepEqual(items.map((i) => i.id), ['requests', 'drives-no-owner', 'health-storage', 'health-cron']);
+    assert.equal(items[2].href, '/admin/storage');
+    assert.equal(items[2].action, 'Open backend');
+    assert.equal(items[2].detail, 'Bucket is not answering. Run the diagnostics.');
+    assert.equal(items[3].href, '/admin/health');
+    assert.equal(items[0].title, '2 people are waiting for access');
+    assert.equal(items[0].detail, 'Ann, b@x.com');
+  });
+
+  test('health answering later only adds rows below: nothing already shown moves', () => {
+    const base = { pending: [{ email: 'a@x.com' }], drivesWithoutOwner: [{ id: 'd1', name: 'Archive' }] };
+    const before = attentionItems(base).map((i) => i.id);
+    const after = attentionItems({ ...base, health: { checks: [{ id: 'email', status: 'fail', label: 'Email' }] } }).map((i) => i.id);
+    assert.deepEqual(after.slice(0, before.length), before);
+    assert.deepEqual(after.slice(before.length), ['health-email']);
   });
 
   test('one drive with no owner links to its members', () => {
@@ -230,9 +239,15 @@ describe('drives: making and deleting', () => {
     assert.match(newDriveRequest({ ...base, accessKeyId: 'AK' }, drivePrefixFor).error, /both/);
     assert.match(newDriveRequest({ ...base, secretAccessKey: 's' }, drivePrefixFor).error, /both/);
     assert.deepEqual(
-      newDriveRequest({ ...base, accessKeyId: ' AK ', secretAccessKey: ' s3cret ', endpoint: 'https://e' }, drivePrefixFor).body,
-      { name: 'Archive', prefix: 'archive', endpoint: 'https://e', accessKeyId: 'AK', secretAccessKey: ' s3cret ' },
+      newDriveRequest({ ...base, bucket: 'other', accessKeyId: ' AK ', secretAccessKey: ' s3cret ', endpoint: 'https://e' }, drivePrefixFor).body,
+      { name: 'Archive', prefix: 'archive', bucket: 'other', endpoint: 'https://e', accessKeyId: 'AK', secretAccessKey: ' s3cret ' },
     );
+  });
+
+  test('its own keys need its bucket named: the Storage bucket is no default for them', () => {
+    const r = newDriveRequest({ name: 'Archive', accessKeyId: 'AK', secretAccessKey: 's' }, drivePrefixFor);
+    assert.equal(r.body, undefined);
+    assert.match(r.error, /own keys needs its bucket named/);
   });
 
   test('deleting says who loses it, that the files stay, and who then sees them', () => {
@@ -269,7 +284,7 @@ describe('storage: the move warning', () => {
 
 describe('health: the version line', () => {
   test('the build label already carries the version, so it is not said twice', () => {
-    const row = (b) => healthChecks(b).checks.find((c) => c.id === 'version')?.detail;
+    const row = (b) => healthChecks({ checks: {}, ...b }).checks.find((c) => c.id === 'version')?.detail;
     assert.equal(row({ version: '0.1.0', build: '0.1.0 · dev' }), '0.1.0 · dev');
     assert.equal(row({ version: '0.1.0', build: '0.1.0 · 3f2c1ab' }), '0.1.0 · 3f2c1ab');
     assert.equal(row({ version: '0.1.0' }), '0.1.0');

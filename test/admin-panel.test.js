@@ -10,7 +10,7 @@ import { activeHref } from '../lib/section-nav.js';
 import { driveRow, driveRows, publicDrive, driveSettingsPatch, hasOwnKeys } from '../lib/admin-drives.js';
 import { storageLocationChange, moveNeedsConfirm } from '../lib/storage-presets.js';
 import { corsOrigins, corsRule } from '../lib/storage-cors.js';
-import { healthChecks } from '../lib/health-checks.js';
+import { healthChecks, isHealthReport } from '../lib/health-checks.js';
 import { relativeTime, plural } from '../lib/admin-format.js';
 
 describe('rail: which section is the page', () => {
@@ -229,9 +229,21 @@ describe('health: the body as a checklist', () => {
     assert.equal(h.checks.some((c) => c.id === 'cron'), false, 'a field the server did not send is not reported missing');
   });
 
-  test('nothing at all is not a crash', () => {
-    assert.deepEqual(healthChecks(null).checks, []);
-    assert.equal(healthChecks({ ok: false }).status, 'fail');
+  test('anything but the report reads as failing, never as working', () => {
+    // A platform's own 503 (a paused deployment, a proxy) is a page or
+    // nothing: the time this page matters most, so it must not say "working".
+    for (const body of [null, undefined, '', '<html>503</html>', { error: 'x' }, { ok: true }, { checks: null }, { checks: [] }, [], 42]) {
+      const h = healthChecks(body);
+      assert.equal(h.status, 'fail', JSON.stringify(body));
+      assert.notEqual(h.label, 'Everything is working.');
+      assert.equal(h.checks.length, 1);
+      assert.equal(h.checks[0].status, 'fail');
+      assert.equal(isHealthReport(body), false, JSON.stringify(body));
+    }
+    assert.match(healthChecks('<html>503</html>').checks[0].detail, /page instead of the checks/);
+    assert.equal(healthChecks({ ok: false, checks: {} }).status, 'fail');
+    assert.equal(healthChecks({ ok: true, checks: {} }).status, 'ok', 'a report with nothing wrong is working');
+    assert.equal(isHealthReport({ ok: false, checks: {} }), true);
   });
 });
 

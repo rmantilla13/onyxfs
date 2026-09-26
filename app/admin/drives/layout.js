@@ -23,7 +23,10 @@ export default async function DrivesLayout({ children }) {
   ]);
   return (
     <>
-      <DrivesList rows={driveRows(drives, { defaultBucket: cfg?.bucket || '' })} />
+      <DrivesList
+        rows={driveRows(drives, { defaultBucket: cfg?.bucket || '' })}
+        storage={{ bucket: cfg?.bucket || '', region: cfg?.region || '' }}
+      />
       {children}
     </>
   );

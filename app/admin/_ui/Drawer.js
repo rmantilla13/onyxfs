@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Dialog from '@/app/components/ui/Dialog';
 
 /**
@@ -17,10 +17,13 @@ import Dialog from '@/app/components/ui/Dialog';
  * scrolled to once it is open, since the browser's own jump to an anchor
  * happens before the dialog exists.
  *
- *   sections: [{ id, label }] — a strip of in-page links under the title.
+ *   sections: [{ id, label }] — a strip of in-page links under the title;
+ *   the one for the section in view is marked (aria-current), as it is
+ *   scrolled to and after a #settings deep link.
  */
 export default function Drawer({ title, subtitle, sections = [], onClose, footer, children, dismissable = true }) {
   const body = useRef(null);
+  const [active, pin] = useSectionInView(body, sections);
 
   useEffect(() => {
     const hash = typeof window !== 'undefined' ? decodeURIComponent(window.location.hash.slice(1)) : '';
@@ -37,6 +40,7 @@ export default function Drawer({ title, subtitle, sections = [], onClose, footer
     const frame = requestAnimationFrame(() => {
       const el = go();
       if (!el) return;
+      pin(hash);
       if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
       el.focus({ preventScroll: true });
     });
@@ -72,12 +76,14 @@ export default function Drawer({ title, subtitle, sections = [], onClose, footer
               <a
                 key={s.id}
                 href={`#${s.id}`}
+                aria-current={active === s.id ? 'location' : undefined}
                 onClick={(e) => {
                   // In a <dialog> the page does not scroll, the body does:
                   // move it there by hand and keep the hash for a reload.
                   e.preventDefault();
                   const el = body.current?.querySelector(`#${CSS.escape(s.id)}`);
                   if (!el) return;
+                  pin(s.id);
                   el.scrollIntoView({ block: 'start', behavior: 'smooth' });
                   if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
                   el.focus({ preventScroll: true });
@@ -104,4 +110,72 @@ export function DrawerSection({ id, title, tone, children }) {
       {children}
     </section>
   );
+}
+
+/**
+ * Which of `sections` is in view in the drawer's scrolling body: the last
+ * one whose top has passed under the sticky strip of links, or the last of
+ * all once the body is scrolled to its end (a short final section never
+ * reaches the top). A section picked by a link or the address (`pin`) is
+ * the answer while it is on screen, until the reader scrolls themselves:
+ * near the end of the drawer, going to "Usage" can only scroll so far,
+ * and the strip should still say Usage.
+ *
+ * Returns [activeId, pin(id)].
+ */
+function useSectionInView(body, sections) {
+  const [active, setActive] = useState(null);
+  const pinned = useRef(null);
+  const schedule = useRef(() => {});
+  const ids = sections.map((s) => s.id).join(' ');
+  const pin = useCallback((id) => { pinned.current = id; schedule.current(); }, []);
+  useEffect(() => {
+    const root = body.current;
+    const scroller = root?.closest('.dialog-body');
+    const list = ids ? ids.split(' ') : [];
+    if (!root || !scroller || list.length < 2) return undefined;
+    let frame = 0;
+    const pick = () => {
+      frame = 0;
+      const nav = root.querySelector('.drawer-nav');
+      const box = scroller.getBoundingClientRect();
+      // Sections scroll to just under the strip (scroll-margin-top in
+      // admin.css), so the line is a little below its bottom edge.
+      const line = box.top + (nav?.offsetHeight || 0) + 24;
+      const at = (id) => root.querySelector(`#${CSS.escape(id)}`);
+      const held = pinned.current && list.includes(pinned.current) && at(pinned.current);
+      if (held) {
+        const r = held.getBoundingClientRect();
+        if (r.top < box.bottom && r.bottom > line) { setActive(pinned.current); return; }
+      }
+      let id = list[0];
+      for (const s of list) {
+        const el = at(s);
+        if (el && el.getBoundingClientRect().top <= line) id = s;
+      }
+      if (scroller.scrollTop > 0 && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) id = list[list.length - 1];
+      setActive(id);
+    };
+    const run = () => { if (!frame) frame = requestAnimationFrame(pick); };
+    schedule.current = run;
+    // The reader scrolling is the reader choosing: the pin lets go.
+    const release = () => { pinned.current = null; };
+    run();
+    scroller.addEventListener('scroll', run, { passive: true });
+    scroller.addEventListener('wheel', release, { passive: true });
+    scroller.addEventListener('touchmove', release, { passive: true });
+    scroller.addEventListener('keydown', release);
+    const ro = new ResizeObserver(run);
+    ro.observe(root);
+    return () => {
+      cancelAnimationFrame(frame);
+      schedule.current = () => {};
+      scroller.removeEventListener('scroll', run);
+      scroller.removeEventListener('wheel', release);
+      scroller.removeEventListener('touchmove', release);
+      scroller.removeEventListener('keydown', release);
+      ro.disconnect();
+    };
+  }, [body, ids]);
+  return [active, pin];
 }

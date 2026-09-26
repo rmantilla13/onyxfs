@@ -61,13 +61,6 @@ function DeleteDriveDialog({ drive, onDone }) {
   // lands on the safe answer.
   useEffect(() => { cancelRef.current?.focus(); }, []);
 
-  // Not dismissable, which also swallows Escape; give Escape back as Cancel.
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape' && !busy) onDone(null); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [busy, onDone]);
-
   const confirm = async () => {
     setBusy(true); setError(null);
     try {
@@ -86,6 +79,9 @@ function DeleteDriveDialog({ drive, onDone }) {
     <Dialog
       open
       dismissable={false}
+      // Escape is Cancel, answered on the dialog's own cancel event so it
+      // never also closes the drive drawer this may sit over.
+      onEscape={() => { if (!busy) onDone(null); }}
       onClose={() => onDone(null)}
       title={`Delete the drive “${drive.name}”?`}
       footer={(
@@ -97,15 +93,15 @@ function DeleteDriveDialog({ drive, onDone }) {
         </>
       )}
     >
-      {!summary && !error && <p className="small muted" style={{ margin: 0 }} role="status">Checking what it holds…</p>}
+      {!summary && !error && <p className="small muted admin-note" role="status">Checking what it holds…</p>}
       {summary && (
-        <div className="stack" style={{ gap: 'var(--s2)' }}>
-          {deleteDriveConsequence(summary).map((line) => <p key={line} className="small" style={{ margin: 0 }}>{line}</p>)}
+        <div className="admin-lines">
+          {deleteDriveConsequence(summary).map((line) => <p key={line} className="small admin-note">{line}</p>)}
         </div>
       )}
       {error && (
-        <div className="stack" style={{ gap: 'var(--s2)', marginTop: summary ? 'var(--s3)' : 0 }}>
-          <p className="small" role="alert" style={{ margin: 0, color: 'var(--danger)' }}>{error}</p>
+        <div className="admin-lines">
+          <p className="small admin-inline-error" role="alert">{error}</p>
           {!summary && <div><button type="button" className="btn btn-sm" onClick={() => setAttempt((n) => n + 1)}>Try again</button></div>}
         </div>
       )}

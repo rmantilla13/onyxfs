@@ -1,7 +1,7 @@
 import { getFilespaceById, countFilesUnderPrefix, driveKindUsage } from '@/lib/db';
 import { getStorageConfig, storageMode } from '@/lib/storage';
 import { publicDrive } from '@/lib/admin-drives';
-import { requireAdminPage } from '../../_lib/guard';
+import { requireAdminPage, viewerIsAdmin } from '../../_lib/guard';
 import DriveDrawer from './DriveDrawer';
 import RouteDrawer from '../../_ui/RouteDrawer';
 import AdminState from '../../_ui/AdminState';
@@ -9,8 +9,10 @@ import AdminState from '../../_ui/AdminState';
 export const dynamic = 'force-dynamic';
 
 export async function generateMetadata({ params }) {
+  // Gated like the page (viewerIsAdmin says why): no lookup for anyone else.
+  if (!(await viewerIsAdmin())) return { title: 'Drives · Admin' };
   const fs = params?.id ? await getFilespaceById(params.id).catch(() => null) : null;
-  return { title: fs ? `${fs.name} · Drives` : 'Drives' };
+  return { title: fs ? `${fs.name} · Drives · Admin` : 'Drives · Admin' };
 }
 
 /**

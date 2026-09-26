@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { fmtSize } from '@/lib/media';
 import { plural } from '@/lib/admin-format';
-import { healthChecks } from '@/lib/health-checks';
+import { healthChecks, isHealthReport } from '@/lib/health-checks';
 import { attentionItems } from '@/lib/admin-overview';
 import AdminPage, { AdminCard } from './_ui/AdminPage';
 import { StatTile } from './_ui/StatTile';
@@ -17,22 +17,26 @@ const HEALTH_TONE = { warn: 'warning', fail: 'danger' };
  * The Overview's body. Everything but health comes from the server render;
  * health is asked of /api/health from here, because its storage check
  * talks to the bucket and a slow bucket should not hold the page. A 503 is
- * still an answer — it is the one that says what is wrong.
+ * still an answer — it is the one that says what is wrong — when it is the
+ * health report; a 503 page from a proxy is an error (isHealthReport).
+ *
+ * A tile's tone colours the words that say what is wrong (its sub-line),
+ * never the number, and a danger tone its border too.
  */
 export default function Overview({ pending, drives, totals }) {
-  const health = useAdminResource('/api/health', { accept: [503] });
+  const health = useAdminResource('/api/health', { accept: [503], valid: isHealthReport });
   const h = health.data ? healthChecks(health.data) : null;
   const items = attentionItems({ pending, drivesWithoutOwner: drives.withoutOwner, health: h });
 
   return (
     <AdminPage title="Overview" description="The state of this workspace at a glance, and anything that needs you.">
       <div className="admin-tiles">
+        {/* People waiting is the queue doing its job, not an alarm: no tone. */}
         <StatTile
           label="Access requests"
           value={pending.length.toLocaleString('en-US')}
           sub={pending.length ? 'waiting for a decision' : 'No one is waiting'}
           href="/admin/requests"
-          tone={pending.length ? 'warning' : undefined}
         />
         <StatTile
           label="Storage used"
@@ -83,9 +87,12 @@ export default function Overview({ pending, drives, totals }) {
             ))}
           </ul>
         )}
+        {health.loading && !h && items.length > 0 && (
+          <p className="small muted attention-foot" role="status">Checking health…</p>
+        )}
         {health.error && (
           <p className="small muted attention-foot">
-            The health checks did not answer ({health.error.message}), so storage and email are not listed here.{' '}
+            The health checks did not answer, so problems with storage or email are not listed here. {health.error.message}{' '}
             <button type="button" className="btn btn-ghost btn-sm" onClick={health.reload}>Try again</button>
           </p>
         )}

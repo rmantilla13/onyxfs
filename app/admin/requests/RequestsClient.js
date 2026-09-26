@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Dialog from '@/app/components/ui/Dialog';
 import { useToast } from '@/app/components/ui/Toast';
-import { REQUEST_FILTERS, askedLabel } from '@/lib/admin-requests';
+import { useConfirm } from '@/app/components/ui/Confirm';
+import { REQUEST_FILTERS, askedLabel, revokeBlockedReason } from '@/lib/admin-requests';
 import AdminPage from '../_ui/AdminPage';
 import AdminState from '../_ui/AdminState';
 import RelativeTime from '../_ui/RelativeTime';
@@ -24,6 +25,7 @@ export default function RequestsClient({ status, rows, counts }) {
   const router = useRouter();
   const toast = useToast();
   const { confirm, confirmElement } = useDestructiveConfirm();
+  const { confirm: ask, confirmElement: askElement } = useConfirm();
   const [busy, setBusy] = useState(null);
   const [denying, setDenying] = useState(null);
   const [adding, setAdding] = useState(false);
@@ -47,6 +49,17 @@ export default function RequestsClient({ status, rows, counts }) {
   const approve = (r) => act(`approve:${r.id}`,
     () => api(INVITES, { method: 'PATCH', json: { id: r.id, status: 'approved' } }),
     `${r.email} can sign in now. They are not emailed about it yet — let them know.`);
+
+  // A denial was someone's deliberate answer; turning it round asks first.
+  const approveDenied = async (r) => {
+    const ok = await ask({
+      title: `Approve ${r.email} after all?`,
+      body: `They were denied${r.reviewedBy && r.reviewedBy !== 'system-bootstrap' ? ` by ${r.reviewedBy}` : ''}. Approving lets them sign in with this address.`,
+      confirmLabel: 'Approve',
+      danger: false,
+    });
+    if (ok) approve(r);
+  };
 
   const deny = (r, note) => act(`deny:${r.id}`,
     () => api(INVITES, { method: 'PATCH', json: { id: r.id, status: 'denied', note: note || null } }),
@@ -109,25 +122,28 @@ export default function RequestsClient({ status, rows, counts }) {
                 </span>
               </div>
               <div className="request-actions">
-                {r.status !== 'approved' && (
-                  <button type="button" className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => approve(r)}>
-                    {busy === `approve:${r.id}` ? 'Approving…' : 'Approve'}
-                  </button>
-                )}
                 {r.status === 'pending' && (
-                  <button type="button" className="btn btn-sm" disabled={!!busy} onClick={() => setDenying(r)}>Deny…</button>
+                  <>
+                    <button type="button" className="btn btn-primary btn-sm" disabled={!!busy} onClick={() => approve(r)}>
+                      {busy === `approve:${r.id}` ? 'Approving…' : 'Approve'}
+                    </button>
+                    <button type="button" className="btn btn-sm" disabled={!!busy} onClick={() => setDenying(r)}>Deny…</button>
+                  </>
                 )}
-                {r.status === 'approved' && (
-                  <button
-                    type="button"
-                    className="btn btn-danger btn-sm"
-                    disabled={!!busy || r.envAdmin || r.self}
-                    title={r.self ? 'You can’t revoke yourself.' : r.envAdmin ? 'Managed in ADMIN_EMAILS.' : undefined}
-                    onClick={() => revoke(r)}
-                  >
-                    {busy === `revoke:${r.id}` ? 'Revoking…' : 'Revoke access…'}
+                {/* Reversing a denial is not the page's main act: quiet, and it asks. */}
+                {r.status === 'denied' && (
+                  <button type="button" className="btn btn-sm" disabled={!!busy} onClick={() => approveDenied(r)}>
+                    {busy === `approve:${r.id}` ? 'Approving…' : 'Approve instead…'}
                   </button>
                 )}
+                {/* A column of red buttons reads as alarm: the danger is in the confirm. */}
+                {r.status === 'approved' && (revokeBlockedReason(r) ? (
+                  <span className="small muted request-locked">{revokeBlockedReason(r)}</span>
+                ) : (
+                  <button type="button" className="btn btn-ghost btn-sm" disabled={!!busy} onClick={() => revoke(r)}>
+                    {busy === `revoke:${r.id}` ? 'Revoking…' : 'Revoke…'}
+                  </button>
+                ))}
               </div>
               {(r.reason || (r.reviewNote && r.status === 'denied')) && (
                 <div className="request-body">
@@ -159,6 +175,7 @@ export default function RequestsClient({ status, rows, counts }) {
         }}
       />
       {confirmElement}
+      {askElement}
     </AdminPage>
   );
 }

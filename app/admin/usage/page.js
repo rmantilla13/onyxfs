@@ -5,6 +5,7 @@ import {
 import { presignFileUrls } from '@/lib/storage';
 import { fmtSize } from '@/lib/media';
 import { crumbsFor } from '@/lib/folder-ops';
+import { driveForKey } from '@/lib/admin-drives';
 import { kindLabel, formatLabel, TRASH_RETENTION_DAYS } from '@/lib/storage-report';
 import { Thumb } from '@/app/components/ui/FileCard';
 import { requireAdminPage } from '../_lib/guard';
@@ -13,7 +14,7 @@ import AdminState from '../_ui/AdminState';
 import KindBreakdown from '../_ui/KindBreakdown';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Usage' };
+export const metadata = { title: 'Usage · Admin' };
 
 const size = (n) => fmtSize(n) || '0 B';
 const files = (n) => `${Number(n).toLocaleString('en-US')} file${n === 1 ? '' : 's'}`;
@@ -44,6 +45,25 @@ export default async function UsagePage() {
     return (
       <AdminPage title="Usage" description="What is using the space.">
         <AdminState kind="empty" title="Nothing to measure" message="No database is connected, so there is no library to measure." />
+      </AdminPage>
+    );
+  }
+
+  // Nothing stored: one sentence and the way to start, not seven cards of
+  // zeros. Anything in the trash still counts as something to show.
+  if (report.live.files === 0 && report.trash.files === 0) {
+    return (
+      <AdminPage title="Usage" description="What is using the space.">
+        <AdminState
+          kind="empty"
+          title="Nothing stored yet"
+          message={drives.length
+            ? 'Files uploaded to the library or to a drive are measured here: by type, drive, format and person.'
+            : 'Files uploaded to the library are measured here. A drive gives a team a space of its own to fill.'}
+          action={drives.length
+            ? <Link href="/files" className="btn btn-primary">Open files</Link>
+            : <Link href="/admin/drives" className="btn btn-primary">Make a drive</Link>}
+        />
       </AdminPage>
     );
   }
@@ -163,7 +183,7 @@ export default async function UsagePage() {
             {dups.extra > 0 ? (
               <p className="storage-stat">
                 <strong>{size(dups.bytes)}</strong>
-                <span className="muted small"> in {files(dups.extra)} that are extra copies of another</span>
+                <span className="muted small"> in {files(dups.extra)} that {dups.extra === 1 ? 'is an extra copy of another' : 'are extra copies of others'}</span>
               </p>
             ) : (
               <p className="storage-stat"><strong>None found</strong></p>
@@ -201,7 +221,7 @@ export default async function UsagePage() {
                 <span className="big-file-thumb"><Thumb file={f} label={formatLabel(extOf(f.name))} /></span>
                 <span className="big-file-text">
                   <span className="truncate big-file-name">{f.name}</span>
-                  <span className="truncate small muted">{crumbsFor(f.folder || '').map((c) => c.name).join(' / ')}</span>
+                  <span className="truncate small muted">{crumbsFor(f.folder || '', driveForKey(drives, f.storageKey)?.name || 'All files').map((c) => c.name).join(' / ')}</span>
                 </span>
                 <span className="big-file-size">{size(f.size)}</span>
                 <span className="big-file-share small muted">{total ? pct(f.size / total) : ''}</span>

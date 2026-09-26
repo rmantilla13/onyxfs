@@ -62,8 +62,6 @@
 /* Cards side by side where there is room, stacked where there is not. */
 .admin-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: var(--s4); align-items: start; }
 
-.admin-note { margin: 0; }
-.admin-inline-error { margin: 0; color: var(--danger); overflow-wrap: anywhere; }
 .admin-quote {
   margin: 0;
   padding: 2px 0 2px var(--s3);
@@ -146,10 +144,12 @@ a.stat-tile:hover {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .stat-sub { color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
-.stat-tile.is-warning { border-color: color-mix(in srgb, var(--warning) 45%, var(--line)); }
+/* The tone goes on the words that say what is wrong, not on the number:
+   "4" drives is not the problem, "2 have no owner" is. Only a failure
+   tints the border, so a warning and a failure never read alike. */
 .stat-tile.is-danger { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
-.stat-tile.is-warning .stat-value { color: var(--warning); }
-.stat-tile.is-danger .stat-value { color: var(--danger); }
+.stat-tile.is-warning .stat-sub { color: var(--warning); }
+.stat-tile.is-danger .stat-sub { color: var(--danger); }
 .stat-tile .skel-line { width: 70%; margin: var(--s2) 0 0; }
 
 .admin-meter { display: block; min-width: 0; }
@@ -188,7 +188,12 @@ a.stat-tile:hover {
 
 /* ── DataTable ──────────────────────────────────────────────────────────── */
 
-.dt-wrap { min-width: 0; }
+/* The table's own width decides rows or cards (below), so the wrap is the
+   container. No overflow-x here: it would clip the ⋯ menus that open below
+   the last rows. The columns cannot outgrow it instead — the name column
+   takes what is left and shrinks to an ellipsis, other long text is capped,
+   and a tag never breaks inside itself. */
+.dt-wrap { min-width: 0; container-type: inline-size; }
 .dt { width: 100%; border-collapse: collapse; font-size: var(--t-sm); }
 .dt th {
   padding: var(--s2) var(--s3) var(--s2) 0;
@@ -226,15 +231,28 @@ th[aria-sort='ascending'] .dt-sort-mark, th[aria-sort='descending'] .dt-sort-mar
 .dt-primary { font-weight: 500; }
 .dt-primary a { color: inherit; }
 .dt-primary a:hover { text-decoration: underline; text-underline-offset: 2px; }
-.dt-cell-truncate { display: block; max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dt-tags { display: inline-flex; flex-wrap: wrap; gap: var(--s1); }
+.dt-cell-truncate { display: block; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The name takes whatever the other columns leave (width 100%), and its
+   text does not count toward the table's minimum width (max-width 0), so a
+   long name is cut short rather than pushing the row wider. */
+.dt td.dt-primary.is-truncate { width: 100%; max-width: 0; }
+.dt td.dt-primary .dt-cell-truncate { max-width: none; }
+/* One line in a row (the name column gives way first); a card wraps them. */
+.dt-tags { display: inline-flex; flex-wrap: nowrap; gap: var(--s1); }
+.dt-tags > .tag { white-space: nowrap; }
 .dt-label { display: none; }
 .dt-card-flat .dt { border-top: 0; }
+.dt-sortbar { display: none; }
 
-/* At a phone's width each row is a card: the primary cell as its title,
-   then each other value under its column's name. The table roles are set in
-   the markup, so the change of display does not strip them. */
-@media (max-width: 720px) {
+/* With less than 800px of its own (CARD_BELOW in lib/admin-table.js) each
+   row is a card: the primary cell as its title, then each other value under
+   its column's name. The table roles are set in the markup, so the change
+   of display does not strip them. The header is out of sight, so the
+   "Sort by" control stands in for it. */
+@container (max-width: 799.98px) {
+  .dt-sortbar { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin-bottom: var(--s3); }
+  .dt-sortbar select.input { width: auto; min-width: 0; flex: 0 1 auto; padding-top: 6px; padding-bottom: 6px; font-size: var(--t-sm); }
+  .dt td.dt-primary.is-truncate { width: auto; max-width: none; }
   .dt, .dt tbody, .dt tr, .dt td { display: block; }
   .dt thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .dt tbody { display: flex; flex-direction: column; gap: var(--s2); }
@@ -257,7 +275,11 @@ th[aria-sort='ascending'] .dt-sort-mark, th[aria-sort='descending'] .dt-sort-mar
   .dt td.is-num, .dt td.is-right { text-align: left; }
   .dt-label { display: inline; flex: none; min-width: 72px; color: var(--muted); }
   .dt td.dt-primary .dt-label, .dt td.dt-actions .dt-label { display: none; }
-  .dt-cell-truncate { max-width: 100%; }
+  /* A card has the height a row does not: long text wraps instead of
+     being cut short, since there is no hover on a phone to read the rest. */
+  .dt td > * { min-width: 0; }
+  .dt-cell-truncate { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+  .dt-tags { flex-wrap: wrap; }
   .dt-row.is-clickable:hover > td { background: none; }
 }
 
@@ -277,12 +299,14 @@ dialog.dialog.dialog-sheet {
   overflow: hidden;
 }
 dialog.dialog.dialog-sheet:not([open]) { display: none; }
-dialog.dialog-sheet .dialog-head { flex: none; }
+/* Child selectors: a confirm opened from inside the drawer is a dialog in
+   its body, and must keep its own head, body and foot. */
+dialog.dialog-sheet > .dialog-head { flex: none; }
 /* Positioned, so absolutely placed text (the .sr-only status words) scrolls
    with the body instead of stretching the dialog and dragging the header
    out of view. */
-dialog.dialog-sheet .dialog-body { position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-top: 0; }
-dialog.dialog-sheet .dialog-foot { flex: none; border-top: 1px solid var(--line); padding-top: var(--s3); }
+dialog.dialog-sheet > .dialog-body { position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-top: 0; }
+dialog.dialog-sheet > .dialog-foot { flex: none; border-top: 1px solid var(--line); padding-top: var(--s3); }
 .drawer-sub { padding-top: var(--s3); }
 /* A drawer's loading, error and not-found states, below its header. */
 .drawer-pad { padding-top: var(--s4); }
@@ -310,6 +334,7 @@ dialog.dialog-sheet .dialog-foot { flex: none; border-top: 1px solid var(--line)
   white-space: nowrap;
 }
 .drawer-nav a:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.drawer-nav a[aria-current] { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
 .drawer-section { padding: 0 0 var(--s5); scroll-margin-top: 56px; }
 .drawer-section + .drawer-section { padding-top: var(--s5); border-top: 1px solid var(--line); }
 .drawer-section > h3 { margin: 0 0 var(--s3); font-size: var(--t-md); }
@@ -328,31 +353,6 @@ dialog.dialog-sheet .dialog-foot { flex: none; border-top: 1px solid var(--line)
   }
   .drawer-nav { margin: 0 calc(var(--s4) * -1) var(--s4); padding: var(--s2) var(--s4); }
 }
-
-/* ── Forms ──────────────────────────────────────────────────────────────── */
-
-.admin-form { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
-.admin-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: var(--s3) var(--s4); }
-.admin-field { display: flex; flex-direction: column; gap: var(--s1); min-width: 0; }
-.admin-field-label { font-size: var(--t-sm); font-weight: 500; }
-.admin-field-hint { margin: 0; font-size: var(--t-sm); color: var(--muted); overflow-wrap: anywhere; }
-.admin-field .input:disabled { opacity: 0.7; cursor: not-allowed; background: var(--surface-sunken); }
-.admin-field-row { display: flex; align-items: center; gap: var(--s2); }
-.admin-check { display: flex; align-items: flex-start; gap: var(--s2); cursor: pointer; }
-.admin-check input { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--accent); }
-.admin-check > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.admin-form-actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
-.admin-lock {
-  display: flex; gap: var(--s2); align-items: flex-start;
-  padding: var(--s2) var(--s3);
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-  font-size: var(--t-sm);
-}
-.admin-lock > [aria-hidden] { flex: none; margin-top: 2px; color: var(--muted); }
-.admin-disclosure > summary { cursor: pointer; font-size: var(--t-sm); font-weight: 500; color: var(--muted); padding: var(--s1) 0; }
-.admin-disclosure > summary:hover { color: var(--ink); }
-.admin-disclosure[open] > summary { margin-bottom: var(--s2); }
 
 /* ── Segmented filter (Waiting · Denied · Approved) ─────────────────────── */
 
@@ -405,7 +405,8 @@ dialog.dialog-sheet .dialog-foot { flex: none; border-top: 1px solid var(--line)
 .request-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .request-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); margin-top: var(--s1); }
 .request-body { grid-column: 1 / -1; display: flex; flex-direction: column; gap: var(--s2); min-width: 0; }
-.request-actions { display: flex; gap: var(--s2); flex-wrap: wrap; justify-content: flex-end; }
+.request-actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; justify-content: flex-end; }
+.request-locked { padding: var(--s1) 0; }
 
 /* ── Duplicates ─────────────────────────────────────────────────────────── */
 
@@ -423,8 +424,10 @@ dialog.dialog-sheet .dialog-foot { flex: none; border-top: 1px solid var(--line)
   .admin-title { font-size: var(--t-xl); }
   .admin-card { padding: var(--s3) var(--s4); }
   .admin-head { align-items: flex-start; }
-  .admin-actions { width: 100%; }
-  .admin-actions > .btn { flex: 1 1 auto; justify-content: center; }
+  /* The primary action spans the phone; a secondary one keeps its size
+     rather than becoming a slab between the description and the list. */
+  .admin-actions:has(> .btn-primary) { width: 100%; }
+  .admin-actions > .btn-primary { flex: 1 1 auto; justify-content: center; }
   .request { grid-template-columns: minmax(0, 1fr); padding: var(--s3) var(--s4); }
   /* Two tiles a row: four stacked tiles push everything else off the screen. */
   .admin-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }

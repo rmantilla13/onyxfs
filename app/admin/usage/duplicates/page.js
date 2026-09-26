@@ -5,7 +5,7 @@ import { requireAdminPage } from '../../_lib/guard';
 import DuplicatesClient from './DuplicatesClient';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Duplicates' };
+export const metadata = { title: 'Duplicates · Admin' };
 
 /**
  * Admin → Storage → Duplicates (was /storage/duplicates): files stored more

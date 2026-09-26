@@ -2,8 +2,9 @@ import Link from 'next/link';
 
 /**
  * One number and what it means, lifted from the Usage page's stat. With
- * `href` the whole tile is the way to the section behind it. `tone` is
- * accent | warning | danger | ok, for a value that asks for attention.
+ * `href` the whole tile is the way to the section behind it. `tone`
+ * (warning | danger) colours the sub-line — the words that say what is
+ * wrong — and, for danger, the border; the value stays in ink.
  */
 export function StatTile({ label, value, sub, href, tone, children }) {
   const cls = `card stat-tile${tone ? ` is-${tone}` : ''}`;

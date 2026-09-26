@@ -41,13 +41,17 @@ export async function api(url, { json, ...opts } = {}) {
 /**
  * Load one resource for a client section: { data, error, loading, reload }.
  * `accept` lists statuses whose body is still the answer — /api/health's 503
- * is a report, not a failure to report. Reloading keeps the last data on
- * screen until the new answer arrives.
+ * is a report, not a failure to report. `valid(body)` says whether a body
+ * is that answer at all: an accepted status with a body that fails it (a
+ * proxy's 503 page) is an error, never data. Reloading keeps the last data
+ * on screen until the new answer arrives.
  */
-export function useAdminResource(url, { accept = [] } = {}) {
+export function useAdminResource(url, { accept = [], valid } = {}) {
   const [state, setState] = useState({ data: null, error: null, loading: true, status: 0 });
   const acceptKey = accept.join(',');
   const seq = useRef(0);
+  const validRef = useRef(valid);
+  validRef.current = valid;
   const reload = useCallback(async () => {
     const mine = ++seq.current;
     setState((s) => ({ ...s, loading: true }));
@@ -62,14 +66,20 @@ export function useAdminResource(url, { accept = [] } = {}) {
     }
     const body = await readBody(r);
     if (mine !== seq.current) return;
-    const ok = r.ok || acceptKey.split(',').includes(String(r.status));
+    const answered = r.ok || acceptKey.split(',').includes(String(r.status));
+    const ok = answered && (!validRef.current || validRef.current(body));
     setState(ok
       ? { data: body, error: null, loading: false, status: r.status }
       : {
         data: null,
         loading: false,
         status: r.status,
-        error: { message: (body && typeof body === 'object' && body.error) || `The server answered ${r.status}.`, status: r.status, body },
+        error: {
+          message: (body && typeof body === 'object' && body.error)
+            || (answered ? `The server answered ${r.status}, but not with what this page reads.` : `The server answered ${r.status}.`),
+          status: r.status,
+          body,
+        },
       });
   }, [url, acceptKey]);
   useEffect(() => { reload(); }, [reload]);

@@ -1,3 +1,5 @@
+import { activeHref } from '../../lib/section-nav.js';
+
 /**
  * ADMIN_NAV — the admin rail, in the groups and order of the design
  * (proposal §2.1). This is the one place a section is added to the panel.
@@ -63,4 +65,16 @@ export function railGroups(counts = {}) {
       return n ? { ...item, count: n, countLabel: `${n} waiting` } : item;
     }),
   }));
+}
+
+/**
+ * The name of the section a path is in, as the rail says it ("Drives" for
+ * a drive's drawer too), or null outside the panel. For an error that has
+ * to say which section failed without being told (app/admin/error.js
+ * catches the sections' layouts as well as the Overview).
+ */
+export function sectionLabel(pathname) {
+  const items = ADMIN_NAV.flatMap((g) => g.items);
+  const href = activeHref(pathname, items);
+  return href ? items.find((i) => i.href === href)?.label || null : null;
 }

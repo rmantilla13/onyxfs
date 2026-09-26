@@ -3,5 +3,5 @@
 import SectionError from '../_ui/SectionError';
 
 export default function Error({ error, reset }) {
-  return <SectionError error={error} reset={reset} title="Usage could not be measured." />;
+  return <SectionError error={error} reset={reset} section="Usage" />;
 }

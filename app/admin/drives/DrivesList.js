@@ -12,13 +12,19 @@ import { useToast } from '@/app/components/ui/Toast';
 import AdminPage from '../_ui/AdminPage';
 import AdminState from '../_ui/AdminState';
 import DataTable from '../_ui/DataTable';
+import { useDrawerReturn } from '../_ui/RouteDrawer';
+import DriveLocation from './DriveLocation';
 
 const size = (n) => fmtSize(n) || '0 B';
 const driveHref = (d, hash = '') => `/admin/drives/${encodeURIComponent(d.id)}${hash}`;
 
-/** Every drive, one row each; a row opens the drive's drawer. */
-export default function DrivesList({ rows }) {
+/**
+ * Every drive, one row each; a row opens the drive's drawer, and closing it
+ * puts the keyboard back on that row (useDrawerReturn).
+ */
+export default function DrivesList({ rows, storage }) {
   const router = useRouter();
+  useDrawerReturn('/admin/drives');
   const toast = useToast();
   const [making, setMaking] = useState(false);
   const { deleteDrive, deleteElement } = useDeleteDrive();
@@ -34,7 +40,8 @@ export default function DrivesList({ rows }) {
     { key: 'name', label: 'Name', primary: true, truncate: true },
     {
       key: 'location', label: 'Location', truncate: true,
-      render: (d) => <span className="admin-mono" title={`${d.bucket} / ${d.prefix}`}>{d.location}</span>,
+      value: (d) => d.location,
+      render: (d) => <DriveLocation row={d} />,
     },
     { key: 'members', label: 'Members', num: true, render: (d) => d.members.toLocaleString('en-US') },
     {
@@ -95,6 +102,7 @@ export default function DrivesList({ rows }) {
       )}
       <NewDriveDialog
         open={making}
+        storage={storage}
         onClose={() => setMaking(false)}
         onCreated={(d) => {
           setMaking(false);
