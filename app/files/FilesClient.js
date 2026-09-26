@@ -1969,6 +1969,7 @@ export default function FilesClient({
           onClose={qlClose}
           onOpen={openFromQuickLook}
           onInfo={infoFromQuickLook}
+          onOriginalBlob={requestThumb ? (f, blob) => requestThumb(f, { blob }) : undefined}
           prefetch={{
             rootRef: mainRef,
             router,

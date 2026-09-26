@@ -47,7 +47,7 @@ const FOCUSABLE = 'button:not([disabled]), a[href], video[controls], audio[contr
  * asked for before this had loaded, opened as soon as it mounts. Opening an
  * item from here (Return, the Open button) leaves Quick Look first.
  */
-export default function QuickLookHost({ apiRef, pending, find, onOpen, onInfo, prefetch, ...state }) {
+export default function QuickLookHost({ apiRef, pending, find, onOpen, onInfo, onOriginalBlob, prefetch, ...state }) {
   const ql = useQuickLook({ ...state, find });
   // Whether this browser draws HEIC and TIFF originals, asked once, early.
   useEffect(() => { decodeProbe().catch(() => {}); }, []);
@@ -70,10 +70,10 @@ export default function QuickLookHost({ apiRef, pending, find, onOpen, onInfo, p
     return () => { apiRef.current = null; };
   }, [apiRef, pending]);
   const open = (key) => { ql.dismiss(); onOpen?.(key); };
-  return <QuickLook ql={ql} find={find} onOpen={open} onInfo={onInfo} />;
+  return <QuickLook ql={ql} find={find} onOpen={open} onInfo={onInfo} onOriginalBlob={onOriginalBlob} />;
 }
 
-function QuickLook({ ql, find, onOpen, onInfo }) {
+function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
   const root = useRef(null);
   const titleId = useId();
   const key = ql.currentKey;
@@ -173,7 +173,7 @@ function QuickLook({ ql, find, onOpen, onInfo }) {
           </button>
         </header>
         <div className="ql-stage" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} style={{ '--ratio': md.width && md.height ? md.width / md.height : 4 / 3 }}>
-          {kind === 'image' && <ImageItem file={file} onSharp={() => ql.onSharp(key)} />}
+          {kind === 'image' && <ImageItem file={file} onSharp={() => ql.onSharp(key)} onOriginalBlob={onOriginalBlob} />}
           {kind === 'video' && <VideoItem file={file} />}
           {kind === 'audio' && <AudioItem file={file} />}
           {kind === 'folder' && (
@@ -205,7 +205,13 @@ function QuickLook({ ql, find, onOpen, onInfo }) {
   );
 }
 
-function ImageItem({ file, onSharp }) {
+/**
+ * An image: the tile's picture, then the large preview. A file with no
+ * preview shows its original instead — fetched as a blob, with a progress bar
+ * once it takes a while — and a writer's browser makes the preview from that
+ * same download (`onOriginalBlob`, the page's backfill).
+ */
+function ImageItem({ file, onSharp, onOriginalBlob }) {
   const probe = probedNow();
   const first = tilePicture(file.id) || thumbSources(file, 'info').src || file.thumbnailUrl;
   const drawable = drawableKind(file, { probe });
@@ -227,6 +233,7 @@ function ImageItem({ file, onSharp }) {
       alt={file.name}
       width={Number(md.width) || 0}
       height={Number(md.height) || 0}
+      onBlob={!file.posterUrl && onOriginalBlob ? (blob) => onOriginalBlob(file, blob) : undefined}
       onDecoded={(q) => {
         // What is on screen first may already be sharp (a neighbour loaded
         // ahead): then it is both.
