@@ -1,0 +1,96 @@
+/*
+ * SectionRail — the left rail of a sectioned area (Admin, and Account next).
+ * Tokens only, so it themes with the brand and the dark scheme for free.
+ *
+ * ≥900px: a 220px sticky column (its width is the parent grid's; see
+ * app/admin/admin.css). Narrower: a strip of pills under the nav that scrolls
+ * sideways and bleeds to the screen edge, like the drive and folder chips.
+ */
+
+.rail { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+.rail-group { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rail-heading {
+  margin: 0 0 2px;
+  padding: 0 var(--s2);
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted);
+}
+.rail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+
+.rail-link {
+  display: flex; align-items: center; gap: var(--s2);
+  min-height: 32px;
+  padding: 6px var(--s2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font-size: var(--t-sm); font-weight: 500;
+  transition: background-color var(--dur-1) var(--ease);
+}
+.rail-link:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+/* The shared .is-active is a solid ink pill; here, where you are is the same
+   blue-to-magenta tint the drive list uses, which reads as a place rather
+   than as a pressed button. */
+.rail .rail-link.is-active {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--accent) 16%, transparent),
+    color-mix(in srgb, var(--accent-alt) 9%, transparent));
+  color: var(--ink);
+  border-color: transparent;
+  box-shadow: none;
+  font-weight: 600;
+}
+.rail-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius-sm); }
+.rail-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-count { flex: none; }
+
+@media (min-width: 900px) {
+  .rail {
+    position: sticky;
+    top: calc(57px + var(--s5));
+    max-height: calc(100dvh - 57px - var(--s5) * 2);
+    overflow-y: auto;
+    padding-bottom: var(--s2);
+  }
+}
+
+@media (max-width: 899.98px) {
+  .rail {
+    /* Positioned, so the visually hidden group names (absolute) stay inside
+       the strip's own scroll area instead of widening the page. */
+    position: relative;
+    flex-direction: row; align-items: center; gap: var(--s1);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    margin: 0 calc(var(--s5) * -1);
+    padding: var(--s3) var(--s5);
+    border-bottom: 1px solid var(--line);
+  }
+  .rail::-webkit-scrollbar { display: none; }
+  .rail-group, .rail-list { flex-direction: row; align-items: center; flex: none; gap: var(--s1); }
+  /* The group names are what the column needed to be scannable; in a strip
+     they would be words between pills. A hairline separates the groups. */
+  .rail-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .rail-group + .rail-group::before {
+    content: '';
+    flex: none;
+    width: 1px; height: 20px;
+    margin: 0 var(--s1);
+    background: var(--line);
+  }
+  .rail-link {
+    white-space: nowrap;
+    min-height: 34px;
+    padding: 6px var(--s3);
+    border-color: var(--line);
+    border-radius: var(--radius-pill);
+    background: var(--surface);
+  }
+  .rail .rail-link.is-active { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+  .rail-label { overflow: visible; }
+}
+
+@media (max-width: 720px) {
+  .rail { margin: 0 calc(var(--s4) * -1); padding: var(--s3) var(--s4); }
+}
