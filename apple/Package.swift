@@ -32,6 +32,7 @@ let package = Package(
         // by scripts/build-mac.sh.
         .executableTarget(
             name: "OnyxFS",
+            dependencies: [.product(name: "OnyxFSCore", package: "OnyxKit")],
             path: "OnyxFS",
             exclude: ["Info.plist", "OnyxFS.entitlements"],
             swiftSettings: [.unsafeFlags(["-application-extension"])],

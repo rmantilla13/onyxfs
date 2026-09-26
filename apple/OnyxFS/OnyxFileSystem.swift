@@ -1,6 +1,7 @@
 import CryptoKit
 import FSKit
 import Foundation
+import OnyxFSCore
 
 /// The extension's entry: FSKit asks it to recognise a resource and to load
 /// it as a volume.

@@ -9,8 +9,7 @@ import Foundation
 /// kernel as they are: ENOENT for a name that is not there, EACCES for a
 /// drive this account may only view, EROFS, EIO when the app cannot be
 /// reached.
-@available(macOS 27.0, *)
-protocol VolumeEngine: AnyObject, Sendable {
+public protocol VolumeEngine: AnyObject, Sendable {
     /// The drive's name: the volume's, and its folder in /Volumes.
     var volumeName: String { get }
     /// This account may only view the drive.
@@ -57,24 +56,34 @@ protocol VolumeEngine: AnyObject, Sendable {
     func shutdown() async
 }
 
-struct VolumeNode: Sendable, Equatable {
-    var id: UInt64
-    var parent: UInt64
-    var name: String
-    var isDirectory: Bool
-    var size: UInt64
-    var modified: Date
-    var created: Date
+public struct VolumeNode: Sendable, Equatable {
+    public init(id: UInt64, parent: UInt64, name: String, isDirectory: Bool, size: UInt64,
+                modified: Date, created: Date, localOnly: Bool) {
+        self.id = id; self.parent = parent; self.name = name; self.isDirectory = isDirectory
+        self.size = size; self.modified = modified; self.created = created; self.localOnly = localOnly
+    }
+
+    public var id: UInt64
+    public var parent: UInt64
+    public var name: String
+    public var isDirectory: Bool
+    public var size: UInt64
+    public var modified: Date
+    public var created: Date
     /// Only on this Mac (.DS_Store and the like): never on the web.
-    var localOnly: Bool
+    public var localOnly: Bool
 }
 
-struct VolumeStatistics: Sendable {
-    var totalBytes: UInt64
-    var usedBytes: UInt64
-    var fileCount: UInt64
+public struct VolumeStatistics: Sendable, Equatable {
+    public init(totalBytes: UInt64, usedBytes: UInt64, fileCount: UInt64) {
+        self.totalBytes = totalBytes; self.usedBytes = usedBytes; self.fileCount = fileCount
+    }
+
+    public var totalBytes: UInt64
+    public var usedBytes: UInt64
+    public var fileCount: UInt64
 }
 
-enum VolumeError: Error {
+public enum VolumeError: Error, Equatable {
     case posix(Int32)
 }

@@ -1,5 +1,6 @@
 import FSKit
 import Foundation
+import OnyxFSCore
 
 /// One mounted drive, as the kernel sees it: FSKit's calls, each translated
 /// into the engine's (VolumeEngine) and back. Nothing is decided here.

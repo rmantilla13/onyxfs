@@ -1,4 +1,5 @@
 import Foundation
+import OnyxFSCore
 
 /// Connects a resource URL to its engine. Filled in with OnyxFSCore's
 /// engine; until then no drive can load.
