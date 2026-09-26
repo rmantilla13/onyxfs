@@ -44,7 +44,7 @@ import useReviewDraft from '@/app/components/review/useReviewDraft';
  */
 export default function FileDetail({
   file: initial, canWrite = false, canShare = false, backHref = '/files', startAt = 0,
-  review = false, me = null, focusComment = null,
+  review = false, me = null, focusComment = null, previewPossible = true,
 }) {
   const [file, setFile] = useState(initial);
   const [sharing, setSharing] = useState(false);
@@ -317,7 +317,7 @@ export default function FileDetail({
             onRangeChange={review ? setRange : undefined}
             onComment={review ? onComment : undefined}
             handoff={handoff}
-            onOriginalBlob={backfill ? onOriginalBlob : undefined}
+            onOriginalBlob={backfill && previewPossible ? onOriginalBlob : undefined}
           />
       )}
       aside={(

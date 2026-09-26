@@ -114,3 +114,12 @@ test('the fill-in records a preview alone, and checks the thumbnail it draws siz
   const pi = await readFile(new URL('../app/components/media/ProgressiveImage.js', import.meta.url), 'utf8');
   assert.match(pi, /fetch\(src, \{ mode: 'cors', cache: 'no-store', signal \}\)/, 'the original handed over is never a cached copy');
 });
+
+test('the file page hands an original over only when its row says a preview could come of it', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const page = await readFile(new URL('../app/files/[id]/page.js', import.meta.url), 'utf8');
+  assert.match(page, /previewPossible=\{previewPossible\(file\)\}/);
+  assert.match(page, /imagePreviewFor\(\{ width: w, height: h \}, \{ bytes: file\.size, mime \}\)/);
+  const detail = await readFile(new URL('../app/components/file/FileDetail.js', import.meta.url), 'utf8');
+  assert.match(detail, /onOriginalBlob=\{backfill && previewPossible \? onOriginalBlob : undefined\}/);
+});

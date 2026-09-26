@@ -3,7 +3,6 @@
 import { useRef, useState } from 'react';
 import { stageSources } from '@/lib/stage-sources';
 import { probedNow } from '@/lib/decode-probe';
-import { previewWanted } from '@/lib/preview-wanted';
 import ProgressiveImage from '@/app/components/media/ProgressiveImage';
 import '@/app/components/review/review.css';
 
@@ -46,7 +45,7 @@ export default function ImageStage({ file, overlay = null, onFailed, handoff = n
     (actual || !preview || hadOriginal.current) && !shell ? { src: original, quality: 'original' } : null,
   ].filter((l) => l && l.src);
   const ratio = natural.w && natural.h ? natural.w / natural.h : 4 / 3;
-  const blob = !preview && original && onOriginalBlob && previewWanted(file, { probe: probedNow() }) ? onOriginalBlob : undefined;
+  const blob = !preview && original && onOriginalBlob ? onOriginalBlob : undefined;
 
   if (!layers.length) return null;
 
