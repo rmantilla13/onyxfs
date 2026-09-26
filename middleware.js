@@ -2,12 +2,13 @@ import NextAuth from 'next-auth';
 import { NextResponse } from 'next/server';
 import { authConfig } from '@/auth.config';
 import { legacyAdminUrl } from '@/lib/admin-redirects';
+import { bearerMayPass } from '@/lib/bearer-gate';
 
 // Built from the Edge-safe config, NOT from @/auth. Importing the full auth
 // config here would pull the Postgres driver into the Edge bundle, which has
 // no TCP sockets — it builds cleanly and then fails at runtime on every
 // request. See auth.config.js. The same goes for everything else imported
-// here: lib/admin-redirects.js imports nothing.
+// here: lib/admin-redirects.js and lib/bearer-gate.js import nothing.
 const { auth } = NextAuth(authConfig);
 
 /**
@@ -17,10 +18,17 @@ const { auth } = NextAuth(authConfig);
  * straight to their sections with a 307. Done ahead of the gate because it
  * reveals nothing — a signed-out visitor is then sent to sign in for the
  * section itself, and returns there.
+ *
+ * And one way past it: Onyx for Mac's writes (upload, rename, move, trash,
+ * folders, new contents, restore) carry its device token, not a session.
+ * Such a request, to exactly those paths, goes on to a handler that checks
+ * the token itself and answers in JSON (lib/bearer-gate.js). The same path
+ * without `Authorization: Bearer …` meets the gate as before.
  */
 export function middleware(req, ev) {
   const legacy = legacyAdminUrl(req.nextUrl.pathname, req.nextUrl.search);
   if (legacy) return NextResponse.redirect(new URL(legacy, req.url), 307);
+  if (bearerMayPass(req.nextUrl.pathname, req.headers.get('authorization'))) return NextResponse.next();
   return auth(req, ev);
 }
 export default middleware;
@@ -41,7 +49,10 @@ export const config = {
   //                bearer) by resolveActor, and read by native clients that
   //                cannot follow a redirect to a sign-in page. Only this one
   //                path under api/files is excluded — the rest stay behind the
-  //                cookie gate.
+  //                cookie gate. (The Mac's write paths stay matched too: the
+  //                middleware function lets a request through only when it
+  //                carries a bearer token — lib/bearer-gate.js — so a
+  //                cookie-less browser is still redirected.)
   // api/files/<id>/transcript, api/transcripts
   //                Transcripts, which Onyx for Mac claims, reports on and
   //                submits with its bearer token while the web reads and

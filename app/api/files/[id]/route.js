@@ -23,9 +23,15 @@ export const TRASH_PREFIX = '_trash';
 // s3PresignGet already documents as the playable-video default.
 const DETAIL_URL_TTL = 21600;
 
-/** GET /api/files/[id] — one file, authorized and presigned for playback. */
-export async function GET(_req, { params }) {
-  const g = await requirePrincipal();
+/**
+ * GET /api/files/[id] — one file, authorized and presigned for playback.
+ *
+ * Every method here takes the browser's session or Onyx for Mac's bearer
+ * token (requirePrincipal(req): the same principal either way, and a token
+ * only for a role that may use the desktop app).
+ */
+export async function GET(req, { params }) {
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal } = g;
 
@@ -80,7 +86,7 @@ function ifMatchVersion(raw) {
  * A folder change is a MOVE, and moves the object too — see below.
  */
 export async function PATCH(req, { params }) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
   const { id } = params;
@@ -283,8 +289,8 @@ export async function PATCH(req, { params }) {
  * never from a request parameter. Letting the caller pick would make a
  * disabled-trash deployment's safety net bypassable with a query string.
  */
-export async function DELETE(_req, { params }) {
-  const g = await requirePrincipal();
+export async function DELETE(req, { params }) {
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
   const { id } = params;

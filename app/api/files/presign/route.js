@@ -24,9 +24,12 @@ const THUMB_CACHE_CONTROL = PREVIEW_CACHE_CONTROL;
  * again against the size that actually landed. A thumbnail, player poster or
  * filmstrip needs a role that can add or change files, and no size —
  * previews are not counted against anyone.
+ *
+ * Takes the browser's session or Onyx for Mac's bearer token
+ * (requirePrincipal(req)).
  */
 export async function POST(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
 

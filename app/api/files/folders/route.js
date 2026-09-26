@@ -67,9 +67,13 @@ async function scopeFor(principal, filespaceId, { write = false } = {}) {
  *
  * `summary` is what the delete confirmation states: how many files and
  * folders a delete of that folder would take with it.
+ *
+ * Every method here takes the browser's session or Onyx for Mac's bearer
+ * token (requirePrincipal(req)): a new folder, a rename or move and a delete
+ * in Finder are these same calls.
  */
 export async function GET(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
   const url = new URL(req.url);
@@ -104,7 +108,7 @@ export async function GET(req) {
  * upload into a new path has, since that creates the same folder implicitly.
  */
 export async function POST(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal } = g;
   const allowed = can(principal, 'folders.manage');
@@ -158,7 +162,7 @@ export async function POST(req) {
  * at `to`, or a rename becomes a way into a folder you do not control.
  */
 export async function PATCH(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal } = g;
   const allowed = can(principal, 'folders.manage');
@@ -252,7 +256,7 @@ export async function PATCH(req) {
  * call again. The folder rows go once nothing in this scope is left.
  */
 export async function DELETE(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
   // Deleting a folder trashes every file in it: both capabilities.

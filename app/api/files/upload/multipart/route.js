@@ -30,6 +30,9 @@ export const dynamic = 'force-dynamic';
  * Every action after `create` re-loads the upload scoped to the caller's email.
  * An upload id plus a part number is enough to write bytes into an object, so
  * ownership is re-proved on each call rather than assumed from the first one.
+ *
+ * Both methods take the browser's session or Onyx for Mac's bearer token
+ * (requirePrincipal(req)).
  */
 
 /**
@@ -54,14 +57,14 @@ const readOnly = new Set(['status', 'abort']);
 const noWrite = () => NextResponse.json({ error: 'You can view this drive but not add to it. Ask one of its owners for editor access.' }, { status: 403 });
 
 /** GET → this user's resumable uploads, for a "pick up where you left off" UI. */
-export async function GET() {
-  const g = await requirePrincipal();
+export async function GET(req) {
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   return NextResponse.json({ uploads: await listUploads(g.email) });
 }
 
 export async function POST(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
 

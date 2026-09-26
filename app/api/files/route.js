@@ -22,9 +22,13 @@ export const maxDuration = 30;
  * `folders` (the sidebar tree) comes with the first page only, and not at all
  * with `folders=0`. It does not depend on the page or the filters, and
  * building it counts every file in the library.
+ *
+ * Both methods here take the browser's session or Onyx for Mac's bearer
+ * token (requirePrincipal(req)), since both are on the path the Mac records
+ * its uploads at (lib/bearer-gate.js).
  */
 export async function GET(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
   const url = new URL(req.url);
@@ -79,7 +83,7 @@ export async function GET(req) {
  * Anything else is someone else's object, or nobody's we know of.
  */
 export async function POST(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
   let body = {};

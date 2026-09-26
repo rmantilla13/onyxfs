@@ -116,7 +116,7 @@ settings table is what lets you test and change a backend without a redeploy.
 | `lib/config.js` | Runtime secret overrides — DB values shadow env vars. |
 | `lib/features.js` · `lib/roles.js` | Feature flags, and the roles that narrow them. |
 | `lib/dam.js` | The metadata/facet model. Dependency-free, shared client + server. |
-| `app/api/space/*` · `app/api/desktop/*` | What the desktop client talks to. |
+| `app/api/space/*` · `app/api/desktop/*` | What the desktop client talks to — plus the web's own write routes, with its token (`lib/bearer-gate.js`). |
 | `desktop/` | The Tauri app. |
 
 ### The brand layer
