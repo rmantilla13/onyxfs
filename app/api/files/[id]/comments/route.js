@@ -15,8 +15,9 @@ export const runtime = 'nodejs';
  * A comment on a file, or a reply to one. Anyone who may read the file may
  * comment on it (lib/review.js reviewDecision). What it may contain is
  * validateComment's to say; who it may mention is decided here, per address,
- * by whether that person could read the file — anyone else is dropped rather
- * than refused, so the answer does not reveal who exists.
+ * by whether that person may sign in and could read the file
+ * (peopleWhoCanRead) — anyone else is dropped rather than refused, so the
+ * answer does not reveal who exists.
  *
  * A reply is attached to the top of its thread (threads are one level deep),
  * inherits an internal thread's audience, and carries no anchor of its own.

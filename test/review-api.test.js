@@ -49,6 +49,9 @@ const tag = Math.random().toString(36).slice(2, 8);
 const OWNER = `owner-${tag}@review.test`;     // uploader, and an editor of the drive
 const MEMBER = `member-${tag}@review.test`;   // a viewer of the drive
 const OUTSIDER = `out-${tag}@review.test`;    // signed in, in no drive
+const BANNED = `banned-${tag}@review.test`;   // signed in once, since banned: an account, no access
+const STRANGER = `stranger-${tag}@external.example`; // never an account at all
+const BOSS = 'boss@review.test';               // an admin (ADMIN_EMAILS), with no invite of their own
 const PREFIX = `drv-${tag}`;
 const FPS = { num: 24000, den: 1001 };
 
@@ -73,9 +76,16 @@ before(async () => {
   drive = await db.createFilespace({ name: `Review ${tag}`, bucket: 'b', prefix: PREFIX, createdBy: 'boss@review.test' });
   await db.grantFilespaceAccess({ filespaceId: drive.id, email: OWNER, role: 'editor' });
   await db.grantFilespaceAccess({ filespaceId: drive.id, email: MEMBER, role: 'viewer' });
-  for (const [email, name] of [[OWNER, 'Olive Owner'], [MEMBER, 'Mo Member'], [OUTSIDER, 'Otto Outsider']]) {
+  for (const [email, name] of [[OWNER, 'Olive Owner'], [MEMBER, 'Mo Member'], [OUTSIDER, 'Otto Outsider'], [BANNED, 'Bea Banned']]) {
     await db.adminAddApprovedInvite({ email, name, reviewedBy: 'test' });
   }
+  // Bea signed in (so has a "user" row), then was banned: the row outlives
+  // the invite. The admin has a row and no invite, and needs none.
+  for (const email of [BANNED, BOSS]) await db.getOrCreateAuthUser(email);
+  await db.sql`UPDATE "user" SET name = 'Bea Banned' WHERE email = ${BANNED}`;
+  await db.sql`UPDATE "user" SET name = ${`Boss ${tag}`} WHERE email = ${BOSS}`;
+  const [invite] = await db.sql`SELECT id FROM invite_requests WHERE email = ${BANNED}`;
+  await db.updateInviteRequest(invite.id, { status: 'banned', reviewedBy: 'test' });
   cut = await db.createFile({
     name: 'cut.mp4', url: `http://s3.test/b/${PREFIX}/cut.mp4`, mime: 'video/mp4', kind: 'video', size: 1000,
     storage: 's3', storageKey: `${PREFIX}/cut.mp4`, createdBy: OWNER,
@@ -95,6 +105,7 @@ after(async () => {
     if (drive) await db.deleteFilespace(drive.id).catch(() => {});
     await db.sql`DELETE FROM invite_requests WHERE email LIKE ${`%-${tag}@review.test`}`.catch(() => {});
     await db.sql`DELETE FROM notifications WHERE user_email LIKE ${`%-${tag}@review.test`}`.catch(() => {});
+    await db.sql`DELETE FROM "user" WHERE email = ANY(${[BANNED, BOSS]})`.catch(() => {});
   }
   await db.sql.end({ timeout: 5 }).catch(() => {});
 });
@@ -259,6 +270,55 @@ describe('the review API', { skip }, () => {
     assert.ok(lib.body.people.some((p) => p.email === OUTSIDER && p.name === 'Otto Outsider'));
     as(OUTSIDER);
     assert.equal((await call(mentionRoute.GET, `/x?q=`, { id: cut.id })).status, 403);
+  });
+
+  test('a mention names only someone who may sign in, even on a file the whole org can read', async () => {
+    // canAccessFile says yes to ANY address for an org-visible file outside
+    // every drive, so the sign-in gate is what stops these two.
+    as(MEMBER);
+    const r = await call(commentsRoute.POST, '/x', { id: still.id }, {
+      method: 'POST', body: { body: `hey @stranger @bea @otto`, mentions: [STRANGER, BANNED, OUTSIDER] },
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.deepEqual(r.body.comment.mentions, [OUTSIDER]);
+    const watching = (await db.sql`SELECT email FROM review_watchers WHERE file_id = ${still.id}`).map((w) => w.email);
+    assert.ok(watching.includes(OUTSIDER));
+    assert.ok(!watching.includes(STRANGER), 'an address that is not an account follows nothing');
+    assert.ok(!watching.includes(BANNED), 'nor does someone who was banned');
+    const told = (await db.sql`SELECT user_email FROM notifications WHERE metadata->>'commentId' = ${r.body.comment.id}`).map((n) => n.user_email);
+    assert.ok(told.includes(OUTSIDER));
+    assert.ok(!told.includes(STRANGER) && !told.includes(BANNED));
+
+    // Editing the words is held to the same rule.
+    const edited = await call(commentRoute.PATCH, '/x', { id: still.id, cid: r.body.comment.id }, {
+      method: 'PATCH', body: { body: 'hey @stranger @bea', mentions: [STRANGER, BANNED] },
+    });
+    assert.equal(edited.status, 200);
+    assert.deepEqual(edited.body.comment.mentions, []);
+  });
+
+  test('a watcher who has since been banned is not told', async () => {
+    await db.addReviewWatchers(still.id, [BANNED]);
+    as(OWNER);
+    const r = await call(commentsRoute.POST, '/x', { id: still.id }, { method: 'POST', body: { body: 'New export is up' } });
+    assert.equal(r.status, 201);
+    const told = (await db.sql`SELECT user_email FROM notifications WHERE metadata->>'commentId' = ${r.body.comment.id}`).map((n) => n.user_email);
+    assert.ok(told.includes(MEMBER), 'a commenter who may still sign in hears of it');
+    assert.ok(!told.includes(BANNED));
+  });
+
+  test('suggestions are people who are active: not a banned account, but an admin without an invite', async () => {
+    as(OWNER);
+    const lib = await call(mentionRoute.GET, `/x?q=${tag}`, { id: still.id });
+    const emails = lib.body.people.map((p) => p.email);
+    assert.ok(emails.includes(OUTSIDER));
+    assert.ok(!emails.includes(BANNED), 'a "user" row outlives the ban; it does not make its owner mentionable');
+    const boss = await call(mentionRoute.GET, `/x?q=${encodeURIComponent(`boss ${tag}`)}`, { id: still.id });
+    assert.deepEqual(boss.body.people, [{ email: BOSS, name: `Boss ${tag}` }]);
+    // Left out of the pool itself, not only filtered after: the route checks
+    // a handful of candidates, and a banned one would take a place.
+    const pool = (await db.listMentionCandidates({ q: tag })).map((p) => p.email);
+    assert.ok(pool.includes(MEMBER) && !pool.includes(BANNED));
   });
 
   test('deleting a comment keeps its place and drops its words; only the author or an editor', async () => {
