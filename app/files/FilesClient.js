@@ -1145,7 +1145,8 @@ export default function FilesClient({
   };
 
   // Files from before thumbnails were made at upload get one when their tile
-  // is seen by someone who may edit them. See lib/thumbnail-client.js.
+  // is seen by someone who may edit them, and files whose thumbnail is one of
+  // the old small ones get a sharper one. See lib/thumbnail-client.js.
   const requestThumb = useMemo(() => (canWrite
     ? createThumbnailBackfill((f) => setFiles((prev) => prev.map((x) => (x.id === f.id
       ? { ...x, thumbnailUrl: f.thumbnailUrl, thumbnailKey: f.thumbnailKey, metadata: f.metadata }

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { effectiveKind, drawableKind, fmtDuration, fmtSize, GRID_ORIGINAL_MAX_BYTES } from '@/lib/media';
+import { isUndersizedPoster } from '@/lib/poster';
 
 /**
  * One file card, for the library grid and the public share grid — which had
@@ -17,7 +18,9 @@ import { effectiveKind, drawableKind, fmtDuration, fmtSize, GRID_ORIGINAL_MAX_BY
  * is a download rather than a selection.
  *
  * `onMissingThumb(file)` is called once a tile that should have a thumbnail
- * and does not comes into view; the library passes the backfill queue.
+ * and does not comes into view, and `onMissingThumb(file, { upgrade: true })`
+ * once one whose thumbnail is an old, too-small one has loaded; the library
+ * passes the backfill queue (lib/thumbnail-client.js).
  */
 
 // Lives in lib/media.js so server pages can use it too; re-exported here for
@@ -31,7 +34,13 @@ export function Thumb({ file, label, onMissingThumb }) {
   // URLs that failed to load in this tile. A broken-image icon is never the
   // answer: a dead thumbnail falls back to the original, then to the label.
   const [failed, setFailed] = useState(() => new Set());
+  // `cover` fills the tile. A picture smaller than the tile in both
+  // directions — an icon, a small screenshot — is shown at its own size
+  // instead of blown up into a blur.
+  const [fit, setFit] = useState('cover');
+  const upgradeAsked = useRef(false);
   const ref = useRef(null);
+  const imgRef = useRef(null);
 
   // A video's poster is its thumbnail or nothing — never the original, which
   // would pull a multi-gigabyte master into an <img> that cannot show it. An
@@ -52,6 +61,32 @@ export function Thumb({ file, label, onMissingThumb }) {
     return () => io.disconnect();
   }, [needsThumb, file, onMissingThumb]);
 
+  const inspect = (img) => {
+    if (!img || !img.naturalWidth) return;
+    const natural = { width: img.naturalWidth, height: img.naturalHeight };
+    const box = ref.current;
+    setFit(box && natural.width < box.clientWidth && natural.height < box.clientHeight ? 'scale-down' : 'cover');
+    // A thumbnail from before posters were sized for a 2x screen (480px on
+    // the long edge) is remade, once, by someone who may edit the file. Known
+    // by its decoded size against the source's recorded one (lib/poster.js),
+    // so nothing has to be stored to tell old from new.
+    if (onMissingThumb && src === file.thumbnailUrl && !upgradeAsked.current
+        && isUndersizedPoster(natural, file.metadata)) {
+      upgradeAsked.current = true;
+      onMissingThumb(file, { upgrade: true });
+    }
+  };
+  const onLoad = (e) => inspect(e.currentTarget);
+  // The grid is server-rendered, and an image that finished loading before
+  // hydration fired its `load` before React was listening — React does not
+  // replay it — so a tile already on screen is inspected here instead.
+  useEffect(() => {
+    const img = imgRef.current;
+    if (img?.complete) inspect(img);
+    // Once per picture; `inspect` reads the rest fresh on each call.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src]);
+
   const duration = kind === 'video' ? fmtDuration(file.metadata?.duration) : '';
   return (
     <div
@@ -62,12 +97,14 @@ export function Thumb({ file, label, onMissingThumb }) {
       {src
         ? (
           <img
+            ref={imgRef}
             src={src}
             alt=""
             loading="lazy"
             decoding="async"
+            onLoad={onLoad}
             onError={() => setFailed((prev) => new Set(prev).add(src))}
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            style={{ width: '100%', height: '100%', objectFit: fit }}
           />
         )
         : <span className="muted small mono">{label || kind}</span>}

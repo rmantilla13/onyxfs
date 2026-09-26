@@ -9,17 +9,18 @@ export const runtime = 'nodejs';
 const THUMB_CACHE_CONTROL = 'private, max-age=31536000, immutable';
 
 /**
- * POST /api/files/presign  Body: { filename, contentType, size, folder, filespaceId?, thumb?, strip? }
+ * POST /api/files/presign  Body: { filename, contentType, size, folder, filespaceId?, thumb?, poster?, strip? }
  * Returns { putUrl, publicUrl, key } for a direct browser → custom-bucket PUT,
- * plus `cacheControl` for a thumbnail, which the PUT must send.
+ * plus `cacheControl` for a preview (thumbnail, player poster or filmstrip),
+ * which the PUT must send.
  * `folder` is baked into the object key so the bucket mirrors Onyx's folders.
  * Only valid when storage mode is 's3'.
  *
  * `size` is required for a file: it is checked against the largest upload
  * and the storage quota before anything is signed, and POST /api/files checks
- * again against the size that actually landed. A thumbnail or filmstrip
- * needs a role that can add or change files, and no size — previews are not
- * counted against anyone.
+ * again against the size that actually landed. A thumbnail, player poster or
+ * filmstrip needs a role that can add or change files, and no size —
+ * previews are not counted against anyone.
  */
 export async function POST(req) {
   const g = await requirePrincipal();
@@ -55,13 +56,15 @@ export async function POST(req) {
     // recorded as a row's thumbnail, or the reverse.
     filename = `${randomUUID()}.strip.webp`;
     cacheControl = THUMB_CACHE_CONTROL;
-  } else if (body.thumb) {
+  } else if (body.thumb || body.poster) {
     if (contentType !== 'image/webp' && contentType !== 'image/jpeg') {
       return NextResponse.json({ error: 'A thumbnail must be WebP or JPEG.' }, { status: 400 });
     }
     scoped = { ...cfg, prefix: '_thumbs' };
     folder = undefined;
-    filename = `${randomUUID()}.${contentType === 'image/webp' ? 'webp' : 'jpg'}`;
+    // A video's player poster is `.poster.<ext>`, which isThumbKey does not
+    // match, so it can only ever be recorded in the poster column.
+    filename = `${randomUUID()}${body.poster ? '.poster' : ''}.${contentType === 'image/webp' ? 'webp' : 'jpg'}`;
     // Never rewritten under the same key, so the browser may keep it.
     cacheControl = THUMB_CACHE_CONTROL;
   } else if (body.filespaceId) {
@@ -76,7 +79,7 @@ export async function POST(req) {
     scoped = cfgForFilespace(cfg, fs);
   }
 
-  if (body.thumb || body.strip) {
+  if (body.thumb || body.poster || body.strip) {
     // A preview for a new upload, or for an existing file someone may edit.
     const d = can(principal, 'files.upload');
     if (!d.ok && !can(principal, 'files.edit').ok) return refusal(d);
@@ -99,7 +102,7 @@ export async function POST(req) {
   } catch (e) {
     return NextResponse.json({ error: e.message || 'Could not presign upload.' }, { status: 500 });
   }
-  if (!body.thumb && !body.strip) {
+  if (!body.thumb && !body.poster && !body.strip) {
     // The key is this person's to record as a file (POST /api/files takes
     // only an issued key), and nobody else's. Unrecorded, the upload could
     // not be added to the library, so fail now rather than after the bytes.

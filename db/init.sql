@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 105
+-- Statements: 107
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -191,6 +191,10 @@ ALTER TABLE files ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
 ALTER TABLE files ADD COLUMN IF NOT EXISTS thumbnail_key TEXT;
 
 ALTER TABLE files ADD COLUMN IF NOT EXISTS filmstrip_key TEXT;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS poster_key TEXT;
+
+CREATE INDEX IF NOT EXISTS files_poster_key_idx ON files (poster_key) WHERE poster_key IS NOT NULL;
 
 ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_at BIGINT;
 

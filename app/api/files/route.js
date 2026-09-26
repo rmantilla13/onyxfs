@@ -66,7 +66,7 @@ export async function GET(req) {
 /**
  * POST /api/files — record an uploaded asset.
  * Body: { name, url, mime, size, kind?, folder, storage, storageKey, tags, notes?,
- *         visibility?, thumbnailKey?, media?, filmstripKey?, filmstrip?, filespace? }
+ *         visibility?, thumbnailKey?, posterKey?, media?, filmstripKey?, filmstrip?, filespace? }
  * `media` is { width, height, duration } read by the browser while it made the thumbnail.
  * Only these fields are read (lib/file-record.js); anything else in the body
  * is ignored, so who, when and what the bytes hash to stay the server's word.

@@ -74,16 +74,20 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
     ? Number(file.metadata.width) / Number(file.metadata.height)
     : null;
   const [ratio, setRatio] = useState(recorded);
+  // The player's own poster — the grid thumbnail's frame at up to 1920px
+  // (lib/poster.js) — where the file has one. The grid-sized thumbnail is
+  // the fallback: on a stage this wide it is enlarged, but it is the picture.
+  const poster = file?.posterUrl || file?.thumbnailUrl || null;
   useEffect(() => {
-    if (ratio || !file?.thumbnailUrl) return undefined;
+    if (ratio || !poster) return undefined;
     let live = true;
     const img = new Image();
     img.onload = () => {
       if (live && img.naturalWidth && img.naturalHeight) setRatio((r) => r || img.naturalWidth / img.naturalHeight);
     };
-    img.src = file.thumbnailUrl;
+    img.src = poster;
     return () => { live = false; };
-  }, [ratio, file?.thumbnailUrl]);
+  }, [ratio, poster]);
 
   const proxy = file?.proxyUrl || null;
   const src = proxy || file?.url || null;
@@ -257,7 +261,7 @@ export default function VideoPlayer({ file, startAt = 0, onRangeChange }) {
         <video
           ref={video}
           src={src}
-          poster={file.thumbnailUrl || undefined}
+          poster={poster || undefined}
           playsInline
           // No picture-in-picture, the player's or the browser's hover button.
           disablePictureInPicture
