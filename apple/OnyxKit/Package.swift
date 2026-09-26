@@ -13,9 +13,14 @@ let package = Package(
     platforms: [.macOS(.v13), .iOS(.v16)],
     products: [
         .library(name: "OnyxKit", targets: ["OnyxKit"]),
+        .library(name: "OnyxFSCore", targets: ["OnyxFSCore"]),
     ],
     targets: [
         .target(name: "OnyxKit"),
         .testTarget(name: "OnyxKitTests", dependencies: ["OnyxKit"]),
+        // The onyxfs file system's engine (ONYXFS.md): plain Swift, no FSKit,
+        // so it is tested here and the extension stays a thin translation.
+        .target(name: "OnyxFSCore"),
+        .testTarget(name: "OnyxFSCoreTests", dependencies: ["OnyxFSCore"]),
     ]
 )
