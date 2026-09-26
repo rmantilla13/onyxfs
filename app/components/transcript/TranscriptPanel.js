@@ -8,6 +8,7 @@ import {
   TRANSCRIPT_LANGUAGES, toSRT, toVTT, toText, exportName, clockLabel, segmentAt, foldText, findMatches,
 } from '@/lib/transcripts';
 import './transcript.css';
+import Icon from '@/app/components/ui/Icon';
 
 /**
  * The Transcript tab of a video or audio file's page.
@@ -102,7 +103,7 @@ export default function TranscriptPanel({
         <p className="tx-title">Transcription failed</p>
         {t.error && <p className="small tx-error-text">{t.error}</p>}
         {data.canRequest && (
-          <div><button type="button" className="btn btn-sm" disabled={data.busy} onClick={again}>{data.busy ? 'Asking…' : 'Retry'}</button></div>
+          <div><button type="button" className="btn btn-sm" disabled={data.busy} onClick={again}><Icon name="refresh-cw" size={14} />{data.busy ? 'Asking…' : 'Retry'}</button></div>
         )}
       </div>
     );
@@ -166,6 +167,7 @@ function RequestForm({ noun, brandName, busy, onRequest }) {
           </select>
         </label>
         <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => onRequest(language || null)}>
+          <Icon name="captions" size={14} />
           {busy ? 'Asking…' : 'Transcribe'}
         </button>
       </div>
@@ -314,11 +316,14 @@ function TranscriptView({
         {kind === 'video' && onCaptions && (
           // The ghost toggle, as the review filters are: its pressed state
           // stays legible under the pointer.
-          <button type="button" className="btn btn-sm btn-ghost" aria-pressed={captions} onClick={() => onCaptions(!captions)}>Captions</button>
+          <button type="button" className="btn btn-sm btn-ghost" aria-pressed={captions} onClick={() => onCaptions(!captions)}>
+            <Icon name={captions ? 'captions' : 'captions-off'} size={14} /* icons: captions captions-off */ />
+            Captions
+          </button>
         )}
-        <button type="button" className="btn btn-sm btn-ghost" onClick={copy}>Copy text</button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={copy}><Icon name="copy" size={14} />Copy text</button>
         <div className="spacer" />
-        <Menu label="Export and transcript actions" trigger="Export">
+        <Menu label="Export and transcript actions" trigger={<><Icon name="download" size={14} />Export</>}>
           <MenuItem onClick={() => exportAs('srt')}>Subtitles (.srt)</MenuItem>
           <MenuItem onClick={() => exportAs('vtt')}>Web captions (.vtt)</MenuItem>
           <MenuItem onClick={() => exportAs('txt')}>Plain text (.txt)</MenuItem>
@@ -344,10 +349,10 @@ function TranscriptView({
               {matches.length ? `${cursor + 1} of ${matches.length}` : 'No matches'}
             </span>
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => step(-1)} disabled={matches.length < 2} aria-label="Previous match">
-              <span aria-hidden="true">↑</span>
+              <Icon name="chevron-up" size={14} />
             </button>
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => step(1)} disabled={matches.length < 2} aria-label="Next match">
-              <span aria-hidden="true">↓</span>
+              <Icon name="chevron-down" size={14} />
             </button>
           </>
         )}
@@ -357,7 +362,7 @@ function TranscriptView({
         <span>{meta}</span>
         <div className="spacer" />
         {!follow && !searching && active >= 0 && (
-          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setFollow(true)}>Follow playback</button>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setFollow(true)}><Icon name="locate-fixed" size={14} />Follow playback</button>
         )}
       </div>
 

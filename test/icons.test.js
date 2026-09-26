@@ -54,7 +54,7 @@ test('icons come from the kit, not hand-drawn SVG or text glyphs', () => {
   // review tool's drawing layer.
   const allowed = new Set(['app/components/OnyxWordmark.js', 'app/components/review/AnnotationLayer.js']);
   // A lone glyph standing in for an icon; a key hint like "← → step" is text.
-  const glyphs = /aria-hidden(?:="true")?>\s*[✕✓✗▾▸▴▶❚⋯‹←]\s*</u;
+  const glyphs = /aria-hidden(?:="true")?>\s*[✕✓✗▾▸▴▶❚⋯‹←→↑↓↕]\s*</u;
   const glyphStrings = /['"](?:✕|✓|✗|▾|▸|▴|⋯|❚❚|🔇|🔊|⛶)['"]/u;
   const walk = (dir) => readdirSync(join(ROOT, dir)).flatMap((e) => {
     const p = `${dir}/${e}`;
