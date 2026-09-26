@@ -1225,6 +1225,8 @@ select.input.cell-input { padding-right: 2px; }
   background: transparent; color: inherit; text-align: left; cursor: pointer;
 }
 .drive-row:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+/* Opening: the drive's page is being rendered. */
+.drive-row.is-pending { opacity: var(--pending-opacity, 0.55); cursor: progress; }
 .drive-row.is-active {
   background: linear-gradient(90deg,
     color-mix(in srgb, var(--accent) 16%, transparent),

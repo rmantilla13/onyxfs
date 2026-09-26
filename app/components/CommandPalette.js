@@ -92,6 +92,14 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
   }, [q, open]);
 
   const go = useCallback((href) => { onClose(); router.push(href); }, [onClose, router]);
+  // A folder result, when the files page is showing All files, is opened in
+  // place (FilesClient handles `onyx:navigate-folder` and says so by
+  // cancelling it) — a folder switch, not a server render of the whole page.
+  const goFolder = useCallback((folder) => {
+    onClose();
+    const e = new CustomEvent('onyx:navigate-folder', { detail: { folder }, cancelable: true });
+    if (window.dispatchEvent(e)) router.push(`/files?folder=${encodeURIComponent(folder)}`);
+  }, [onClose, router]);
   const command = useCallback((name) => {
     onClose();
     window.dispatchEvent(new CustomEvent('onyx:command', { detail: { name } }));
@@ -146,7 +154,7 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
           label: f.name,
           hint: f.folder.includes('/') ? f.folder.slice(0, f.folder.lastIndexOf('/')) : 'All files',
           icon: 'folder',
-          run: () => go(`/files?folder=${encodeURIComponent(f.folder)}`),
+          run: () => goFolder(f.folder),
         })),
       });
     }
@@ -168,7 +176,7 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
     return out;
     // `match` closes over `term`, which is in the list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, folders, drives, actions, term, go, driveOf]);
+  }, [files, folders, drives, actions, term, go, goFolder, driveOf]);
 
   const flat = useMemo(() => sections.flatMap((s) => s.items), [sections]);
   useEffect(() => { setActive(0); }, [q]);

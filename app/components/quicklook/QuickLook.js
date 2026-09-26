@@ -1,0 +1,252 @@
+'use client';
+
+import { useEffect, useId, useRef } from 'react';
+import { effectiveKind, drawableKind, fmtSize, fmtDuration } from '@/lib/media';
+import { thumbSources } from '@/lib/renditions';
+import { probedNow } from '@/lib/decode-probe';
+import { positionLabel } from '@/lib/quicklook';
+import { parseKey } from '@/lib/selection';
+import { modKey } from '@/lib/keys';
+import ProgressiveImage from '@/app/components/media/ProgressiveImage';
+import '@/app/components/review/review.css';
+import './quicklook.css';
+
+function mark(name, key) {
+  try { performance.mark(`onyx:ql:${name}`, { detail: { key } }); } catch {}
+}
+
+/** The picture a tile is showing for `id`, if it is on screen and loaded: the cheapest first layer there is. */
+function tilePicture(id) {
+  if (typeof document === 'undefined') return null;
+  const img = document.querySelector(`.files-pane [data-file-id="${CSS.escape(String(id))}"] img`);
+  return img && img.complete && img.naturalWidth ? img.currentSrc || img.src : null;
+}
+
+const FOCUSABLE = 'button:not([disabled]), a[href], video[controls], audio[controls], [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Quick Look: the item under the selection, large, over the files view —
+ * built only from the row the page already holds, so it never waits for the
+ * server. An image shows the tile's own picture at once and sharpens to the
+ * large preview (ProgressiveImage); a video plays with its poster up first;
+ * a folder or a document shows what it is and how to open it.
+ *
+ *   ← → (↑ ↓)   step        Space, Esc   close
+ *   Return, ⌘↓  open        ⌘I           Get info
+ *
+ * On a touch screen a sideways swipe steps and a swipe down closes. The keys
+ * are taken on window in the capture phase while it is open, so nothing
+ * behind it (the grid, the page's shortcuts) sees them.
+ */
+export default function QuickLook({ ql, find, onOpen, onInfo }) {
+  const root = useRef(null);
+  const titleId = useId();
+  const key = ql.currentKey;
+  const p = key ? parseKey(key) : null;
+  const item = key ? find(key) : null;
+  const file = p?.type === 'file' ? item : null;
+  const folder = p?.type === 'folder' ? item : null;
+  const live = useRef(null);
+  live.current = { ql, key, file, folder, onOpen, onInfo };
+
+  // Focus into the dialog on open; the page puts it back on close (onClose).
+  useEffect(() => {
+    if (ql.isOpen) root.current?.focus({ preventScroll: true });
+  }, [ql.isOpen]);
+
+  useEffect(() => {
+    if (!ql.isOpen) return undefined;
+    const onKey = (e) => {
+      const L = live.current;
+      const mod = e.metaKey || e.ctrlKey;
+      // A dialog opened from here (Get info) has the keys to itself.
+      if (e.target?.closest?.('dialog')) return;
+      let handled = true;
+      if (e.key === 'Escape' || (e.key === ' ' && !e.shiftKey)) {
+        if (!e.repeat) L.ql.close();
+      } else if (e.key === 'ArrowRight' || (e.key === 'ArrowDown' && !mod)) L.ql.step(1);
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') L.ql.step(-1);
+      else if (e.key === 'Enter' || (mod && e.key === 'ArrowDown')) L.onOpen?.(L.key);
+      else if (mod && (e.key === 'i' || e.key === 'I')) L.onInfo?.(L.key);
+      else if (e.key === 'Tab') {
+        // Kept inside: the header's buttons and the player.
+        const list = [...(root.current?.querySelectorAll(FOCUSABLE) || [])];
+        if (!list.length) return;
+        const i = list.indexOf(document.activeElement);
+        const next = e.shiftKey ? (i <= 0 ? list.length - 1 : i - 1) : (i + 1) % list.length;
+        list[next].focus();
+      } else handled = false;
+      if (handled) { e.preventDefault(); e.stopPropagation(); }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [ql.isOpen]);
+
+  // Swipes.
+  const touch = useRef(null);
+  const onTouchStart = (e) => {
+    const t = e.touches[0];
+    touch.current = e.touches.length === 1 ? { x: t.clientX, y: t.clientY, at: performance.now() } : null;
+  };
+  const onTouchEnd = (e) => {
+    const s = touch.current;
+    touch.current = null;
+    const t = e.changedTouches[0];
+    if (!s || !t) return;
+    const dx = t.clientX - s.x;
+    const dy = t.clientY - s.y;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) ql.step(dx < 0 ? 1 : -1);
+    else if (dy > 80 && dy > Math.abs(dx) * 1.5) ql.close();
+  };
+
+  if (!ql.isOpen || !key) return null;
+
+  const kind = file ? effectiveKind(file) : folder ? 'folder' : null;
+  const md = file?.metadata || {};
+  const facts = [
+    positionLabel(ql.index, ql.count, ql.more),
+    md.width && md.height ? `${md.width} × ${md.height}` : null,
+    kind === 'video' && md.duration ? fmtDuration(md.duration) : null,
+    file?.size ? fmtSize(file.size) : null,
+    folder && folder.count != null ? `${folder.count} file${folder.count === 1 ? '' : 's'}` : null,
+  ].filter(Boolean).join(' · ');
+  const name = file?.name || folder?.name || '';
+
+  return (
+    <div
+      ref={root}
+      className="ql"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      data-quicklook=""
+      data-file-id={file?.id}
+      tabIndex={-1}
+    >
+      <div className="ql-backdrop" onClick={() => ql.close()} aria-hidden />
+      <div className="ql-panel">
+        <header className="ql-head">
+          <div className="ql-title">
+            <h2 id={titleId} className="truncate" title={name}>{name}</h2>
+            <span className="small muted truncate">{facts}</span>
+          </div>
+          <div className="spacer" />
+          <button type="button" className="btn btn-sm" onClick={() => onOpen?.(key)} title="Open (Return)">Open</button>
+          {file && <a className="btn btn-sm" href={`/api/files/${file.id}/download`}>Download</a>}
+          <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => ql.close()} aria-label="Close" title="Close (Space)">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+          </button>
+        </header>
+        <div className="ql-stage" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} style={{ '--ratio': md.width && md.height ? md.width / md.height : 4 / 3 }}>
+          {kind === 'image' && <ImageItem file={file} onSharp={() => ql.onSharp(key)} />}
+          {kind === 'video' && <VideoItem file={file} />}
+          {kind === 'audio' && <AudioItem file={file} />}
+          {kind === 'folder' && (
+            <div className="ql-card">
+              <svg viewBox="0 0 24 24" width="56" height="56" aria-hidden className="ql-card-icon">
+                <path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.3l2 2h8.7A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+              </svg>
+              <p className="ql-card-name">{folder.name}</p>
+              <p className="small muted">Folder{folder.count != null ? ` · ${folder.count} file${folder.count === 1 ? '' : 's'}` : ''}</p>
+              <button type="button" className="btn btn-primary" onClick={() => onOpen?.(key)}>Open</button>
+            </div>
+          )}
+          {file && kind !== 'image' && kind !== 'video' && kind !== 'audio' && (
+            <div className="ql-card">
+              <p className="ql-card-kind mono">{String(file.mime || kind || 'file').toUpperCase()}</p>
+              <p className="ql-card-name">{file.name}</p>
+              <p className="small muted">{fmtSize(file.size)}</p>
+              <div className="row" style={{ gap: 'var(--s2)', justifyContent: 'center' }}>
+                <button type="button" className="btn btn-primary" onClick={() => onOpen?.(key)}>Open</button>
+                <a className="btn" href={`/api/files/${file.id}/download`}>Download</a>
+              </div>
+            </div>
+          )}
+        </div>
+        <p className="sr-only" aria-live="polite">{name}, {ql.index + 1} of {ql.count}</p>
+        <p className="ql-keys small muted" aria-hidden>← → step · Space closes · Return opens · {modKey()}I info</p>
+      </div>
+    </div>
+  );
+}
+
+function ImageItem({ file, onSharp }) {
+  const probe = probedNow();
+  const first = tilePicture(file.id) || thumbSources(file, 'info').src || file.thumbnailUrl;
+  const drawable = drawableKind(file, { probe });
+  const layers = [
+    { src: first, quality: 'thumb' },
+    { src: file.posterUrl, quality: 'preview' },
+    // A file with no preview: its original, when this browser can draw it.
+    !file.posterUrl && drawable ? { src: file.url, quality: 'original' } : null,
+  ].filter((l) => l && l.src);
+  if (!layers.length) {
+    return <div className="ql-card"><p className="small muted">No preview for this file.</p></div>;
+  }
+  const md = file.metadata || {};
+  return (
+    <ProgressiveImage
+      key={file.id}
+      id={file.id}
+      layers={layers}
+      alt={file.name}
+      width={Number(md.width) || 0}
+      height={Number(md.height) || 0}
+      onDecoded={(q) => {
+        // What is on screen first may already be sharp (a neighbour loaded
+        // ahead): then it is both.
+        mark('thumb', file.id);
+        if (q !== 'thumb') { mark('sharp', file.id); onSharp?.(); }
+      }}
+    />
+  );
+}
+
+/**
+ * A plain <video>, not the file page's player: its keys are Quick Look's.
+ * It plays at once (Space or Return was the gesture); refused, it tries
+ * muted. Stepping away or closing drops its source, so the download stops.
+ */
+function VideoItem({ file }) {
+  const ref = useRef(null);
+  const poster = file.posterUrl || file.thumbnailUrl || undefined;
+  const under = tilePicture(file.id) || thumbSources(file, 'info').src;
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return undefined;
+    v.play()?.catch?.(() => { v.muted = true; v.play()?.catch?.(() => {}); });
+    return () => {
+      queueMicrotask(() => {
+        if (v.isConnected) return;
+        try { v.pause(); v.removeAttribute('src'); v.load(); } catch {}
+      });
+    };
+  }, [file.id]);
+  return (
+    <>
+      {/* The tile's picture under the player until its poster or a frame is up. */}
+      {under && <img className="ql-under" src={under} alt="" aria-hidden />}
+      <video
+        key={file.id}
+        ref={ref}
+        className="ql-video"
+        src={file.url}
+        poster={poster}
+        controls
+        playsInline
+        preload="metadata"
+        onLoadedData={(e) => { mark('sharp', file.id); e.currentTarget.classList.add('has-frame'); }}
+        onPlaying={() => mark('play', file.id)}
+      />
+    </>
+  );
+}
+
+function AudioItem({ file }) {
+  return (
+    <div className="ql-card">
+      <p className="ql-card-name">{file.name}</p>
+      <audio src={file.url} controls autoPlay style={{ width: 'min(480px, 100%)' }} />
+    </div>
+  );
+}

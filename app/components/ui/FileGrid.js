@@ -181,6 +181,17 @@ function FileGrid({
     }
   }, [metrics]);
 
+  const revealCell = (i) => {
+    const el = cellAt(i);
+    if (el) { el.scrollIntoView({ block: 'nearest' }); return; }
+    if (!outer.current || !metrics.pitch) return;
+    const row = Math.floor(i / metrics.cols);
+    const top = outer.current.getBoundingClientRect().top + window.scrollY + row * metrics.pitch;
+    const bottom = top + metrics.pitch - metrics.gap;
+    if (top < window.scrollY + 64) window.scrollTo(0, Math.max(0, top - 64));
+    else if (bottom > window.scrollY + window.innerHeight) window.scrollTo(0, bottom - window.innerHeight);
+  };
+
   if (navRef) {
     navRef.current.files = {
       cols: metrics.cols,
@@ -189,6 +200,9 @@ function FileGrid({
       // Bring the rendered window to the scroll position now, not on the
       // next scroll event (the page restoring a scroll position).
       update: updateRange,
+      // Bring a card into view without moving the focus (Quick Look steps
+      // behind its overlay, and closing lands on the card).
+      reveal: (i) => revealCell(i),
     };
   }
 

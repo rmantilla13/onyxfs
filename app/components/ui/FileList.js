@@ -276,6 +276,14 @@ function FileList({
       // Bring the rendered window to the scroll position now, not on the
       // next scroll event (the page restoring a scroll position).
       update: updateRange,
+      reveal: (i) => {
+        const el = cellAt(i);
+        if (el) { el.scrollIntoView({ block: 'nearest' }); return; }
+        if (!outer.current || !pitch) return;
+        const top = outer.current.getBoundingClientRect().top + window.scrollY + i * pitch;
+        if (top < window.scrollY + 64) window.scrollTo(0, Math.max(0, top - 64));
+        else if (top + pitch > window.scrollY + window.innerHeight) window.scrollTo(0, top + pitch - window.innerHeight);
+      },
     };
   }
 

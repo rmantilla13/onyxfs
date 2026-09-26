@@ -117,6 +117,15 @@ export default function useSelectionModel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /** Scroll `key` into view without moving the focus. */
+  const reveal = useCallback((key) => {
+    const pos = posOf(key);
+    if (!pos) return;
+    const nav = pos.s === 0 ? navRef.current.folders : navRef.current.files;
+    nav?.reveal?.(pos.i);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const open = useCallback((key) => {
     const p = parseKey(key);
     const L = live.current;
@@ -261,6 +270,7 @@ export default function useSelectionModel({
     ensureSelected,
     longPress,
     focusItem,
+    reveal,
     open,
     move,
     bodyKey,

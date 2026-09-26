@@ -16,7 +16,7 @@ import { drivePrefixFor } from '@/lib/folder-ops';
  * see it. Usage is counted on the server (countFilesUnderPrefix); the library
  * total is only shown to admins.
  */
-export function DriveList({ drives = [], usage = {}, library = null, activeId = '', canCreate = false, onOpen, onNew }) {
+export function DriveList({ drives = [], usage = {}, library = null, activeId = '', pendingId = null, canCreate = false, onOpen, onNew }) {
   const sorted = [...drives].sort((a, b) => String(a.name).localeCompare(String(b.name)));
   return (
     <nav className="drives" aria-label="Drives">
@@ -31,6 +31,7 @@ export function DriveList({ drives = [], usage = {}, library = null, activeId = 
           name="All files"
           detail={library ? usageLine(library) : 'Everything you can open'}
           active={!activeId}
+          pending={pendingId === ''}
           onClick={() => onOpen?.('')}
           library
         />
@@ -44,6 +45,7 @@ export function DriveList({ drives = [], usage = {}, library = null, activeId = 
             detail={usage[d.id] ? usageLine(usage[d.id]) : ROLE_WORDS[d.role] || d.role}
             role={d.role}
             active={activeId === d.id}
+            pending={pendingId === d.id}
             onClick={() => onOpen?.(d.id)}
           />
         ))}
@@ -58,12 +60,15 @@ export function DriveList({ drives = [], usage = {}, library = null, activeId = 
 const ROLE_WORDS = { owner: 'Owner', editor: 'Can edit', viewer: 'Can view' };
 const usageLine = (u) => `${fmtSize(u.bytes) || '0 B'} · ${Number(u.files).toLocaleString()} file${u.files === 1 ? '' : 's'}`;
 
-function DriveRow({ id, name, detail, role, active, onClick, library = false }) {
+// A drive opens with a server render, which takes a moment: the row it is
+// going to says so (`pending`) until the page has changed.
+function DriveRow({ id, name, detail, role, active, pending = false, onClick, library = false }) {
   return (
     <li>
       <button
         type="button"
-        className={`drive-row${active ? ' is-active' : ''}`}
+        className={`drive-row${active ? ' is-active' : ''}${pending ? ' is-pending' : ''}`}
+        aria-busy={pending || undefined}
         aria-current={active ? 'page' : undefined}
         data-drive={library ? '' : id}
         onClick={onClick}

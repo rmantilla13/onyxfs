@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
 import { reviewBadges } from '@/app/components/review/badges';
@@ -19,6 +19,8 @@ import { listingCache, listingKey, returnSlot } from '@/lib/listing-cache';
 import { mergeFirstPage, keepUnchanged } from '@/lib/listing-merge';
 import { setHandoff, getHandoff, rememberReturn, markReady } from '@/lib/file-handoff';
 import FileOpening from '@/app/components/file/FileOpening';
+import QuickLook from '@/app/components/quicklook/QuickLook';
+import useQuickLook from '@/app/components/quicklook/useQuickLook';
 import {
   VIEW_STORAGE_KEY, parseView, availableColumns, parseColumns, resolveColumns,
   COLUMNS_STORAGE_KEY, DEFAULT_COLUMNS, METADATA_PREFIX,
@@ -37,6 +39,7 @@ import FolderDrop, { DRAG_FILES, DRAG_FOLDER, startFolderDrag } from './FolderDr
 import { FolderTiles, FolderRows } from './FolderItems';
 import useSelectionModel from './useSelectionModel';
 import useLongPress from './useLongPress';
+import useOpenPrefetch from './useOpenPrefetch';
 import {
   folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, crumbsFor, folderStats,
 } from '@/lib/folder-ops';
@@ -1072,8 +1075,11 @@ export default function FilesClient({
   // its own volume on the desktop. Opening one is a page change (the server
   // scopes the listing to it); making, renaming and deleting are admin
   // routes, and members are managed by admins and the drive's owners.
+  const [drivePending, startDriveOpen] = useTransition();
+  const [pendingDrive, setPendingDrive] = useState(null);
   const openDrive = useCallback((id) => {
-    router.push(id ? `/files?filespace=${encodeURIComponent(id)}` : '/files');
+    setPendingDrive(id || '');
+    startDriveOpen(() => router.push(id ? `/files?filespace=${encodeURIComponent(id)}` : '/files'));
   }, [router]);
   const canManageDrive = (d) => isAdmin || d?.role === 'owner';
 
@@ -1159,6 +1165,19 @@ export default function FilesClient({
     const on = (e) => commands.current?.(e.detail?.name);
     window.addEventListener('onyx:command', on);
     return () => window.removeEventListener('onyx:command', on);
+  }, []);
+  // ⌘K's folder results, opened in place while All files is on screen (a
+  // drive's page leaves them to the palette, which loads All files).
+  const paletteFolder = useRef(null);
+  paletteFolder.current = (e) => {
+    if (filespaceId || typeof e.detail?.folder !== 'string') return;
+    e.preventDefault();
+    navigate(e.detail.folder);
+  };
+  useEffect(() => {
+    const on = (e) => paletteFolder.current?.(e);
+    window.addEventListener('onyx:navigate-folder', on);
+    return () => window.removeEventListener('onyx:navigate-folder', on);
   }, []);
 
   // /files?new=drive — the palette's New drive from another page. Opens the
@@ -1354,6 +1373,52 @@ export default function FilesClient({
   const mainRef = useRef(null);
   useLongPress(mainRef, { onLongPress: (key) => selRef.current.longPress(key) });
   const anySelected = selected.size + sel.selectedFolders.size;
+  useOpenPrefetch({
+    rootRef: mainRef,
+    router,
+    selectedId: selected.size === 1 && !sel.selectedFolders.size ? [...selected][0] : null,
+    find: (id) => filesRef.current.find((f) => String(f.id) === id),
+  });
+
+  // ── Quick Look ────────────────────────────────────────────────────────────
+  // Space on an item (or the selection), from the rows already on the page.
+  // Stepping with nothing else selected moves the selection with it, so
+  // closing lands where it was looking; at the last loaded file it loads
+  // the next page.
+  const itemFoldersRef = useRef(itemFolders);
+  itemFoldersRef.current = itemFolders;
+  const findItem = useCallback((key) => {
+    const p = parseKey(key);
+    if (p?.type === 'file') return filesRef.current.find((f) => String(f.id) === p.id) || null;
+    if (p?.type === 'folder') return itemFoldersRef.current.find((f) => f.folder === p.id) || null;
+    return null;
+  }, []);
+  const ql = useQuickLook({
+    order: sel.order,
+    selectedKeys: sel.keys,
+    find: findItem,
+    more: !!cursor,
+    loadMore: () => (cursorRef.current ? fetchPage(cursorRef.current) : null),
+    onStep: (key, { follow }) => {
+      if (follow) selRef.current.setKeys([key], { anchor: key, focus: key });
+      selRef.current.reveal(key);
+    },
+    onClose: (key) => { if (key) selRef.current.focusItem(key); },
+  });
+  quickLookRef.current = ql.open;
+  const openFromQuickLook = (key) => {
+    const p = parseKey(key);
+    const item = findItem(key);
+    if (!item) return;
+    ql.dismiss();
+    if (p.type === 'file') openFile(item);
+    else openFolderItem(p.id);
+  };
+  const infoFromQuickLook = (key) => {
+    const p = parseKey(key);
+    if (p?.type === 'file') infoForFiles([p.id]);
+    else if (p?.type === 'folder') infoForFolder(p.id);
+  };
 
   // Back from a file: once the rows are laid out, the scroll goes back to
   // where it was and the file just viewed is selected and focused. Retried
@@ -1718,6 +1783,7 @@ export default function FilesClient({
               usage={driveUsage}
               library={usage.library}
               activeId={filespaceId}
+              pendingId={drivePending ? pendingDrive : null}
               canCreate={isAdmin}
               onOpen={openDrive}
               onNew={() => setNewDrive(true)}
@@ -1832,6 +1898,7 @@ export default function FilesClient({
         </div>
       )}
       <MarqueeRect store={marquee.store} />
+      <QuickLook ql={ql} find={findItem} onOpen={openFromQuickLook} onInfo={infoFromQuickLook} />
       {opening && (
         <div className="file-opening-overlay" style={{ top: opening.top }}>
           <FileOpening

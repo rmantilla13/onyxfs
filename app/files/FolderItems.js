@@ -73,6 +73,7 @@ function useFolderNav({ folders, navRef, columns }) {
     navRef.current.folders = {
       cols,
       focus,
+      reveal: (i) => itemAt(i)?.scrollIntoView({ block: 'nearest' }),
       // Folder items are never virtualized, so the DOM can be asked.
       hits: (rect) => {
         const out = [];
