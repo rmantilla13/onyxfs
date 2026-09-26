@@ -214,3 +214,47 @@ test('a poster is recorded only alongside a thumbnail, and only under a key the 
   assert.equal(uploadFields({ thumbnailKey: KEY, posterKey: KEY }).posterKey, null, 'a thumbnail key is not a poster');
   assert.equal(uploadFields({ thumbnailKey: KEY }).posterKey, null);
 });
+
+// The thumbnail's smaller siblings: keys derived on the server, never taken
+// from a client, and never accepted in another preview column.
+test('a sibling key is the thumbnail key with its size before the extension', async () => {
+  const { thumbSiblingKey, isThumbSiblingKey, isPosterKey, isFilmstripKey } = await import('../lib/media.js');
+  assert.equal(thumbSiblingKey(KEY, 'sm'), '_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.sm.webp');
+  assert.equal(thumbSiblingKey('_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.jpg', 'xs'), '_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.xs.jpg');
+  assert.ok(isThumbSiblingKey(thumbSiblingKey(KEY, 'sm')));
+  // Only from a key the presign route named, and only for a known size.
+  assert.equal(thumbSiblingKey('files/Campaign/x-thumb-a.jpg', 'sm'), null);
+  assert.equal(thumbSiblingKey('drives/finance/salaries.pdf', 'sm'), null);
+  assert.equal(thumbSiblingKey(KEY, 'lg'), null);
+  assert.equal(thumbSiblingKey(null, 'sm'), null);
+  // No other column accepts a sibling, and a sibling is not any other key.
+  const sib = thumbSiblingKey(KEY, 'xs');
+  assert.equal(isThumbKey(sib), false);
+  assert.equal(isPosterKey(sib), false);
+  assert.equal(isFilmstripKey(sib), false);
+  assert.equal(isThumbSiblingKey(KEY), false);
+  assert.equal(isThumbSiblingKey('_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.poster.webp'), false);
+  assert.equal(isThumbSiblingKey('_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.lg.webp'), false);
+});
+
+test('an upload keeps only known sibling sizes, and only with its thumbnail', async () => {
+  const { thumbSizesFrom } = await import('../lib/media.js');
+  assert.deepEqual(thumbSizesFrom(['xs', 'sm', 'sm', 'lg']), ['sm', 'xs']);
+  assert.deepEqual(thumbSizesFrom('xs'), ['xs']);
+  assert.equal(thumbSizesFrom([]), null);
+  assert.equal(thumbSizesFrom({ sm: true }), null);
+  assert.deepEqual(uploadFields({ thumbnailKey: KEY, thumbSizes: ['sm', 'xs'] }).thumbSizes, ['sm', 'xs']);
+  assert.equal(uploadFields({ thumbSizes: ['sm', 'xs'] }).thumbSizes, null, 'no siblings without the thumbnail they derive from');
+  assert.equal(uploadFields({ thumbnailKey: 'files/x.jpg', thumbSizes: ['sm'] }).thumbSizes, null);
+});
+
+test('HEIC and TIFF are drawable only where the browser was seen to decode them', () => {
+  const heic = { mime: 'image/heic', name: 'IMG_1.HEIC' };
+  const tiff = { mime: 'image/tiff', name: 'scan.tif' };
+  assert.equal(drawableKind(heic), null);
+  assert.equal(drawableKind(tiff), null);
+  assert.equal(drawableKind(heic, { probe: { heic: true } }), 'image');
+  assert.equal(drawableKind(tiff, { probe: { tiff: true } }), 'image');
+  assert.equal(drawableKind(tiff, { probe: { heic: true } }), null);
+  assert.equal(drawableKind({ mime: '', name: 'a.heif' }, { probe: { heic: true } }), 'image');
+});
