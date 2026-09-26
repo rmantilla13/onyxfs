@@ -284,6 +284,11 @@ describe('flags are enforced by the decision', () => {
 });
 
 describe('link rules', () => {
+  test('the refusal says what the role can do instead', () => {
+    assert.match(can(principal('contributor'), 'shares.public', { canModify: true }).reason, /private links only/);
+    assert.match(can(principal('viewer'), 'shares.public', { canModify: true }).reason, /cannot make links/);
+  });
+
   test('each kind needs its own capability', () => {
     assert.equal(shareCapFor('private'), 'shares.private');
     assert.equal(shareCapFor('public'), 'shares.public');
