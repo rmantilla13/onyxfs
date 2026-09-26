@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
-import { listInviteRequests, updateInviteRequest, adminAddApprovedInvite, deleteInviteRequest, removeUserAccount } from '@/lib/db';
+import {
+  listInviteRequests, updateInviteRequest, adminAddApprovedInvite, deleteInviteRequest, removeUserAccount,
+  isInviteStatus, INVITE_STATUSES,
+} from '@/lib/db';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,6 +39,11 @@ export async function PATCH(req) {
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
   if (!body.id) return NextResponse.json({ error: 'id required' }, { status: 400 });
+  // Only the three states the gate understands. Anything else was stored as
+  // sent and, since only 'approved' lets anyone in, quietly revoked them.
+  if (!isInviteStatus(body.status)) {
+    return NextResponse.json({ error: `Status must be one of: ${INVITE_STATUSES.join(', ')}.` }, { status: 400 });
+  }
   const row = await updateInviteRequest(body.id, { status: body.status, reviewedBy: guard.email, reviewNote: body.note || null });
   return NextResponse.json({ request: row });
 }

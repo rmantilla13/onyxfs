@@ -43,9 +43,13 @@ test('the cron route deletes what purgeTarget names, not row.storageKey', async 
 test('POST /api/files requires a storage key for an S3 row', async () => {
   // Without one the listing signs a key read out of `url`, which the drive
   // check never sees: a row could name any object in the bucket.
+  const { parseFileRecord } = await import('../lib/file-record.js');
+  assert.match(parseFileRecord({ url: 'https://b/x', storage: 's3' }).error, /storage key/);
+  assert.ok(parseFileRecord({ url: 'https://b/x', storage: 's3', storageKey: 'files/x' }).record);
+  // …and the route reads the body through it, before the row is written.
   const src = await readFile(new URL('../app/api/files/route.js', import.meta.url), 'utf8');
   const post = src.slice(src.indexOf('export async function POST'));
-  const guard = post.indexOf("body.storage === 's3' && !body.storageKey");
-  assert.ok(guard > 0, 'POST must refuse an S3 row without a storage key');
+  const guard = post.indexOf('parseFileRecord(body)');
+  assert.ok(guard > 0, 'POST must read its body through parseFileRecord');
   assert.ok(guard < post.indexOf('createFile('), 'refused before the row is written');
 });

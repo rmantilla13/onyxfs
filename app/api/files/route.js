@@ -6,6 +6,7 @@ import { driveAccess } from '@/lib/drive-access';
 import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject } from '@/lib/storage';
 import { decodeCursor } from '@/lib/file-query';
 import { uploadFields } from '@/lib/media';
+import { parseFileRecord } from '@/lib/file-record';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -65,37 +66,31 @@ export async function GET(req) {
 
 /**
  * POST /api/files — record an uploaded asset.
- * Body: { name, url, mime, size, kind?, folder, storage, storageKey, tags, thumbnailKey?,
- *         media?, filmstripKey?, filmstrip? }
+ * Body: { name, url, mime, size, kind?, folder, storage, storageKey, tags, notes?,
+ *         visibility?, thumbnailKey?, media?, filmstripKey?, filmstrip?, filespace? }
  * `media` is { width, height, duration } read by the browser while it made the thumbnail.
+ * Only these fields are read (lib/file-record.js); anything else in the body
+ * is ignored, so who, when and what the bytes hash to stay the server's word.
  */
 export async function POST(req) {
   const session = await auth();
   if (!session?.user?.email) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
-  if (!body.url) return NextResponse.json({ error: 'A file URL is required.' }, { status: 400 });
+  const parsed = parseFileRecord(body);
+  if (parsed.error) return NextResponse.json({ error: parsed.error }, { status: 400 });
+  const { record } = parsed;
 
   // Recording a file makes its creator able to open it, so where it points is
   // checked like an upload: not by a platform viewer, not into our own
-  // previews or trash, and not into a drive this person cannot add to.
+  // previews or trash (parseFileRecord), and not into a drive this person
+  // cannot add to.
   const principal = await buildPrincipal(session.user.email);
   if (principal.roleId === 'viewer' && !principal.isAdmin) {
     return NextResponse.json({ error: 'Your role can view files but not add them.' }, { status: 403 });
   }
-  // For an S3 row the listing signs storageKey, or failing that a key read
-  // back out of `url` — and only storageKey is checked below. A row with a
-  // url alone could name any object in the bucket: another drive's, a
-  // preview, the trash. Both uploaders always send the key.
-  if (body.storage === 's3' && !body.storageKey) {
-    return NextResponse.json({ error: 'A storage key is required.' }, { status: 400 });
-  }
-  if (body.storageKey) {
-    const key = String(body.storageKey);
-    if (/^(_thumbs|_trash)\//.test(key)) {
-      return NextResponse.json({ error: 'Not a file key.' }, { status: 400 });
-    }
-    const d = driveAccess(key, principal.isAdmin ? { isAdmin: true } : principal.driveScope);
+  if (record.storageKey) {
+    const d = driveAccess(record.storageKey, principal.isAdmin ? { isAdmin: true } : principal.driveScope);
     if (d.inDrive && !d.write) {
       return NextResponse.json({ error: 'That file is in a drive you can view but not add to.' }, { status: 403 });
     }
@@ -106,10 +101,11 @@ export async function POST(req) {
     // the content hash duplicates are found by, and its length the size the
     // Storage page adds up. Best-effort — a bucket that will not answer a
     // HEAD still gets its file recorded, just without a hash.
-    const facts = await objectFacts(session.user.email, body);
+    const facts = await objectFacts(session.user.email, record);
+    const { filespace, media, filmstrip, ...fields } = record;
     const file = await createFile({
-      ...body,
-      ...uploadFields(body),
+      ...fields,
+      ...uploadFields(record),
       ...(facts?.size != null ? { size: facts.size } : {}),
       contentHash: facts?.etag || null,
       createdBy: session.user.email,
