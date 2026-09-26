@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getStorageConfig, s3PresignPut, s3PresignSiblingPut, storageMode, cfgForFilespace, buildObjectKey } from '@/lib/storage';
 import { isThumbKey, thumbSiblingKey, thumbSizesFrom, PREVIEW_CACHE_CONTROL } from '@/lib/media';
-import { getFilespaceForWrite, issueUploadKey } from '@/lib/db';
+import { getFilespaceForWrite, issueUploadKey, uploadKeyHeld } from '@/lib/db';
 import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 import { replacementTarget, replacementKey } from '@/lib/replace-content';
 
@@ -127,12 +127,18 @@ export async function POST(req) {
       replaces: replacing ? replacing.file.size : null,
     });
     if (!d.ok) return refusal(d);
-    if (replacing) replacing.key = await replacementKey(scoped, replacing.file);
+    if (replacing) replacing.key = await replacementKey(scoped, replacing.file, { by: email });
   }
 
   let out;
   try {
-    out = await s3PresignPut(scoped, { filename, contentType, folder, cacheControl, key: replacing?.key || null });
+    // A file's key also passes over one another upload in flight holds
+    // (lib/db.js uploadKeyHeld): the bucket cannot see a PUT that has not
+    // landed. A preview's is a fresh uuid, and needs nothing.
+    const held = body.thumb || body.poster || body.strip
+      ? null
+      : (k) => uploadKeyHeld(k, { by: email }).catch(() => false);
+    out = await s3PresignPut(scoped, { filename, contentType, folder, cacheControl, key: replacing?.key || null, held });
     // The grid thumbnail's siblings, named from the key just made — never
     // from anything the client sent — and so under _thumbs/ with it.
     const sizes = body.thumb && !body.poster ? thumbSizesFrom(body.sizes) : null;

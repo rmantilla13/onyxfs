@@ -87,6 +87,26 @@ describe('new contents against a real database', { skip }, () => {
     assert.equal(await db.claimUploadKey(k, ED, { replaceOf: f.id }), null);
   });
 
+  test('a key an upload in flight holds is passed over — except your own new file’s', async () => {
+    const f = await file('Held.mov');
+    const mine = `${PREFIX}/Cuts/Held-mine.mov`;
+    const theirs = `${PREFIX}/Cuts/Held-theirs.mov`;
+    const bound = `${PREFIX}/Cuts/Held (2).mov`;
+    await db.issueUploadKey(mine, ED, { bucket: 'b' });
+    await db.issueUploadKey(theirs, OTHER, { bucket: 'b' });
+    await db.issueUploadKey(bound, ED, { bucket: 'b', replaceOf: f.id });
+    assert.equal(await db.uploadKeyHeld(mine, { by: ED }), false, 'retrying your own upload keeps its name');
+    assert.equal(await db.uploadKeyHeld(mine, { by: OTHER }), true);
+    assert.equal(await db.uploadKeyHeld(theirs, { by: ED }), true);
+    assert.equal(await db.uploadKeyHeld(bound, { by: ED }), true, 'new contents are never shared, even with yourself');
+    assert.equal(await db.uploadKeyHeld(mine, { by: ED, forReplacement: true }), true, 'nor do new contents share anything');
+    assert.equal(await db.uploadKeyHeld(`${PREFIX}/Cuts/nobody.mov`, { by: ED, forReplacement: true }), false);
+    await db.claimUploadKey(theirs, OTHER);
+    assert.equal(await db.uploadKeyHeld(theirs, { by: ED }), false, 'recorded: the bucket answers for it now');
+    await db.sql`UPDATE upload_keys SET issued_at = ${Date.now() - db.UPLOAD_KEY_TTL_MS - 1} WHERE storage_key = ${bound}`;
+    assert.equal(await db.uploadKeyHeld(bound, { by: OTHER }), false, 'expired');
+  });
+
   test('a resumable upload keeps the file it is new contents for', async () => {
     const f = await file('Resume.mov');
     const up = await db.createUpload({

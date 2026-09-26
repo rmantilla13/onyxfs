@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   createUpload, getUpload, deleteUpload, touchUpload, listUploads, getFilespaceForUser, getFilespaceForWrite,
-  issueUploadKey,
+  issueUploadKey, uploadKeyHeld,
 } from '@/lib/db';
 import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 import { replacementTarget, replacementKey } from '@/lib/replace-content';
@@ -139,7 +139,9 @@ export async function POST(req) {
         filename: replacing ? replacing.file.name : body.filename,
         contentType: body.mime,
         folder: body.folder,
-        key: replacing ? await replacementKey(scoped, replacing.file) : null,
+        key: replacing ? await replacementKey(scoped, replacing.file, { by: email }) : null,
+        // Not a key another upload in flight holds (lib/db.js uploadKeyHeld).
+        held: (k) => uploadKeyHeld(k, { by: email }).catch(() => false),
       });
 
       const upload = await createUpload({

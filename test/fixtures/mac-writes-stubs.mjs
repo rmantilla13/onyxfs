@@ -234,6 +234,16 @@ export async function claimUploadKey(key, email, { replaceOf = null } = {}) {
   s().uploadKeys.delete(k);
   return { bucket: row.bucket };
 }
+// As the SQL: held by an unexpired key someone else holds, or one bound to
+// new contents — or any, when the asker wants a key for new contents.
+export async function uploadKeyHeld(key, { by = null, forReplacement = false } = {}) {
+  for (const [k, row] of s().uploadKeys) {
+    const at = k.lastIndexOf('|');
+    if (k.slice(0, at) !== key || row.issuedAt < now() - UPLOAD_KEY_TTL_MS) continue;
+    if (forReplacement || row.replaceOf || k.slice(at + 1) !== norm(by)) return true;
+  }
+  return false;
+}
 export async function createUpload(data = {}) {
   const row = {
     id: crypto.randomUUID(), uploadId: data.uploadId, storageKey: data.storageKey, filename: data.filename,

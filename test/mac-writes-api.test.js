@@ -597,6 +597,41 @@ describe('new contents for a file', () => {
     assert.equal((await record(who, { name: 'Plain.mov', url: plain.body.publicUrl, storage: 's3', storageKey: plain.body.key, folder: 'Cuts', filespace: 'd1' })).status, 200);
   });
 
+  test('uploads in flight are never handed the same key', async () => {
+    const who = mac(ED);
+    const other = mac(ED2);
+    const { f } = await seeded(who);
+    // Two Macs saving over one file before either lands.
+    const a = await presign(who, { replaceOf: f.id, size: 10 });
+    const b = await presign(other, { replaceOf: f.id, size: 12 });
+    assert.equal(a.body.key, 'team/Cuts/Interview (2).mov');
+    assert.equal(b.body.key, 'team/Cuts/Interview (3).mov', 'not the key the first one is still uploading to');
+    // A new file of the same name, meanwhile, by presign or by multipart —
+    // and the same person starting it again gets the key they already hold.
+    const n = await presign(other, { filename: 'Interview.mov', size: 10, folder: 'Cuts', filespaceId: 'd1' });
+    assert.equal(n.body.key, 'team/Cuts/Interview (4).mov');
+    const m = await multipart(mac(BOSS), { action: 'create', filename: 'Interview.mov', size: 10, folder: 'Cuts', filespaceId: 'd1' });
+    assert.equal(m.body.key, 'team/Cuts/Interview (5).mov');
+    const again = await multipart(other, { action: 'create', filename: 'Interview.mov', size: 10, folder: 'Cuts', filespaceId: 'd1' });
+    assert.equal(again.body.key, 'team/Cuts/Interview (4).mov');
+    // Retrying your own new upload keeps its name; your own replacement is still passed over.
+    const r1 = await presign(who, { filename: 'Retry.mov', size: 10, folder: 'Cuts', filespaceId: 'd1' });
+    const r2 = await presign(who, { filename: 'Retry.mov', size: 10, folder: 'Cuts', filespaceId: 'd1' });
+    assert.equal(r2.body.key, r1.body.key);
+    assert.equal(r1.body.key, 'team/Cuts/Retry.mov');
+    // Both replacements land and swap in, each over the last: the catalog
+    // always names the bytes that are there.
+    put(a.body.putUrl, Buffer.alloc(10, 1));
+    put(b.body.putUrl, Buffer.alloc(12, 2));
+    assert.equal((await swap(who, f.id, { key: a.body.key })).status, 200);
+    assert.equal((await swap(other, f.id, { key: b.body.key })).status, 200);
+    assert.equal(row(f.id).storageKey, 'team/Cuts/Interview (3).mov');
+    assert.equal(row(f.id).size, 12);
+    assert.equal(stored('team/Cuts/Interview (3).mov').size, 12);
+    assert.equal(stored('team/Cuts/Interview (2).mov'), null, 'the first one’s bytes went with the second swap');
+    assert.equal(stored('team/Cuts/Interview.mov'), null);
+  });
+
   test('If-Match is asked before the key is taken', async () => {
     const who = mac(ED);
     const { f } = await seeded(who);
