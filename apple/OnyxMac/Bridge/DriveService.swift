@@ -55,6 +55,18 @@ final class DriveService: ObservableObject {
     @Published private(set) var relocationProblem: String?
 
     let mounts = MountManager()
+    /// Drives as disks of their own (onyxfs): a DiskMounter on macOS 27,
+    /// kept untyped because the type does not exist before it. `disks`
+    /// (DriveService+Disks) is the typed way in.
+    var diskMounter: AnyObject?
+    /// Files copied onto a drive in Finder, on their way to the server —
+    /// this account's, opened at sign-in.
+    var uploads: UploadQueue?
+    /// One per drive with a disk: Finder's changes, made on the server.
+    var writers: [String: DriveWriter] = [:]
+    @Published var uploadSummary = UploadSummary()
+    /// Moves the menu's upload percentage while something is on its way.
+    var uploadTicker: Task<Void, Never>?
     private let server = DAVServer()
     private var mirrors: [String: DriveMirror] = [:]
     private var names: [String: String] = [:]
@@ -83,9 +95,10 @@ final class DriveService: ObservableObject {
     /// Scopes being reconciled; true when another pass is wanted after.
     private var reconciling: [String: Bool] = [:]
     private var timer: Timer?
-    private weak var model: AppModel?
+    weak var model: AppModel?
     private let defaults = UserDefaults.standard
     private var forwarding: AnyCancellable?
+    var diskForwarding: AnyCancellable?
 
     private enum Keys {
         static let root = "cache.root"
@@ -102,12 +115,8 @@ final class DriveService: ObservableObject {
         // A mount finishing or failing changes what this reports too (the
         // menu bar icon, Settings), so its changes are passed on.
         forwarding = mounts.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
-        mounts.onEjected = { [weak self] scope in
-            guard let self else { return }
-            wantMounted.remove(scope.identifier)
-            defaults.set(Array(wantMounted), forKey: Keys.mounted)
-            model?.web.publishOfflineState()
-        }
+        setUpDisks()
+        mounts.onEjected = { [weak self] scope in self?.forgetWanted(scope) }
     }
 
     /// ~/Library/Application Support/Onyx/Offline: not Caches, which macOS
@@ -185,11 +194,14 @@ final class DriveService: ObservableObject {
         openPins()
         await refreshPins()
         guard started == generation else { return }
+        openUploads(account: account, server: model.config.baseURL)
         active = started
         await mountWanted()
         guard started == generation else { return }
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+        // Every 5 s: a mounted drive is to show what the web shows, and a
+        // delta pass with nothing new is one small request.
+        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { await self?.tick() }
         }
         Task { await tick() }
@@ -204,6 +216,7 @@ final class DriveService: ObservableObject {
         timer?.invalidate()
         timer = nil
         mounts.unmountAllNow()
+        stopDisks()
         for key in mirrors.keys { server.setRoute(MountManager.remoteName(SyncDomain(identifier: key)!), nil) }
         mirrors.removeAll()
         // The account's downloads stop now, rather than carry on under the
@@ -222,13 +235,25 @@ final class DriveService: ObservableObject {
 
     func quit() {
         mounts.unmountAllNow()
+        disksUnmountAllNow()
     }
 
     // MARK: - Mounting
 
     func isMounted(_ scope: SyncDomain) -> Bool {
-        if case .mounted = mounts.state(of: scope) { return true }
+        if case .mounted = mountState(of: scope) { return true }
         return false
+    }
+
+    /// How a drive's mount is doing — as a disk or in ~/Onyx, whichever it
+    /// is. What the menus, Settings and the page show.
+    func mountState(of scope: SyncDomain) -> MountManager.State? {
+        diskState(of: scope) ?? mounts.state(of: scope)
+    }
+
+    /// Every drive's, disks and mounts together (the menu bar's count).
+    var allMountStates: [MountManager.State] {
+        Array(mounts.states.values) + diskStates
     }
 
     func setMounted(_ scope: SyncDomain, name: String, _ on: Bool) async {
@@ -238,6 +263,7 @@ final class DriveService: ObservableObject {
         } else {
             wantMounted.remove(scope.identifier)
             await mounts.unmount(scope)
+            await diskUnmount(scope)
         }
         defaults.set(Array(wantMounted), forKey: Keys.mounted)
     }
@@ -252,11 +278,11 @@ final class DriveService: ObservableObject {
         let started = generation
         for drive in model.finderDrives {
             let scope = SyncDomain.drive(id: drive.id)
-            guard wantMounted.contains(scope.identifier), mounts.state(of: scope) == nil else { continue }
+            guard wantMounted.contains(scope.identifier), mountState(of: scope) == nil else { continue }
             await mount(scope, name: drive.name)
             guard started == generation else { return }
         }
-        if wantMounted.contains(SyncDomain.library.identifier), mounts.state(of: .library) == nil {
+        if wantMounted.contains(SyncDomain.library.identifier), mountState(of: .library) == nil {
             await mount(.library, name: MountFolder.library)
         }
     }
@@ -270,6 +296,8 @@ final class DriveService: ObservableObject {
         server.setRoute(segment, DAVResponder(source: MountSource(scope: scope.identifier, mirror: mirror,
                                                                   pins: currentPins),
                                              bearerToken: server.token, hrefPrefix: "/\(segment)"))
+        // As a disk of its own when this Mac can (onyxfs); in ~/Onyx otherwise.
+        if await mountAsDisk(scope, name: name, mirror: mirror) { return }
         guard let bridge = server.baseURL(for: segment) else { return }
         await mounts.mount(scope, name: name, bridge: bridge, token: server.token,
                            cache: streamingCache, cacheLimitGB: cacheLimitGB, logs: Self.logsDirectory)
@@ -284,7 +312,36 @@ final class DriveService: ObservableObject {
             : streamingDirectory
     }
 
-    func reveal(_ scope: SyncDomain) { mounts.reveal(scope) }
+    /// Ejected in Finder, or unmounted by something other than Onyx: the
+    /// drive is no longer wanted there.
+    func forgetWanted(_ scope: SyncDomain) {
+        wantMounted.remove(scope.identifier)
+        defaults.set(Array(wantMounted), forKey: Keys.mounted)
+        model?.web.publishOfflineState()
+    }
+
+    /// The mirror a drive's writes are checked against (opened if it is not).
+    func mirrorForWrites(_ scope: SyncDomain) async -> DriveMirror? {
+        if let open = mirrors[scope.identifier] { return open }
+        return await mirror(for: scope, name: names[scope.identifier] ?? scope.identifier)
+    }
+
+    /// After a change Finder made: the drive's mirror now, not at the next
+    /// tick, so the next listing already shows it.
+    func syncForWrites(_ scope: SyncDomain) async {
+        guard let mirror = mirrors[scope.identifier] else { return }
+        _ = try? await mirror.sync()
+        await writers[scope.identifier]?.mirrorChanged()
+    }
+
+    // TEMPORARY until the bridge's onyxfs routes land (feat/onyxfs-bridge):
+    // they provide these two.
+    func onyxfsResourceURL(for scope: SyncDomain) async throws -> URL { throw OnyxError.decoding("onyxfs bridge not built yet") }
+    func endOnyxfsSessions(for scope: SyncDomain) {}
+
+    func reveal(_ scope: SyncDomain) {
+        if diskState(of: scope) != nil { diskReveal(scope) } else { mounts.reveal(scope) }
+    }
 
     // MARK: - Mirrors
 
@@ -354,6 +411,7 @@ final class DriveService: ObservableObject {
         names[id] = nil
         if wantMounted.remove(id) != nil { defaults.set(Array(wantMounted), forKey: Keys.mounted) }
         await mounts.unmount(scope)
+        await diskUnmount(scope)
         guard started == generation else { return }
         if let pins { await pins.removeAll(scope: id) }
         guard started == generation else { return }
