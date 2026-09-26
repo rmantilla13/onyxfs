@@ -5,6 +5,7 @@ import { effectiveKind, drawableKind, fmtSize, fmtDuration } from '@/lib/media';
 import { thumbSources } from '@/lib/renditions';
 import { probedNow, decodeProbe } from '@/lib/decode-probe';
 import { positionLabel } from '@/lib/quicklook';
+import { previewWanted } from '@/lib/backfill';
 import { parseKey } from '@/lib/selection';
 import { modKey } from '@/lib/keys';
 import ProgressiveImage from '@/app/components/media/ProgressiveImage';
@@ -25,6 +26,30 @@ function tilePicture(id) {
 }
 
 const FOCUSABLE = 'button:not([disabled]), a[href], video[controls], audio[controls], [tabindex]:not([tabindex="-1"])';
+// A control that answers its own keys: Return and Space press a button or
+// follow a link; a player or a field takes the arrows too.
+const CONTROL = 'button, a[href], input, select, textarea, summary, [role="button"], video[controls], audio[controls]';
+const OWN_ARROWS = 'input, select, textarea, video[controls], audio[controls]';
+
+/**
+ * Make everything but `root` inert (and so out of the accessibility tree
+ * and the tab order): every sibling of it and of each of its ancestors. A
+ * branch holding a <dialog> is gone into rather than made inert whole, so a
+ * dialog opened from here (Get info) still works. Returns the undo.
+ */
+function inertAround(root) {
+  const made = [];
+  const hide = (el) => {
+    if (el.inert || /^(SCRIPT|STYLE|LINK|TEMPLATE|DIALOG)$/.test(el.tagName)) return;
+    if (el.querySelector('dialog')) { for (const c of el.children) hide(c); return; }
+    el.inert = true;
+    made.push(el);
+  };
+  for (let el = root; el && el.parentElement && el !== document.body; el = el.parentElement) {
+    for (const sib of el.parentElement.children) if (sib !== el) hide(sib);
+  }
+  return () => { for (const el of made) el.inert = false; };
+}
 
 /**
  * Quick Look: the item under the selection, large, over the files view —
@@ -48,7 +73,11 @@ const FOCUSABLE = 'button:not([disabled]), a[href], video[controls], audio[contr
  * item from here (Return, the Open button) leaves Quick Look first.
  */
 export default function QuickLookHost({ apiRef, pending, find, onOpen, onInfo, onOriginalBlob, prefetch, ...state }) {
-  const ql = useQuickLook({ ...state, find });
+  // An original the fill-in wants is loaded ahead the way it needs it
+  // (lib/original-preload.js), so a neighbour stepped onto gets its preview
+  // made just as one waited for does.
+  const wantsOriginal = onOriginalBlob ? (f) => previewWanted(f, { probe: probedNow() }) : null;
+  const ql = useQuickLook({ ...state, find, wantsOriginal });
   // Whether this browser draws HEIC and TIFF originals, asked once, early.
   useEffect(() => { decodeProbe().catch(() => {}); }, []);
   // Getting a file's page and preview ready while it rests selected
@@ -83,10 +112,18 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
   const folder = p?.type === 'folder' ? item : null;
   const live = useRef(null);
   live.current = { ql, key, file, folder, onOpen, onInfo };
+  const hadOriginal = useRef({ id: null, yes: false });
 
   // Focus into the dialog on open; the page puts it back on close (onClose).
+  // While it is open the page behind is inert: out of reach of Tab and of a
+  // screen reader, which otherwise reads the grid under the overlay.
   useEffect(() => {
-    if (ql.isOpen) root.current?.focus({ preventScroll: true });
+    if (!ql.isOpen || !root.current) return undefined;
+    root.current.focus({ preventScroll: true });
+    const undo = inertAround(root.current);
+    ql.releaseRef.current = undo;
+    return () => { if (ql.releaseRef.current === undo) ql.releaseRef.current = null; undo(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ql.isOpen]);
 
   useEffect(() => {
@@ -96,6 +133,13 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
       const mod = e.metaKey || e.ctrlKey;
       // A dialog opened from here (Get info) has the keys to itself.
       if (e.target?.closest?.('dialog')) return;
+      // So does a control of Quick Look's own that has the focus: Return on
+      // Close closes, Space on Open opens, a focused player seeks.
+      const control = e.target?.closest?.(CONTROL);
+      if (control && root.current?.contains(control) && !mod) {
+        if (e.key === 'Enter' || e.key === ' ') return;
+        if (e.key.startsWith('Arrow') && control.matches(OWN_ARROWS)) return;
+      }
       let handled = true;
       if (e.key === 'Escape' || (e.key === ' ' && !e.shiftKey)) {
         if (!e.repeat) L.ql.close();
@@ -138,14 +182,23 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
 
   const kind = file ? effectiveKind(file) : folder ? 'folder' : null;
   const md = file?.metadata || {};
+  const position = positionLabel(ql.index, ql.count, ql.more);
   const facts = [
-    positionLabel(ql.index, ql.count, ql.more),
+    position,
     md.width && md.height ? `${md.width} × ${md.height}` : null,
     kind === 'video' && md.duration ? fmtDuration(md.duration) : null,
     file?.size ? fmtSize(file.size) : null,
     folder && folder.count != null ? `${folder.count} file${folder.count === 1 ? '' : 's'}` : null,
   ].filter(Boolean).join(' · ');
   const name = file?.name || folder?.name || '';
+  // An image with nothing this browser can show (a HEIC or TIFF outside
+  // Safari with no thumbnail, a RAW): the kind panel, as for a document.
+  // A preview made while the original is on screen (the fill-in, from this
+  // very download) must not send the picture back through the thumbnail:
+  // the original stays one of the layers for as long as this file is shown.
+  if (hadOriginal.current.id !== file?.id) hadOriginal.current = { id: file?.id, yes: false };
+  if (file && !file.posterUrl) hadOriginal.current.yes = true;
+  const layers = kind === 'image' ? imageLayers(file, { keepOriginal: hadOriginal.current.yes }) : null;
 
   return (
     <div
@@ -173,7 +226,7 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
           </button>
         </header>
         <div className="ql-stage" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} style={{ '--ratio': md.width && md.height ? md.width / md.height : 4 / 3 }}>
-          {kind === 'image' && <ImageItem file={file} onSharp={() => ql.onSharp(key)} onOriginalBlob={onOriginalBlob} />}
+          {kind === 'image' && layers.length > 0 && <ImageItem file={file} layers={layers} onSharp={() => ql.onSharp(key)} onOriginalBlob={onOriginalBlob} />}
           {kind === 'video' && <VideoItem file={file} />}
           {kind === 'audio' && <AudioItem file={file} />}
           {kind === 'folder' && (
@@ -186,7 +239,7 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
               <button type="button" className="btn btn-primary" onClick={() => onOpen?.(key)}>Open</button>
             </div>
           )}
-          {file && kind !== 'image' && kind !== 'video' && kind !== 'audio' && (
+          {file && ((kind === 'image' && !layers.length) || (kind !== 'image' && kind !== 'video' && kind !== 'audio')) && (
             <div className="ql-card">
               <p className="ql-card-kind mono">{String(file.mime || kind || 'file').toUpperCase()}</p>
               <p className="ql-card-name">{file.name}</p>
@@ -198,7 +251,7 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
             </div>
           )}
         </div>
-        <p className="sr-only" aria-live="polite">{name}, {ql.index + 1} of {ql.count}</p>
+        <p className="sr-only" aria-live="polite">{name}, {position}</p>
         <p className="ql-keys small muted" aria-hidden>← → step · Space closes · Return opens · {modKey()}I info</p>
       </div>
     </div>
@@ -211,20 +264,22 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
  * once it takes a while — and a writer's browser makes the preview from that
  * same download (`onOriginalBlob`, the page's backfill).
  */
-function ImageItem({ file, onSharp, onOriginalBlob }) {
-  const probe = probedNow();
+function imageLayers(file, { keepOriginal = false } = {}) {
   const first = tilePicture(file.id) || thumbSources(file, 'info').src || file.thumbnailUrl;
-  const drawable = drawableKind(file, { probe });
-  const layers = [
+  const drawable = drawableKind(file, { probe: probedNow() });
+  return [
     { src: first, quality: 'thumb' },
     { src: file.posterUrl, quality: 'preview' },
     // A file with no preview: its original, when this browser can draw it.
-    !file.posterUrl && drawable ? { src: file.url, quality: 'original' } : null,
+    (!file.posterUrl || keepOriginal) && drawable ? { src: file.url, quality: 'original' } : null,
   ].filter((l) => l && l.src);
-  if (!layers.length) {
-    return <div className="ql-card"><p className="small muted">No preview for this file.</p></div>;
-  }
+}
+
+function ImageItem({ file, layers, onSharp, onOriginalBlob }) {
   const md = file.metadata || {};
+  // Handed to the fill-in only when it would make a preview from it: never
+  // for a file that by design gets none (lib/backfill.js previewWanted).
+  const blob = !file.posterUrl && onOriginalBlob && previewWanted(file, { probe: probedNow() });
   return (
     <ProgressiveImage
       key={file.id}
@@ -233,7 +288,7 @@ function ImageItem({ file, onSharp, onOriginalBlob }) {
       alt={file.name}
       width={Number(md.width) || 0}
       height={Number(md.height) || 0}
-      onBlob={!file.posterUrl && onOriginalBlob ? (blob) => onOriginalBlob(file, blob) : undefined}
+      onBlob={blob ? (b) => onOriginalBlob(file, b) : undefined}
       onDecoded={(q) => {
         // What is on screen first may already be sharp (a neighbour loaded
         // ahead): then it is both.

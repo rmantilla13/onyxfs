@@ -5,6 +5,8 @@ import { parseKey } from '@/lib/selection';
 import { quickLookItems, stepIndex, preloadPlan, keepDecoded, preloadUrl } from '@/lib/quicklook';
 import { markReady } from '@/lib/file-handoff';
 import { effectiveKind } from '@/lib/media';
+import { probedNow } from '@/lib/decode-probe';
+import { preloadOriginal, dropPreloaded } from '@/lib/original-preload';
 
 const PRELOAD_AFTER_MS = 200;
 const PRELOAD_PARALLEL = 2;
@@ -36,12 +38,16 @@ const isPhone = () => typeof window !== 'undefined' && window.matchMedia?.('(max
  * `order` is the view's keys (folders then files); `find(key)` gives the row
  * (a file) or { folder } for one.
  */
-export default function useQuickLook({ order, selectedKeys, find, more = false, loadMore, onStep, onClose }) {
+export default function useQuickLook({ order, selectedKeys, find, more = false, loadMore, onStep, onClose, wantsOriginal = null }) {
   const [state, setState] = useState(null); // { keys (null: follow order), index, dir }
   const live = useRef(null);
-  live.current = { order, selectedKeys, find, more, loadMore, onStep, onClose, state };
+  live.current = { order, selectedKeys, find, more, loadMore, onStep, onClose, wantsOriginal, state };
   const pushed = useRef(false);
   const ignorePop = useRef(false);
+  // Set by the overlay while it keeps the page behind it inert; called before
+  // focus goes back to the page, which an inert page would refuse.
+  const releaseRef = useRef(null);
+  const release = () => { const fn = releaseRef.current; releaseRef.current = null; fn?.(); };
 
   const keysOf = (s) => (s ? s.keys || live.current.order : []);
   const currentKey = state ? keysOf(state)[state.index] || null : null;
@@ -72,6 +78,7 @@ export default function useQuickLook({ order, selectedKeys, find, more = false, 
     const key = keysOf(s)[s.index] || null;
     try { performance.mark('onyx:ql:close', { detail: { key } }); } catch {}
     setState(null);
+    release();
     if (pushed.current && !viaHistory) {
       ignorePop.current = true;
       pushed.current = false;
@@ -98,6 +105,7 @@ export default function useQuickLook({ order, selectedKeys, find, more = false, 
     }
     try { performance.mark('onyx:ql:close', { detail: {} }); } catch {}
     setState(null);
+    release();
   }, []);
 
   useEffect(() => {
@@ -139,13 +147,20 @@ export default function useQuickLook({ order, selectedKeys, find, more = false, 
   // Once the current picture is sharp (or after a moment): the previews of
   // the next, the previous and the one after next in the direction of
   // travel, two at a time. Decoded pictures are held for the neighbours only
-  // (a 2400px preview is ~15 MB decoded); the rest are let go.
-  const held = useRef(new Map()); // url → { img, i }
+  // (a 2400px preview is ~15 MB decoded); the rest are let go. An original
+  // the fill-in will want (`wantsOriginal`: a writer, a file with no preview
+  // that would get one) is fetched the way it needs, as a blob
+  // (lib/original-preload.js), not by an <img> it could not use.
+  const held = useRef(new Map()); // url → { img, i } | { blob: true, i }
   const [sharpAt, setSharpAt] = useState(null);
   const onSharp = useCallback((key) => setSharpAt(key), []);
   useEffect(() => {
+    const letGo = (url, h) => {
+      if (h.blob) dropPreloaded(url);
+      else h.img.src = '';
+    };
     if (!state) {
-      for (const { img } of held.current.values()) img.src = '';
+      for (const [url, h] of held.current) letGo(url, h);
       held.current.clear();
       return undefined;
     }
@@ -154,19 +169,20 @@ export default function useQuickLook({ order, selectedKeys, find, more = false, 
     const plan = preloadPlan(index, keys.length, state.dir);
     const phone = isPhone();
     const fast = fastConnection();
+    const probe = probedNow();
     const wanted = new Map();
     for (const i of plan) {
       const p = parseKey(keys[i]);
       if (p?.type !== 'file') continue;
       const f = live.current.find(keys[i]);
       if (!f || effectiveKind(f) !== 'image') continue;
-      const url = preloadUrl(f, { distance: Math.abs(i - index), fast });
-      if (url) wanted.set(url, i);
+      const url = preloadUrl(f, { distance: Math.abs(i - index), fast, probe });
+      if (url) wanted.set(url, { i, blob: url === f.url && !!live.current.wantsOriginal?.(f) });
     }
     // Let go of what is no longer near.
     for (const [url, h] of held.current) {
       if (!wanted.has(url) && !keepDecoded(h.i, index, { phone })) {
-        h.img.src = '';
+        letGo(url, h);
         held.current.delete(url);
       }
     }
@@ -178,13 +194,18 @@ export default function useQuickLook({ order, selectedKeys, find, more = false, 
       const next = () => {
         if (cancelled) return;
         while (running < PRELOAD_PARALLEL && queue.length) {
-          const [url, i] = queue.shift();
+          const [url, { i, blob }] = queue.shift();
+          running++;
+          const done = () => { running--; next(); };
+          if (blob) {
+            held.current.set(url, { blob: true, i });
+            (preloadOriginal(url) || Promise.resolve()).then(done, done);
+            continue;
+          }
           const img = new Image();
           img.decoding = 'async';
           img.src = url;
           held.current.set(url, { img, i });
-          running++;
-          const done = () => { running--; next(); };
           (img.decode ? img.decode() : Promise.resolve()).then(() => { markReady(url); done(); }, done);
         }
       };
@@ -197,7 +218,7 @@ export default function useQuickLook({ order, selectedKeys, find, more = false, 
   }, [state, sharpAt]);
 
   return {
-    open, close, step, dismiss, onSharp,
+    open, close, step, dismiss, onSharp, releaseRef,
     isOpen: !!state,
     currentKey,
     index: state ? state.index : 0,
