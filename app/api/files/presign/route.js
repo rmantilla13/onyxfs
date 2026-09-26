@@ -1,19 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
-import { getStorageConfig, s3PresignPut, storageMode, cfgForFilespace, buildObjectKey } from '@/lib/storage';
+import { getStorageConfig, s3PresignPut, s3PresignSiblingPut, storageMode, cfgForFilespace, buildObjectKey } from '@/lib/storage';
+import { isThumbKey, thumbSiblingKey, thumbSizesFrom, PREVIEW_CACHE_CONTROL } from '@/lib/media';
 import { getFilespaceForWrite, driveScopeFor } from '@/lib/db';
 import { driveAccess } from '@/lib/drive-access';
 
 export const runtime = 'nodejs';
 
-const THUMB_CACHE_CONTROL = 'private, max-age=31536000, immutable';
+const THUMB_CACHE_CONTROL = PREVIEW_CACHE_CONTROL;
 
 /**
- * POST /api/files/presign  Body: { filename, contentType, folder, thumb?, poster?, strip? }
+ * POST /api/files/presign  Body: { filename, contentType, folder, thumb?, sizes?, poster?, strip? }
  * Returns { putUrl, publicUrl, key } for a direct browser → custom-bucket PUT,
  * plus `cacheControl` for a preview (thumbnail, player poster or filmstrip),
- * which the PUT must send.
+ * which the PUT must send. A thumbnail with `sizes` (['sm', 'xs']) also gets
+ * `siblings`: { sm: { putUrl, key }, … }, PUTs for its smaller renditions
+ * under the same uuid (lib/media.js thumbSiblingKey), in the same format.
  * `folder` is baked into the object key so the bucket mirrors Onyx's folders.
  * Only valid when storage mode is 's3'.
  */
@@ -85,6 +88,17 @@ export async function POST(req) {
 
   try {
     const out = await s3PresignPut(scoped, { filename, contentType, folder, cacheControl });
+    // The grid thumbnail's siblings, named from the key just made — never
+    // from anything the client sent — and so under _thumbs/ with it.
+    const sizes = body.thumb && !body.poster ? thumbSizesFrom(body.sizes) : null;
+    if (sizes && isThumbKey(out.key)) {
+      const siblings = {};
+      for (const size of sizes) {
+        const key = thumbSiblingKey(out.key, size);
+        if (key) siblings[size] = await s3PresignSiblingPut(scoped, key, { contentType, cacheControl });
+      }
+      out.siblings = siblings;
+    }
     // S3 stores whatever Cache-Control the PUT carries, so the browser sends this.
     return NextResponse.json(cacheControl ? { ...out, cacheControl } : out);
   } catch (e) {

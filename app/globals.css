@@ -441,11 +441,33 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 /* Our wordmark: ink letters, and "/FS" in the aura colours sliding behind
    them — slowly, so it reads as light moving rather than a banner. The
    reduced-motion rule at the top stops it on its last frame. */
-.onyx-wordmark { display: block; color: var(--ink); }
-.onyx-fs-sweep { animation: onyx-fs-sweep 7s linear infinite; }
+.onyx-wordmark { position: relative; display: block; color: var(--ink); }
+.onyx-wordmark svg { display: block; }
+/* "/FS": the letters' box (180-276 of the 276-unit wordmark), masked to their
+   shapes. The sweep inside is two periods of the gradient wide and slides one
+   period — a transform, so the compositor runs it without the page. */
+.onyx-fs {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: calc(100% * 180 / 276);
+  width: calc(100% * 96 / 276);
+  overflow: hidden;
+  -webkit-mask-size: 100% 100%; mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+}
+.onyx-fs-sweep {
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 200%;
+  background: linear-gradient(90deg,
+    var(--aura-a) 0%, var(--aura-b) 16.667%, var(--aura-c) 33.333%,
+    var(--aura-a) 50%, var(--aura-b) 66.667%, var(--aura-c) 83.333%, var(--aura-a) 100%);
+  animation: onyx-fs-sweep 7s linear infinite;
+  will-change: transform;
+}
 @keyframes onyx-fs-sweep {
   from { transform: translateX(0); }
-  to { transform: translateX(-96px); }
+  to { transform: translateX(-50%); }
 }
 .auth-logo { margin-bottom: var(--s5); }
 
@@ -709,8 +731,45 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .kind-strip .btn { flex: 0 0 auto; }
 .files-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--s5); }
 .files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--s4); }
-.filecard { display: block; overflow: hidden; cursor: pointer; text-align: left; }
-.filecard:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* A card is picked, not read: no text selection from a double-click, and no
+   iOS image callout on a long-press (which selects, useLongPress). */
+.filecard { display: block; overflow: hidden; cursor: pointer; text-align: left; -webkit-user-select: none; user-select: none; }
+/* Focus: a ring standing off the card. Selection: the card's own edge and a
+   tint, as a folder tile (its edge ring is with the glow, below). */
+.filecard:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.filecard[aria-selected='true'] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+[data-theme='dark'] .filecard[aria-selected='true'],
+[data-theme='dark'] .folder-tile[aria-selected='true'] { background: color-mix(in srgb, var(--accent) 22%, var(--surface)); }
+.filecard-thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: var(--surface-sunken);
+}
+.filecard-thumb img { width: 100%; height: 100%; -webkit-touch-callout: none; -webkit-user-drag: none; }
+.filecard-text { padding: 10px; }
+/* A listing kept on screen while the next one loads: still real files, and
+   still usable, but plainly not the answer yet. The delay keeps a fast load
+   from flickering. */
+.is-pending > .files-grid,
+.filelist.is-pending .filelist-body {
+  opacity: var(--pending-opacity, 0.55);
+  transition: opacity var(--dur-2) var(--ease) 150ms;
+}
+/* Placeholders shaped like the cards and rows they stand in for. */
+.filecard.is-skeleton { cursor: default; box-shadow: none; }
+.skeleton-line {
+  display: block;
+  height: 10px;
+  margin: 3px 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+.skeleton-line.is-short { width: 40%; }
+.filelist-row.is-skeleton { cursor: default; }
+.filelist-row.is-skeleton .skeleton-line { width: 50%; margin: 0; }
 .filecard-badge {
   position: absolute;
   right: 6px;
@@ -763,6 +822,7 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .folder-tile {
   display: flex; align-items: center; gap: var(--s2);
   width: 100%; min-width: 0;
+  -webkit-user-select: none; user-select: none;
   padding: var(--s2) var(--s3);
   background: var(--surface);
   border: 1px solid var(--line);
@@ -774,6 +834,10 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 }
 .folder-tile:hover { border-color: color-mix(in srgb, var(--ink) 30%, var(--line)); }
 .folder-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.folder-tile[aria-selected='true'] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
 .folder-tile-icon { flex: none; color: var(--muted); }
 .folder-tile-name { flex: 1; min-width: 0; }
 .folder-tile-wrap.is-over .folder-tile { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
@@ -1046,10 +1110,31 @@ select.input.cell-input { padding-right: 2px; }
 .file-detail-body { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: var(--s5); align-items: start; }
 .detail-list { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--s2) var(--s3); margin: 0; }
 
+/* The opening shell (FileOpening): the file page's own geometry, drawn by
+   the files page over itself while the file page is on its way, so the
+   picture is up at once and does not move when the page replaces it. */
+.file-opening-overlay {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: calc(var(--z-nav) - 1);
+  overflow: hidden;
+}
+.files-main.is-opening > :not(.file-opening-overlay) { visibility: hidden; }
+.file-opening-hold { visibility: hidden; }
+.file-opening-aside { display: grid; gap: var(--s2); padding: var(--s4); }
+.file-opening-aside .skeleton-line { margin: 0; }
+.player-stage.is-shell { container-type: size; }
+.player-bar.is-shell { min-height: 44px; }
+
 /* One extra breakpoint, scoped to this view: the inspector beside a preview
    stops being readable well before the phone breakpoint. */
 @media (max-width: 900px) {
   .file-detail-body { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* No keyboard, no keyboard hints (the phone's More menu). */
+@media (hover: none) and (pointer: coarse) {
+  .ctx-hint { display: none; }
 }
 
 /* ── Phone ──────────────────────────────────────────────────────────────── */
@@ -1076,6 +1161,12 @@ select.input.cell-input { padding-right: 2px; }
      squeezing it to nothing. */
   .files-head { flex-wrap: wrap; row-gap: var(--s2); }
   .files-head > .spacer { flex: 1 0 100%; height: 0; }
+  /* So on a file's page and its opening screen: the name keeps its line. */
+  .file-detail-head { flex-wrap: wrap; row-gap: var(--s2); }
+  .file-detail-head > .spacer { flex: 1 0 100%; height: 0; }
+  /* Selecting swaps New folder and the uploads for what acts on the
+     selection, in the same row, so the grid does not move under a click. */
+  .files-head.has-selection .files-create { display: none; }
   .files-toolbar .input { max-width: none; flex: 1 1 100%; }
   .files-layout { grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
 
@@ -1171,6 +1262,8 @@ select.input.cell-input { padding-right: 2px; }
   background: transparent; color: inherit; text-align: left; cursor: pointer;
 }
 .drive-row:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+/* Opening: the drive's page is being rendered. */
+.drive-row.is-pending { opacity: var(--pending-opacity, 0.55); cursor: progress; }
 .drive-row.is-active {
   background: linear-gradient(90deg,
     color-mix(in srgb, var(--accent) 16%, transparent),
@@ -1536,13 +1629,16 @@ body::before {
     color-mix(in srgb, var(--accent-alt) 13%, transparent));
 }
 .filecard[aria-selected='true'] {
-  box-shadow: 0 10px 30px -14px color-mix(in srgb, var(--aura-b) 70%, transparent);
+  box-shadow: 0 0 0 1px var(--accent), 0 10px 30px -14px color-mix(in srgb, var(--aura-b) 70%, transparent);
 }
 /* A card glows a little when a pointer rests on it. */
 @media (hover: hover) {
   .filecard, .folder-tile { transition: box-shadow var(--dur-2) var(--ease), border-color var(--dur-1); }
   .filecard:hover, .folder-tile:hover {
     box-shadow: 0 10px 28px -16px color-mix(in srgb, var(--aura-a) 60%, transparent);
+  }
+  .filecard[aria-selected='true']:hover {
+    box-shadow: 0 0 0 1px var(--accent), 0 10px 28px -16px color-mix(in srgb, var(--aura-a) 60%, transparent);
   }
 }
 

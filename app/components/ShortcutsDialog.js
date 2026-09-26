@@ -7,9 +7,9 @@ import { modKey } from '@/lib/keys';
  * Every keyboard shortcut in the app, in one place. Opened from the account
  * menu, from the ⌘K palette, or with "?" anywhere that is not a text field.
  *
- * Each entry mirrors a handler — CommandPalette (⌘K), FileGrid / FileList
- * (moving and selecting), FilesClient (⌘↑, ⌘I, the menu key), FileList's
- * cell editors, VideoPlayer —
+ * Each entry mirrors a handler — CommandPalette (⌘K), useSelectionModel
+ * (clicking, moving and selecting in the files view), QuickLook,
+ * FilesClient (⌘↑, ⌘I, the menu key), FileList's cell editors, VideoPlayer —
  * so a change to one of those belongs here too. The modifier is the viewer's
  * platform's, which is why this renders only when opened, in the browser.
  */
@@ -19,16 +19,30 @@ function groups(mod) {
     {
       title: 'Files',
       keys: [
-        [['←', '→', '↑', '↓'], 'Move between files'],
-        [['Home', 'End'], 'First or last file'],
-        [['Space'], 'Select or deselect'],
-        [[`${mod}A`], 'Select every file in the folder'],
-        [['Drag'], 'On empty space: select the files the rectangle touches (⇧ or ' + mod + ' adds to the selection)'],
+        [['Click'], 'Select a file or folder'],
+        [[`${mod}-click`], 'Add it to the selection, or take it out'],
+        [['⇧-click'], 'Select everything from the last one clicked'],
+        [['←', '→', '↑', '↓'], 'Move the selection'],
+        [['⇧←', '⇧→', '⇧↑', '⇧↓'], 'Extend the selection'],
+        [['Home', 'End'], 'First or last item'],
+        [['⇧Space'], 'Add the focused item to the selection, or take it out'],
+        [['Space'], 'Quick Look'],
+        [['Double-click', 'Return', `${mod}↓`], 'Open'],
+        [[`${mod}A`], 'Select everything in the folder'],
+        [['Drag'], 'On empty space: select what the rectangle touches (⇧ or ' + mod + ' adds to the selection)'],
         [['Esc'], 'Clear the selection'],
-        [['Enter'], 'Open'],
         [[`${mod}I`], 'Get info'],
         [['⇧F10'], 'Menu for the file or folder in focus'],
         [['Drag'], 'Move the selection onto a folder, in the grid, the sidebar or the path'],
+        [['Tap'], 'On a touch screen: open (a long press selects, then taps add)'],
+      ],
+    },
+    {
+      title: 'Quick Look',
+      keys: [
+        [['←', '→'], 'Previous or next'],
+        [['Space', 'Esc'], 'Close'],
+        [['Return'], 'Open'],
       ],
     },
     {
@@ -43,7 +57,8 @@ function groups(mod) {
       title: 'List view',
       keys: [
         [['Tab'], "Move into a row's editable cells"],
-        [['Enter', 'F2'], 'Edit the cell'],
+        [['Click'], 'On a cell of a row already selected: edit it'],
+        [['Return', 'F2'], 'Edit the cell'],
         [['Enter'], 'Save'],
         [['Esc'], 'Cancel'],
       ],

@@ -150,6 +150,22 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   const [picture, setPicture] = useState({ w: Number(md.width) || 0, h: Number(md.height) || 0 });
   const rect = useContainedRect(stage, picture.w, picture.h);
 
+  // Leaving the page stops the download. A <video> that is removed from the
+  // document while playing keeps streaming its file until it is collected —
+  // 11 to 14 MB in the three seconds after Back, measured — so once it is
+  // really gone (not React's rehearsal unmount, which leaves it attached)
+  // its source is dropped.
+  useEffect(() => {
+    const v = video.current;
+    return () => {
+      if (!v) return;
+      queueMicrotask(() => {
+        if (v.isConnected) return;
+        try { v.pause(); v.removeAttribute('src'); v.load(); } catch { /* already gone */ }
+      });
+    };
+  }, []);
+
   // Restore the volume this viewer last chose. Wrapped because storage throws
   // in a private window and returns nothing with site data cleared, and the
   // player must work in both.

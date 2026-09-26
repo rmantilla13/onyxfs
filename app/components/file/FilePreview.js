@@ -1,9 +1,10 @@
 'use client';
 
-import { forwardRef, useRef, useState } from 'react';
+import { forwardRef, useEffect, useState } from 'react';
 import { effectiveKind, drawableKind } from '@/lib/media';
+import { probedNow, decodeProbe } from '@/lib/decode-probe';
 import VideoPlayer from '@/app/components/video/VideoPlayer';
-import useContainedRect from '@/app/components/review/useContainedRect';
+import ImageStage from './ImageStage';
 import '@/app/components/review/review.css';
 
 /**
@@ -11,9 +12,12 @@ import '@/app/components/review/review.css';
  *
  * Deliberately four narrow cases rather than one generic viewer:
  *
- *   image  ImageStage: a plain <img> — NOT next/image, whose optimizer would
- *          cache a presigned URL and keep serving it after it expires — with
- *          Fit / 100% and a slot for the review overlay on the picture.
+ *   image  ImageStage: the thumbnail at once, sharpening to the large
+ *          preview (ProgressiveImage) — NOT next/image, whose optimizer
+ *          would cache a presigned URL and keep serving it after it expires
+ *          — with Fit / 100% and a slot for the review overlay on the
+ *          picture. The original is loaded only at 100%, or when there is
+ *          no preview.
  *   video  VideoPlayer, which owns playback, frames and its own overlay slot.
  *   audio  <audio controls>.
  *   else   the kind, and the download button that is always there anyway.
@@ -32,6 +36,7 @@ import '@/app/components/review/review.css';
  */
 const FilePreview = forwardRef(function FilePreview({
   file, startAt = 0, overlay = null, markers = null, onMarkerClick, onFrameChange, onRangeChange, onComment,
+  handoff = null, onOriginalBlob,
 }, ref) {
   const kind = effectiveKind(file);
   const [failed, setFailed] = useState(false);
@@ -44,8 +49,18 @@ const FilePreview = forwardRef(function FilePreview({
     overflow: 'hidden',
   };
 
-  if (kind === 'image' && drawableKind(file) && !failed) {
-    return <ImageStage file={file} overlay={overlay} onFailed={() => setFailed(true)} />;
+  // Any image with a rendition shows it, whether or not this browser could
+  // draw the original (a HEIC or TIFF, say); without one, only an original
+  // it can draw — which, for those two, a quick probe of this browser says
+  // (lib/decode-probe.js; Safari can).
+  const renditions = !!(file.posterUrl || file.thumbnailUrl);
+  const [probe, setProbe] = useState(probedNow);
+  const probeWorth = kind === 'image' && !renditions && !probe && /heic|heif|tiff?/i.test(`${file.mime || ''} ${file.name || ''}`);
+  useEffect(() => {
+    if (probeWorth) decodeProbe().then(setProbe, () => {});
+  }, [probeWorth]);
+  if (kind === 'image' && (renditions || drawableKind(file, { probe })) && !failed) {
+    return <ImageStage file={file} overlay={overlay} handoff={handoff} onOriginalBlob={onOriginalBlob} onFailed={() => setFailed(true)} />;
   }
 
   if (kind === 'video' && !failed) {
@@ -90,55 +105,3 @@ const FilePreview = forwardRef(function FilePreview({
 });
 
 export default FilePreview;
-
-/**
- * An image on a stage the shape of the image, the way the player stages a
- * video, with Fit and 100%.
- *
- *   Fit   the picture contained in the stage; the frame that holds it (and
- *         the overlay) is placed on the contained rectangle, so a pin at 0.4
- *         is 0.4 of the picture, not of the grey around it.
- *   100%  one image pixel to one CSS pixel, in a stage that scrolls.
- *
- * Either way the overlay fills the frame the picture fills, so a drawing
- * made at Fit is on the same spot at 100%.
- */
-function ImageStage({ file, overlay, onFailed }) {
-  const stage = useRef(null);
-  const md = file?.metadata || {};
-  const [natural, setNatural] = useState({ w: Number(md.width) || 0, h: Number(md.height) || 0 });
-  const [actual, setActual] = useState(false);
-  const rect = useContainedRect(stage, natural.w, natural.h);
-  const ratio = natural.w && natural.h ? natural.w / natural.h : 4 / 3;
-
-  const frameStyle = actual && natural.w
-    ? { width: natural.w, height: natural.h }
-    : { left: rect.x, top: rect.y, width: rect.width, height: rect.height };
-
-  return (
-    <div className="image-stage-wrap">
-      <div ref={stage} className={`image-stage${actual ? ' is-actual' : ''}`} style={{ '--ratio': ratio }}>
-        <div className="image-frame" style={frameStyle}>
-          <img
-            src={file.url}
-            alt={file.name}
-            draggable={false}
-            onLoad={(e) => {
-              const { naturalWidth: w, naturalHeight: h } = e.currentTarget;
-              if (w && h) setNatural((n) => (n.w === w && n.h === h ? n : { w, h }));
-            }}
-            onError={onFailed}
-          />
-          {overlay && <div className="image-overlay">{overlay({ width: natural.w, height: natural.h })}</div>}
-        </div>
-      </div>
-      <div className="image-stage-bar">
-        <div className="view-toggle" role="group" aria-label="Zoom">
-          <button type="button" className="btn btn-sm" aria-pressed={!actual} onClick={() => setActual(false)}>Fit</button>
-          <button type="button" className="btn btn-sm" aria-pressed={actual} onClick={() => setActual(true)}>100%</button>
-        </div>
-        {natural.w > 0 && <span className="small muted mono">{natural.w} × {natural.h}</span>}
-      </div>
-    </div>
-  );
-}

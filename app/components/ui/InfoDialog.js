@@ -122,7 +122,7 @@ export default function InfoDialog({ info, schema, onClose, onOpenFile, onDownlo
         )}
       >
         <div className="info-head">
-          <span className="info-thumb"><Thumb file={f} label={kindLabel(f)} /></span>
+          <span className="info-thumb"><Thumb file={f} label={kindLabel(f)} surface="info" /></span>
           <div style={{ minWidth: 0 }}>
             <p className="info-name" title={f.name}>{f.name}</p>
             <p className="small muted" style={{ margin: 0 }}>{kindLabel(f)}{f.size != null ? ` · ${fmtSize(f.size)}` : ''}</p>
@@ -139,7 +139,7 @@ export default function InfoDialog({ info, schema, onClose, onOpenFile, onDownlo
       <Dialog open onClose={close} title="Info" footer={<button type="button" className="btn btn-primary" onClick={close}>Done</button>}>
         <div className="info-head">
           <span className="info-thumb info-stack" aria-hidden>
-            {info.files.slice(0, 3).map((f) => <Thumb key={f.id} file={f} label="" />)}
+            {info.files.slice(0, 3).map((f) => <Thumb key={f.id} file={f} label="" surface="info" />)}
           </span>
           <div style={{ minWidth: 0 }}>
             <p className="info-name">{s.count} files</p>

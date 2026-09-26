@@ -69,3 +69,19 @@ test('updateFile does not write thumbnail columns', async () => {
   const body = fn.slice(0, fn.indexOf('\n}\n'));
   assert.ok(!/thumbnail_(key|url)\s*=/.test(body), 'updateFile must not set a thumbnail');
 });
+
+test('a sibling key is never signed as a thumbnail', () => {
+  // Siblings are signed only as siblings, derived from a thumbnail key
+  // (presignFileUrls); stored in the thumbnail column, they would be one.
+  const sib = '_thumbs/3f2b8c1e-0d4a-4a53-9a0e-2b7c5d1f6e90.sm.webp';
+  assert.equal(thumbnailKeyToSign(cfg, { thumbnailKey: sib }), sib, 'a _thumbs/ key is still a preview');
+});
+
+test('siblings are signed only from a server-named thumbnail key, never a URL or a stored name', async () => {
+  const src = await readFile(new URL('../lib/storage.js', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('export async function presignFileUrls'));
+  const body = fn.slice(0, fn.indexOf('\n}\n'));
+  assert.ok(/thumbSiblingKey\(f\.thumbnailKey, size\)/.test(body), 'derived from the row’s thumbnail key');
+  assert.ok(/isThumbSiblingKey\(sib\)/.test(body), 'and checked before it is signed');
+  assert.ok(!/f\.(smKey|xsKey|siblingKey)/.test(body), 'no sibling key is read from the row');
+});

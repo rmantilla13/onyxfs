@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import { redirect, notFound } from 'next/navigation';
 import { auth } from '@/auth';
 import { loadBrand } from '@/lib/brand-config';
@@ -11,12 +12,16 @@ import { parseTimecode, secondsOfFrame, toRate, ASSUMED_RATE } from '@/lib/video
 import { flagsForUser } from '@/lib/user-flags';
 import { isFeatureEnabled } from '@/lib/features';
 import { effectiveKind } from '@/lib/media';
+import { imagePreviewFor } from '@/lib/poster';
 import { isReviewableKind } from '@/lib/review';
 
 export const dynamic = 'force-dynamic';
 
+// One query per request for the row, shared by the title and the page.
+const fileById = cache((id) => getFileById(id));
+
 export async function generateMetadata({ params }) {
-  const file = await getFileById(params.id).catch(() => null);
+  const file = await fileById(params.id).catch(() => null);
   return { title: file?.name || 'File' };
 }
 
@@ -45,14 +50,30 @@ function startAtFrom(value, metadata = {}) {
   return frame != null && frame >= 0 ? secondsOfFrame(frame, fps) : 0;
 }
 
+/**
+ * Whether an image shown here from its original could get a large preview
+ * from it (lib/poster.js imagePreviewFor): not a GIF, nor a picture its
+ * size says is its own preview. Decided here, from the row, so the page
+ * hands the original to the fill-in (lib/thumbnail-client.js) — which costs
+ * a download past the HTTP cache — only when something could come of it;
+ * without a size on the row, the fill-in decides after the decode, and
+ * remembers (lib/preview-wanted.js).
+ */
+function previewPossible(file) {
+  const w = Number(file.metadata?.width);
+  const h = Number(file.metadata?.height);
+  const mime = file.mime || (/\.gif$/i.test(file.name || '') ? 'image/gif' : '');
+  if (/gif/i.test(mime)) return false;
+  return !(w > 0 && h > 0) || !!imagePreviewFor({ width: w, height: h }, { bytes: file.size, mime });
+}
+
 export default async function FilePage({ params, searchParams }) {
   const session = await auth();
   const email = session?.user?.email;
   if (!email) redirect('/signin');
-  // The account menu's picture, or null for initials; never throws.
-  const avatarUrl = await getAvatarUrl(email);
-
-  const file = await getFileById(params.id);
+  // The account menu's picture (null for initials; never throws), asked for
+  // alongside the row rather than before it.
+  const [avatarUrl, file] = await Promise.all([getAvatarUrl(email), fileById(params.id)]);
   // A trashed file waits for the purge, and is not a page until it is restored.
   if (!file || file.deletedAt) notFound();
 
@@ -99,6 +120,7 @@ export default async function FilePage({ params, searchParams }) {
         me={email.toLowerCase()}
         // ?c= is a comment to open on — a notification's link.
         focusComment={typeof searchParams?.c === 'string' ? searchParams.c.slice(0, 64) : null}
+        previewPossible={previewPossible(file)}
       />
     </>
   );

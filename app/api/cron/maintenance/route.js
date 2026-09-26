@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ensureSchema, listExpiredTrash, deleteFile, listAllFiles, getFileMetadataSchema, listStaleUploads, deleteUpload, purgeTarget, storageKeyInUse } from '@/lib/db';
 import { getStorageConfig, s3DeleteObject, s3AbortMultipartUpload } from '@/lib/storage';
+import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
 import { normalizeSchema, expiryState } from '@/lib/dam';
 import { notifyExpiringRights } from '@/lib/notify';
 import { TRASH_RETENTION_DAYS } from '@/lib/storage-report';
@@ -16,9 +17,10 @@ const UPLOAD_STALE_DAYS = 7;
 
 /**
  * Daily maintenance. Two jobs:
- *   1. Purge trashed files past the retention window — the row AND the object,
- *      in that order, so a failed object delete leaves a row to retry from
- *      rather than an orphaned object nobody can find.
+ *   1. Purge trashed files past the retention window — the object, then the
+ *      row, in that order, so a failed object delete leaves a row to retry
+ *      from rather than an orphaned object nobody can find — and then the
+ *      previews only that row pointed at.
  *   2. Warn about usage rights that have lapsed or are about to.
  *
  * Bearer-authed with CRON_SECRET; the middleware excludes /api/cron.
@@ -29,7 +31,7 @@ export async function GET(req) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const out = { schema: [], purged: 0, purgeErrors: 0, expired: 0, soon: 0, uploadsAborted: 0 };
+  const out = { schema: [], purged: 0, purgeErrors: 0, previewsPurged: 0, expired: 0, soon: 0, uploadsAborted: 0 };
 
   // Schema first. With SCHEMA_MANAGED=1 this is the one place in the app that
   // still runs DDL, so a guard that gained a column since the last init.sql
@@ -49,6 +51,8 @@ export async function GET(req) {
         const target = purgeTarget(row, { keyInUse });
         if (target) await s3DeleteObject(cfg, target);
         await deleteFile(row.id);
+        // And its previews, which a trashed row kept for a restore.
+        out.previewsPurged += await dropUnusedPreviews(previewKeysOf(row), { cfg });
         out.purged++;
       } catch (e) {
         out.purgeErrors++;

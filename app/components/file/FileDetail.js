@@ -3,14 +3,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import FilePreview from './FilePreview';
+import FileDetailFrame from './FileDetailFrame';
+import { getHandoff, returnFor } from '@/lib/file-handoff';
+import { lazyThumbnailBackfill, mergeBackfilled } from '@/lib/backfill';
 import Dialog from '@/app/components/ui/Dialog';
 import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
 import { Panel, Field } from '@/app/components/ui/Layout';
 import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
-import { fmtSize } from '@/app/components/ui/FileCard';
 import { deriveAuto } from '@/lib/dam';
-import { effectiveKind } from '@/lib/media';
+import { effectiveKind, fmtSize } from '@/lib/media';
 import { toRate, rateLabel, timecode, ASSUMED_RATE } from '@/lib/video-time';
 import { anchorLabel, commentFrame, snippet } from '@/lib/review';
 import ShareDialog from '@/app/components/ShareDialog';
@@ -42,7 +44,7 @@ import useReviewDraft from '@/app/components/review/useReviewDraft';
  */
 export default function FileDetail({
   file: initial, canWrite = false, canShare = false, backHref = '/files', startAt = 0,
-  review = false, me = null, focusComment = null,
+  review = false, me = null, focusComment = null, previewPossible = true,
 }) {
   const [file, setFile] = useState(initial);
   const [sharing, setSharing] = useState(false);
@@ -56,6 +58,31 @@ export default function FileDetail({
   const auto = deriveAuto(file);
   const kind = effectiveKind(file);
   const md = file.metadata || {};
+
+  // What the files view handed over when it opened this file: the picture
+  // its tile was showing, so the stage starts from it (lib/file-handoff.js).
+  // Only ever set in this browser, so a server render has none.
+  const [handoff] = useState(() => getHandoff(initial.id));
+
+  // An image with no large preview is shown from its original; a writer's
+  // browser makes the preview from that same download (fromBlob), so the next
+  // viewer gets it — no second download of the original. The drawing code is
+  // loaded only then (lib/backfill.js): most files have a preview.
+  const backfill = useMemo(() => (canWrite
+    ? lazyThumbnailBackfill((f) => setFile((x) => mergeBackfilled(x, f)))
+    : null), [canWrite]);
+  const onOriginalBlob = useCallback((blob) => { backfill?.(file, { blob }); }, [backfill, file]);
+
+  // ← Back: through history when this page was opened from the files view,
+  // so the listing comes back as it was left (its rows, scroll and
+  // selection); from anywhere else, the folder the file is in. A modified
+  // click still opens the link as a link.
+  const goBack = (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    if (returnFor(file.id) && window.history.length > 1) window.history.back();
+    else router.push(backHref);
+  };
 
   // The frame model, as the player uses it: the probed rate, or the assumed
   // one until the backfill below finds it.
@@ -271,9 +298,10 @@ export default function FileDetail({
   };
 
   return (
-    <main className="shell file-detail" style={{ padding: 'var(--s5) var(--s5) 64px' }}>
-      <div className="row" style={{ marginBottom: 'var(--s4)' }}>
-        <a className="btn btn-ghost btn-sm" href={backHref}>← Back</a>
+    <FileDetailFrame
+      header={(
+        <>
+        <a className="btn btn-ghost btn-sm" href={backHref} onClick={goBack}>← Back</a>
         <h1 className="truncate" style={{ fontSize: 'var(--t-xl)', minWidth: 0 }} title={file.name}>{file.name}</h1>
         {review && <ReviewStatusTag status={status} className="review-status-head" />}
         <div className="spacer" />
@@ -286,10 +314,9 @@ export default function FileDetail({
             <MenuItem danger onClick={trash}>Move to trash</MenuItem>
           </Menu>
         )}
-      </div>
-
-      <div className="file-detail-body">
-        <div style={{ minWidth: 0 }}>
+        </>
+      )}
+      stage={(
           <FilePreview
             ref={player}
             file={file}
@@ -300,10 +327,12 @@ export default function FileDetail({
             onFrameChange={review ? onFrameChange : undefined}
             onRangeChange={review ? setRange : undefined}
             onComment={review ? onComment : undefined}
+            handoff={handoff}
+            onOriginalBlob={backfill && previewPossible ? onOriginalBlob : undefined}
           />
-        </div>
-
-        <aside style={{ minWidth: 0 }}>
+      )}
+      aside={(
+        <>
           {review && (
             <div className="review-tabs" role="tablist" aria-label="Inspector">
               <button
@@ -385,9 +414,9 @@ export default function FileDetail({
             </dl>
           </Panel>
           )}
-        </aside>
-      </div>
-
+        </>
+      )}
+    >
       <Dialog
         open={renaming}
         onClose={() => setRenaming(false)}
@@ -412,7 +441,7 @@ export default function FileDetail({
 
       {canShare && <ShareDialog file={file} open={sharing} onClose={() => setSharing(false)} />}
       {confirmElement}
-    </main>
+    </FileDetailFrame>
   );
 }
 

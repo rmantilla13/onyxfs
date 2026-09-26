@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { STORAGE_PRESETS, presetById, detectPreset, applyPreset, summarizeChecks } from '@/lib/storage-presets';
 import FilespaceMembers from '@/app/components/FilespaceMembers';
 import { useConfirm } from '@/app/components/ui/Confirm';
-import { fmtSize } from '@/app/components/ui/FileCard';
+import { fmtSize } from '@/lib/media';
 
 // Features, Brand and Keys were editors for settings that are now compiled
 // defaults. Their routes are gone; the defaults they used to override live in
