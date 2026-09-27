@@ -26,5 +26,9 @@ let package = Package(
         .target(name: "OnyxFSCore"),
         .testTarget(name: "OnyxKitTests", dependencies: ["OnyxKit"]),
         .testTarget(name: "OnyxFSCoreTests", dependencies: ["OnyxFSCore"]),
+        // The extension's engine against the app's bridge, over the wire
+        // protocol itself (in process, no socket): each side's own tests
+        // pin what it says; these check the two agree.
+        .testTarget(name: "OnyxFSIntegrationTests", dependencies: ["OnyxKit", "OnyxFSCore"]),
     ]
 )

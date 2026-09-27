@@ -23,6 +23,12 @@ public protocol EngineBridge: Sendable {
 public protocol ByteSource: Sendable {
     /// Up to `length` bytes from `offset`; fewer at the end, none past it.
     func read(offset: Int64, length: Int) async throws -> Data
+    /// No longer read: whatever it fetched ahead can go.
+    func close() async
+}
+
+extension ByteSource {
+    public func close() async {}
 }
 
 public struct BridgeEntry: Sendable, Equatable {
@@ -35,11 +41,13 @@ public struct BridgeEntry: Sendable, Equatable {
     public var version: String
     /// Still uploading from this Mac.
     public var pending: Bool
+    /// Its bytes are on this Mac (kept offline, or still uploading).
+    public var local: Bool
 
     public init(name: String, isDirectory: Bool, id: String? = nil, size: Int64 = 0, modified: Date = Date(timeIntervalSince1970: 0),
-                version: String = "", pending: Bool = false) {
+                version: String = "", pending: Bool = false, local: Bool = false) {
         self.name = name; self.isDirectory = isDirectory; self.id = id; self.size = size
-        self.modified = modified; self.version = version; self.pending = pending
+        self.modified = modified; self.version = version; self.pending = pending; self.local = local
     }
 }
 
@@ -76,6 +84,8 @@ public enum BridgeFailure: Error, Equatable {
     case forbidden(String)
     case exists(String)
     case other(String)
+    /// Anything else, as the file system reports it (EDQUOT, ESTALE …).
+    case posix(Int32, String)
 
     public var errno: Int32 {
         switch self {
@@ -84,6 +94,7 @@ public enum BridgeFailure: Error, Equatable {
         case .forbidden: return EACCES
         case .exists: return EEXIST
         case .other: return EIO
+        case let .posix(code, _): return code
         }
     }
 }

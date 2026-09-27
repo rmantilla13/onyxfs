@@ -36,6 +36,9 @@ public actor DriveEngine {
         var created: Date
         var fileId: String?
         var version: String
+        /// Its bytes are on this Mac (kept offline, or still uploading): read
+        /// through the app, not cached a second time.
+        var local = false
         var localOnly: Bool
         /// Made here and not yet handed to the app.
         var unsent: Bool
@@ -57,7 +60,10 @@ public actor DriveEngine {
     private var byPath: [String: UInt64] = [:]
     private var nextID: UInt64 = 16
     private var writing: [UInt64: Writing] = [:]
-    private var readers: [String: any ByteSource] = [:]
+    /// Readers by file and version, the most recently used last: a file
+    /// open in several places shares one, and its read-ahead.
+    private var readers: [(key: String, source: any ByteSource)] = []
+    static let readersKept = 32
     private var generation: UInt64
     private var watching: Task<Void, Never>?
     private var changed: (@Sendable (Set<UInt64>, Bool) -> Void)?
@@ -432,6 +438,7 @@ public actor DriveEngine {
             node.modified = entry.modified
             node.fileId = entry.id
             node.version = entry.version
+            node.local = entry.local
             nodes[id] = node
             return id
         }
@@ -440,8 +447,11 @@ public actor DriveEngine {
 
     @discardableResult
     private func insert(_ entry: BridgeEntry, parent: UInt64) -> Node {
-        insert(name: entry.name, parent: parent, isDirectory: entry.isDirectory, size: UInt64(max(0, entry.size)),
-               modified: entry.modified, fileId: entry.id, version: entry.version, localOnly: false, unsent: false)
+        var node = insert(name: entry.name, parent: parent, isDirectory: entry.isDirectory, size: UInt64(max(0, entry.size)),
+                          modified: entry.modified, fileId: entry.id, version: entry.version, localOnly: false, unsent: false)
+        node.local = entry.local
+        nodes[node.id] = node
+        return node
     }
 
     private func insert(name: String, parent: UInt64, isDirectory: Bool, size: UInt64, modified: Date,
@@ -517,11 +527,21 @@ public actor DriveEngine {
 
     private func reader(for node: Node) async throws -> any ByteSource {
         let key = "\(node.fileId ?? node.path)\u{0}\(node.version)"
-        if let known = readers[key] { return known }
+        if let at = readers.firstIndex(where: { $0.key == key }) {
+            let known = readers.remove(at: at)
+            readers.append(known)
+            return known.source
+        }
         let entry = BridgeEntry(name: node.name, isDirectory: false, id: node.fileId, size: Int64(node.size),
-                                modified: node.modified, version: node.version)
+                                modified: node.modified, version: node.version, local: node.local)
         let source = try await wrap { try await self.bridge.reader(for: entry) }
-        readers[key] = source
+        if let raced = readers.first(where: { $0.key == key }) { return raced.source }
+        readers.append((key, source))
+        if readers.count > Self.readersKept {
+            // The longest unread lets go of its read-ahead.
+            let dropped = readers.removeFirst().source
+            Task { await dropped.close() }
+        }
         return source
     }
 

@@ -80,9 +80,11 @@ final class DiskMounter: ObservableObject {
     }
 
     /// Mount one drive from its resource URL (a one-time ticket to the
-    /// app's bridge — see DriveService.onyxfsResourceURL). Read-only for now:
-    /// saving into a drive from Finder arrives with uploads (ONYXFS.md,
-    /// Phase B).
+    /// app's bridge — see DriveService.onyxfsResourceURL). Always writable at
+    /// the mount: what this account may change is the drive's role, checked
+    /// by the extension (EACCES) and the bridge (403) as it is now — a
+    /// viewer made an editor needs no remount, and Finder keeps its own
+    /// window files on a drive it may only view.
     func mount(_ scope: SyncDomain, name: String, resource: URL) async {
         let id = scope.identifier
         switch states[id] {
@@ -94,7 +96,7 @@ final class DiskMounter: ObservableObject {
             let path = try await FSClient.shared.mountSingleVolume(
                 resource: FSGenericURLResource(url: resource),
                 bundleID: Self.extensionBundleID,
-                options: ["-o", "rdonly"])
+                options: [])
             // Turned off while it mounted.
             guard states[id] == .mounting else {
                 Self.unmountPath(path)
