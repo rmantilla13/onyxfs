@@ -55,6 +55,9 @@ final class Stub: @unchecked Sendable {
     /// Every write is refused with this status, as the app refuses one the
     /// server would not make.
     var writeRefusal: Int?
+    /// What /fs/v1/icon answers with; nil is a 404, as an app with no icon
+    /// (or from before icons) answers.
+    var icon: Data?
 
     // Storage state.
     private var signature = 0
@@ -270,6 +273,12 @@ final class Stub: @unchecked Sendable {
             if let ready { request.respond(json: ready) }
         case ("GET", "/fs/v1/volume"):
             request.respond(json: lock.withLock { volume })
+        case ("GET", "/fs/v1/icon"):
+            if let icon = lock.withLock({ self.icon }) {
+                request.respond(headers: ["Content-Type": "image/icns"], body: icon)
+            } else {
+                request.respond(404, json: ErrorReply(error: "There is no such endpoint."))
+            }
         case ("PUT", "/fs/v1/file"):
             guard writable(request) else { return }
             let path = query["path"] ?? ""

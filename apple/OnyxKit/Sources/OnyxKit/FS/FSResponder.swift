@@ -33,6 +33,12 @@ public protocol FSSource: Sendable {
     /// The drive's name and what this account may do in it, as the app
     /// knows them now.
     func volumeInfo() async -> FSVolumeInfo
+    /// The drive's disk icon, an .icns (DriveIcon); nil for none.
+    func volumeIcon() async -> Data?
+}
+
+extension FSSource {
+    public func volumeIcon() async -> Data? { nil }
 }
 
 public struct FSSnapshot: Sendable {
@@ -195,6 +201,14 @@ public struct FSResponder: Sendable {
     func volume() async -> DAVResponse {
         let (_, view) = await log.current()
         return Self.json(200, volumeJSON(await source.volumeInfo(), view))
+    }
+
+    /// `GET /fs/v1/icon`: the drive's disk icon, an .icns, which the extension
+    /// puts where macOS looks for a disk's own. 404 when it has none.
+    func icon() async -> DAVResponse {
+        guard let icon = await source.volumeIcon(), !icon.isEmpty else { return Self.error(404, "This drive has no icon.") }
+        return DAVResponse(status: 200, headers: [("Content-Type", "image/icns"), ("Cache-Control", "no-store")],
+                           body: .data(icon))
     }
 
     // MARK: - Pieces

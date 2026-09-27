@@ -4,7 +4,7 @@ import OnyxFSCore
 /// Connects a resource URL to its engine: the ticket exchanged with the app
 /// for a session, then the drive's engine over it, with its chunk cache,
 /// the staging area for files being written, and what macOS keeps on the
-/// disk for itself.
+/// disk for itself — the drive's icon among it.
 @available(macOS 27.0, *)
 enum EngineFactory {
     static func connect(_ url: URL) async throws -> any VolumeEngine {
@@ -18,6 +18,12 @@ enum EngineFactory {
                                        limitBytes: client.session.cacheLimitBytes)
             let staging = try StagingArea(directory: try Self.directory(.applicationSupportDirectory, folder, "staging"))
             let local = try LocalStore(directory: try Self.directory(.applicationSupportDirectory, folder, "local"))
+            // The drive's icon, on the disk before Finder first looks at it.
+            // Without one (the app has none, or it could not be put there) the
+            // disk mounts as it would have: an icon is not worth a failed mount.
+            if let icon = try? await client.volumeIcon() {
+                try? await local.placeVolumeIcon(icon)
+            }
             let bridge = ClientBridge(client: client, store: store)
             let volume = bridge.initialVolume
             let engine = DriveEngine(bridge: bridge, volume: volume, staging: staging, local: local)

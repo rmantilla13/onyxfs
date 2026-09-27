@@ -64,6 +64,29 @@ struct FSBridgeClientTests {
         }
     }
 
+    @Test func theDrivesIconOrNone() async throws {
+        let stub = Stub()
+        let client = try await stub.connect()
+        #expect(try await client.volumeIcon() == nil, "an app with none, or from before icons: 404")
+
+        let body = Data("0123456789".utf8)
+        var icns = Data("icns".utf8)
+        withUnsafeBytes(of: UInt32(8 + body.count).bigEndian) { icns.append(contentsOf: $0) }
+        icns.append(body)
+        stub.icon = icns
+        #expect(try await client.volumeIcon() == icns)
+        #expect(stub.requests("/fs/v1/icon").last?.headers["Authorization"]?.hasPrefix("Bearer ") == true)
+
+        // Anything that is not one is none.
+        stub.icon = Data("<html>".utf8)
+        #expect(try await client.volumeIcon() == nil)
+        stub.icon = icns.dropLast()
+        #expect(try await client.volumeIcon() == nil, "cut short")
+
+        stub.forgetSessions()
+        await #expect(throws: FSBridgeError.disconnected) { try await client.volumeIcon() }
+    }
+
     // MARK: - Reading the tree
 
     @Test func listStatAndVolume() async throws {

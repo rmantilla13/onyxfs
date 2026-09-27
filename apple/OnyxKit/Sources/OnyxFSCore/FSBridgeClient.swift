@@ -138,6 +138,25 @@ public final class FSBridgeClient: Sendable {
         try await get("volume", [], as: FSVolumeInfo.self)
     }
 
+    /// GET /fs/v1/icon: the drive's disk icon, an .icns. Nil when the app has
+    /// none to give (404 — an app from before icons says the same), or sent
+    /// something that is not one.
+    public func volumeIcon() async throws -> Data? {
+        var request = self.request("GET", "icon", query: [])
+        request.setValue("image/icns", forHTTPHeaderField: "Accept")
+        let (body, response) = try await Self.send(request, on: bridge)
+        if response.statusCode == 404 { return nil }
+        try Self.check(response, body)
+        return Self.isIcns(body) ? body : nil
+    }
+
+    /// "icns", then the length of the whole.
+    static func isIcns(_ data: Data) -> Bool {
+        guard data.count > 8, data.prefix(4) == Data("icns".utf8) else { return false }
+        let length = data.dropFirst(4).prefix(4).reduce(0) { $0 << 8 | Int($1) }
+        return length == data.count
+    }
+
     // MARK: - Writes
 
     /// PUT /fs/v1/file: uploads the file at `fileURL` to `path`, streamed
