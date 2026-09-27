@@ -160,6 +160,10 @@ public actor DriveWriter {
         case nil: break
         }
         try await server { try await self.api.createFolder(path: Self.relative(path), filespaceId: self.filespaceId) }
+        // The bridge answers a new folder with its entry, read from the
+        // mirror: without this it is not there yet, and Finder is told the
+        // folder it just made does not exist.
+        await tree.refresh()
     }
 
     /// `replace`: a file already at `to` gives way (how an app saves: write
