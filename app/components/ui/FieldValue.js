@@ -1,8 +1,9 @@
 'use client';
 
 import { Fragment, useSyncExternalStore } from 'react';
-import { fmtSize, fmtDuration, effectiveKind } from '@/lib/media';
-import { deriveAuto } from '@/lib/dam';
+// lib/media.js alone, not lib/dam.js: every card draws these, and the
+// storage pages' pictures come from the same module (FileCard).
+import { fmtSize, fmtDuration, effectiveKind, fileFormat, aspectLabel } from '@/lib/media';
 
 /**
  * A file's metadata fields as a card's line, a tile's caption or a list's
@@ -60,12 +61,12 @@ export function fieldValue(file, field, { rootName = 'All files' } = {}) {
   const md = file?.metadata || {};
   switch (field.key) {
     case 'size': return fmtSize(file.size);
-    case 'type': return deriveAuto(file).format || KIND_WORDS[effectiveKind(file)] || '';
+    case 'type': return fileFormat(file.name, file.mime) || KIND_WORDS[effectiveKind(file)] || '';
     case 'modified': return file.updatedAt ? { at: file.updatedAt } : '';
     case 'added': return file.createdAt ? { at: file.createdAt } : '';
     case 'duration': return fmtDuration(md.duration);
     case 'dimensions': return md.width && md.height ? `${md.width} × ${md.height}` : '';
-    case 'aspect_ratio': return deriveAuto(file).aspect_ratio || '';
+    case 'aspect_ratio': return aspectLabel(md.width, md.height) || '';
     case 'added_by': return file.createdBy || '';
     case 'folder': return file.folder || rootName;
     case 'tags': return (file.tags || []).join(', ');

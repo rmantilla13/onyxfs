@@ -7,7 +7,7 @@ import { fmtSize } from '@/lib/media';
 import { crumbsFor } from '@/lib/folder-ops';
 import { kindLabel } from '@/lib/file-info';
 import { thumbSources } from '@/lib/renditions';
-import { BUILTIN_VIEWS } from '@/lib/views';
+import { BUILTIN_VIEWS } from '@/lib/builtin-views';
 import Icon from '@/app/components/ui/Icon';
 
 /**

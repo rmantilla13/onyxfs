@@ -1,6 +1,7 @@
 'use client';
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
 import { reviewBadges } from '@/app/components/review/badges';
@@ -8,9 +9,7 @@ import { lazyThumbnailBackfill, mergeBackfilled } from '@/lib/backfill';
 import { createUploadQueue, filesFromDrop, filesFromInput, joinFolder } from '@/lib/upload-queue';
 import FileGrid from '@/app/components/ui/FileGrid';
 import FileList from '@/app/components/ui/FileList';
-import TileGrid from '@/app/components/ui/TileGrid';
 import FilterPanel, { ActiveFilters, countActive } from '@/app/components/ui/FilterPanel';
-import NewFieldDialog from '@/app/components/ui/NewFieldDialog';
 import InfoDialog from '@/app/components/ui/InfoDialog';
 import ShareDialog from '@/app/components/ShareDialog';
 import { DriveList, DriveMembersDialog } from '@/app/components/Drives';
@@ -41,11 +40,10 @@ import { canFor, canForSome } from './can-for';
 import { fileKey, folderKey, parseKey } from '@/lib/selection';
 import FolderDrop, { DRAG_FILES, DRAG_FOLDER, startFolderDrag } from './FolderDrop';
 import { FolderTiles, FolderRows, MAX_TILES } from './FolderItems';
-import ColumnView from './ColumnView';
 import FilesHeader from './FilesHeader';
 import FilesToolbar, { MoreMenu } from './FilesToolbar';
 import DisplayPopover from './DisplayPopover';
-import ViewMenu, { SaveViewDialog, ManageViewsDialog } from './ViewMenu';
+import ViewMenu from './ViewMenu';
 import useSelectionModel from './useSelectionModel';
 import useLongPress from './useLongPress';
 import { isTouch } from './usePointerIntent';
@@ -55,6 +53,26 @@ import {
 import Icon from '@/app/components/ui/Icon';
 
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
+// The grid and the list are what most pages show; the other two layouts
+// load with the first page that shows one — rendered on the server all the
+// same, and preloaded for it — and the dialogs for keeping views and adding
+// a field load when one is first opened.
+const TileGrid = dynamic(() => import('@/app/components/ui/TileGrid'));
+const ColumnView = dynamic(() => import('./ColumnView'));
+const SaveViewDialog = dynamic(() => import('./ViewDialogs').then((m) => m.SaveViewDialog), { ssr: false });
+const ManageViewsDialog = dynamic(() => import('./ViewDialogs').then((m) => m.ManageViewsDialog), { ssr: false });
+const NewFieldDialog = dynamic(() => import('@/app/components/ui/NewFieldDialog'), { ssr: false });
+// Once the page is idle, the other layouts are fetched too, so choosing one
+// in Display never waits on the network.
+let layoutsAsked = false;
+function prefetchLayouts() {
+  if (layoutsAsked || typeof window === 'undefined') return;
+  layoutsAsked = true;
+  const go = () => { import('@/app/components/ui/TileGrid'); import('./ColumnView'); };
+  if ('requestIdleCallback' in window) window.requestIdleCallback(go, { timeout: 4000 });
+  else setTimeout(go, 2000);
+}
 
 // The opening shell and Quick Look are not needed to show a folder, so they
 // are not part of the page's first load. They are fetched ahead of the
@@ -438,6 +456,8 @@ export default function FilesClient({
     if (treeFor.current === filespaceId) { loadUsage(); return; }
     loadFolders();
   }, [loadFolders, loadUsage, filespaceId]);
+
+  useEffect(() => { prefetchLayouts(); }, []);
 
   // What this browser keeps, read after mount: the server cannot see
   // localStorage, and reading it during the first render would mismatch the
@@ -2371,26 +2391,30 @@ export default function FilesClient({
       {promptElement}
       {pickerElement}
       {contextMenuElement}
-      {isAdmin && flags.metadata && (
-        <NewFieldDialog open={addingField} onClose={() => setAddingField(false)} onCreate={createField} />
+      {isAdmin && flags.metadata && addingField && (
+        <NewFieldDialog open onClose={() => setAddingField(false)} onCreate={createField} />
       )}
       <ShareDialog file={sharing} open={!!sharing} onClose={() => setSharing(null)} />
-      <SaveViewDialog
-        open={savingView}
-        onClose={() => setSavingView(false)}
-        onSave={saveViewAs}
-        drive={activeDrive}
-        suggestion={view.builtin && view.id !== DEFAULT_VIEW_ID ? `${view.name} — ${rootName}` : ''}
-      />
-      <ManageViewsDialog
-        open={managingViews}
-        onClose={() => setManagingViews(false)}
-        views={customViews}
-        drives={drives}
-        onRename={renameView}
-        onRescope={rescopeView}
-        onDelete={deleteView}
-      />
+      {savingView && (
+        <SaveViewDialog
+          open
+          onClose={() => setSavingView(false)}
+          onSave={saveViewAs}
+          drive={activeDrive}
+          suggestion={view.builtin && view.id !== DEFAULT_VIEW_ID ? `${view.name} — ${rootName}` : ''}
+        />
+      )}
+      {managingViews && (
+        <ManageViewsDialog
+          open
+          onClose={() => setManagingViews(false)}
+          views={customViews}
+          drives={drives}
+          onRename={renameView}
+          onRescope={rescopeView}
+          onDelete={deleteView}
+        />
+      )}
       {isAdmin && (
         <NewDriveDialog
           open={newDrive}
