@@ -14,13 +14,16 @@ public struct MirrorFSSource: FSSource {
     /// What this Mac has written that the mirror does not show yet (the
     /// drive's DriveWriter), and its revision.
     let overlay: (@Sendable () async -> (FSOverlay, UInt64))?
+    /// The drive's disk icon (DriveIcon).
+    let icon: (@Sendable () async -> Data?)?
 
     /// `presign` signs a link to a file's bytes; by default the mirror's own
     /// (DriveMirror.contentLink), which reuses one while it has time left.
     public init(scope: String, mirror: DriveMirror, pins: @escaping @Sendable () -> PinStore?,
                 presign: (@Sendable (MirrorEntry) async throws -> FSRemoteLink)? = nil,
                 volume: @escaping @Sendable () async -> FSVolumeInfo,
-                overlay: (@Sendable () async -> (FSOverlay, UInt64))? = nil) {
+                overlay: (@Sendable () async -> (FSOverlay, UInt64))? = nil,
+                icon: (@Sendable () async -> Data?)? = nil) {
         self.scope = scope
         self.mirror = mirror
         self.pins = pins
@@ -31,6 +34,7 @@ public struct MirrorFSSource: FSSource {
         }
         self.volume = volume
         self.overlay = overlay
+        self.icon = icon
     }
 
     /// The mirror, with this Mac's writes laid over it. Both revisions only
@@ -68,5 +72,9 @@ public struct MirrorFSSource: FSSource {
 
     public func volumeInfo() async -> FSVolumeInfo {
         await volume()
+    }
+
+    public func volumeIcon() async -> Data? {
+        await icon?()
     }
 }

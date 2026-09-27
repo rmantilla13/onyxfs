@@ -60,6 +60,7 @@ struct FSBridgeTests {
         private var copies: [String: URL] = [:]
         private var linkError: Error?
         private(set) var presigned: [String] = []
+        private var icon: Data?
 
         init(_ index: MirrorIndex, info: FSVolumeInfo = FSVolumeInfo(name: "Client Deliverables", readOnly: false,
                                                                       cacheLimitBytes: 50 << 30)) {
@@ -81,6 +82,7 @@ struct FSBridgeTests {
         }
         func refuseLinks(_ error: Error?) { linkError = error }
         func setInfo(_ info: FSVolumeInfo) { self.info = info }
+        func setIcon(_ icon: Data?) { self.icon = icon }
 
         func snapshot() -> FSSnapshot { FSSnapshot(revision: revision, index: index, overlay: overlay) }
 
@@ -104,6 +106,8 @@ struct FSBridgeTests {
         }
 
         func volumeInfo() -> FSVolumeInfo { info }
+
+        func volumeIcon() -> Data? { icon }
     }
 
     /// A bridge answering for the fixture drive, and a session on it.
@@ -261,7 +265,7 @@ struct FSBridgeTests {
 
     @Test func everythingElseNeedsTheSession() async throws {
         let rig = try await rig(); defer { rig.remove() }
-        for endpoint in ["list", "stat", "source", "data", "changes", "volume", "nope"] {
+        for endpoint in ["list", "stat", "source", "data", "changes", "volume", "icon", "nope"] {
             for auth in [nil, "Bearer wrong", "bearer \(rig.key)", "Bearer \(rig.key)x", rig.key, "Basic \(rig.key)"] {
                 var headers: [String: String] = [:]
                 if let auth { headers["authorization"] = auth }
@@ -637,6 +641,25 @@ struct FSBridgeTests {
         #expect((after["usedBytes"] as? NSNumber)?.int64Value == 7)
         #expect((after["fileCount"] as? NSNumber)?.intValue == 1)
         #expect(after["scope"] as? String == Self.scope)
+    }
+
+    @Test func theDrivesIconIsItsBytesOrNone() async throws {
+        let rig = try await rig(); defer { rig.remove() }
+        let none = await ask(rig, "icon")
+        #expect(none.status == 404)
+        expectWellFormed(none)
+        #expect(try json(none)["error"] is String)
+
+        let icns = try #require(DriveIcon.icns(color: "#E040FB", name: "Client Deliverables"))
+        await rig.source.setIcon(icns)
+        let r = await ask(rig, "icon")
+        #expect(r.status == 200)
+        #expect(r.header("Content-Type") == "image/icns")
+        #expect(r.header("Content-Length") == String(icns.count))
+        guard case let .data(body) = r.body else { throw Unexpected.body }
+        #expect(body == icns)
+        #expect(await ask(rig, "icon", method: "HEAD").body.length == 0)
+        #expect(await ask(rig, "icon", method: "PUT").status == 405)
     }
 
     @Test func aDriveMayBeWrittenToByItsEditorsAndOwners() {

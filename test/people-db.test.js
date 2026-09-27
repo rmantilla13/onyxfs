@@ -323,6 +323,7 @@ describeDb('people, sessions and the admin tables (database)', () => {
     const ids = body.filespaces.map((f) => f.id);
     assert.ok(ids.includes(mine.id));
     assert.ok(!ids.includes(notMine.id), 'a full role no longer lists every drive');
+    for (const f of body.filespaces) assert.match(f.color, /^#[0-9A-F]{6}$/, 'each drive with its colour, for its disk icon');
   });
 
   test('STS for a Viewer: read-only, or refused where no read-only key exists', async () => {

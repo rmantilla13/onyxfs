@@ -145,6 +145,8 @@ Endpoints:
    listing changed. `all: true` = drop everything (e.g. the mirror was rebuilt).
 7. `GET /fs/v1/volume` → the `volume` object from (1), fresh.
 
+(And 12, `GET /fs/v1/icon`, under "The drive's icon" at the end.)
+
 `generation` is a per-scope counter that moves every time that drive's mirror
 changes.
 
@@ -329,8 +331,12 @@ extension's cached chunks.
   carry Finder's hidden flag (`UF_HIDDEN`), as on any disk — which is what
   keeps the Time Machine marker at each disk's root
   (`com.apple.timemachine.donotpresent`, no dot to hide it) out of sight.
-- **Extended attributes** are kept locally per item (so macOS does not
-  write `._` AppleDouble files); never uploaded.
+- **Extended attributes** never leave this Mac. The engine can keep them
+  per item (LocalStore), but FSKit never asks it to: OnyxVolume's
+  `supportedXattrNames` answers `[]`, which FSKit takes as "limited"
+  support with no names. So macOS keeps them the way it does on a FAT disk,
+  in `._` AppleDouble files (the root's in `._.`). Those files are
+  local-only names, stored in the same LocalStore.
 - **Finder's Trash**: the volume has none — making `/.Trashes` is refused
   (EPERM), so Finder offers "Delete Immediately", and the delete goes to the
   web's trash (the server's `trash` flag decides, as for the web's Delete).
@@ -360,3 +366,50 @@ otherwise a save could briefly read back its old bytes.
 - Tests: OnyxKitTests (bridge, writer, queue), OnyxFSCoreTests (engine,
   client, cache, reader), and OnyxFSIntegrationTests — the engine against the
   app's real bridge over the wire protocol, in process.
+
+
+## The drive's icon
+
+Each disk has an icon of its own, built on the Onyx mark (the slash on its
+near-black tile, `public/onyx-mark.svg`). The slash is in the drive's colour,
+the same colour as the dot beside its name on the web. After the slash comes
+the drive's initial in white, as a path is written: `/V` for Videos.
+
+Colour alone would not be enough. The web has seven colours, so drives share
+them: on the owner's Mac, Videos and Memories are both the same green. The
+initial is the name's first letter or digit. A name with neither keeps the
+slash alone. The library's disk is the mark as it is. A drive whose colour
+the server did not send keeps the mark's own slash colour.
+
+- **The colour** comes from the server: `GET /api/space/filespaces` gives
+  each drive a `color` (`#RRGGBB`). `driveColorHex` in `lib/drive-color.js`
+  resolves the drive's `DRIVE_COLORS` entry against the brand's palette the
+  way the browser does: a mix in OKLCH, mapped into sRGB as CSS Color 4 maps
+  a colour it cannot show. A white-label palette colours its own disks. The
+  app lightens a colour that would vanish on the tile (under 3:1).
+- **The icon** is drawn by the app (`DriveIcon`, OnyxKit). It is an .icns of
+  PNGs from 16 to 1024 px, each drawn at its own size on macOS's icon grid.
+  The initial is in the system's bold face, and a letter too wide to fit is
+  made smaller. Each colour-and-initial pair is drawn once, in 12–21 ms, off
+  the main thread, then served from a cache that holds a few hundred KB per
+  pair.
+- **The bridge** serves it:
+  12. `GET /fs/v1/icon` → `image/icns` bytes, or 404 when the drive has none
+      (as an app from before icons also answers).
+- **The extension** fetches it as it connects, before the volume is handed to
+  FSKit (EngineFactory). `LocalStore.placeVolumeIcon` puts it where macOS
+  looks for a disk's own icon: `/.VolumeIcon.icns`, plus Finder's
+  custom-icon flag (kHasCustomIcon) in the root's Finder info. The root's
+  Finder info lives in `/._.`, since this volume's attributes are AppleDouble
+  (above). A new `._.` is byte for byte the kernel's own layout, and an
+  existing one only has the flag set. Both are local-only names: never
+  uploaded, never listed by the bridge, hidden in Finder.
+- **The person's icon wins.** The store remembers the SHA-256 of the icon it
+  placed. An icon at the root with other bytes is the person's (Get Info ›
+  paste) and is never replaced. One that is removed comes back at the next
+  mount, as the disk's own. A new drawing, from a new design or a new colour,
+  replaces the old one at the next mount.
+- **Not on NFS.** Drives mounted the other way, the rclone NFS mounts in
+  `~/Onyx`, keep macOS's generic network-volume icon. macOS reads no Finder
+  info over NFSv3: a root's `._.` and a file's `._name` are both ignored (tried
+  with rclone's NFS server). Only a disk of its own can carry an icon.

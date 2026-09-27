@@ -408,7 +408,14 @@ final class DriveService: ObservableObject {
                                             await self?.onyxfsVolume(scope)
                                                 ?? FSVolumeInfo(name: name, readOnly: true, cacheLimitBytes: 0)
                                         },
-                                        overlay: overlay)
+                                        overlay: overlay,
+                                        icon: { [weak self] in
+                                            // Drawn off the main thread: the
+                                            // drive's colour and name are all
+                                            // it needs from here.
+                                            let drive = await self?.onyxfsIconDrive(scope)
+                                            return DriveIcon.icns(color: drive?.color, name: drive?.name)
+                                        })
             server.fs.register(FSResponder(scope: id, source: source))
             server.fs.setWriter(writer, for: id)
         }
@@ -443,6 +450,15 @@ final class DriveService: ObservableObject {
             return FSVolumeInfo(name: drive?.name ?? names[scope.identifier] ?? id,
                                 readOnly: !(drive?.mayAddFiles ?? false), cacheLimitBytes: limit)
         }
+    }
+
+    /// What a drive's disk icon is drawn from (DriveIcon): its colour, as
+    /// the server gives it, and its name's initial. None for the library,
+    /// whose disk is the mark as it is.
+    private func onyxfsIconDrive(_ scope: SyncDomain) -> (color: String?, name: String)? {
+        guard case let .drive(id) = scope else { return nil }
+        guard let drive = model?.drives.first(where: { $0.id == id }) else { return (nil, names[scope.identifier] ?? "") }
+        return (drive.color, drive.name)
     }
 
     // MARK: - Mirrors
