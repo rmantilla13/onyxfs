@@ -138,8 +138,10 @@ export async function POST(req) {
     return bad(made.existed
       ? `A folder named “${name.slice(name.lastIndexOf('/') + 1)}” already exists here.`
       // Another scope has the name, and the old primary key on folder names
-      // alone still stands (lib/db.js ensureFoldersTable). Say so rather than
-      // answer 201 for a folder that would not show up.
+      // alone still stands: only until the schema guard that drops it has
+      // run (lib/db.js ensureFoldersTable; in production, the maintenance
+      // cron or `npm run doctor`). Say so rather than answer 201 for a
+      // folder that would not show up.
       : `A folder at “${name}” already exists in another filespace, and folder names are not yet per-filespace. Choose another name.`, 409);
   }
   // A zero-byte marker so the empty folder also shows on a mounted drive.

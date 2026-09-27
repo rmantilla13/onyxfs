@@ -64,7 +64,10 @@ describe('folder names per scope, against a real database', { skip }, () => {
     assert.deepEqual(await db.createFolder(n('Legacy'), { filespace: '' }), { name: n('Legacy'), created: false, existed: true });
     assert.ok((await db.listSyncFolders({ isAdmin: true }, {})).includes(n('Legacy')), 'listed as the library’s');
     assert.equal(await db.folderPathInUse(n('Legacy')), true);
-    assert.deepEqual(await db.createFolder(n('Legacy'), { filespace: A }), { name: n('Legacy'), created: false, existed: false });
+    assert.deepEqual(await db.createFolder(n('Legacy'), { filespace: A }), { name: n('Legacy'), created: true, existed: false });
+    // The rule the index keeps: one row per name within a scope.
+    await assert.rejects(db.sql`INSERT INTO folders (name, created_at, filespace) VALUES (${n('Legacy')}, ${Date.now()}, '')`, /duplicate key/);
+    await assert.rejects(db.sql`INSERT INTO folders (name, created_at, filespace) VALUES (${n('Legacy')}, ${Date.now()}, ${A})`, /duplicate key/);
   });
 
   test('create: once per scope, ancestors with it', async () => {
@@ -76,12 +79,47 @@ describe('folder names per scope, against a real database', { skip }, () => {
     assert.deepEqual([r.parent, r.depth], [n('Day 1'), 2]);
   });
 
-  test('while the old primary key on names stands, another scope’s name is not yours yet', async () => {
+  test('the old primary key on the name alone is gone, and the name stays NOT NULL', async () => {
     const [pk] = await db.sql`SELECT count(*)::int AS n FROM pg_constraint WHERE conname = 'folders_pkey'`;
-    assert.equal(pk.n, 1, 'this commit only adds the scoped key');
-    await db.createFolder(n('Selects'), { filespace: A });
-    assert.deepEqual(await db.createFolder(n('Selects'), { filespace: B }), { name: n('Selects'), created: false, existed: false });
-    assert.deepEqual(await rows(n('Selects')), [`${A}:${n('Selects')}`]);
+    assert.equal(pk.n, 0);
+    const [col] = await db.sql`SELECT attnotnull FROM pg_attribute WHERE attrelid = 'folders'::regclass AND attname = 'name'`;
+    assert.equal(col.attnotnull, true);
+  });
+
+  test('two drives and the library each have "Selects": create, rename, delete and list, each its own', async () => {
+    for (const tag of [A, B, '']) {
+      assert.deepEqual(await db.createFolder(`${n('Selects')}/Empty`, { filespace: tag }), { name: `${n('Selects')}/Empty`, created: true, existed: false });
+    }
+    assert.deepEqual(await rows(n('Selects')), [
+      `library:${n('Selects')}`, `library:${n('Selects')}/Empty`,
+      `${A}:${n('Selects')}`, `${A}:${n('Selects')}/Empty`, `${B}:${n('Selects')}`, `${B}:${n('Selects')}/Empty`,
+    ]);
+    // Rename in one drive: the other drive's and the library's stay. (The
+    // UPDATE used to match rows by name alone, and would have renamed all
+    // three.)
+    const out = await db.renameFolder(n('Selects'), n('Picks'), { tag: A });
+    assert.equal(out.folders, 2);
+    assert.deepEqual(await rows(n('Picks')), [`${A}:${n('Picks')}`, `${A}:${n('Picks')}/Empty`]);
+    assert.deepEqual(await rows(n('Selects')), [
+      `library:${n('Selects')}`, `library:${n('Selects')}/Empty`, `${B}:${n('Selects')}`, `${B}:${n('Selects')}/Empty`,
+    ]);
+    // Move onto a name the other drive has: this drive's own is free.
+    await db.renameFolder(n('Picks'), n('Selects'), { tag: A });
+    assert.equal((await rows(n('Selects'))).length, 6);
+    // Delete in the other drive: this one's and the library's stay.
+    await db.deleteFolderRows(n('Selects'), { tag: B });
+    assert.deepEqual(await rows(n('Selects')), [
+      `library:${n('Selects')}`, `library:${n('Selects')}/Empty`, `${A}:${n('Selects')}`, `${A}:${n('Selects')}/Empty`,
+    ]);
+    // In use, and the sync feed's folders, each for its own scope.
+    assert.equal(await db.folderPathInUse(n('Selects'), { tag: B, prefix: B }), false);
+    assert.equal(await db.folderPathInUse(n('Selects'), { tag: A, prefix: A }), true);
+    const inA = await db.listSyncFolders({ email: 'm@fs.test' }, { storagePrefix: A });
+    const inB = await db.listSyncFolders({ email: 'm@fs.test' }, { storagePrefix: B });
+    assert.ok(inA.includes(n('Selects')) && inA.includes(`${n('Selects')}/Empty`));
+    assert.ok(!inB.includes(n('Selects')));
+    // And the same name twice in one scope is still one folder.
+    assert.deepEqual(await db.createFolder(n('Selects'), { filespace: A }), { name: n('Selects'), created: false, existed: true });
   });
 
   test('in use: each scope as its own view shows it', async () => {
@@ -109,6 +147,11 @@ describe('folder names per scope, against a real database', { skip }, () => {
     await db.deleteFolderRows(n('R2'), { tag: A });
     assert.deepEqual(await rows(n('R2')), []);
     assert.deepEqual(await rows(n('Q')), [`library:${n('Q')}`]);
+    // A path only the library has a row at is, to the drive, a folder of its
+    // own with nothing in it yet: renamed, the drive has the new one, and
+    // the library still has its own.
+    await db.renameFolder(n('Q'), n('Q2'), { tag: A });
+    assert.deepEqual([await rows(n('Q')), await rows(n('Q2'))], [[`library:${n('Q')}`], [`${A}:${n('Q2')}`]]);
   });
 
   test('the sync feed’s folders are the scope’s own', async () => {
