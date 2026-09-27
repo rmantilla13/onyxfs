@@ -770,8 +770,9 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 html[data-mac-app] { --topnav-h: calc(var(--mac-bar-h, 52px) + 1px); }
 .files-main { min-height: calc(100dvh - var(--topnav-h)); padding-top: var(--s4); }
 /* In the Mac app the window is the app: the page spans it, as the title bar
-   above it does, rather than sitting in a column in the middle. */
-html[data-mac-app] .files-main { max-width: none; }
+   above it does, rather than sitting in a column in the middle — and ends
+   where the title bar's own controls do, on the right. */
+html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); padding-right: var(--s3); }
 .files-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--s6); align-items: start; }
 .files-layout.is-collapsed { grid-template-columns: minmax(0, 1fr); }
 .files-layout.is-collapsed > .files-sidebar { display: none; }
@@ -856,9 +857,9 @@ html[data-mac-app] .files-main { max-width: none; }
 /* The card size, from the view (data-card-size on the pane): a card's
    column width — its picture keeps 4:3, so its height follows — a folder
    card's size, a tile row's height and a column's width. */
-.files-pane[data-card-size='s'] { --card-min: 150px; --folder-min: 210px; --folder-h: 76px; --folder-name: 15px; }
-.files-pane[data-card-size='m'] { --card-min: 200px; --folder-min: 240px; --folder-h: 96px; --folder-name: 17px; }
-.files-pane[data-card-size='l'] { --card-min: 280px; --folder-min: 300px; --folder-h: 124px; --folder-name: 19px; }
+.files-pane[data-card-size='s'] { --card-min: 150px; --folder-min: 210px; --folder-h: 80px; --folder-name: 15px; }
+.files-pane[data-card-size='m'] { --card-min: 200px; --folder-min: 240px; --folder-h: 108px; --folder-name: 18px; }
+.files-pane[data-card-size='l'] { --card-min: 280px; --folder-min: 300px; --folder-h: 132px; --folder-name: 20px; }
 .files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(var(--card-min), 100%), 1fr)); gap: var(--s4); }
 /* A card is picked, not read: no text selection from a double-click, and no
    iOS image callout on a long-press (which selects, useLongPress). */

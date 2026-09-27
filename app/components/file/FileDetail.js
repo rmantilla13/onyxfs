@@ -447,8 +447,8 @@ export default function FileDetail({
                 <Row label="Start"><span className="mono">{timecode(0, model)}</span></Row>
               )}
               <Row label="Folder">{file.folder || 'All files'}</Row>
-              <Row label="Added">{file.createdAt ? new Date(file.createdAt).toLocaleString() : '—'}</Row>
-              <Row label="Added by">{file.createdBy || '—'}</Row>
+              <Row label="Created">{file.createdAt ? new Date(file.createdAt).toLocaleString() : '—'}</Row>
+              <Row label="Created by">{file.createdBy || '—'}</Row>
               {file.tags?.length > 0 && (
                 <Row label="Tags">
                   <span className="row" style={{ gap: 4, flexWrap: 'wrap' }}>

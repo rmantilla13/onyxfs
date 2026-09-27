@@ -12,7 +12,7 @@ import { describeFolder } from '@/lib/folder-ops';
 export const MAX_TILES = 300;
 
 // The folder glyph on a card, by the view's card size.
-const GLYPH = { s: 40, m: 52, l: 64 };
+const GLYPH = { s: 42, m: 58, l: 70 };
 
 
 /**

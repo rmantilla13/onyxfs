@@ -738,6 +738,17 @@ export default function FilesClient({
   const current = useMemo(() => viewSettings({ kinds, facets, query, sort, display }), [kinds, facets, query, sort, display]);
   const dirty = !view.builtin && !sameSettings(view, current);
   const offeredViews = useMemo(() => viewsForDrive(customViews, filespaceId), [customViews, filespaceId]);
+  // A link to a view that is not this person's — someone else's, one since
+  // deleted, or kept for a drive they have left — rendered All files (the
+  // server's fallback); the URL is put right, and they are told why.
+  useEffect(() => {
+    const asked = searchParams.get('view');
+    if (!asked || asked === first.viewId || returned) return;
+    replaceParams({ view: first.viewId === DEFAULT_VIEW_ID ? null : first.viewId });
+    toast.error('That view is not one you can open here, so this is All files.');
+  // Once, for the link the page was opened with.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const driveNames = useMemo(() => new Map(drives.map((d) => [d.id, d.name])), [drives]);
 
   const viewRequest = async (url, method, body) => {

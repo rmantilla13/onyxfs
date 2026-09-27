@@ -194,7 +194,7 @@ function DisplayPanel({
       <div className="display-foot">
         {builtin ? (
           <>
-            <span className="small muted">{viewName}: kept in this browser</span>
+            <span className="small muted">Changes to {viewName} are kept in this browser.</span>
             <div className="spacer" />
             {canReset && <button type="button" className="btn btn-ghost btn-sm" onClick={onReset}>Reset</button>}
           </>
