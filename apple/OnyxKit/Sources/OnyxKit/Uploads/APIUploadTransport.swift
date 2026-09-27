@@ -24,13 +24,19 @@ public struct APIUploadTransport: UploadTransport {
     }
 
     public func presign(_ job: UploadJob) async throws -> OnyxAPI.PresignedPut {
-        try await api.presignUpload(filename: job.name, contentType: job.mime, folder: job.folder,
-                                    filespaceId: job.filespaceId, size: job.size)
+        if let file = job.replaceOf {
+            return try await api.presignReplacement(fileId: file, contentType: job.mime, size: job.size)
+        }
+        return try await api.presignUpload(filename: job.name, contentType: job.mime, folder: job.folder,
+                                           filespaceId: job.filespaceId, size: job.size)
     }
 
     public func startMultipart(_ job: UploadJob) async throws -> OnyxAPI.MultipartUpload {
-        try await api.startMultipart(filename: job.name, mime: job.mime, folder: job.folder,
-                                     filespaceId: job.filespaceId, size: job.size)
+        if let file = job.replaceOf {
+            return try await api.startReplacementMultipart(fileId: file, mime: job.mime, size: job.size)
+        }
+        return try await api.startMultipart(filename: job.name, mime: job.mime, folder: job.folder,
+                                            filespaceId: job.filespaceId, size: job.size)
     }
 
     public func signParts(uploadId: String, parts: [Int]) async throws -> [Int: URL] {
@@ -45,9 +51,18 @@ public struct APIUploadTransport: UploadTransport {
         try await api.completeMultipart(uploadId: uploadId)
     }
 
+    public func abortMultipart(uploadId: String) async throws {
+        try await api.abortMultipart(uploadId: uploadId)
+    }
+
     public func record(_ job: UploadJob, key: String, publicUrl: String?) async throws -> OnyxAPI.RecordedFile {
         try await api.recordFile(key: key, publicUrl: publicUrl, name: job.name, size: job.size, mime: job.mime,
                                  folder: job.folder, filespaceId: job.filespaceId)
+    }
+
+    public func replaceContent(_ job: UploadJob, key: String) async throws -> OnyxAPI.RecordedFile {
+        guard let file = job.replaceOf else { throw OnyxError.decoding("not a replacement") }
+        return try await api.replaceContent(fileId: file, key: key, mime: job.mime)
     }
 
     /// The whole file is streamed from disk; a part (a range of it) is read

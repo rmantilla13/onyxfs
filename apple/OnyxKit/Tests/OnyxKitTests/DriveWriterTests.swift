@@ -5,10 +5,15 @@ import Testing
 /// The mirror, pretend: a map of paths, and a count of refreshes.
 private actor FakeTree: DriveTree {
     var items: [String: DriveItem] = [:]
+    var dates: [String: Date] = [:]
     var refreshes = 0
     func item(at path: String) async -> DriveItem? { items[path] }
+    func changed(at path: String) async -> Date? { dates[path] }
     func refresh() async { refreshes += 1 }
-    func set(_ path: String, _ item: DriveItem?) { items[path] = item }
+    func set(_ path: String, _ item: DriveItem?, changed: Date? = nil) {
+        items[path] = item
+        dates[path] = changed
+    }
 }
 
 /// The server's write routes, pretend: what was called, and a refusal on command.
@@ -30,7 +35,7 @@ private actor FakeRoutes: DriveWriteAPI {
 }
 
 private func writer(_ tree: FakeTree, _ routes: FakeRoutes, _ server: FakeServer, gate: Gate? = nil) throws -> (DriveWriter, UploadQueue) {
-    let queue = try UploadQueue(directory: scratch(), transport: server, sleep: { _ in await gate?.wait() })
+    let queue = try UploadQueue(directory: scratch(), transport: server, settle: 0, sleep: { _ in await gate?.wait() })
     return (DriveWriter(scope: "drive.d1", filespaceId: "d1", api: routes, tree: tree, uploads: queue), queue)
 }
 
@@ -58,17 +63,82 @@ private func writer(_ tree: FakeTree, _ routes: FakeRoutes, _ server: FakeServer
         #expect(await drive.pending(at: "/Footage/Take 1.mov") == nil)
     }
 
-    @Test func savingOverAFileReplacesIt() async throws {
+    /// Saved over: the same file, new bytes — its id, and so its comments,
+    /// tags and links on the web, stay. Listed as pending until the mirror
+    /// shows the change itself, not merely the file (which it always did).
+    @Test func savingOverAFileGivesItNewContents() async throws {
         let tree = FakeTree(), routes = FakeRoutes(), server = FakeServer()
-        await tree.set("/notes.txt", .file(id: "old"))
+        await tree.set("/notes.txt", .file(id: "notes"), changed: Date(timeIntervalSince1970: 1))
         let (drive, queue) = try writer(tree, routes, server)
         await queue.observe { job in Task { await drive.uploadChanged(job) } }
         try await drive.putFile(path: "/notes.txt", from: try source(Data("v2".utf8)))
         await settle(queue)
         try await Task.sleep(nanoseconds: 30_000_000)
-        // The new copy recorded, then the old one gone (until the server can
-        // replace bytes in place).
-        #expect(await routes.calls == ["delete old"])
+        #expect(await server.calls == ["presign for notes", "put notes.txt", "swap notes <- drive/notes-new"])
+        #expect(await routes.calls.isEmpty)
+        // The mirror still has the old bytes (changed at 1 s; the swap was at 2 s).
+        await drive.mirrorChanged()
+        #expect(await drive.pending(at: "/notes.txt") != nil)
+        await tree.set("/notes.txt", .file(id: "notes"), changed: Date(timeIntervalSince1970: 2))
+        await drive.mirrorChanged()
+        #expect(await drive.pending(at: "/notes.txt") == nil)
+    }
+
+    /// How apps save: a new copy under a temporary name, moved over the
+    /// document. The move comes before anything is sent, so the copy goes
+    /// up once — as the document's new contents.
+    @Test func anAppsSaveBecomesTheDocumentsNewContents() async throws {
+        let tree = FakeTree(), routes = FakeRoutes(), server = FakeServer()
+        await tree.set("/Script.fdx", .file(id: "script"))
+        let gate = Gate()
+        let queue = try UploadQueue(directory: scratch(), transport: server, settle: 1, sleep: { _ in await gate.wait() })
+        let drive = DriveWriter(scope: "drive.d1", filespaceId: "d1", api: routes, tree: tree, uploads: queue)
+        try await drive.putFile(path: "/.Script.fdx.sb-1a2b", from: try source(Data("draft 2".utf8)))
+        try await drive.rename(from: "/.Script.fdx.sb-1a2b", to: "/Script.fdx", replace: true)
+        #expect(await drive.pending(at: "/Script.fdx")?.replaceOf == "script")
+        await gate.open()
+        await settle(queue)
+        #expect(await server.calls == ["presign for script", "put Script.fdx", "swap script <- drive/script-new"])
+        #expect(await routes.calls.isEmpty) // nothing deleted, nothing renamed
+    }
+
+    /// Moved over the document after its bytes had started up as a new
+    /// file: it starts again as the document's contents — the key a new
+    /// file was given cannot be swapped into another.
+    @Test func aSaveMovedOverTheDocumentLateStartsAgainAsItsContents() async throws {
+        let tree = FakeTree(), routes = FakeRoutes(), server = FakeServer()
+        await tree.set("/Script.fdx", .file(id: "script"))
+        await server.setFailure("record /.tmp-save", URLError(.networkConnectionLost), times: 50)
+        let gate = Gate()
+        let (drive, queue) = try writer(tree, routes, server, gate: gate)
+        try await drive.putFile(path: "/.tmp-save", from: try source(Data("draft 2".utf8)))
+        var tries = 0
+        while await !server.calls.contains("record /.tmp-save"), tries < 500 {
+            tries += 1
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        try await drive.rename(from: "/.tmp-save", to: "/Script.fdx", replace: true)
+        await gate.open()
+        await settle(queue)
+        let calls = await server.calls
+        #expect(calls.suffix(3) == ["presign for script", "put Script.fdx", "swap script <- drive/script-new"])
+        #expect(await routes.calls.isEmpty)
+    }
+
+    /// Deleted in Finder while its new contents were on their way: the file
+    /// goes on the server too, or its old contents would come back.
+    @Test func deletingAFileMidSaveDeletesIt() async throws {
+        let tree = FakeTree(), routes = FakeRoutes(), server = FakeServer()
+        await tree.set("/notes.txt", .file(id: "notes"))
+        await server.setFailure("presign for notes", URLError(.notConnectedToInternet))
+        let gate = Gate()
+        let (drive, queue) = try writer(tree, routes, server, gate: gate)
+        try await drive.putFile(path: "/notes.txt", from: try source(Data("v2".utf8)))
+        try await drive.delete(path: "/notes.txt")
+        await gate.open()
+        await settle(queue)
+        #expect(await routes.calls == ["delete notes"])
+        #expect(await server.calls.filter { $0.hasPrefix("swap") }.isEmpty)
     }
 
     @Test func renamedOrDeletedWhileUploadingNeverReachesTheServerAsItWas() async throws {

@@ -12,7 +12,7 @@ import Foundation
 ///     /api/transcripts/queue, /api/files/<id>/transcript[/claim]
 ///                         video transcripts, made on this Mac
 ///     /api/files/presign, /api/files/upload/multipart, POST /api/files,
-///     /api/files/<id>, /api/files/folders
+///     /api/files/<id>, /api/files/<id>/content, /api/files/folders
 ///                         writes from a drive mounted as a disk (onyxfs,
 ///                         Writes.swift) — let through only with a bearer
 ///

@@ -171,7 +171,7 @@ public final class FSBridge: @unchecked Sendable {
         guard let query = Self.query(request.target) else { return FSResponder.error(400, "The query is not valid.") }
         // Registered before its first ticket was issued, and forgotten only
         // with its sessions: missing here means it went just now.
-        guard let responder = responder(for: session.scope) else { return FSResponder.unavailable }
+        guard let responder = responder(for: session.scope) else { return gone(request) }
 
         switch route {
         case "list": return await responder.list(path: query["path"])
@@ -208,7 +208,7 @@ public final class FSBridge: @unchecked Sendable {
     /// A drive this account may only view answers 403 before anything is
     /// tried; the server checks each change again whatever the app thinks.
     private func write(_ route: String, _ request: DAVRequest, session: FSSessions.Session) async -> DAVResponse {
-        guard let responder = responder(for: session.scope) else { return FSResponder.unavailable }
+        guard let responder = responder(for: session.scope) else { return gone(request) }
         let allowed: String = switch route {
         case "file": "PUT"
         case "item": "DELETE"
@@ -276,6 +276,13 @@ public final class FSBridge: @unchecked Sendable {
             return FSResponder.error(401, "This drive is no longer mounted.")
         }
         return await responder.sessionAnswer(key: key)
+    }
+
+    /// A drive unmounted between this request's session check and now: its
+    /// sessions went with it, so the answer is the one that says so (401,
+    /// mount again), not a 503 to be retried.
+    private func gone(_ request: DAVRequest) -> DAVResponse {
+        sessions.session(for: request.headers["authorization"]) == nil ? Self.unauthorized : FSResponder.unavailable
     }
 
     private static func notAllowed(_ allow: String) -> DAVResponse {

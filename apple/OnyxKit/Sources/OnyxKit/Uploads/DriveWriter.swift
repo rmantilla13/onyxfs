@@ -18,6 +18,9 @@ public protocol DriveTree: Sendable {
     /// The item at a path within the drive ("/Footage/Take 1.mov"): a file
     /// (with its id) or a folder; nil when there is none.
     func item(at path: String) async -> DriveItem?
+    /// When the file at `path` last changed, by the server's clock (its
+    /// updatedAt); nil when there is no file there.
+    func changed(at path: String) async -> Date?
     /// Bring the mirror up to date now, after a change made here, so the
     /// next listing already shows it.
     func refresh() async
@@ -33,7 +36,9 @@ public enum DriveItem: Sendable, Equatable {
 ///
 /// - A file copied in goes to the upload queue, and is listed at once as
 ///   pending (its bytes read back from the queue's copy) until the server
-///   has it.
+///   has it. Written over a file already there — or moved over one, as an
+///   app saves — it becomes that file's new contents: the same file on the
+///   web, with its tags, comments and links.
 /// - A rename, move or delete of a file still uploading changes where it
 ///   will land, or stops it; of anything else, is the server's own rename,
 ///   move or delete (to the trash when the web's trash is on).
@@ -55,6 +60,15 @@ public actor DriveWriter {
         public let staged: String
         public let modified: Date
         public var failed: String?
+        /// The server's file whose contents these become, if any.
+        public var replaceOf: String? = nil
+    }
+
+    /// An upload the server has, the mirror not yet: its file (nil when an
+    /// attempt whose answer was lost recorded it), and when it changed.
+    struct Arrival: Sendable, Equatable {
+        let id: String?
+        let changedAt: Date?
     }
 
     let scope: String
@@ -65,12 +79,8 @@ public actor DriveWriter {
     private var pending: [String: Pending] = [:] {
         didSet { revision &+= 1 }
     }
-    /// Uploads recorded, not yet in the mirror: path → file id.
-    private var arrived: [String: String] = [:]
-    /// A file saved over an existing one: once the new copy is recorded,
-    /// the old one goes. (Until the server can replace a file's bytes in
-    /// place, keeping its id — then this becomes that call.)
-    private var replacing: [UUID: String] = [:]
+    /// Uploads recorded, not yet in the mirror, by path.
+    private var arrived: [String: Arrival] = [:]
     /// Moves whenever the pending files change, so the bridge's view of the
     /// drive (mirror + overlay) moves with it.
     public private(set) var revision: UInt64 = 0
@@ -113,23 +123,32 @@ public actor DriveWriter {
     @discardableResult
     public func putFile(path: String, from file: URL, modified: Date? = nil) async throws -> Pending {
         let (folder, name) = try Self.split(path)
-        if let waiting = pending[path] {
-            // Written again before the first copy arrived: only the latest goes.
-            await uploads.cancel(waiting.job)
-            pending[path] = nil
-        }
         let existing = await tree.item(at: path)
         if existing == .folder { throw Failure.posix(EISDIR, nil) }
+        var replaceOf: String?
+        if case let .file(id)? = existing { replaceOf = id }
+        if let waiting = pending.removeValue(forKey: path) {
+            // Written again before the first copy arrived: only the latest
+            // goes — as new contents for the file the first became, if it has.
+            if let id = await arrivedFile(waiting) {
+                replaceOf = id
+                await uploads.release(waiting.job)
+            } else {
+                await uploads.cancel(waiting.job)
+                replaceOf = replaceOf ?? waiting.replaceOf
+            }
+            arrived[path] = nil
+        }
         let mime = UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType ?? "application/octet-stream"
         let job: UploadJob
         do {
-            job = try await uploads.enqueue(from: file, scope: scope, filespaceId: filespaceId, folder: folder, name: name, mime: mime)
+            job = try await uploads.enqueue(from: file, scope: scope, filespaceId: filespaceId, folder: folder, name: name,
+                                            mime: mime, replaceOf: replaceOf)
         } catch {
             throw Failure.posix(EIO, error.localizedDescription)
         }
-        if case let .file(id)? = existing { replacing[job.id] = id }
         let entry = Pending(job: job.id, path: path, size: job.size, staged: job.staged,
-                            modified: modified ?? Date(), failed: nil)
+                            modified: modified ?? Date(), failed: nil, replaceOf: replaceOf)
         pending[path] = entry
         return entry
     }
@@ -150,8 +169,9 @@ public actor DriveWriter {
         let target = await tree.item(at: to) ?? pending[to].map { .file(id: "pending:\($0.job)") }
         if target != nil, !replace { throw Failure.posix(EEXIST, nil) }
         let (newFolder, newName) = try Self.split(to)
+        if target == .folder, pending[from] != nil { throw Failure.posix(EISDIR, nil) }
 
-        if let moving = pending[from], let id = await uploads.fileId(for: moving.job) {
+        if let moving = pending[from], let id = await arrivedFile(moving) {
             // Uploaded a moment ago: it is a file on the server now.
             pending[from] = nil
             arrived[from] = nil
@@ -161,14 +181,34 @@ public actor DriveWriter {
             return
         }
         if let moving = pending[from] {
-            // Still uploading: it lands at the new place instead.
-            if let over = pending[to] { await uploads.cancel(over.job); pending[to] = nil }
-            if case let .file(id)? = await tree.item(at: to) { replacing[moving.job] = id }
-            await uploads.retarget(moving.job, folder: newFolder, name: newName)
+            // Still uploading: it lands at the new place instead. Moved over
+            // a file, it becomes that file's new contents (an app's save).
+            var over: String?
+            if case let .file(id)? = await tree.item(at: to) { over = id }
+            if let other = pending.removeValue(forKey: to) {
+                if let id = await arrivedFile(other) {
+                    over = id
+                    await uploads.release(other.job)
+                } else {
+                    await uploads.cancel(other.job)
+                    over = over ?? other.replaceOf
+                }
+                arrived[to] = nil
+            }
+            var replacing = over
+            if let replaced = moving.replaceOf {
+                // New contents for a file the server has: that file moves,
+                // and the contents follow it.
+                try await renameFile(replaced, from: from, to: to, over: over.map { .file(id: $0) })
+                replacing = replaced
+            }
+            await uploads.retarget(moving.job, folder: newFolder, name: newName, replacing: replacing)
             var moved = moving
             moved.path = to
+            moved.replaceOf = replacing
             pending[from] = nil
             pending[to] = moved
+            if moving.replaceOf != nil { await tree.refresh() }
             return
         }
 
@@ -179,6 +219,7 @@ public actor DriveWriter {
             if target != nil { throw Failure.posix(EEXIST, "A folder cannot replace another item.") }
             try await server { try await self.api.moveFolder(from: Self.relative(from), to: Self.relative(to), filespaceId: self.filespaceId) }
         case let .file(id)?:
+            if target == .folder { throw Failure.posix(EISDIR, nil) }
             try await renameFile(id, from: from, to: to, over: target)
         }
         await tree.refresh()
@@ -202,15 +243,21 @@ public actor DriveWriter {
 
     public func delete(path: String) async throws {
         if let waiting = pending[path] {
+            let uploaded = await arrivedFile(waiting)
             pending[path] = nil
             arrived[path] = nil
-            if let id = await uploads.fileId(for: waiting.job) {
+            if let id = uploaded {
                 // Uploaded a moment ago: delete the file it became.
                 try await server { try await self.api.deleteFile(id: id) }
                 await tree.refresh()
                 await uploads.release(waiting.job)
             } else {
                 await uploads.cancel(waiting.job)
+                if let replaced = waiting.replaceOf {
+                    // Its old contents are still the server's: that file goes.
+                    try await server { try await self.api.deleteFile(id: replaced) }
+                    await tree.refresh()
+                }
             }
             return
         }
@@ -232,10 +279,7 @@ public actor DriveWriter {
         guard job.scope == scope, let path = pending.first(where: { $0.value.job == job.id })?.key else { return }
         switch job.state {
         case .done:
-            if let id = job.fileId { arrived[path] = id }
-            if let old = replacing.removeValue(forKey: job.id), old != job.fileId {
-                try? await api.deleteFile(id: old)
-            }
+            arrived[path] = Arrival(id: job.fileId ?? pending[path]?.replaceOf, changedAt: job.changedAt)
             await tree.refresh()
             await mirrorChanged()
         case .failed:
@@ -245,18 +289,30 @@ public actor DriveWriter {
         }
     }
 
-    /// The mirror moved on: pending files it now holds are no longer
-    /// pending (checked against the mirror, so a listing never loses a file
-    /// between "uploaded" and "synced").
+    /// The mirror moved on: pending files it now holds — the change itself,
+    /// not just a file by that name — are no longer pending (checked
+    /// against the mirror, so a listing never loses a file, or shows its
+    /// old bytes, between "uploaded" and "synced").
     public func mirrorChanged() async {
-        for (path, id) in arrived {
-            if case let .file(found)? = await tree.item(at: path), found == id {
-                arrived[path] = nil
-                // The mirror shows the server's copy now: Finder reads that,
-                // and the staged one can go.
-                if let job = pending.removeValue(forKey: path)?.job { await uploads.release(job) }
-            }
+        for (path, arrival) in arrived {
+            guard case let .file(found)? = await tree.item(at: path), arrival.id == nil || found == arrival.id else { continue }
+            if let changedAt = arrival.changedAt, let shown = await tree.changed(at: path), shown < changedAt { continue }
+            arrived[path] = nil
+            // The mirror shows the server's copy now: Finder reads that,
+            // and the staged one can go.
+            if let job = pending.removeValue(forKey: path)?.job { await uploads.release(job) }
         }
+    }
+
+    /// The file a pending upload became, once the server has it.
+    private func arrivedFile(_ file: Pending) async -> String? {
+        if let id = await uploads.fileId(for: file.job) { return id }
+        guard let arrival = arrived[file.path] else { return nil }
+        if let id = arrival.id { return id }
+        // Recorded by an attempt whose answer was lost: the mirror has its id.
+        await tree.refresh()
+        if case let .file(found)? = await tree.item(at: file.path) { return found }
+        return nil
     }
 
     // MARK: -
