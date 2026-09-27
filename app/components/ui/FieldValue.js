@@ -4,6 +4,7 @@ import { Fragment, useSyncExternalStore } from 'react';
 // lib/media.js alone, not lib/dam.js: every card draws these, and the
 // storage pages' pictures come from the same module (FileCard).
 import { fmtSize, fmtDuration, effectiveKind, fileFormat, aspectLabel } from '@/lib/media';
+import { whenCreated, whenModified } from '@/lib/file-dates';
 
 /**
  * A file's metadata fields as a card's line, a tile's caption or a list's
@@ -62,8 +63,8 @@ export function fieldValue(file, field, { rootName = 'All files' } = {}) {
   switch (field.key) {
     case 'size': return fmtSize(file.size);
     case 'type': return fileFormat(file.name, file.mime) || KIND_WORDS[effectiveKind(file)] || '';
-    case 'modified': return file.updatedAt ? { at: file.updatedAt } : '';
-    case 'added': return file.createdAt ? { at: file.createdAt } : '';
+    case 'modified': { const at = whenModified(file); return at ? { at } : ''; }
+    case 'added': { const at = whenCreated(file); return at ? { at } : ''; }
     case 'duration': return fmtDuration(md.duration);
     case 'dimensions': return md.width && md.height ? `${md.width} × ${md.height}` : '';
     case 'aspect_ratio': return aspectLabel(md.width, md.height) || '';

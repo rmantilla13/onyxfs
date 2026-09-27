@@ -184,6 +184,7 @@ struct FSBridgeTests {
         let id: String?
         let size: Int64
         let mtime: Double
+        let btime: Double
         let version: String
         let local: Bool
         let pending: Bool
@@ -344,11 +345,13 @@ struct FSBridgeTests {
         #expect(campaigns.id == nil && campaigns.size == 0 && !campaigns.local && !campaigns.pending)
         #expect(campaigns.mtime == Double(Self.t0) / 1000, "a folder is as new as the newest thing in it")
         let empty = try #require(entries.first { $0.name == "Empty" })
-        #expect(empty.mtime == 0)
+        #expect(empty.mtime == Double(Self.t0) / 1000, "an empty folder is dated as the one it is in")
         #expect(text(r).contains(#""id":null"#), "a folder's id is written as null")
 
         let pinned = try #require(entries.first { $0.name == "Pinned.bin" })
         #expect(pinned.type == "file" && pinned.id == "pinned" && pinned.size == 100)
+        #expect(pinned.mtime == Double(Self.t0 - 4_000) / 1000)
+        #expect(pinned.btime == Double(Self.t0 - 4_001) / 1000, "born when it was added, with no date of its own")
         #expect(pinned.local, "kept offline")
         #expect(pinned.mtime == Double(Self.t0 - 4_000) / 1000)
         #expect(pinned.version.count == 32 && pinned.version.allSatisfy { $0.isHexDigit })

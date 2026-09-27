@@ -6,7 +6,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { parseFileRecord, FILE_VISIBILITIES } = await import('../lib/file-record.js');
+const { parseFileRecord, FILE_VISIBILITIES, fileDate } = await import('../lib/file-record.js');
 
 const base = { url: 'https://bucket.example/files/a.jpg', storage: 's3', storageKey: 'files/a.jpg', name: 'a.jpg' };
 
@@ -93,5 +93,34 @@ describe('parseFileRecord keeps the thumbnail sizes uploadFields checks', async 
     const { record } = parseFileRecord({ ...base, thumbnailKey: thumb, thumbSizes: ['huge', '../x'] });
     const sizes = uploadFields(record).thumbSizes;
     assert.ok(!sizes || !sizes.length, `got ${JSON.stringify(sizes)}`);
+  });
+});
+
+describe('the file’s own dates', () => {
+  const NOW = Date.parse('2026-09-26T12:00:00Z');
+
+  test('epoch milliseconds, as a number or a string of one, rounded', () => {
+    assert.equal(fileDate(Date.parse('2026-09-05T10:00:00Z'), NOW), Date.parse('2026-09-05T10:00:00Z'));
+    assert.equal(fileDate('1788604800000', NOW), 1788604800000);
+    assert.equal(fileDate(1788604800000.6, NOW), 1788604800001);
+    assert.equal(fileDate(NOW + 23 * 3600_000, NOW), NOW + 23 * 3600_000, 'a clock a little ahead');
+  });
+
+  test('anything that could not be a real date is dropped, not refused', () => {
+    for (const bad of [null, undefined, '', 0, -1, NaN, Infinity, true, 'yesterday', '2026-09-05', {}, [1], NOW + 25 * 3600_000]) {
+      assert.equal(fileDate(bad, NOW), null, JSON.stringify(bad));
+    }
+  });
+
+  test('a record carries them, and a bad one leaves the upload as it was', () => {
+    const { record } = parseFileRecord({ ...base, fileCreatedAt: 1725530400000, fileModifiedAt: '1727337600000' });
+    assert.equal(record.fileCreatedAt, 1725530400000);
+    assert.equal(record.fileModifiedAt, 1727337600000);
+    const bad = parseFileRecord({ ...base, fileCreatedAt: 'last week', fileModifiedAt: -5 });
+    assert.ok(!bad.error, 'still recorded');
+    assert.equal(bad.record.fileCreatedAt, null);
+    assert.equal(bad.record.fileModifiedAt, null);
+    const none = parseFileRecord(base).record;
+    assert.deepEqual([none.fileCreatedAt, none.fileModifiedAt], [null, null]);
   });
 });

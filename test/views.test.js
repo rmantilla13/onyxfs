@@ -22,7 +22,7 @@ describe('the built-in views', () => {
   test('each has the defaults the files page promises', () => {
     const want = {
       all: { layout: 'grid', kinds: [] },
-      recent: { layout: 'grid', kinds: [], flatten: true, sort: 'modified' },
+      recent: { layout: 'grid', kinds: [], flatten: true, sort: 'activity' },
       images: { layout: 'tile', kinds: ['image'], fields: ['dimensions'] },
       video: { layout: 'grid', kinds: ['video'], fields: ['duration', 'dimensions', 'size'] },
       audio: { layout: 'list', kinds: ['audio'], fields: ['duration', 'size', 'modified'] },
@@ -39,8 +39,10 @@ describe('the built-in views', () => {
       if (w.flatten) assert.equal(v.display.flatten, true, `${id} flattens`);
       if (w.sort) assert.equal(v.sort, w.sort, `${id} sort`);
     }
-    assert.equal(resolveView('recent').sort, 'modified', 'Recent is newest-modified first');
-    assert.equal(sortParts('modified').dir, 'desc');
+    // Latest activity, not Modified: that is the file's own date, and a file
+    // that has only just come can have one from years ago.
+    assert.equal(resolveView('recent').sort, 'activity', 'Recent is what came or changed last, first');
+    assert.deepEqual(sortParts('activity'), { field: 'activity', dir: 'desc' });
   });
 
   test('every kind a built-in filters on is one the server knows, and every field one a view may show', () => {
@@ -305,9 +307,16 @@ describe('the Sort menu', () => {
     assert.equal(sortFor('size'), 'size', 'a field opens largest first');
     assert.equal(sortFor('name'), 'name', 'and names A to Z');
     assert.equal(sortFor('nope', 'asc'), 'new');
-    assert.deepEqual(sortParts('bogus'), { field: 'added', dir: 'desc' });
+    assert.deepEqual(sortParts('bogus'), { field: 'uploaded', dir: 'desc' });
     assert.equal(describeSort('modified'), 'Date modified, newest first');
     assert.equal(describeSort('small'), 'Size, smallest first');
+    // Four dates, as a file manager has them: the file's own two, when it
+    // came (the default), and when anything about it last changed here.
+    assert.equal(describeSort('created_old'), 'Date created, oldest first');
+    assert.equal(describeSort('new'), 'Date added, newest first');
+    assert.equal(describeSort('activity'), 'Last activity, newest first');
+    assert.deepEqual(SORT_FIELDS.map((f) => f.label), ['Date modified', 'Date created', 'Date added', 'Last activity', 'Name', 'Size', 'Type']);
+    for (const sort of VIEW_SORT_KEYS) assert.ok(SORT_FIELDS.some((f) => f.asc === sort || f.desc === sort), `${sort} is in the menu`);
   });
 });
 

@@ -26,15 +26,20 @@ test('a header opens in its natural direction and then flips', () => {
   assert.equal(nextSortFor('modified', 'old'), 'modified');
   assert.equal(nextSortFor('modified', 'modified'), 'modified_old');
   assert.equal(nextSortFor('type', 'size'), 'type');
+  assert.equal(nextSortFor('added', 'new'), 'created', 'from the default, Created opens newest first');
+  assert.equal(nextSortFor('added', 'created'), 'created_old');
   assert.equal(nextSortFor('nope', 'size'), 'size');
 });
 
 test('the active column and direction are read back from the sort', () => {
   assert.deepEqual(columnOf('small'), { key: 'size', dir: 'asc' });
   assert.deepEqual(columnOf('type_desc'), { key: 'type', dir: 'desc' });
-  // Newest and Oldest are the Created column, now that there is one to show.
-  assert.deepEqual(columnOf('new'), { key: 'added', dir: 'desc' });
-  assert.deepEqual(columnOf('old'), { key: 'added', dir: 'asc' });
+  // Created is the file's own date, as the cell shows it; newest and oldest
+  // added — the default — and activity are orders no column shows.
+  assert.deepEqual(columnOf('created'), { key: 'added', dir: 'desc' });
+  assert.deepEqual(columnOf('created_old'), { key: 'added', dir: 'asc' });
+  assert.deepEqual(columnOf('modified_old'), { key: 'modified', dir: 'asc' });
+  for (const sort of ['new', 'old', 'activity', 'activity_old']) assert.equal(columnOf(sort), null, sort);
   assert.equal(columnOf('nope'), null);
 });
 

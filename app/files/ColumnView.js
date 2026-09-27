@@ -10,6 +10,7 @@ import { fileKey, folderKey } from '@/lib/selection';
 import { overlaps } from '@/lib/marquee';
 import { baseName } from '@/lib/folder-ops';
 import { kindLabel } from '@/lib/file-info';
+import { whenCreated, whenModified } from '@/lib/file-dates';
 import { MAX_TILES } from './FolderItems';
 
 /**
@@ -103,8 +104,10 @@ function Details({ file, fields, rootName, labelFor, onOpenFile, width }) {
     ['Size', fieldValue(file, { key: 'size' })],
     ['Dimensions', md.width && md.height ? `${md.width} × ${md.height}` : ''],
     ['Duration', fieldValue(file, { key: 'duration' })],
-    ['Created', file.createdAt ? <When at={file.createdAt} /> : ''],
-    ['Modified', file.updatedAt ? <When at={file.updatedAt} /> : ''],
+    ['Created', whenCreated(file) ? <When at={whenCreated(file)} /> : ''],
+    // When it came, where Created is the file's own date and so says otherwise.
+    ['Added', file.fileCreatedAt && file.createdAt ? <When at={file.createdAt} /> : ''],
+    ['Modified', whenModified(file) ? <When at={whenModified(file)} /> : ''],
     ['Created by', file.createdBy || ''],
     ['Folder', file.folder || rootName],
   ].filter(([, v]) => v);
