@@ -204,8 +204,12 @@ private func writer(_ tree: FakeTree, _ routes: FakeRoutes, _ server: FakeServer
         let tree = FakeTree(), routes = FakeRoutes(), server = FakeServer()
         let (drive, _) = try writer(tree, routes, server)
         try await drive.mkdir(path: "/Footage/Day 1")
+        // The mirror is brought up to date before the bridge reads the new
+        // folder's entry back from it.
+        #expect(await tree.refreshes == 1)
         await tree.set("/Footage/Day 1", .folder)
         try await drive.mkdir(path: "/Footage/Day 1") // already there: nothing to do
+        #expect(await tree.refreshes == 1)
         try await drive.delete(path: "/Footage/Day 1")
         #expect(await routes.calls == ["mkdir Footage/Day 1", "rmdir Footage/Day 1"])
         await tree.set("/a.txt", .file(id: "x"))

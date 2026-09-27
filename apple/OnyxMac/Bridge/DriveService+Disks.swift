@@ -24,7 +24,7 @@ extension DriveService {
         // A disk mounting, failing or ejected shows in the menus and Settings.
         diskForwarding = mounter.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         // Volumes an earlier run left can no longer reach this run's bridge.
-        DiskMounter.clearStale()
+        mounter.clearStale()
         Task { await mounter.refreshAvailability() }
     }
 

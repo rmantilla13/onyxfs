@@ -209,7 +209,11 @@ final class DAVServer: @unchecked Sendable {
             case .failed:
                 return // answered, and closing
             case .needMore:
-                break
+                // An upload whose body has begun: the rest of it goes to its
+                // spool file. Read into the buffer instead, it would never
+                // reach the file, and the upload would wait for bytes that
+                // had already come.
+                if spool != nil { receiveSpooled(); return }
             }
             if buffer.count > Self.maxHeader + Self.maxBody {
                 fail(413); return
