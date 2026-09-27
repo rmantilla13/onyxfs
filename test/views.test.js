@@ -320,7 +320,8 @@ describe('a drive’s colour', () => {
     assert.ok(DRIVE_COLORS.includes(driveColor(id)));
     assert.ok(!DRIVE_COLORS.includes(LIBRARY_COLOR));
     for (const c of DRIVE_COLORS) {
-      assert.match(c, /^(var\(--[a-z-]+\)|color-mix\(in srgb, var\(--[a-z-]+\) \d+%, var\(--[a-z-]+\)\))$/, 'only brand properties');
+      assert.match(c, /^(var\(--[a-z-]+\)|color-mix\(in oklch, var\(--[a-z-]+\)( \d+%)?, var\(--[a-z-]+\)\))$/, 'only brand properties');
+      assert.ok(!c.includes('accent-deep') && c !== LIBRARY_COLOR, `${c} is the library’s colour by another name`);
       assert.ok(!/danger/.test(c));
     }
     // A handful of ids spread over more than one colour.

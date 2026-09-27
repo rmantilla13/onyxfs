@@ -133,6 +133,36 @@ export default function useSelectionModel({
     if (f) L.openFile?.(f);
   }, []);
 
+  // ↑ ↓ (and a page of them) in a files layout whose rows are not a grid —
+  // the justified tiles, rows of different lengths — asked of the layout
+  // itself (`step`), which says when a move leaves the top of the files for
+  // the folders above. Null when this layout does not say.
+  const stepTarget = (pos, keyName) => {
+    const nav = navRef.current.files;
+    const L = live.current;
+    if (pos?.s !== 1 || !nav?.step || !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'].includes(keyName)) return null;
+    const up = keyName === 'ArrowUp' || keyName === 'PageUp';
+    const times = keyName.startsWith('Page') ? Math.max(1, nav.rowsPerPage || 1) : 1;
+    let i = pos.i;
+    let crossed = null;
+    for (let n = 0; n < times; n++) {
+      const next = nav.step(i, up ? 'ArrowUp' : 'ArrowDown');
+      if (typeof next !== 'number') { crossed = next; break; }
+      i = next;
+    }
+    if (i !== pos.i) return { s: 1, i };
+    if (crossed?.cross === 'up' && L.shownFolders.length) {
+      const cols = navRef.current.folders?.cols || 1;
+      const lastRow = Math.floor((L.shownFolders.length - 1) / cols);
+      const col = Math.min(cols - 1, Math.floor((crossed.x || 0) * cols));
+      return { s: 0, i: Math.min(L.shownFolders.length - 1, lastRow * cols + col) };
+    }
+    // A page at the edge goes to the end, as it does in a grid.
+    if (keyName === 'PageUp' && pos.i > 0) return { s: 1, i: 0 };
+    if (keyName === 'PageDown' && pos.i < L.files.length - 1) return { s: 1, i: L.files.length - 1 };
+    return false;
+  };
+
   const move = useCallback((from, keyName, extend) => {
     const L = live.current;
     const sections = [
@@ -140,7 +170,9 @@ export default function useSelectionModel({
       { count: L.files.length, cols: navRef.current.files?.cols || 1 },
     ];
     const rowsPerPage = navRef.current.files?.rowsPerPage || 1;
-    const to = keyAt(navTarget(sections, posOf(from), keyName, { rowsPerPage }));
+    const pos = posOf(from);
+    const stepped = stepTarget(pos, keyName);
+    const to = keyAt(stepped === null ? navTarget(sections, pos, keyName, { rowsPerPage }) : stepped || null);
     if (!to) return false;
     apply(moveTo(current(), to, { extend, order: L.order }));
     focusItem(to);

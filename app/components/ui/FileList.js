@@ -1,11 +1,13 @@
 'use client';
 
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Thumb, fmtSize } from './FileCard';
+import { When, localDay, useHydrated } from './FieldValue';
 import { rowWindow } from '@/lib/virtual-rows';
 import { listHits, overlaps } from '@/lib/marquee';
 import { LIST_COLUMNS, columnOf, nextSortFor, columnTemplate, fitColumns } from '@/lib/list-columns';
 import { deriveAuto } from '@/lib/dam';
+import { fmtDuration } from '@/lib/media';
 import { fileKey } from '@/lib/selection';
 import { rowsPerViewport } from '@/lib/nav-geometry';
 import { createEditIntent } from '@/lib/edit-intent';
@@ -38,6 +40,10 @@ import Icon from '@/app/components/ui/Icon';
  * page for a new sort and the listing reloads in that order. Columns the
  * server cannot order by have a plain label instead of a button.
  *
+ * Which columns there are is the view's metadata fields, chosen in the
+ * Display popover (app/files/DisplayPopover.js); chosen ones that do not fit
+ * the width wait at the end, and the header's last slot says how many.
+ *
  * `before` renders between the header and the files — the page puts the open
  * folder's subfolders there. As a function it is handed the columns on
  * screen, so its rows can line up with them.
@@ -49,42 +55,15 @@ const NAME = LIST_COLUMNS[0];
 // stylesheet's phone breakpoint), so its columns are fitted with those.
 const NARROW_QUERY = '(max-width: 720px)';
 const NARROW_LAYOUT = { thumb: 40, nameMin: 120, gap: 8 };
-// The picker's slot at the end of the row, and its width when it also has to
-// say how many chosen columns are waiting for room.
-const TRAILING = 28;
-const TRAILING_WITH_COUNT = 52;
+// The slot at the end of the row, and its width when it has to say how many
+// chosen columns are waiting for room.
+const TRAILING = 8;
+const TRAILING_WITH_COUNT = 36;
 
+// Dates in the viewer's own zone once hydrated, UTC before (./FieldValue.js).
 const dateFmt = typeof Intl !== 'undefined'
   ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' })
   : null;
-const timeFmt = typeof Intl !== 'undefined'
-  ? new Intl.DateTimeFormat(undefined, { timeStyle: 'short' })
-  : null;
-
-// The list is rendered on the server now (when it is the stored view), and
-// the server's clock is not the viewer's: dates are written in UTC there and
-// while the page hydrates, and in the viewer's own zone from the render after.
-// (A fixed locale too: the server's is not the viewer's either.)
-const utcDateFmt = typeof Intl !== 'undefined'
-  ? new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: 'UTC' })
-  : null;
-const utcTimeFmt = typeof Intl !== 'undefined'
-  ? new Intl.DateTimeFormat('en-US', { timeStyle: 'short', timeZone: 'UTC' })
-  : null;
-const noSubscribe = () => () => {};
-const useHydrated = () => useSyncExternalStore(noSubscribe, () => true, () => false);
-
-function When({ at }) {
-  const local = useHydrated();
-  if (!at || !dateFmt) return <span className="muted">—</span>;
-  const d = new Date(Number(at));
-  const [df, tf] = local ? [dateFmt, timeFmt] : [utcDateFmt, utcTimeFmt];
-  return (
-    <time dateTime={d.toISOString()} title={local ? d.toLocaleString() : undefined}>
-      {df.format(d)}<span className="filelist-time"> {tf.format(d)}</span>
-    </time>
-  );
-}
 
 function useNarrow() {
   const [narrow, setNarrow] = useState(false);
@@ -117,7 +96,7 @@ function SortButton({ col, sort, onSort }) {
   );
 }
 
-export function FileListHeader({ sort, onSort, columns = [], picker = null }) {
+export function FileListHeader({ sort, onSort, columns = [], waiting = [] }) {
   return (
     <div className="filelist-head filelist-cols">
       <span aria-hidden />
@@ -125,7 +104,17 @@ export function FileListHeader({ sort, onSort, columns = [], picker = null }) {
       {columns.map((c) => (c.asc
         ? <SortButton key={c.key} col={c} sort={sort} onSort={onSort} />
         : <span key={c.key} className="filelist-label truncate" title={c.label}>{c.label}</span>))}
-      <span className="filelist-colpick">{picker}</span>
+      <span className="filelist-colpick">
+        {waiting.length > 0 && (
+          <span
+            className="colpick-count"
+            title={`${waiting.map((c) => c.label).join(', ')}: no room at this width`}
+            aria-label={`${waiting.length} more field${waiting.length === 1 ? '' : 's'} do not fit at this width`}
+          >
+            +{waiting.length}
+          </span>
+        )}
+      </span>
     </div>
   );
 }
@@ -145,7 +134,6 @@ function FileList({
   onSort,
   before = null,
   columns = [],
-  picker = null,
   canEdit = false,
   onEdit,
   suggestionsFor,
@@ -200,9 +188,8 @@ function FileList({
     trailing = TRAILING_WITH_COUNT;
     shown = fitColumns(columns, width, { ...layout, trailing });
   }
-  const waiting = columns.slice(shown.length).map((c) => c.key);
+  const waiting = columns.slice(shown.length);
   const style = { '--filelist-cols': columnTemplate(shown, { ...layout, trailing }) };
-  const pickerEl = typeof picker === 'function' ? picker(waiting) : picker;
 
   useEffect(() => {
     setActive((i) => Math.min(Math.max(0, i), Math.max(0, files.length - 1)));
@@ -314,7 +301,7 @@ function FileList({
     if (i >= 0) setActive((a) => (a === i ? a : i));
   };
 
-  const head = <FileListHeader sort={sort} onSort={onSort} columns={shown} picker={pickerEl} />;
+  const head = <FileListHeader sort={sort} onSort={onSort} columns={shown} waiting={waiting} />;
 
   // Drag-to-select (useMarquee): which rows a viewport rectangle touches,
   // from the fixed row pitch — rows scrolled out of the window are not in
@@ -437,6 +424,8 @@ function Cell({ file, col, ctx, tabbable, selected, editing }) {
       return <span className="filelist-cell filelist-date muted"><When at={file.createdAt} /></span>;
     case 'added_by':
       return <span className="filelist-cell muted truncate" title={file.createdBy || undefined}>{file.createdBy || '—'}</span>;
+    case 'duration':
+      return <span className="filelist-cell filelist-num muted">{fmtDuration(md.duration) || '—'}</span>;
     case 'dimensions':
       return <span className="filelist-cell filelist-num muted">{md.width && md.height ? `${md.width} × ${md.height}` : '—'}</span>;
     case 'aspect_ratio':
@@ -477,12 +466,6 @@ const canon = (v) => {
 };
 const sameValue = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
 const textOf = (v) => (Array.isArray(v) ? v.join(', ') : v == null ? '' : String(v));
-
-/** 'YYYY-MM-DD' as a local calendar day — not midnight UTC, which is the day before west of Greenwich. */
-function localDay(value) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value || ''));
-  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
-}
 
 const SOON_MS = 30 * 24 * 60 * 60 * 1000;
 

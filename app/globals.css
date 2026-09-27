@@ -586,6 +586,10 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
   background: linear-gradient(90deg,
     color-mix(in srgb, var(--accent) 16%, transparent),
     color-mix(in srgb, var(--accent-alt) 9%, transparent));
+  /* Not the shared pressed state (.is-active above), whose paper-on-ink
+     text is nearly invisible on this tint. */
+  color: var(--ink);
+  box-shadow: none;
 }
 .palette-icon { flex: none; display: grid; place-items: center; width: 28px; height: 28px; overflow: hidden; border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--muted); }
 .palette-icon img { width: 100%; height: 100%; object-fit: cover; }
@@ -757,15 +761,105 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 
 /* ── Files page ─────────────────────────────────────────────────────────── */
 
-/* The page reaches the bottom of the window, so a right-click below a short
-   listing still lands on the page's own menu, not the browser's. */
-.files-main { min-height: calc(100dvh - 57px); }
-.files-toolbar { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s4); }
-.files-toolbar .input { max-width: 280px; }
-.kind-strip { display: flex; gap: var(--s2); flex-wrap: wrap; }
-.kind-strip .btn { flex: 0 0 auto; }
-.files-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--s5); }
-.files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--s4); }
+/* One rhythm for the whole page: the sidebar, then a column in which the
+   title bar, the toolbar and the files share their left and right edges —
+   the shell's padding, level with the top nav's mark — each row a hairline
+   apart. The page reaches the bottom of the window, so a right-click below
+   a short listing still lands on the page's own menu, not the browser's. */
+:root { --topnav-h: 57px; --tb-h: 36px; --card-min: 200px; }
+html[data-mac-app] { --topnav-h: calc(var(--mac-bar-h, 52px) + 1px); }
+.files-main { min-height: calc(100dvh - var(--topnav-h)); padding-top: var(--s4); }
+/* In the Mac app the window is the app: the page spans it, as the title bar
+   above it does, rather than sitting in a column in the middle. */
+html[data-mac-app] .files-main { max-width: none; }
+.files-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: var(--s6); align-items: start; }
+.files-layout.is-collapsed { grid-template-columns: minmax(0, 1fr); }
+.files-layout.is-collapsed > .files-sidebar { display: none; }
+/* The drives and folders stay in reach down a long listing. */
+.files-sidebar {
+  position: sticky; top: calc(var(--topnav-h) + var(--s4));
+  max-height: calc(100dvh - var(--topnav-h) - var(--s5));
+  overflow-y: auto; overscroll-behavior: contain;
+  padding-top: 10px;
+}
+.side-section { margin-bottom: var(--s5); }
+.side-title { margin: 0 0 6px; font-family: var(--font-body); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.files-content { min-width: 0; }
+.files-error { padding: var(--s3) var(--s4); margin-bottom: var(--s4); border-color: var(--danger); }
+
+/* The title bar: the drive's dot and the path on the left, three icon
+   buttons on the right, a hairline under it. */
+.files-header {
+  display: flex; align-items: center; gap: var(--s3);
+  min-height: 52px; padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--line);
+}
+.files-header .crumbs { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.drive-dot {
+  flex: none; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--dot, var(--accent));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--dot, var(--accent)) 20%, transparent);
+}
+.files-header-actions { display: flex; align-items: center; gap: 2px; flex: none; margin-right: -8px; }
+.hdr-btn { width: 36px; height: 36px; padding: 0; justify-content: center; color: var(--muted); }
+.files-up { display: none; }
+.hdr-btn:hover, .hdr-btn[aria-expanded='true'] { color: var(--ink); }
+
+/* The toolbar: what the view shows on the left, the view itself on the
+   right. One height and one radius for every control, hairlines between the
+   groups; on a narrow window it wraps rather than running off the side. */
+.files-toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2) var(--s4);
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--s5);
+}
+.tb-group { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+.tb-left { flex: none; }
+.tb-right { flex: none; margin-left: auto; }
+.tb-btn { height: var(--tb-h); min-height: var(--tb-h); padding: 0 12px; gap: 7px; font-size: var(--t-sm); }
+.tb-btn .icon { color: var(--muted); }
+.tb-btn:hover .icon, .tb-btn[aria-expanded='true'] .icon { color: var(--ink); }
+.tb-btn.is-open { border-color: color-mix(in srgb, var(--ink) 35%, var(--glass-edge)); }
+.tb-icon { width: var(--tb-h); padding: 0; justify-content: center; }
+.tb-div { flex: none; width: 1px; height: 20px; background: var(--line); }
+/* Select view: borderless, like the screenshot's, and the view's name. */
+.tb-view { max-width: 240px; padding: 0 10px; }
+.tb-view-name { min-width: 0; }
+.tb-caret { flex: none; }
+.tb-dirty { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.btn.is-dirty .icon { color: var(--accent); }
+.tb-count { font-size: var(--t-sm); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; margin-right: var(--s1); }
+.tb-chips { display: flex; flex: 1 1 0; flex-wrap: wrap; align-items: center; gap: var(--s2); min-width: 160px; }
+.tb-chips .filter-chip { height: 30px; }
+.search-chip { padding: 0; gap: 0; overflow: hidden; }
+.search-chip-edit {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 260px;
+  height: 100%; padding: 0 2px 0 10px; border: 0; background: none; color: inherit;
+  font: inherit; cursor: pointer;
+}
+.search-chip-edit .icon { color: var(--muted); }
+.search-chip-x {
+  display: inline-grid; place-items: center; flex: none; width: 28px; height: 100%;
+  border: 0; background: none; color: var(--muted); cursor: pointer;
+}
+.search-chip-x:hover { color: var(--ink); }
+
+/* Sections: "Folders · 4", then "Files · 12", on the grid's own edge. */
+.files-section { margin-bottom: var(--s6); }
+.files-section-label {
+  margin: 0 0 var(--s3); font-family: var(--font-body);
+  font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+.files-section-count { font-weight: 500; letter-spacing: 0.02em; }
+
+/* The card size, from the view (data-card-size on the pane): a card's
+   column width — its picture keeps 4:3, so its height follows — a folder
+   card's size, a tile row's height and a column's width. */
+.files-pane[data-card-size='s'] { --card-min: 150px; --folder-min: 210px; --folder-h: 76px; --folder-name: 15px; }
+.files-pane[data-card-size='m'] { --card-min: 200px; --folder-min: 240px; --folder-h: 96px; --folder-name: 17px; }
+.files-pane[data-card-size='l'] { --card-min: 280px; --folder-min: 300px; --folder-h: 124px; --folder-name: 19px; }
+.files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(var(--card-min), 100%), 1fr)); gap: var(--s4); }
 /* A card is picked, not read: no text selection from a double-click, and no
    iOS image callout on a long-press (which selects, useLongPress). */
 .filecard { display: block; overflow: hidden; cursor: pointer; text-align: left; -webkit-user-select: none; user-select: none; }
@@ -784,7 +878,18 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
   background: var(--surface-sunken);
 }
 .filecard-thumb img { width: 100%; height: 100%; -webkit-touch-callout: none; -webkit-user-drag: none; }
-.filecard-text { padding: 10px; }
+.filecard-text { padding: 10px 12px 12px; }
+.filecard-name { font-size: var(--t-sm); min-width: 0; }
+.filecard-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* One line tall even when none of the view's fields has a value for this
+   file (a document's duration): the grid is virtualized on the first card's
+   height, so every card must be the same. */
+.filecard-text > .filecard-meta.small { margin-top: 4px; min-height: 1.4em; line-height: 1.4; }
+.filecard-meta > .filecard-name { flex: 1; }
+.filecard-badges { display: inline-flex; gap: 4px; flex: none; margin-left: auto; }
+.field-line { min-width: 0; font-variant-numeric: tabular-nums; }
+.filecard-meta > .field-line { flex: 1; }
+.field-sep { opacity: 0.6; }
 /* A listing kept on screen while the next one loads: still real files, and
    still usable, but plainly not the answer yet. The delay keeps a fast load
    from flickering. */
@@ -847,43 +952,61 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .folder-drop.is-over { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
 .folder-link[draggable="true"] { cursor: pointer; }
 
-/* Subfolder tiles above the grid. */
+/* A folder, drawn solid (FolderGlyph): the kit's folder filled for the
+   back, a lighter front panel over it, both the accent mixed with the page's
+   own colours — deeper at the back in the light scheme, brighter at the
+   front in the dark — so folders read as folders, in any brand's colour. */
+:root {
+  --folder-back: color-mix(in srgb, var(--accent) 72%, var(--paper));
+  --folder-front: color-mix(in srgb, var(--accent) 48%, var(--paper));
+}
+:root[data-theme='dark'] {
+  --folder-back: color-mix(in srgb, var(--accent) 46%, var(--paper));
+  --folder-front: color-mix(in srgb, var(--accent) 80%, var(--paper));
+}
+.folder-glyph { position: relative; display: inline-block; flex: none; width: var(--glyph); height: var(--glyph); color: var(--folder-back); }
+.folder-glyph-back { display: block; width: 100%; height: 100%; }
+/* The front panel over the Lucide folder's body (x 2-22, y 8.5-20 of 24). */
+.folder-glyph-front {
+  position: absolute;
+  left: calc(100% * 1.6 / 24); right: calc(100% * 1.6 / 24);
+  top: calc(100% * 8.3 / 24); bottom: calc(100% * 3.6 / 24);
+  border-radius: calc(var(--glyph) * 2.2 / 24);
+  background: var(--folder-front);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 30%, transparent);
+}
+
+/* The open folder's subfolders, above its files: larger than a file's card,
+   the name bigger than a file's, what it holds muted beneath. */
 .folder-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: var(--s2);
-  margin-bottom: var(--s4);
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--folder-min, 240px), 100%), 1fr));
+  gap: var(--s4);
 }
-.folder-tile-wrap { border-radius: var(--radius); min-width: 0; }
+.folder-tile-wrap { border-radius: calc(var(--radius) + 4px); min-width: 0; }
 .folder-tile {
-  display: flex; align-items: center; gap: var(--s2);
-  width: 100%; min-width: 0;
+  display: flex; align-items: center; gap: var(--s4);
+  width: 100%; min-width: 0; min-height: var(--folder-h, 92px);
   -webkit-user-select: none; user-select: none;
-  padding: var(--s2) var(--s3);
+  padding: var(--s3) var(--s4);
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: calc(var(--radius) + 4px);
   color: var(--ink);
-  font: inherit; font-size: var(--t-md);
+  font: inherit;
   text-align: left;
   cursor: pointer;
 }
-.folder-tile:hover { border-color: color-mix(in srgb, var(--ink) 30%, var(--line)); }
-.folder-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.folder-tile:hover { border-color: color-mix(in srgb, var(--ink) 24%, var(--line)); }
+.folder-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .folder-tile[aria-selected='true'] {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--surface));
 }
-.folder-tile-icon { flex: none; color: var(--muted); }
-.folder-tile-name { flex: 1; min-width: 0; }
+.folder-tile-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.folder-tile-name { font-size: var(--folder-name, 17px); line-height: 1.25; letter-spacing: -0.01em; }
+.folder-tile-meta { font-size: var(--t-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
 .folder-tile-wrap.is-over .folder-tile { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
-
-/* Grid / list switch in the toolbar: two icon buttons joined into one. */
-/* Pressed uses the shared .btn[aria-pressed] state. */
-.view-toggle { display: inline-flex; align-self: stretch; }
-.view-toggle .btn { padding: 0 10px; justify-content: center; }
-.view-toggle .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.view-toggle .btn:last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
 
 /* The list view. Header, folder rows and file rows share one column
    template, so everything lines up without a table. The template is built
@@ -932,7 +1055,11 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .filelist-thumb { display: block; width: 44px; border-radius: var(--radius-sm); overflow: hidden; }
 .filelist-thumb .filecard-badge { display: none; }
 .filelist-thumb .filecard-thumb > span { font-size: 9px; line-height: 1; overflow: hidden; }
-.filelist-folder-icon { display: grid; place-items: center; height: 33px; color: var(--muted); background: var(--surface-sunken); }
+.filelist-folder-icon { display: grid; place-items: center; height: 33px; }
+/* A folder row: the solid folder, the name in semibold and a faint tint, so
+   the folders read as folders before a word of them is. */
+.filelist-folder { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.filelist-folder .filelist-name { font-weight: 600; }
 .filelist-name { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .filelist-name .truncate { min-width: 0; }
 .filelist-cell { display: flex; align-items: center; min-width: 0; overflow: hidden; font-size: var(--t-sm); }
@@ -1050,14 +1177,10 @@ select.input.cell-input { padding-right: 2px; }
 .picker-row.active { background: color-mix(in srgb, var(--accent) 14%, transparent); font-weight: 600; }
 .picker-row:disabled { cursor: default; opacity: 0.6; }
 
-.kind-row { display: flex; align-items: center; gap: var(--s2); min-width: 0; flex: 1 1 auto; }
-.kind-row .kind-strip { min-width: 0; }
 .only-mobile { display: none; }
 
 /* The facet filters: a toggle in the toolbar, a panel under it while open,
-   and a row of chips for what is applied once it is shut. */
-.files-filters-btn { flex: 0 0 auto; }
-.files-filters-btn.is-open { border-color: var(--ink); }
+   and a chip beside the toggle for each value applied. */
 .count-badge {
   display: inline-grid; place-items: center;
   min-width: 18px; height: 18px; padding: 0 5px;
@@ -1065,7 +1188,7 @@ select.input.cell-input { padding-right: 2px; }
   background: var(--ink); color: var(--paper);
   font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
 }
-.filters-panel { padding: var(--s3) var(--s4) var(--s4); margin-bottom: var(--s4); animation: filters-in var(--dur-2) var(--ease); }
+.filters-panel { padding: var(--s3) var(--s4) var(--s4); margin: calc(var(--s2) - var(--s5)) 0 var(--s5); animation: filters-in var(--dur-2) var(--ease); }
 @keyframes filters-in {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: none; }
@@ -1094,16 +1217,19 @@ select.input.cell-input { padding-right: 2px; }
 }
 .filter-chip:hover { border-color: var(--ink); }
 .filter-chip > [aria-hidden] { color: var(--muted); font-size: 10px; }
+.filter-chips.is-inline { display: inline-flex; margin: 0; }
 
-/* Back, and the path to the open folder. Every crumb but the last is a way
-   back up, and takes drops like a folder in the tree. */
-.files-back { flex: none; margin-left: calc(var(--s2) * -1); }
-.files-back:disabled { opacity: 0.3; }
+/* The path to the open folder, in the title bar: the drive or library, then
+   each folder down. Every crumb but the last is a way back up, and takes
+   drops like a folder in the tree. Regular weight, the open folder in ink. */
 .crumbs { min-width: 0; }
 .crumbs ol { display: flex; align-items: center; gap: 2px; min-width: 0; margin: 0; padding: 0; list-style: none; }
 .crumb-item { display: flex; align-items: center; min-width: 0; flex: 0 3 auto; }
 .crumb-here { flex: 0 1 auto; min-width: 3em; }
-.crumb-here .files-title { margin: 0; padding-left: 4px; font-size: 24px; }
+.files-title {
+  margin: 0; padding: 2px 6px;
+  font-family: var(--font-body); font-size: 18px; font-weight: 500; letter-spacing: -0.01em; line-height: 1.35;
+}
 .crumb-item:only-child .files-title { padding-left: 0; }
 .crumb-drop { display: flex; min-width: 0; }
 .crumb {
@@ -1112,13 +1238,14 @@ select.input.cell-input { padding-right: 2px; }
   padding: 2px 6px;
   border: 0; border-radius: var(--radius-sm);
   background: none; color: var(--muted);
-  font: inherit; font-size: var(--t-lg);
+  font: inherit; font-size: 18px; letter-spacing: -0.01em; line-height: 1.35;
   cursor: pointer;
 }
+.crumb-item:first-child .crumb { margin-left: -6px; }
 .crumb:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .crumb:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .crumb-drop.is-over .crumb { color: var(--ink); }
-.crumb-sep { padding: 0 2px; color: var(--muted); opacity: 0.5; font-size: var(--t-lg); }
+.crumb-sep { flex: none; color: var(--muted); opacity: 0.6; }
 /* ── Selection action bar (phone) ──────────────────────────────────────────
    The header's Trash button scrolls out of reach on a phone, so a selection
    ends up with nothing to act on. This bar is fixed to the bottom edge and
@@ -1140,6 +1267,219 @@ select.input.cell-input { padding-right: 2px; }
   padding: 0 16px;
 }
 .edge-scroll::-webkit-scrollbar { display: none; }
+
+/* ── Menus: choices, icons, groups ─────────────────────────────────────────
+   A dropdown item may carry an icon, a hint (a shortcut, a drive's name) and,
+   as one of a set of choices, a tick on the chosen one (MenuItem). */
+.menu-item-icon { color: var(--muted); }
+.menu-item-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.menu-item-hint { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; font-size: var(--t-xs); color: var(--muted); }
+.menu-item-check { flex: none; display: inline-flex; width: 15px; color: var(--accent); }
+.menu-item.danger .menu-item-icon { color: inherit; }
+.menu-empty { margin: 0; padding: 2px var(--s3) var(--s2); }
+.view-menu { min-width: 250px; max-width: min(320px, calc(100vw - 16px)); max-height: min(72vh, 600px); overflow-y: auto; }
+.sort-menu { min-width: 210px; }
+.more-menu { min-width: 230px; }
+.menu-label { margin-top: 2px; }
+
+/* ── Display (app/files/DisplayPopover.js) ─────────────────────────────────
+   The layouts as a segmented control, then the preferences as rows of a
+   label and a control. */
+.display-pop { width: 380px; max-width: calc(100vw - 16px); max-height: min(80vh, 660px); overflow-y: auto; padding: var(--s3); }
+.seg {
+  display: flex; gap: 2px; padding: 3px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: color-mix(in srgb, var(--ink) 5%, var(--surface));
+}
+.seg-btn {
+  position: relative; flex: 1 1 0; min-width: 0;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 34px; padding: 0 var(--s2);
+  border: 0; border-radius: calc(var(--radius) - 2px);
+  background: transparent; color: var(--muted);
+  font: inherit; font-size: var(--t-sm); font-weight: 500; white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.seg-btn:hover:not(:disabled) { color: var(--ink); }
+/* A hairline between two choices neither of which is chosen. */
+.seg-btn + .seg-btn::before {
+  content: ''; position: absolute; left: -2px; top: 9px; bottom: 9px; width: 1px;
+  background: var(--line);
+}
+.seg-btn[aria-checked='true']::before, .seg-btn[aria-checked='true'] + .seg-btn::before { display: none; }
+.seg-btn[aria-checked='true'] {
+  background: var(--surface); color: var(--ink);
+  box-shadow: 0 0 0 1px var(--line), var(--shadow-1);
+}
+.seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.seg-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+.seg-sm { padding: 2px; }
+.seg-sm .seg-btn { flex: none; width: 34px; height: 26px; padding: 0; }
+.display-heading {
+  margin: var(--s4) 0 var(--s1); padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-body); font-size: var(--t-sm); font-weight: 500; letter-spacing: 0; color: var(--muted);
+}
+.display-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); min-height: 44px; font-size: var(--t-md); }
+.display-select-wrap { position: relative; display: inline-flex; align-items: center; }
+.display-select-wrap > .icon { position: absolute; right: 9px; color: var(--muted); pointer-events: none; }
+.display-select {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); color: var(--ink);
+  font: inherit; font-size: var(--t-sm);
+  cursor: pointer;
+}
+.display-select > .icon { color: var(--muted); }
+select.display-select { -webkit-appearance: none; appearance: none; padding-right: 30px; }
+.display-select:hover:not(:disabled) { border-color: color-mix(in srgb, var(--ink) 28%, var(--line)); }
+.display-select:disabled { opacity: 0.5; cursor: not-allowed; }
+.display-note { margin: var(--s1) 0 0; }
+.display-foot {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+  margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line);
+}
+.display-foot .small { min-width: 0; }
+.display-back {
+  display: inline-flex; align-items: center; gap: 2px; margin-left: -4px; padding: 4px;
+  border: 0; border-radius: var(--radius-sm); background: none; color: var(--muted);
+  font: inherit; font-size: var(--t-sm); cursor: pointer;
+}
+.display-back:hover { color: var(--ink); }
+.display-subhead { display: flex; align-items: center; gap: var(--s2); margin: var(--s2) 0 0; padding: 0 var(--s1); }
+
+/* An on/off switch: the platform's checkbox, drawn as a track and a knob. */
+.switch {
+  -webkit-appearance: none; appearance: none;
+  flex: none; position: relative; margin: 0;
+  width: 36px; height: 20px; border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+  cursor: pointer; transition: background var(--dur-1) var(--ease);
+}
+.switch::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--on-aura, var(--paper)); box-shadow: var(--shadow-1);
+  transition: transform var(--dur-1) var(--ease);
+}
+.switch:checked { background: var(--accent); }
+.switch:checked::after { transform: translateX(16px); }
+.switch:disabled { opacity: 0.5; cursor: not-allowed; }
+.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── Tile layout (TileGrid): justified rows of pictures ────────────────── */
+.tiles { position: relative; }
+.tiles.is-pending { opacity: var(--pending-opacity, 0.55); transition: opacity var(--dur-2) var(--ease) 150ms; }
+.tile { position: absolute; display: flex; flex-direction: column; cursor: pointer; -webkit-user-select: none; user-select: none; outline: none; }
+/* Before the width is measured: the first tiles in plain flow, at the
+   target height, so the folder is in the first paint. */
+.tiles.is-flow { display: flex; flex-wrap: wrap; gap: 12px; }
+.tiles.is-flow .tile { position: relative; flex: 0 0 auto; width: calc(var(--tile-h) * var(--tile-a)); max-width: 100%; }
+.tiles.is-flow .tile-pic { height: var(--tile-h); }
+.tile-pic {
+  position: relative; overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+  transition: box-shadow var(--dur-2) var(--ease);
+}
+.tile-pic .filecard-thumb { width: 100%; height: 100%; aspect-ratio: auto; }
+.tile-caption { display: flex; flex-direction: column; justify-content: center; gap: 1px; padding: 0 2px; min-width: 0; }
+.tile-name { font-size: var(--t-sm); }
+.tile-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.tile-meta .field-line { flex: 1; }
+.tile:focus-visible .tile-pic { outline: 2px solid var(--accent); outline-offset: 3px; }
+.tile[aria-selected='true'] .tile-pic { box-shadow: 0 0 0 2px var(--accent), 0 10px 30px -14px color-mix(in srgb, var(--aura-b) 70%, transparent); }
+.tile[aria-selected='true'] .tile-name { color: var(--accent-deep); }
+@media (hover: hover) {
+  .tile:hover .tile-pic { box-shadow: 0 10px 28px -16px color-mix(in srgb, var(--aura-a) 60%, transparent); }
+  .tile[aria-selected='true']:hover .tile-pic { box-shadow: 0 0 0 2px var(--accent), 0 10px 28px -16px color-mix(in srgb, var(--aura-a) 60%, transparent); }
+}
+
+/* ── Column layout (ColumnView): Finder's columns ──────────────────────── */
+.colview {
+  display: flex; overflow-x: auto; overflow-y: hidden;
+  min-height: 360px;
+  border: 1px solid var(--line); border-radius: calc(var(--radius) + 4px);
+  background: var(--surface);
+}
+.colview.is-pending .col.is-current { opacity: var(--pending-opacity, 0.55); transition: opacity var(--dur-2) var(--ease) 150ms; }
+.col { flex: none; display: flex; flex-direction: column; gap: 1px; height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: var(--s1); border-right: 1px solid var(--line); }
+.col > .folder-drop { flex: none; }
+.col-row {
+  display: flex; align-items: center; gap: var(--s2); flex: none;
+  width: 100%; min-width: 0; height: 32px; padding: 0 var(--s2);
+  border: 0; border-radius: var(--radius-sm);
+  background: none; color: var(--ink);
+  font: inherit; font-size: var(--t-sm); text-align: left;
+  cursor: pointer; -webkit-user-select: none; user-select: none;
+}
+.col-row:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.col-row.is-folder .col-name { font-weight: 500; }
+/* The way down: each column's open folder, quietly. */
+.col-row.is-open { background: color-mix(in srgb, var(--ink) 9%, transparent); }
+.col-row.is-selected {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--accent) 18%, transparent),
+    color-mix(in srgb, var(--accent-alt) 10%, transparent));
+}
+.col-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.col-name { flex: 1; min-width: 0; }
+.col-chevron { flex: none; color: var(--muted); }
+.col-thumb { flex: none; width: 22px; height: 22px; border-radius: 4px; overflow: hidden; }
+.col-thumb .filecard-thumb { width: 22px; height: 22px; aspect-ratio: auto; }
+.col-thumb .filecard-thumb > span { font-size: 7px; line-height: 1; overflow: hidden; }
+.col-thumb .filecard-badge { display: none; }
+.col-note { margin: 0; padding: var(--s2); }
+.col-details { padding: var(--s4); gap: 0; border-right: 0; }
+.col-preview { overflow: hidden; border-radius: var(--radius); background: var(--surface-sunken); }
+.col-preview .filecard-badge { display: none; }
+.col-details-name { margin: var(--s3) 0 var(--s1); font-family: var(--font-body); font-size: var(--t-lg); font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.col-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px var(--s3); margin: var(--s3) 0 var(--s4); font-size: var(--t-sm); }
+.col-fact { display: contents; }
+.col-fact dd { margin: 0; overflow-wrap: anywhere; }
+.col-open { align-self: flex-start; }
+
+/* ── Activity (app/files/ActivityPopover.js) ───────────────────────────── */
+.activity-pop { width: 380px; max-width: calc(100vw - 16px); padding: var(--s2); }
+.activity-head { display: flex; align-items: baseline; gap: var(--s2); min-width: 0; padding: var(--s1) var(--s2) var(--s2); }
+.activity-list { list-style: none; margin: 0; padding: 0; max-height: min(60vh, 520px); overflow-y: auto; }
+.activity-row {
+  display: flex; align-items: center; gap: var(--s3);
+  width: 100%; min-width: 0; padding: 6px var(--s2);
+  border: 0; border-radius: var(--radius-sm);
+  background: none; color: inherit; font: inherit; text-align: left;
+  cursor: pointer;
+}
+.activity-row:hover, .activity-row:focus-visible { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.activity-row.is-skeleton { cursor: default; }
+.activity-row.is-skeleton .skeleton-line { flex: 1; margin: 0; }
+.activity-thumb {
+  flex: none; display: grid; place-items: center;
+  width: 34px; height: 34px; overflow: hidden;
+  border-radius: 6px; background: var(--surface-sunken); color: var(--muted);
+}
+.activity-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.activity-text { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.activity-name { font-size: var(--t-sm); font-weight: 500; }
+.activity-meta { font-size: var(--t-xs); color: var(--muted); }
+.activity-kind { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-empty { margin: 0; padding: var(--s3) var(--s2); }
+.activity-foot { margin-top: var(--s1); padding-top: var(--s1); border-top: 1px solid var(--line); }
+
+/* ── Manage views ───────────────────────────────────────────────────────── */
+.views-manage { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.views-manage-row { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 220px) auto; align-items: center; gap: var(--s2); }
+.views-manage-row .input { padding-top: 6px; padding-bottom: 6px; }
+.views-manage-error { grid-column: 2 / -1; margin: 0; color: var(--danger); }
+
+@media (max-width: 720px) {
+  .views-manage-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .views-manage-scope { grid-column: 2 / 3; grid-row: 2; }
+  .activity-kind { display: none; }
+  .colview { border-radius: var(--radius); }
+}
 
 /* ── File detail ────────────────────────────────────────────────────────── */
 
@@ -1192,19 +1532,38 @@ select.input.cell-input { padding-right: 2px; }
   .btn, .input, select.input { min-height: 40px; }
   .btn-sm { min-height: 32px; }
 
-  .files-title { font-size: var(--t-xl); }
-  /* The title keeps its line; the actions wrap beneath it rather than
-     squeezing it to nothing. */
-  .files-head { flex-wrap: wrap; row-gap: var(--s2); }
-  .files-head > .spacer { flex: 1 0 100%; height: 0; }
-  /* So on a file's page and its opening screen: the name keeps its line. */
+  /* On a file's page and its opening screen: the name keeps its line. */
   .file-detail-head { flex-wrap: wrap; row-gap: var(--s2); }
   .file-detail-head > .spacer { flex: 1 0 100%; height: 0; }
-  /* Selecting swaps New folder and the uploads for what acts on the
-     selection, in the same row, so the grid does not move under a click. */
-  .files-head.has-selection .files-create { display: none; }
-  .files-toolbar .input { max-width: none; flex: 1 1 100%; }
-  .files-layout { grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
+  /* One column: the title bar, the toolbar, then the drives and folders as
+     strips of chips (hidden with the sidebar's toggle), then the files. The
+     content column gives its rows to the page so they can be ordered. */
+  .files-main { padding-top: var(--s2); }
+  .files-layout, .files-layout.is-collapsed { display: flex; flex-direction: column; align-items: stretch; gap: 0; }
+  .files-content { display: contents; }
+  .files-header { order: 1; min-height: 48px; padding-bottom: var(--s2); }
+  .files-toolbar { order: 2; margin-bottom: var(--s3); gap: var(--s2); }
+  .filters-panel { order: 3; margin-top: 0; }
+  .files-sidebar { order: 4; position: static; max-height: none; overflow: visible; padding-top: 0; margin-bottom: var(--s3); }
+  .files-error { order: 5; }
+  .files-pane { order: 6; }
+  .side-section { margin-bottom: 0; }
+  .files-title, .crumb { font-size: var(--t-lg); }
+  /* Icons, not labels, and the view's name kept short, so the toolbar is
+     one line on a phone; chips go to the next. */
+  .tb-label, .tb-div, .tb-count { display: none; }
+  .tb-btn:not(.tb-view) { width: var(--tb-h); padding: 0; justify-content: center; }
+  .tb-view { max-width: 118px; padding: 0 8px; gap: 5px; }
+  .tb-view.is-default .tb-view-name { display: none; }
+  .tb-right { min-width: 0; }
+  .tb-chips { order: 3; flex: 1 1 100%; min-width: 0; }
+  .files-section { margin-bottom: var(--s5); }
+  .files-pane[data-card-size] { --folder-min: 150px; --folder-h: 64px; --folder-name: 15px; }
+  .files-pane[data-card-size='l'] { --folder-min: 100%; --folder-h: 84px; --folder-name: 17px; }
+  .folder-tiles { gap: var(--s2); }
+  .folder-tile { gap: var(--s3); padding: var(--s2) var(--s3); }
+  .folder-tile .folder-glyph { width: 36px; height: 36px; }
+  .files-pane[data-card-size='l'] .folder-tile .folder-glyph { width: 48px; height: 48px; }
 
   /* The sidebar becomes a strip of folders as chips. A 220px column beside a
      150px grid was the whole page. */
@@ -1224,16 +1583,25 @@ select.input.cell-input { padding-right: 2px; }
   .folder-list .folder-row { flex: 0 0 auto; padding-left: 0; }
   .folder-list span.folder-toggle { display: none; }
   .folder-list .folder-link .muted { color: inherit; opacity: 0.6; }
-  .kind-row { flex: 1 1 100%; }
-  .kind-row .kind-strip { margin-right: 0; padding-right: var(--s2); }
   .filters-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3) var(--s4); }
   .filters-panel { padding: var(--s3); }
 
-  /* Only the parent crumb before the open folder; Back covers the rest. */
-  .crumb-item:not(.crumb-here):not(:nth-last-child(2)) { display: none; }
-  .crumb-here .files-title { font-size: var(--t-xl); }
+  /* The open folder's name alone, with the way up before it. */
+  .files-up { display: inline-flex; margin-left: -10px; margin-right: -6px; }
+  .crumb-item:not(.crumb-here) { display: none; }
+  .crumb-item.crumb-here .files-title { padding-left: 0; }
+
+  /* Columns on a phone: the open folder's column, the width of the page,
+     and what is selected in it below — there is no room beside it. */
+  .colview { flex-direction: column; height: auto !important; min-height: 0; overflow: visible; }
+  .colview > .col:not(.is-current):not(.col-details) { display: none; }
+  .colview > .col { width: auto !important; height: auto; overflow: visible; border-right: 0; }
+  .colview > .col-details { border-top: 1px solid var(--line); }
+  .col-preview { max-width: 320px; }
 
   .files-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); }
+  .files-pane[data-card-size='s'] .files-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2); }
+  .files-pane[data-card-size='l'] .files-grid { grid-template-columns: minmax(0, 1fr); }
   .empty { padding: 48px var(--s4); }
 
   /* A dialog on a phone is a bottom sheet: full width, anchored to the
@@ -1279,7 +1647,6 @@ select.input.cell-input { padding-right: 2px; }
   .filelist-thumb { width: 40px; }
   .filelist-time { display: none; }
   .filelist-row { height: 52px; }
-  .files-toolbar select.input { flex: 1 1 auto; }
 }
 
 /* ── Drives (filespaces) ────────────────────────────────────────────────── */
@@ -1308,8 +1675,8 @@ select.input.cell-input { padding-right: 2px; }
 .drive-icon {
   flex: none; display: grid; place-items: center;
   width: 28px; height: 28px; border-radius: 7px;
-  color: var(--accent-deep);
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: color-mix(in srgb, var(--drive, var(--accent)) 78%, var(--ink));
+  background: color-mix(in srgb, var(--drive, var(--accent)) 16%, var(--surface));
 }
 .drive-icon.is-library { color: var(--ink); background: var(--surface-sunken); }
 .drive-row.is-active .drive-icon { color: var(--on-aura); background: linear-gradient(135deg, var(--aura-a-deep), var(--aura-b-deep)); }
