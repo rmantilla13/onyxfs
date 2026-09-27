@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
-import { listAllShares, deleteShares } from '@/lib/db';
+import { listAllShares, deleteShares, refreshReviewStatus } from '@/lib/db';
 import { audit } from '@/lib/audit';
 
 export const runtime = 'nodejs';
@@ -54,6 +54,10 @@ export async function DELETE(req) {
       // A token is the link itself: record enough to recognise it, not to use it.
       links: removed.map((r) => ({ token: r.token.slice(0, 6), fileId: r.fileId, createdBy: r.createdBy })),
     });
+    // A file that was in review only for a revoked link's sake is not now.
+    for (const id of new Set(removed.filter((r) => r.review && r.fileId).map((r) => r.fileId))) {
+      await refreshReviewStatus(id).catch(() => {});
+    }
   }
   return NextResponse.json({ revoked: removed.length });
 }

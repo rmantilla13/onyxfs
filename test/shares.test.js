@@ -8,8 +8,11 @@ import {
   newShareToken, hashSharePassword, verifySharePassword,
   shareCookieName, shareCookieValue, shareCookieValid, shareState,
   MAX_PASSWORD_FAILURES,
+  newGuestId, guestCookieName, guestCookieValue, readGuestCookie,
 } from '../lib/shares.js';
-import { parseShareRequest, shareKind, isShareToken, expiryLabel, MIN_PASSWORD } from '../lib/share-kinds.js';
+import {
+  parseShareRequest, parseShareReview, shareKind, shareReview, reviewLabel, isShareToken, expiryLabel, MIN_PASSWORD,
+} from '../lib/share-kinds.js';
 import { safeReturnPath } from '../lib/return-path.js';
 
 test('tokens are 128-bit and URL-safe; old 12-hex tokens still pass the shape check', () => {
@@ -74,14 +77,64 @@ test('a stored row presents as public, password or private', () => {
 });
 
 test('a create request is checked before anything is stored', () => {
-  assert.deepEqual(parseShareRequest({ kind: 'public' }), { mode: 'public', password: null, expiresInDays: null });
-  assert.deepEqual(parseShareRequest({ kind: 'private', expires: '7' }), { mode: 'private', password: null, expiresInDays: 7 });
-  assert.deepEqual(parseShareRequest({ kind: 'password', password: 'abcdef', expires: '1' }), { mode: 'public', password: 'abcdef', expiresInDays: 1 });
+  assert.deepEqual(parseShareRequest({ kind: 'public' }), { mode: 'public', password: null, expiresInDays: null, review: null });
+  assert.deepEqual(parseShareRequest({ kind: 'private', expires: '7' }), { mode: 'private', password: null, expiresInDays: 7, review: null });
+  assert.deepEqual(parseShareRequest({ kind: 'password', password: 'abcdef', expires: '1' }), { mode: 'public', password: 'abcdef', expiresInDays: 1, review: null });
   assert.match(parseShareRequest({ kind: 'password', password: 'abc' }).error, new RegExp(String(MIN_PASSWORD)));
   assert.match(parseShareRequest({ kind: 'everyone' }).error, /who/);
   assert.match(parseShareRequest({ kind: 'public', expires: '365' }).error, /expires/);
   // A private link never takes a password, even if one is sent.
   assert.equal(parseShareRequest({ kind: 'private', password: 'abcdef' }).password, null);
+});
+
+test('a link can take comments, or approvals too — public and password links only', () => {
+  assert.equal(parseShareRequest({ kind: 'public', review: 'comment' }).review, 'comment');
+  assert.equal(parseShareRequest({ kind: 'password', password: 'abcdef', review: 'approve' }).review, 'approve');
+  assert.equal(parseShareRequest({ kind: 'public', review: 'view' }).review, null, 'view is stored as nothing');
+  assert.equal(parseShareRequest({ kind: 'public', review: null }).review, null);
+  // Refused, not dropped: a sharer must never be told a link takes comments when it does not.
+  assert.match(parseShareRequest({ kind: 'private', review: 'comment' }).error, /members/);
+  assert.match(parseShareRequest({ kind: 'public', review: 'edit' }).error, /can do/);
+  assert.match(parseShareRequest({ kind: 'public', review: true }).error, /can do/);
+  // A private link may be asked for as view only, which is what it is.
+  assert.equal(parseShareRequest({ kind: 'private', review: 'view' }).review, null);
+  assert.deepEqual(parseShareReview(undefined, 'public'), { review: null });
+  assert.deepEqual(parseShareReview('approve', 'password'), { review: 'approve' });
+});
+
+test('a stored link reads back its level; anything unknown is view only', () => {
+  assert.equal(shareReview({ review: 'comment' }), 'comment');
+  assert.equal(shareReview({ review: 'approve' }), 'approve');
+  assert.equal(shareReview({ review: null }), null);
+  assert.equal(shareReview({ review: 'admin' }), null);
+  assert.equal(shareReview({}), null);
+  assert.equal(reviewLabel('comment'), 'Can comment');
+  assert.equal(reviewLabel('approve'), 'Can approve');
+  assert.equal(reviewLabel(null), null);
+});
+
+test('a guest cookie is signed for its link, and names its guest', () => {
+  const secret = 'test-secret';
+  const id = newGuestId();
+  assert.match(id, /^[A-Za-z0-9_-]{16}$/);
+  assert.notEqual(newGuestId(), id);
+  assert.equal(guestCookieName('tok'), 'onyx_guest_tok');
+
+  const value = guestCookieValue('tok', { id, name: 'Zoë Ōta — Studio' }, secret);
+  assert.deepEqual(readGuestCookie(value, 'tok', secret), { id, name: 'Zoë Ōta — Studio' });
+  assert.equal(readGuestCookie(value, 'other', secret), null, 'one link\'s guest is nobody on another');
+  assert.equal(readGuestCookie(value, 'tok', 'other-secret'), null);
+  assert.throws(() => guestCookieValue('tok', { id, name: 'x' }, ''), /AUTH_SECRET/);
+
+  // The id is not the secret — it reaches other people as a comment's author —
+  // so it cannot be made into someone's cookie, nor a name changed under it.
+  const [, name, sig] = value.split('.');
+  assert.equal(readGuestCookie(`${newGuestId()}.${name}.${sig}`, 'tok', secret), null);
+  const renamed = Buffer.from('Someone else').toString('base64url');
+  assert.equal(readGuestCookie(`${id}.${renamed}.${sig}`, 'tok', secret), null);
+  for (const bad of ['', 'x', `${id}.${name}`, `${id}.${name}.${sig}.x`, `../${id}.${name}.${sig}`, `${id}..${sig}`]) {
+    assert.equal(readGuestCookie(bad, 'tok', secret), null, bad);
+  }
 });
 
 test('expiry reads as a person would say it', () => {

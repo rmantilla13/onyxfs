@@ -101,8 +101,11 @@ export default async function FilePage({ params, searchParams }) {
     listFilespacesForSpace(email, principal),
   ]);
   // Some kind of link is open to them: private, or public and password.
-  const canShare = canChange && ['shares.private', 'shares.public']
-    .some((cap) => can(principal, cap, { canModify: true, expiresInDays: principal.limits.shareMaxExpiryDays }).ok);
+  const linkable = (cap) => can(principal, cap, { canModify: true, expiresInDays: principal.limits.shareMaxExpiryDays }).ok;
+  const canShare = canChange && ['shares.private', 'shares.public'].some(linkable);
+  // And one that takes comments: a public or password link that is also a
+  // review link, to a photo or a video.
+  const canReviewLinks = canShare && isReviewableKind(effectiveKind(file)) && ['shares.public', 'review.links'].every(linkable);
 
   return (
     <>
@@ -121,6 +124,7 @@ export default async function FilePage({ params, searchParams }) {
         // Sharing takes a link capability AND write access to the file; the
         // routes check both again.
         canShare={canShare}
+        canReviewLinks={canReviewLinks}
         // Back to the folder the file is in, not the top of the library.
         backHref={file.folder ? `/files?folder=${encodeURIComponent(file.folder)}` : '/files'}
         // ?t= opens the player at a moment, so a timecode can be shared as a

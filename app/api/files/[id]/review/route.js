@@ -46,7 +46,9 @@ export async function GET(req, { params }) {
 
   const res = reviewJson({
     comments: feed.comments,
-    decisions: feed.decisions.map((d) => ({ ...d, name: d.email ? names.get(d.email) || null : null })),
+    // A member by the name on their account; a guest (a review link's) by
+    // the one they gave, kept with the decision.
+    decisions: feed.decisions.map((d) => ({ ...d, name: d.email ? names.get(d.email) || null : d.name })),
     cursor: feed.cursor,
     more: feed.more,
     status: summary.status,

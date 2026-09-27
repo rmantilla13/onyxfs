@@ -3,7 +3,7 @@
 import { memo, useState } from 'react';
 import Menu, { MenuItem } from '@/app/components/ui/Menu';
 import MentionTextarea, { mentionsIn } from './MentionTextarea';
-import { ago, handleOf, initials, personLabel } from './format';
+import { ago, handleOf, initials, personLabel, isAuthoredBy } from './format';
 import Icon from '@/app/components/ui/Icon';
 
 /**
@@ -14,12 +14,17 @@ import Icon from '@/app/components/ui/Icon';
  * author edits; the author or anyone who may change the file deletes and
  * resolves. The server checks again either way.
  *
+ * A guest on a review link (`guest`) edits and deletes their own comments
+ * and replies to any thread they can see; resolving is the team's, and they
+ * mention nobody. `canComment` false (a guest who has not given a name yet)
+ * shows the threads with nothing to do but read them.
+ *
  * Clicking the comment (or its timecode) selects it, which is how the page
  * seeks the player to its frame and shows its drawing.
  */
 function CommentThread({
   comment, replies = [], me, canModify, anchor, pinNumber = null, selected = false, unread = false,
-  unreadIds, fileId, onSelect, onReply, onUpdate, onRemove, onError,
+  unreadIds, fileId, onSelect, onReply, onUpdate, onRemove, onError, guest = false, canComment = true,
 }) {
   const [replying, setReplying] = useState(false);
   const [text, setText] = useState('');
@@ -60,6 +65,7 @@ function CommentThread({
         onRemove={onRemove}
         onError={onError}
         fileId={fileId}
+        guest={guest}
       />
 
       {replies.length > 0 && (
@@ -76,6 +82,7 @@ function CommentThread({
               onRemove={onRemove}
               onError={onError}
               fileId={fileId}
+              guest={guest}
               reply
             />
           ))}
@@ -96,6 +103,7 @@ function CommentThread({
             label="Reply"
             rows={2}
             autoFocus
+            mentions={!guest}
           />
           <div className="review-composer-row">
             <div className="spacer" />
@@ -105,8 +113,8 @@ function CommentThread({
         </div>
       ) : (
         <div className="review-thread-foot">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReplying(true)}>Reply</button>
-          {!comment.deletedAt && (isMine(comment, me) || canModify) && (
+          {canComment && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReplying(true)}>Reply</button>}
+          {!guest && !comment.deletedAt && (isAuthoredBy(comment, me) || canModify) && (
             <button
               type="button"
               className="btn btn-ghost btn-sm"
@@ -124,13 +132,11 @@ function CommentThread({
 
 export default memo(CommentThread);
 
-const isMine = (c, me) => !!me && c.author?.email === me;
-
-function CommentBody({ c, me, canModify, anchor, pinNumber, unread, onSelect, onUpdate, onRemove, onError, fileId, reply = false }) {
+function CommentBody({ c, me, canModify, anchor, pinNumber, unread, onSelect, onUpdate, onRemove, onError, fileId, guest = false, reply = false }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(c.body);
   const [people, setPeople] = useState([]);
-  const mine = isMine(c, me);
+  const mine = isAuthoredBy(c, me);
 
   if (c.deletedAt) {
     return (
@@ -194,6 +200,7 @@ function CommentBody({ c, me, canModify, anchor, pinNumber, unread, onSelect, on
             label="Edit comment"
             rows={2}
             autoFocus
+            mentions={!guest}
           />
           <div className="review-composer-row">
             <div className="spacer" />

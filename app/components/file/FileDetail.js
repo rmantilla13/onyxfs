@@ -15,15 +15,12 @@ import { useConfirm } from '@/app/components/ui/Confirm';
 import { deriveAuto } from '@/lib/dam';
 import { effectiveKind, fmtSize, coverChangeable } from '@/lib/media';
 import { toRate, rateLabel, timecode, ASSUMED_RATE } from '@/lib/video-time';
-import { anchorLabel, commentFrame, snippet } from '@/lib/review';
 import ShareDialog from '@/app/components/ShareDialog';
 import CoverDialog from '@/app/components/video/CoverDialog';
 import ReviewPanel from '@/app/components/review/ReviewPanel';
 import ReviewStatusTag from '@/app/components/review/ReviewStatusTag';
-import AnnotationLayer from '@/app/components/review/AnnotationLayer';
-import PinLayer from '@/app/components/review/PinLayer';
 import useReviewFeed from '@/app/components/review/useReviewFeed';
-import useReviewDraft from '@/app/components/review/useReviewDraft';
+import useReviewStage from '@/app/components/review/useReviewStage';
 import Icon from '@/app/components/ui/Icon';
 import TranscriptPanel from '@/app/components/transcript/TranscriptPanel';
 import useTranscript from '@/app/components/transcript/useTranscript';
@@ -44,11 +41,13 @@ import { toVTT } from '@/lib/transcripts';
  *
  * REVIEW. With `review` on (the flag as this person has it, decided on the
  * server, for a video or an image) the inspector becomes two tabs, Comments
- * and Details. This component is where the review panel and the picture
- * meet: selecting a comment seeks the player to its frame (or picks out its
- * pin) and shows its drawing; a marker or a pin selects its comment; the
- * draft being drawn is shared between the composer and the overlay; and C on
- * the player starts a comment on the frame on screen.
+ * and Details. The review panel and the picture meet in useReviewStage —
+ * the share page's review link uses it too: selecting a comment seeks the
+ * player to its frame (or picks out its pin) and shows its drawing; a marker
+ * or a pin selects its comment; the draft being drawn is shared between the
+ * composer and the overlay; and C on the player starts a comment on the
+ * frame on screen. `canReviewLinks` (decided on the server) offers links
+ * that take comments in the Share dialog.
  *
  * TRANSCRIPT. With `transcripts` on (the flag, decided on the server, for a
  * video or an audio file) there is a Transcript tab. The transcript is
@@ -58,7 +57,7 @@ import { toVTT } from '@/lib/transcripts';
  * player, and Captions turns the segments into a subtitles track on it.
  */
 export default function FileDetail({
-  file: initial, canWrite = false, canShare = false, backHref = '/files', startAt = 0,
+  file: initial, canWrite = false, canShare = false, canReviewLinks = false, backHref = '/files', startAt = 0,
   review = false, me = null, focusComment = null, previewPossible = true,
   transcripts = false, brandName = '',
 }) {
@@ -130,16 +129,16 @@ export default function FileDetail({
   const tabs = useMemo(() => [review && 'comments', transcripts && 'transcript', 'details'].filter(Boolean), [review, transcripts]);
   const [tab, setTab] = useState(tabs[0]);
   const feed = useReviewFeed(file.id, { enabled: review && tab === 'comments', me });
-  const draftApi = useReviewDraft();
-  const { draft } = draftApi;
   const player = useRef(null);
-  const composer = useRef(null);
-  const [frame, setFrame] = useState(0);
-  const [range, setRange] = useState({ inFrame: null, outFrame: null });
-  const [selectedId, setSelectedId] = useState(focusComment);
+  // The comments and the picture, wired together: selection, seeking,
+  // markers, pins, drawings and the C key (useReviewStage) — the same wiring
+  // the share page gives a review link's guests. Whatever asks for the
+  // comments (a marker, a pin, C) brings the Comments tab forward.
+  const {
+    draftApi, composer, frame, range, setRange, onFrameChange,
+    selectedId, selectComment, pick, holdFrame, onComposerFocus, onComment, markers, overlay,
+  } = useReviewStage({ enabled: review, kind, feed, model, player, focusComment, onReveal: () => setTab('comments') });
   const onError = useCallback((e) => toast.error(e?.message || 'Something went wrong.'), [toast]);
-
-  const onFrameChange = useCallback((f) => setFrame(f), []);
 
   // ── Transcript ──
   const transcript = useTranscript(file.id, { enabled: transcripts });
@@ -160,119 +159,6 @@ export default function FileDetail({
     () => (captionsUrl ? { src: captionsUrl, lang: captionLang ? captionLang.split('-')[0] : undefined, label: 'Transcript' } : null),
     [captionsUrl, captionLang],
   );
-
-  const selectComment = useCallback((c) => {
-    setSelectedId(c.id);
-    if (kind === 'video' && (c.anchor === 'frame' || c.anchor === 'range') && c.frameIn != null) {
-      player.current?.seekToFrame(commentFrame(c.frameIn, c.fps, model.fps));
-    }
-  }, [kind, model.fps]);
-
-  // ?c= — a notification's link — opens on that comment once it has loaded.
-  const focused = useRef(false);
-  useEffect(() => {
-    if (focused.current || !focusComment || !feed.loaded) return;
-    focused.current = true;
-    const c = feed.comments.get(focusComment);
-    if (c) selectComment(c.parentId ? feed.comments.get(c.parentId) || c : c);
-  }, [focusComment, feed.loaded, feed.comments, selectComment]);
-
-  // Drawing on a video is drawing on a frame: picking up a tool pauses the
-  // player on the frame it is showing (and loads it, if it has not yet).
-  useEffect(() => {
-    if (kind === 'video' && draft.tool) player.current?.seekToFrame(player.current.frame());
-  }, [draft.tool, kind]);
-
-  // Escape puts the tool down wherever the focus is.
-  useEffect(() => {
-    if (!draft.tool && !draft.placing) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') draftApi.set({ tool: null, placing: false }); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [draft.tool, draft.placing, draftApi]);
-
-  // A comment about to be pinned to "this frame" needs this frame on the
-  // stage: before the first seek or play it shows the poster, a frame from
-  // mid-clip, while the label (and so the comment) reads another. hold()
-  // pauses there and, if need be, loads the frame. The player's C key does
-  // the same; a general comment only pauses.
-  const holdFrame = useCallback(() => player.current?.hold?.(), []);
-  const onComposerFocus = useCallback(() => {
-    if (draft.anchored) holdFrame();
-    else player.current?.pause();
-  }, [draft.anchored, holdFrame]);
-
-  // C on the player: a comment on this frame.
-  const onComment = useCallback(() => {
-    setTab('comments');
-    draftApi.set({ anchored: true });
-    requestAnimationFrame(() => composer.current?.focus());
-  }, [draftApi]);
-
-  const tops = useMemo(() => [...feed.comments.values()].filter((c) => !c.parentId && !c.deletedAt), [feed.comments]);
-
-  const markers = useMemo(() => {
-    if (!review || kind !== 'video') return null;
-    return tops
-      .filter((c) => (c.anchor === 'frame' || c.anchor === 'range') && c.frameIn != null && !c.pending)
-      .map((c) => ({
-        id: c.id,
-        frameIn: commentFrame(c.frameIn, c.fps, model.fps),
-        frameOut: c.anchor === 'range' ? commentFrame(c.frameOut, c.fps, model.fps) : null,
-        active: c.id === selectedId,
-        label: `${anchorLabel(c, model)} — ${snippet(c.body, 60) || 'Drawing'}`,
-      }));
-  }, [review, kind, tops, model, selectedId]);
-
-  const pins = useMemo(() => {
-    if (!review || kind !== 'image') return [];
-    return tops
-      .filter((c) => c.anchor === 'point' && c.pointX != null)
-      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
-      .map((c, i) => ({ id: c.id, x: c.pointX, y: c.pointY, n: i + 1, resolved: !!c.resolvedAt, label: snippet(c.body, 60) }));
-  }, [review, kind, tops]);
-
-  const selected = selectedId ? feed.comments.get(selectedId) : null;
-  const drawing = review && !!draft.tool;
-
-  // What goes on the picture: the draft while one is being drawn, else the
-  // selected comment's drawing — on a video, only while paused on its frame
-  // (or inside its range), since it was drawn on that picture.
-  const overlay = review ? ({ frame: f, playing }) => {
-    let shapes = [];
-    if (draft.shapes.length || drawing) {
-      if (kind !== 'video' || draft.frame == null || f === draft.frame) shapes = draft.shapes;
-    } else if (selected?.annotation && !selected.deletedAt) {
-      if (kind === 'video') {
-        const a = commentFrame(selected.frameIn, selected.fps, model.fps);
-        const b = selected.anchor === 'range' ? commentFrame(selected.frameOut, selected.fps, model.fps) : a;
-        if (!playing && f >= a && f <= b) shapes = selected.annotation.shapes || [];
-      } else {
-        shapes = selected.annotation.shapes || [];
-      }
-    }
-    return (
-      <>
-        <AnnotationLayer
-          shapes={shapes}
-          mode={drawing ? 'draw' : 'display'}
-          tool={draft.tool}
-          color={draft.color}
-          onShape={(shape) => draftApi.addShape(shape, kind === 'video' ? (player.current?.frame() ?? f) : null)}
-        />
-        {kind === 'image' && (
-          <PinLayer
-            pins={pins}
-            draft={draft.pin}
-            selectedId={selectedId}
-            placing={draft.placing}
-            onPlace={(p) => draftApi.set({ pin: p, placing: false })}
-            onSelect={(id) => { setSelectedId(id); setTab('comments'); }}
-          />
-        )}
-      </>
-    );
-  } : null;
 
   const status = feed.status !== undefined ? feed.status : file.reviewStatus;
   const openCount = feed.openComments !== undefined ? feed.openComments : (file.openComments || 0);
@@ -367,7 +253,7 @@ export default function FileDetail({
             startAt={startAt}
             overlay={overlay}
             markers={markers}
-            onMarkerClick={(id) => { setSelectedId(id); setTab('comments'); }}
+            onMarkerClick={pick}
             onFrameChange={review ? onFrameChange : undefined}
             onRangeChange={review ? setRange : undefined}
             onComment={review ? onComment : undefined}
@@ -491,7 +377,7 @@ export default function FileDetail({
         </Field>
       </Dialog>
 
-      {canShare && <ShareDialog file={file} open={sharing} onClose={() => setSharing(false)} />}
+      {canShare && <ShareDialog file={file} open={sharing} onClose={() => setSharing(false)} canReview={canReviewLinks} />}
       {covering && (
         <CoverDialog
           file={file}
