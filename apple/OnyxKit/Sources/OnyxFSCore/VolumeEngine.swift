@@ -72,6 +72,11 @@ public struct VolumeNode: Sendable, Equatable {
     public var created: Date
     /// Only on this Mac (.DS_Store and the like): never on the web.
     public var localOnly: Bool
+
+    /// Hidden in Finder, as macOS's own files are on any disk. Most hide by
+    /// their dot; the Time Machine marker at the root
+    /// (com.apple.timemachine.donotpresent) and a folder's Icon\r have none.
+    public var hidden: Bool { localOnly }
 }
 
 public struct VolumeStatistics: Sendable, Equatable {

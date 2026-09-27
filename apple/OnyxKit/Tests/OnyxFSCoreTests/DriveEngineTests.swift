@@ -117,6 +117,8 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
         let engine = try await makeEngine(bridge)
         let top = try await engine.children(of: DriveEngine.rootID)
         #expect(top.map(\.name) == ["Footage", ".metadata_never_index", "com.apple.timemachine.donotpresent"])
+        // macOS's own are hidden in Finder, the marker with no dot to hide it too.
+        #expect(top.map(\.hidden) == [false, true, true])
         let footage = try await engine.lookup("footage", in: DriveEngine.rootID) // as Finder asks: any case
         #expect(footage.name == "Footage" && footage.isDirectory)
         let take = try await engine.lookup("TAKE 1.MOV", in: footage.id)
