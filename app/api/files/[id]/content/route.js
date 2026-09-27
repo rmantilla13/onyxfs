@@ -4,7 +4,7 @@ import { requirePrincipal, uploadCheck, refusal } from '@/lib/authz';
 import { s3HeadObject, s3DeleteObject, publicUrlForKey, presignFileUrls } from '@/lib/storage';
 import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
 import { replacementTarget, dirOf } from '@/lib/replace-content';
-import { ifMatchVersion } from '@/lib/file-record';
+import { ifMatchVersion, fileDate } from '@/lib/file-record';
 import { fileKind } from '@/lib/media';
 
 export const runtime = 'nodejs';
@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 const answer = (status, error, extra = {}) => NextResponse.json({ error, ...extra }, { status });
 
 /**
- * POST /api/files/[id]/content  { key, mime? }   [If-Match: <version>]
+ * POST /api/files/[id]/content  { key, mime?, fileModifiedAt? }   [If-Match: <version>]
  *   → { file }
  *
  * Swap in new contents for a file: the same file — id, name, folder, tags,
@@ -31,6 +31,10 @@ const answer = (status, error, extra = {}) => NextResponse.json({ error, ...extr
  * by the client; and the largest upload and the quotas, for what the file
  * grows by. Then one conditional UPDATE (replaceFileContent), which refuses
  * a file moved, trashed or replaced again while these bytes were uploading.
+ *
+ * The file's own modified date (`fileModifiedAt`, epoch ms) moves with the
+ * bytes: to the one sent, else to now — a device that keys what it holds on
+ * size and modified date must see it change. Its own created date stays.
  *
  * After it commits: the old object is deleted, since Onyx keeps no versions
  * yet — unless another row still names it — and the old previews go with it,
@@ -54,6 +58,8 @@ export async function POST(req, { params }) {
   const key = typeof body.key === 'string' && body.key.length <= 2048 ? body.key : '';
   if (!key) return answer(400, 'The key the new contents were uploaded to is required.');
   const mime = typeof body.mime === 'string' && body.mime.trim() ? body.mime.trim().slice(0, 255) : null;
+  // A bad date is dropped, as at upload, and the swap then stamps now.
+  const fileModifiedAt = fileDate(body.fileModifiedAt);
 
   const target = await replacementTarget(principal, params.id);
   if (target.error) return target.error;
@@ -124,6 +130,7 @@ export async function POST(req, { params }) {
       // Only what a new type says: the name still decides the rest.
       kind: mime ? fileKind(mime, file.name) : null,
       contentHash: facts.etag || null,
+      fileModifiedAt,
     });
   } catch (e) {
     await giveBack();
