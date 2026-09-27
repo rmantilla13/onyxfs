@@ -4,7 +4,7 @@ import OnyxWordmark from '@/app/components/OnyxWordmark';
  * The brand's logo, from the resolved brand (loadBrand → visual.logo).
  *
  * Our own wordmark is drawn inline (OnyxWordmark): its letters follow the
- * theme and its "/FS" moves through the platform's colours.
+ * theme and its "FS" moves through the platform's colours.
  *
  * A white-label deployment's own wordmark is an image, in both its versions,
  * and the stylesheet shows the one for the current scheme — [data-theme] is
