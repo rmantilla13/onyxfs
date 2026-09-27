@@ -370,29 +370,36 @@ otherwise a save could briefly read back its old bytes.
 
 ## The drive's icon
 
-Each disk has an icon of its own, built on the Onyx mark (the slash on its
-near-black tile, `public/onyx-mark.svg`). The slash is in the drive's colour,
-the same colour as the dot beside its name on the web. After the slash comes
-the drive's initial in white, as a path is written: `/V` for Videos.
+Each disk has an icon of its own, in the logo's style. It is the near-black
+tile of the ONYX FS icon (`public/onyx-mark.svg`), with the drive's initial
+on it. The initial is set the way the logo sets its letters, thin and wide,
+and it is in the drive's own colour, the same colour as the dot beside its
+name on the web. That colour plays the part the logo's cyan plays in "FS".
+Photos is a magenta `P`, Videos a green `V`.
 
 Colour alone would not be enough. The web has seven colours, so drives share
 them: on the owner's Mac, Videos and Memories are both the same green. The
-initial is the name's first letter or digit. A name with neither keeps the
-slash alone. The library's disk is the mark as it is. A drive whose colour
-the server did not send keeps the mark's own slash colour.
+initial is the name's first letter or digit. A name with neither shows its
+first other sign, an emoji say. The library's disk is the app's own icon,
+the ONYX FS mark. A drive whose colour the server did not send has its
+letter in the logo's cyan.
 
 - **The colour** comes from the server: `GET /api/space/filespaces` gives
   each drive a `color` (`#RRGGBB`). `driveColorHex` in `lib/drive-color.js`
   resolves the drive's `DRIVE_COLORS` entry against the brand's palette the
   way the browser does: a mix in OKLCH, mapped into sRGB as CSS Color 4 maps
   a colour it cannot show. A white-label palette colours its own disks. The
-  app lightens a colour that would vanish on the tile (under 3:1).
+  app lightens a colour too dark to read on the tile (under 4.5:1, as the
+  web's dark scheme does).
 - **The icon** is drawn by the app (`DriveIcon`, OnyxKit). It is an .icns of
   PNGs from 16 to 1024 px, each drawn at its own size on macOS's icon grid.
-  The initial is in the system's bold face, and a letter too wide to fit is
-  made smaller. Each colour-and-initial pair is drawn once, in 12–21 ms, off
-  the main thread, then served from a cache that holds a few hundred KB per
-  pair.
+  The initial is in the system face, expanded: light at 256 px and up, and
+  heavier as the size drops, down to semibold at 32 px and below, where a
+  thin stroke would be lost. A letter too wide or tall to fit is made
+  smaller. The library's disk draws the app's own icon (`AppIcon.icns` in
+  the bundle) on the same grid, since the icon itself fills its whole canvas.
+  Each colour-and-initial pair is drawn once, in 13–24 ms, off the main
+  thread, then served from a cache that holds a few hundred KB per pair.
 - **The bridge** serves it:
   12. `GET /fs/v1/icon` → `image/icns` bytes, or 404 when the drive has none
       (as an app from before icons also answers).
