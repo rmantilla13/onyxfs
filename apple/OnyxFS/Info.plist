@@ -4,6 +4,8 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Onyx</string>
 	<key>CFBundleExecutable</key>
 	<string>OnyxFS</string>
 	<key>CFBundleIdentifier</key>
@@ -12,37 +14,31 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>Onyx</string>
-	<key>CFBundleDisplayName</key>
-	<string>Onyx</string>
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
 	<key>CFBundleShortVersionString</key>
 	<string>0.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>0</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>27.0</string>
 	<key>EXAppExtensionAttributes</key>
 	<dict>
 		<key>EXExtensionPointIdentifier</key>
 		<string>com.apple.fskit.fsmodule</string>
-		<!-- What `mount` and statfs call it. -->
-		<key>FSShortName</key>
-		<string>onyxfs</string>
-		<!-- A drive is named by a URL, not a disk: onyxfs-drive://127.0.0.1:<port>/<drive>?ticket=…
-		     (not onyxfs:, the app's sign-in hand-off scheme). -->
-		<key>FSSupportsGenericURLResources</key>
-		<true/>
-		<key>FSSupportedSchemes</key>
-		<array>
-			<string>onyxfs-drive</string>
-		</array>
-		<key>FSSupportsBlockResources</key>
-		<false/>
-		<key>FSSupportsPathURLs</key>
-		<false/>
-		<key>FSSupportsServerURLs</key>
-		<false/>
+		<key>FSActivateOptionSyntax</key>
+		<dict>
+			<key>shortOptions</key>
+			<string>o:</string>
+		</dict>
+		<key>FSCheckOptionSyntax</key>
+		<dict>
+			<key>shortOptions</key>
+			<string>nqy</string>
+		</dict>
+		<key>FSFormatOptionSyntax</key>
+		<dict>
+			<key>shortOptions</key>
+			<string></string>
+		</dict>
 		<key>FSMediaTypes</key>
 		<dict/>
 		<key>FSPersonalities</key>
@@ -55,12 +51,24 @@
 				<false/>
 			</dict>
 		</dict>
-		<!-- Needed even with no options of our own: without it probing fails. -->
-		<key>FSActivateOptionSyntax</key>
-		<dict>
-			<key>shortOptions</key>
-			<string></string>
-		</dict>
+		<key>FSRequiresSecurityScopedPathURLResources</key>
+		<false/>
+		<key>FSShortName</key>
+		<string>onyxfs</string>
+		<key>FSSupportedSchemes</key>
+		<array>
+			<string>onyxfs-drive</string>
+		</array>
+		<key>FSSupportsBlockResources</key>
+		<false/>
+		<key>FSSupportsGenericURLResources</key>
+		<true/>
+		<key>FSSupportsPathURLs</key>
+		<false/>
+		<key>FSSupportsServerURLs</key>
+		<false/>
 	</dict>
+	<key>LSMinimumSystemVersion</key>
+	<string>27.0</string>
 </dict>
 </plist>

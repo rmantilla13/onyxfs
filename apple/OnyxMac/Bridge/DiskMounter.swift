@@ -82,6 +82,66 @@ final class DiskMounter: ObservableObject {
         _ = FSClient.shared.openFileSystemExtensionsSettings()
     }
 
+    /// Settings' Turn On: switches the extension on from Onyx itself, through
+    /// the call System Settings' own switch makes (FSClient's
+    /// setEnabledStateForIdentifier:newState:replyHandler:, declared in FSKit's
+    /// FSClientXPC protocol but not in its headers — so looked up at run time).
+    ///
+    /// On macOS 27.0 that switch refuses every extension not Apple's: fskitd
+    /// counts the Settings pane as an unentitled caller with no team, and
+    /// answers EPERM before the extension is looked at. Onyx holds FSKit's
+    /// mount entitlement and signs its extension with its own team.
+    ///
+    /// Nil when the extension is on; else why not, in words for Settings.
+    func enableExtension() async -> String? {
+        let client = FSClient.shared
+        let selector = NSSelectorFromString("setEnabledStateForIdentifier:newState:replyHandler:")
+        guard client.responds(to: selector) else {
+            return "This version of macOS gives Onyx no way to switch it on. Use System Settings instead."
+        }
+        typealias Call = @convention(c) (AnyObject, Selector, NSString, ObjCBool,
+                                         @escaping @convention(block) (NSError?) -> Void) -> Void
+        let call = unsafeBitCast(client.method(for: selector), to: Call.self)
+        let identifier = Self.extensionBundleID as NSString
+        // The daemon answers at once; should its answer never come (its
+        // connection dropped), Settings is not left waiting on it.
+        let answer: NSError?? = await withCheckedContinuation { done in
+            let once = Once()
+            call(client, selector, identifier, ObjCBool(true)) { error in
+                if once.first() { done.resume(returning: .some(error)) }
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(15))
+                if once.first() { done.resume(returning: .none) }
+            }
+        }
+        await refreshAvailability()
+        if availability == .ready {
+            appLog.info("onyxfs: the file system extension is on (Turn On)")
+            return nil
+        }
+        switch answer {
+        case .none:
+            return "macOS did not answer. Try again, or switch Onyx on in System Settings."
+        case let .some(error?):
+            appLog.error("onyxfs: switching the extension on failed: \(error.localizedDescription, privacy: .public)")
+            let ns = error as NSError
+            if ns.domain == NSPOSIXErrorDomain, ns.code == Int(EPERM) || ns.code == Int(EACCES) {
+                return "macOS did not let Onyx switch its file system on. Your drives stay in the Onyx folder, where they stream as before."
+            }
+            return "macOS could not switch the file system on: \(error.localizedDescription)"
+        case .some(nil):
+            return "macOS accepted, but the file system is still off. Try again in a moment."
+        }
+    }
+
+    /// The first of two racing answers wins; the other is dropped.
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+        func first() -> Bool { lock.withLock { defer { done = true }; return !done } }
+    }
+
     /// Mount one drive from its resource URL (a one-time ticket to the
     /// app's bridge — see DriveService.onyxfsResourceURL). Always writable at
     /// the mount: what this account may change is the drive's role, checked

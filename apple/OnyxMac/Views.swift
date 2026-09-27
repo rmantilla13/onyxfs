@@ -488,6 +488,7 @@ struct FinderSettings: View {
                  : "Each drive you turn on appears in Finder, in your Onyx folder and under Locations. It is exactly what the web shows you, and files stream as you open them — nothing downloads until something reads it.")
                 .font(.callout).foregroundStyle(.secondary)
             DiskModeNote(finder: finder)
+            FullDiskAccessRow()
             List {
                 ForEach(model.finderDrives) { drive in
                     row(.drive(id: drive.id), name: drive.name)
@@ -647,18 +648,76 @@ struct DiskModeNote: View {
                 .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
             }
         case .needsEnabling:
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(lucide: "hard-drive").foregroundStyle(.secondary)
-                Text("To have each drive be a disk of its own, turn on Onyx in System Settings › General › Login Items & Extensions › File System Extensions.")
-                    .font(.caption)
-                Spacer()
-                Button("Open System Settings") { finder.openFileSystemSettings() }
+            // Turn On asks macOS from Onyx itself; System Settings' own switch
+            // is the way round when that is refused (DiskMounter.enableExtension).
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(lucide: "hard-drive").foregroundStyle(.secondary)
+                    Text("Each drive can be a disk of its own, under Locations and on the Desktop. Turn on the Onyx file system to have them there.")
+                        .font(.caption)
+                    Spacer()
+                    Button(finder.turningOnDisks ? "Turning On…" : "Turn On") {
+                        Task { await finder.turnOnDisks() }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(finder.turningOnDisks)
+                    Button("System Settings…") { finder.openFileSystemSettings() }
+                }
+                if let problem = finder.turnOnProblem {
+                    Text(problem).font(.caption).foregroundStyle(.red)
+                }
             }
             .padding(10)
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
         case .folder:
             EmptyView()
         }
+    }
+}
+
+/// Settings › Finder: whether Onyx has Full Disk Access, and the way to the
+/// pane that grants it. Only the person can grant it; Onyx only says where.
+struct FullDiskAccessRow: View {
+    @StateObject private var access = FullDiskAccess()
+
+    var body: some View {
+        let granted = access.granted
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(lucide: granted ? "shield-check" : "shield").foregroundStyle(.secondary) /* icons: shield-check shield */
+            Text(granted
+                 ? "Full Disk Access is on: Onyx can reach files anywhere on this Mac you point it to."
+                 : "Full Disk Access is off. Turn it on for Onyx to reach files in every folder on this Mac.")
+                .font(.caption)
+            Spacer()
+            if !granted {
+                Button("Privacy & Security…") { FullDiskAccess.openSettings() }
+            }
+        }
+        // Back from System Settings, it may be on now.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            access.check()
+        }
+    }
+}
+
+@MainActor
+final class FullDiskAccess: ObservableObject {
+    @Published private(set) var granted = FullDiskAccess.probe()
+
+    func check() { granted = Self.probe() }
+
+    /// Whether this app may open a file only Full Disk Access opens: the
+    /// privacy database itself, opened and closed, nothing read.
+    nonisolated static func probe() -> Bool {
+        let fd = open(NSHomeDirectory() + "/Library/Application Support/com.apple.TCC/TCC.db", O_RDONLY)
+        guard fd >= 0 else { return false }
+        close(fd)
+        return true
+    }
+
+    static func openSettings() {
+        let pane = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles")!
+        NSWorkspace.shared.open(pane)
     }
 }
 

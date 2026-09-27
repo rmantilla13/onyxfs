@@ -31,6 +31,10 @@ final class DriveService: ObservableObject {
     @Published var cacheLimitGB: Int { didSet { defaults.set(cacheLimitGB, forKey: Keys.limit) } }
     /// Drives to keep mounted, across launches (SyncDomain identifiers).
     @Published private(set) var wantMounted: Set<String>
+    /// Settings' Turn On (turnOnDisks) under way, and why it did not work
+    /// when it did not.
+    @Published var turningOnDisks = false
+    @Published var turnOnProblem: String?
     @Published private(set) var pinnedFiles: Set<String> = []
     @Published private(set) var pinRules: [PinRule] = []
     /// Folder rules naming no folder in their drive now: renamed or deleted
@@ -290,6 +294,23 @@ final class DriveService: ObservableObject {
         }
         if wantMounted.contains(SyncDomain.library.identifier), mountState(of: .library) == nil {
             await mount(.library, name: MountFolder.library)
+        }
+    }
+
+    /// The file system extension just came on (Settings › Turn On): each
+    /// drive in ~/Onyx moves to a disk of its own. One whose folder mount
+    /// will not let go (a file open on it) stays where it is until the next
+    /// launch; one whose disk does not mount comes back to ~/Onyx, as always.
+    func remountAsDisks() async {
+        guard let model else { return }
+        let started = generation
+        var drives: [(SyncDomain, String)] = model.finderDrives.map { (.drive(id: $0.id), $0.name) }
+        drives.append((.library, MountFolder.library))
+        for (scope, name) in drives where wantMounted.contains(scope.identifier) && mounts.state(of: scope) != nil {
+            await mounts.unmount(scope)
+            guard started == generation else { return }
+            guard mounts.state(of: scope) == nil else { continue }
+            await mount(scope, name: name)
         }
     }
 

@@ -100,6 +100,26 @@ extension DriveService {
 
     var drivesAreDisks: Bool { diskMode == .disks }
 
+    /// Settings' Turn On: the file system extension switched on from Onyx,
+    /// then the drives in ~/Onyx moved to disks of their own. Why it did not
+    /// work, when it did not, is turnOnProblem.
+    func turnOnDisks() async {
+        guard !turningOnDisks else { return }
+        turningOnDisks = true
+        turnOnProblem = nil
+        defer { turningOnDisks = false }
+        guard #available(macOS 27.0, *), let disks else {
+            turnOnProblem = "Disks of their own need macOS 27."
+            return
+        }
+        if let problem = await disks.enableExtension() {
+            turnOnProblem = problem
+            return
+        }
+        objectWillChange.send()
+        await remountAsDisks()
+    }
+
     /// Why the last drive that should have been a disk is in ~/Onyx instead.
     var diskFailure: String? {
         guard #available(macOS 27.0, *) else { return nil }
