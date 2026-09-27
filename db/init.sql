@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 129
+-- Statements: 133
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -248,6 +248,10 @@ ALTER TABLE files ADD COLUMN IF NOT EXISTS review_status TEXT;
 
 ALTER TABLE files ADD COLUMN IF NOT EXISTS open_comments INT NOT NULL DEFAULT 0;
 
+ALTER TABLE files ADD COLUMN IF NOT EXISTS file_created_at BIGINT;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS file_modified_at BIGINT;
+
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 CREATE INDEX IF NOT EXISTS files_folder_created_idx ON files (folder, created_at, id) WHERE deleted_at IS NULL;
@@ -257,6 +261,10 @@ CREATE INDEX IF NOT EXISTS files_folder_name_idx ON files (folder, name, id) WHE
 CREATE INDEX IF NOT EXISTS files_folder_size_idx ON files (folder, (coalesce(size, -1)), id) WHERE deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS files_folder_updated_idx ON files (folder, updated_at, id) WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS files_folder_modified_idx ON files (folder, (coalesce(file_modified_at, updated_at)), id) WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS files_folder_file_created_idx ON files (folder, (coalesce(file_created_at, created_at)), id) WHERE deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS files_folder_mime_idx ON files (folder, (coalesce(mime, '')), id) WHERE deleted_at IS NULL;
 

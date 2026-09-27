@@ -8,6 +8,8 @@ private actor FakeBridge: EngineBridge {
     var folders: Set<String> = ["/"]
     var files: [String: (id: String, bytes: Data, version: String)] = [:]
     var calls: [String] = []
+    /// The dates each put came with: (modified, created).
+    var dates: [String: (Date?, Date?)] = [:]
     var readsFrom: [String] = []
     var readOnly = false
     var pendingChanges: [BridgeChanges] = []
@@ -45,9 +47,10 @@ private actor FakeBridge: EngineBridge {
         return out
     }
 
-    func putFile(_ path: String, from: URL, modified: Date?) async throws -> BridgeEntry {
+    func putFile(_ path: String, from: URL, modified: Date?, created: Date?) async throws -> BridgeEntry {
         let bytes = try Data(contentsOf: from)
         calls.append("put \(path) \(bytes.count)")
+        dates[path] = (modified, created)
         if readOnly { throw BridgeFailure.forbidden("You can view this drive but not add to it.") }
         if files[path] != nil { replaceBytes(path, bytes) } else { addFile(path, bytes) }
         let file = files[path]!
@@ -144,6 +147,22 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
         #expect(await bridge.calls.contains("put /Cut.mov 11"))
         // Now it reads as the server's.
         #expect(String(decoding: try await engine.read(file.id, at: 0, count: 5), as: UTF8.self) == "hello")
+    }
+
+    @Test func aCopyKeepsTheDatesFinderGivesIt() async throws {
+        let bridge = FakeBridge()
+        let engine = try await makeEngine(bridge)
+        let file = try await engine.create("Old.mov", in: DriveEngine.rootID, isDirectory: false)
+        try await engine.beginWriting(file.id, truncating: false)
+        _ = try await engine.write(file.id, at: 0, data: Data("bytes".utf8))
+        // Finder's copy sets the original's dates once the bytes are in.
+        let modified = Date(timeIntervalSince1970: 1_551_530_000), born = Date(timeIntervalSince1970: 1_551_000_000)
+        _ = try await engine.setModified(file.id, to: modified)
+        let node = try await engine.setCreated(file.id, to: born)
+        #expect(node.created == born && node.modified == modified, "shown as Finder set them")
+        try await engine.finishWriting(file.id)
+        let sent = try #require(await bridge.dates["/Old.mov"])
+        #expect(sent.0 == modified && sent.1 == born, "and sent with the bytes")
     }
 
     @Test func changingAFileBringsItHereFirstAndSendsItWhole() async throws {

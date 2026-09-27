@@ -44,6 +44,7 @@ public final class EngineVolume: VolumeEngine, @unchecked Sendable {
     public func write(_ id: UInt64, at offset: Int64, data: Data) async throws -> Int { try await engine.write(id, at: offset, data: data) }
     public func setSize(_ id: UInt64, to size: UInt64) async throws -> VolumeNode { try await engine.setSize(id, to: size) }
     public func setModified(_ id: UInt64, to date: Date) async throws -> VolumeNode { try await engine.setModified(id, to: date) }
+    public func setCreated(_ id: UInt64, to date: Date) async throws -> VolumeNode { try await engine.setCreated(id, to: date) }
     public func finishWriting(_ id: UInt64) async throws { try await engine.finishWriting(id) }
     public func rename(_ id: UInt64, from directory: UInt64, name: String, to newDirectory: UInt64,
                        newName: String, replacing: UInt64?) async throws -> VolumeNode {

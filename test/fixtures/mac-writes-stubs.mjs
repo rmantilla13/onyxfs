@@ -126,6 +126,7 @@ export async function createFile(data = {}) {
     posterKey: data.posterKey || null, thumbSizes: data.thumbSizes || [],
     deletedAt: null, trashKey: null, deletedBy: null, version: 1, contentHash: data.contentHash || null,
     metadata: data.metadata || {}, createdBy: data.createdBy || null, createdAt: now(), updatedAt: now(), seq: nextSeq(),
+    fileCreatedAt: data.fileCreatedAt ?? null, fileModifiedAt: data.fileModifiedAt ?? null,
   };
   s().files.set(id, row);
   return copy(row);
@@ -178,13 +179,14 @@ export async function setFileStorageKey(id, storageKey) {
   return { ok: true };
 }
 // As the SQL: only a live row still at `fromKey`; no transcript follows.
-export async function replaceFileContent(id, { fromKey, toKey, url, size = null, mime = null, kind = null, contentHash = null } = {}) {
+export async function replaceFileContent(id, { fromKey, toKey, url, size = null, mime = null, kind = null, contentHash = null, fileModifiedAt = null } = {}) {
   const row = s().files.get(String(id));
   if (!row || row.deletedAt || row.storageKey !== fromKey) return null;
   const metadata = { ...row.metadata };
   for (const k of MEDIA_KEYS) delete metadata[k];
   Object.assign(row, {
     storageKey: toKey, url, size, mime: mime ?? row.mime, kind: kind ?? row.kind, contentHash,
+    fileModifiedAt: fileModifiedAt ?? now(), // as the SQL: the one given, else now; created stays
     thumbnailKey: null, thumbnailUrl: null, posterKey: null, thumbSizes: [], filmstripKey: null, metadata,
   });
   touch(row);

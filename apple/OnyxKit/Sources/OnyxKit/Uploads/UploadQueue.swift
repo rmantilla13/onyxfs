@@ -36,6 +36,10 @@ public struct UploadJob: Codable, Identifiable, Sendable, Equatable {
     /// When the server made the change, once it has: the mirror shows it
     /// once its entry is this new.
     public var changedAt: Date? = nil
+    /// The file's own dates where it was written (Finder's copy keeps a
+    /// file's), sent when it is recorded; nil when the writer did not say.
+    public var fileCreatedAt: Date? = nil
+    public var fileModifiedAt: Date? = nil
 
     public var path: String { folder.isEmpty ? "/\(name)" : "/\(folder)/\(name)" }
 }
@@ -126,7 +130,8 @@ public actor UploadQueue {
     /// file it was saved over, whose contents it becomes.
     @discardableResult
     public func enqueue(from source: URL, scope: String, filespaceId: String?, folder: String,
-                        name: String, mime: String, replaceOf: String? = nil) throws -> UploadJob {
+                        name: String, mime: String, replaceOf: String? = nil,
+                        created: Date? = nil, modified: Date? = nil) throws -> UploadJob {
         let id = UUID()
         let staged = directory.appendingPathComponent("files").appendingPathComponent(id.uuidString)
         do {
@@ -137,7 +142,8 @@ public actor UploadQueue {
         let size = (try? FileManager.default.attributesOfItem(atPath: staged.path)[.size] as? NSNumber)?.int64Value ?? 0
         let job = UploadJob(id: id, scope: scope, filespaceId: filespaceId, folder: folder, name: name,
                             staged: staged.path, size: size, mime: mime, replaceOf: replaceOf, multipartId: nil,
-                            state: .queued, attempts: 0, lastError: nil, fileId: nil)
+                            state: .queued, attempts: 0, lastError: nil, fileId: nil,
+                            fileCreatedAt: created, fileModifiedAt: modified)
         jobs[id] = job
         save()
         onChange?(job)

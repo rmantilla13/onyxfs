@@ -14,10 +14,16 @@
   --text-dim: #4D4D4D;
   --text-h:   #E8E8E8;
 
-  /* Accent — lime for logo + primary buttons only */
-  --accent:       #E6FF7F;
-  --accent-hover: #D4F25E;
-  --accent-on:    #0E1200;
+  /* Accent — the web app's, as its dark scheme draws it (lib/brand.js;
+     darkPalette in lib/brand-config.js). --accent is its electric blue
+     lifted to read on near-black: text, borders, active states. Filled
+     controls take its aura gradient, blue into a magenta deepened far
+     enough to carry a white label. */
+  --accent:      #8193F5;
+  --accent-on:   #FFFFFF;
+  --aura-a:      #3D5AFE;
+  --aura-b:      #E040FB;
+  --aura-b-deep: #B333C9;
 
   /* Status indicators */
   --green:  #6BCF7F;

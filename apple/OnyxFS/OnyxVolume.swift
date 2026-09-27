@@ -170,10 +170,11 @@ final class OnyxVolume: FSVolume, FSVolume.Handler, FSVolume.PathConfOperations,
         return result
     }
 
-    /// Size (truncating, extending) and the modification date are kept;
-    /// the rest — owner, mode, flags — is accepted and ignored, as on any
-    /// volume that does not store permissions (and Finder sets them on
-    /// every copy).
+    /// Size (truncating, extending) and the modification and birth dates
+    /// are kept — Finder sets both on a copy, and they go to the server as
+    /// the file's own; the rest — owner, mode, flags — is accepted and
+    /// ignored, as on any volume that does not store permissions (and
+    /// Finder sets them on every copy).
     func setAttributes(_ request: FSItem.SetAttributesRequest, on item: FSItem, context: FSContext) async throws -> FSSetAttributesResult {
         let id = Self.id(item)
         var node = try await Self.mapped { try await self.engine.node(id) }
@@ -184,6 +185,10 @@ final class OnyxVolume: FSVolume, FSVolume.Handler, FSVolume.PathConfOperations,
         if request.isValid(.modifyTime) {
             let date = Date(timeIntervalSince1970: Double(request.modifyTime.tv_sec) + Double(request.modifyTime.tv_nsec) / 1e9)
             if !engine.readOnly { node = try await Self.mapped { try await self.engine.setModified(id, to: date) } }
+        }
+        if request.isValid(.birthTime) {
+            let date = Date(timeIntervalSince1970: Double(request.birthTime.tv_sec) + Double(request.birthTime.tv_nsec) / 1e9)
+            if !engine.readOnly { node = try await Self.mapped { try await self.engine.setCreated(id, to: date) } }
         }
         request.consumedAttributes = [.size, .modifyTime, .mode, .uid, .gid, .flags, .accessTime, .changeTime, .birthTime, .backupTime, .addedTime]
         guard let result = FSSetAttributesResult(attributes: attributes(of: node), freeSpace: nil) else { throw Self.posix(EIO) }

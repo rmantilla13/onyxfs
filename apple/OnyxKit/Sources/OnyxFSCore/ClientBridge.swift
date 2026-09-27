@@ -27,8 +27,8 @@ public final class ClientBridge: EngineBridge {
         try await mapped { try await self.client.list(path: path) }.entries.map(Self.entry)
     }
 
-    public func putFile(_ path: String, from: URL, modified: Date?) async throws -> BridgeEntry {
-        Self.entry(try await mapped { try await self.client.putFile(path: path, from: from, mtime: modified) })
+    public func putFile(_ path: String, from: URL, modified: Date?, created: Date?) async throws -> BridgeEntry {
+        Self.entry(try await mapped { try await self.client.putFile(path: path, from: from, mtime: modified, btime: created) })
     }
 
     public func mkdir(_ path: String) async throws -> BridgeEntry {
@@ -70,7 +70,7 @@ public final class ClientBridge: EngineBridge {
 
     static func entry(_ e: FSEntry) -> BridgeEntry {
         BridgeEntry(name: e.name, isDirectory: e.isDirectory, id: e.id, size: e.size, modified: e.modified,
-                    version: e.version, pending: e.pending, local: e.local)
+                    version: e.version, pending: e.pending, local: e.local, created: e.created)
     }
 
     static func volume(_ info: FSVolumeInfo, generation: UInt64) -> BridgeVolume {

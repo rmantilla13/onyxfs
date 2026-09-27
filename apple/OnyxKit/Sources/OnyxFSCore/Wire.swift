@@ -23,6 +23,9 @@ public struct FSEntry: Codable, Sendable, Hashable {
     public var size: Int64
     /// Seconds since 1970. For a folder, its newest child's, or 0.
     public var mtime: Double
+    /// When the file was made, seconds since 1970; nil from an app that
+    /// does not say, when the modification time stands in.
+    public var btime: Double?
     /// Changes whenever the bytes may have, and only then: it keys the chunk
     /// cache, so a rename keeps what was cached and new bytes never read old.
     public var version: String
@@ -33,16 +36,17 @@ public struct FSEntry: Codable, Sendable, Hashable {
     public var pending: Bool
 
     public init(name: String, type: Kind, id: String? = nil, size: Int64 = 0, mtime: Double = 0,
-                version: String = "", local: Bool = false, pending: Bool = false) {
+                version: String = "", local: Bool = false, pending: Bool = false, btime: Double? = nil) {
         self.name = name; self.type = type; self.id = id; self.size = size; self.mtime = mtime
-        self.version = version; self.local = local; self.pending = pending
+        self.version = version; self.local = local; self.pending = pending; self.btime = btime
     }
 
     public var isDirectory: Bool { type == .dir }
     public var modified: Date { Date(timeIntervalSince1970: mtime) }
+    public var created: Date? { btime.map { Date(timeIntervalSince1970: $0) } }
 
     enum CodingKeys: String, CodingKey {
-        case name, type, id, size, mtime, version, local, pending
+        case name, type, id, size, mtime, btime, version, local, pending
     }
 
     /// Only the name and type are required. A field the app leaves out takes
@@ -55,6 +59,7 @@ public struct FSEntry: Codable, Sendable, Hashable {
         id = try c.decodeIfPresent(String.self, forKey: .id)
         size = try c.decodeIfPresent(Int64.self, forKey: .size) ?? 0
         mtime = try c.decodeIfPresent(Double.self, forKey: .mtime) ?? 0
+        btime = try c.decodeIfPresent(Double.self, forKey: .btime)
         version = try c.decodeIfPresent(String.self, forKey: .version) ?? ""
         local = try c.decodeIfPresent(Bool.self, forKey: .local) ?? false
         pending = try c.decodeIfPresent(Bool.self, forKey: .pending) ?? false

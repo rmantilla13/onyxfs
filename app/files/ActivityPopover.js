@@ -11,8 +11,9 @@ import { kindLabel } from '@/lib/file-info';
  * Activity: the twenty files most recently added or changed in this drive —
  * beneath the open folder, when one is open — newest first. Nothing new
  * behind it: it is the listing the page reads (GET /api/files), flattened
- * and ordered by modification, so it shows only what the viewer may see,
- * asked for each time it is opened.
+ * and ordered by activity, so it shows only what the viewer may see, asked
+ * for each time it is opened. Activity, not Modified: that is the file's
+ * own date, which for a file that has only just come can be years ago.
  */
 const COUNT = 20;
 
@@ -31,7 +32,7 @@ function ActivityList({ filespaceId, folder, rootName, onOpen, onShowAll, close 
   const [state, setState] = useState({ files: null, error: null });
   useEffect(() => {
     let live = true;
-    const p = listingParams({ folder, flat: true, sort: 'modified' }, { filespaceId, limit: COUNT });
+    const p = listingParams({ folder, flat: true, sort: 'activity' }, { filespaceId, limit: COUNT });
     fetch(`/api/files?${p}`)
       .then(async (r) => {
         if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);

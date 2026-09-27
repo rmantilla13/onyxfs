@@ -73,8 +73,12 @@ export async function GET(req) {
 /**
  * POST /api/files — record an uploaded asset.
  * Body: { name, url, mime, size, kind?, folder, storage, storageKey, tags, notes?,
- *         visibility?, thumbnailKey?, posterKey?, thumbSizes?, media?, filmstripKey?, filmstrip?, filespace? }
+ *         visibility?, thumbnailKey?, posterKey?, thumbSizes?, media?, filmstripKey?, filmstrip?, filespace?,
+ *         fileCreatedAt?, fileModifiedAt? }
  * `media` is { width, height, duration } read by the browser while it made the thumbnail.
+ * `fileCreatedAt` and `fileModifiedAt` are the file's own dates in epoch ms —
+ * from the Mac's file system, File.lastModified, a capture date — and a value
+ * that could not be a real date is dropped rather than refused (fileDate).
  * Only these fields are read (lib/file-record.js); anything else in the body
  * is ignored, so who, when and what the bytes hash to stay the server's word.
  *

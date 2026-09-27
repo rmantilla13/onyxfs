@@ -285,7 +285,7 @@ describe('pagination', () => {
   test('every sort key orders on a known column with id as the tiebreaker', () => {
     for (const key of SORT_KEYS) {
       const { text } = buildFileQuery({ opts: { sort: key }, principal: admin });
-      assert.match(text, /ORDER BY (f\.(created_at|name|updated_at)|coalesce\(f\.(size|mime), [^)]+\)) (ASC|DESC), f\.id (ASC|DESC)/, key);
+      assert.match(text, /ORDER BY (f\.(created_at|name|updated_at)|coalesce\(f\.(size|mime|file_modified_at|file_created_at), [^)]+\)) (ASC|DESC), f\.id (ASC|DESC)/, key);
     }
     // Object prototype names are not sorts.
     assert.equal(sortSpec('constructor').column, 'created_at');
@@ -310,8 +310,38 @@ describe('pagination', () => {
 
   test('non-null columns are ordered bare, so their indexes still apply', () => {
     assert.ok(buildFileQuery({ opts: { sort: 'name_desc' }, principal: admin }).text.includes('ORDER BY f.name DESC, f.id DESC'));
-    assert.ok(buildFileQuery({ opts: { sort: 'modified' }, principal: admin }).text.includes('ORDER BY f.updated_at DESC, f.id DESC'));
-    assert.ok(buildFileQuery({ opts: { sort: 'modified_old' }, principal: admin }).text.includes('ORDER BY f.updated_at ASC, f.id ASC'));
+    assert.ok(buildFileQuery({ opts: { sort: 'new' }, principal: admin }).text.includes('ORDER BY f.created_at DESC, f.id DESC'), 'Added is the row’s');
+    // Activity too: when anything about the file last changed here, which
+    // the Recent view and the Activity popover want whatever the file's own
+    // Modified says.
+    assert.ok(buildFileQuery({ opts: { sort: 'activity' }, principal: admin }).text.includes('ORDER BY f.updated_at DESC, f.id DESC'));
+    assert.ok(buildFileQuery({ opts: { sort: 'activity_old' }, principal: admin }).text.includes('ORDER BY f.updated_at ASC, f.id ASC'));
+  });
+
+  test('Modified and Created order on the file’s own date, else the row’s, and page on the same', () => {
+    // As the list shows them: a photo from September 5th uploaded on the
+    // 26th sorts as the 5th.
+    const modified = buildFileQuery({ opts: { sort: 'modified', cursor: { value: 5, id: 'x' } }, principal: admin });
+    assert.ok(modified.text.includes('ORDER BY coalesce(f.file_modified_at, f.updated_at) DESC, f.id DESC'));
+    assert.ok(modified.text.includes('(coalesce(f.file_modified_at, f.updated_at), f.id) < ($'));
+    assert.ok(buildFileQuery({ opts: { sort: 'modified_old' }, principal: admin }).text.includes('ORDER BY coalesce(f.file_modified_at, f.updated_at) ASC, f.id ASC'));
+    assert.ok(buildFileQuery({ opts: { sort: 'created' }, principal: admin }).text.includes('ORDER BY coalesce(f.file_created_at, f.created_at) DESC, f.id DESC'));
+    assert.ok(buildFileQuery({ opts: { sort: 'created_old' }, principal: admin }).text.includes('ORDER BY coalesce(f.file_created_at, f.created_at) ASC, f.id ASC'));
+    // The cursor carries the value the row sorted by.
+    assert.deepEqual(nextCursor([{ id: 'a', updated_at: '9', file_modified_at: '5' }], sortSpec('modified'), 1), { value: '5', id: 'a' });
+    assert.deepEqual(nextCursor([{ id: 'b', updated_at: '9', file_modified_at: null }], sortSpec('modified'), 1), { value: '9', id: 'b' });
+    assert.deepEqual(nextCursor([{ id: 'c', created_at: '7', file_created_at: '3' }], sortSpec('created'), 1), { value: '3', id: 'c' });
+    // The columns the rows need to say it are listed.
+    assert.ok(FILE_COLUMNS.includes('file_created_at') && FILE_COLUMNS.includes('file_modified_at'));
+  });
+
+  test('the indexes behind Modified and Created are on the expressions the listing orders by', async () => {
+    const { readFileSync } = await import('node:fs');
+    const db = readFileSync(new URL('../lib/db.js', import.meta.url), 'utf8');
+    for (const [sort, expr] of [['modified', 'coalesce(file_modified_at, updated_at)'], ['created', 'coalesce(file_created_at, created_at)']]) {
+      assert.ok(buildFileQuery({ opts: { sort }, principal: admin }).text.includes(`ORDER BY ${expr.replace(/(file_\w+|updated_at|created_at)/g, 'f.$1')}`), sort);
+      assert.ok(db.includes(`ON files (folder, (${expr}), id) WHERE deleted_at IS NULL`), `an index leads with the folder, then ${expr}`);
+    }
   });
 
   test('limit is clamped to a sane range', () => {

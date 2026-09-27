@@ -9,7 +9,8 @@ public protocol EngineBridge: Sendable {
     func list(_ path: String) async throws -> [BridgeEntry]
     /// The whole file at `from` becomes the file at `path` (new, or the
     /// existing one's new contents); answered as soon as the app has it.
-    func putFile(_ path: String, from: URL, modified: Date?) async throws -> BridgeEntry
+    /// `modified` and `created`: the dates the writer gave it.
+    func putFile(_ path: String, from: URL, modified: Date?, created: Date?) async throws -> BridgeEntry
     func mkdir(_ path: String) async throws -> BridgeEntry
     func rename(_ from: String, to: String, replace: Bool) async throws -> BridgeEntry
     func delete(_ path: String) async throws
@@ -37,6 +38,8 @@ public struct BridgeEntry: Sendable, Equatable {
     public var id: String?
     public var size: Int64
     public var modified: Date
+    /// When the file was made; nil when the app did not say.
+    public var created: Date?
     /// Moves when the bytes may have changed; keys the chunk cache.
     public var version: String
     /// Still uploading from this Mac.
@@ -45,9 +48,10 @@ public struct BridgeEntry: Sendable, Equatable {
     public var local: Bool
 
     public init(name: String, isDirectory: Bool, id: String? = nil, size: Int64 = 0, modified: Date = Date(timeIntervalSince1970: 0),
-                version: String = "", pending: Bool = false, local: Bool = false) {
+                version: String = "", pending: Bool = false, local: Bool = false, created: Date? = nil) {
         self.name = name; self.isDirectory = isDirectory; self.id = id; self.size = size
         self.modified = modified; self.version = version; self.pending = pending; self.local = local
+        self.created = created
     }
 }
 

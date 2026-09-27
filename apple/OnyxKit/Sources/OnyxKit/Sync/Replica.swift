@@ -234,6 +234,10 @@ public struct ReplicaFile: Codable, Sendable, Equatable, Identifiable {
     public let contentHash: String?
     public let createdAt: EpochMillis?
     public let updatedAt: EpochMillis?
+    /// The file's own dates (FileItem). Absent from a replica saved before
+    /// they were kept: nil, and the row's shown instead.
+    public var fileCreatedAt: EpochMillis? = nil
+    public var fileModifiedAt: EpochMillis? = nil
 
     public init(_ item: FileItem) {
         id = item.id
@@ -245,5 +249,7 @@ public struct ReplicaFile: Codable, Sendable, Equatable, Identifiable {
         contentHash = item.contentHash
         createdAt = item.createdAt
         updatedAt = item.updatedAt
+        fileCreatedAt = item.fileCreatedAt
+        fileModifiedAt = item.fileModifiedAt
     }
 }
