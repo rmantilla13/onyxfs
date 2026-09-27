@@ -2114,7 +2114,7 @@ export default function FilesClient({
             <Section title={activeDrive ? `Folders in ${activeDrive.name}` : 'Folders'}>
               <div className="folder-list edge-scroll">
                 <FolderDrop target="" enabled={canWrite} onDrop={onTreeDrop}>
-                  <FolderLink active={!folder} onClick={() => navigate('')} path="">{rootName}</FolderLink>
+                  <FolderLink active={!folder} onClick={() => navigate('')} path=""><span className="folder-name">{rootName}</span></FolderLink>
                 </FolderDrop>
                 <FolderTree
                   folders={folders}
@@ -2613,7 +2613,8 @@ const FolderTree = memo(function FolderTree({ folders, summaries, selected, onSe
           draggable={canWrite}
           onDragStart={canWrite ? (e) => startFolderDrag(e, f.folder) : undefined}
         >
-          {f.name} {f.count != null && <span className="muted">{summaries?.get(f.folder)?.total ?? f.count}</span>}
+          <span className="folder-name">{f.name}</span>
+          {f.count != null && <span className="muted folder-count">{summaries?.get(f.folder)?.total ?? f.count}</span>}
         </FolderLink>
       </FolderDrop>
     );
