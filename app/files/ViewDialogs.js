@@ -14,7 +14,9 @@ import { LIMITS } from '@/lib/views';
  * resolves to an error to show — a name already in use, say — or null.
  */
 export function SaveViewDialog({ open, onClose, onSave, drive, suggestion = '' }) {
-  const [name, setName] = useState('');
+  // The page mounts it afresh for each opening, so its first state is the
+  // suggestion — no frame of an empty field before it.
+  const [name, setName] = useState(suggestion);
   const [scoped, setScoped] = useState(false);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -23,12 +25,8 @@ export function SaveViewDialog({ open, onClose, onSave, drive, suggestion = '' }
 
   useEffect(() => {
     if (!open) return;
-    setName(suggestion);
-    setScoped(false);
-    setError(null);
-    setBusy(false);
     requestAnimationFrame(() => { input.current?.focus(); input.current?.select(); });
-  }, [open, suggestion]);
+  }, [open]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -92,7 +90,6 @@ export function SaveViewDialog({ open, onClose, onSave, drive, suggestion = '' }
  */
 export function ManageViewsDialog({ open, onClose, views, drives, onRename, onRescope, onDelete }) {
   const [errors, setErrors] = useState({});
-  useEffect(() => { if (open) setErrors({}); }, [open]);
   const run = async (id, fn) => {
     const problem = await fn();
     setErrors((e) => ({ ...e, [id]: problem || null }));
