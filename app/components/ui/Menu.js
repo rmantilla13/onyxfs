@@ -10,8 +10,16 @@ import Icon from '@/app/components/ui/Icon';
  * Deliberately small: a button, a list, close on escape, on outside click and
  * on choosing something. Opening focuses the first item and ↑ ↓ Home End move
  * between items (shared with the context menu); there is no type-ahead.
+ *
+ * The button is a small ghost one unless `buttonClassName` says otherwise —
+ * the files toolbar's are its own height. A `trigger` that is only an icon
+ * needs `ariaLabel` for its name; `label` names the default "…" trigger.
+ * `menuClassName` sizes the list.
  */
-export default function Menu({ label = 'Actions', trigger, children, align = 'right' }) {
+export default function Menu({
+  label = 'Actions', trigger, children, align = 'right',
+  buttonClassName = 'btn btn-ghost btn-sm', ariaLabel, title, disabled = false, menuClassName = '',
+}) {
   const [open, setOpen] = useState(false);
   // How far the popup has to move to stay inside the viewport. It is placed
   // relative to its trigger, so near an edge (a phone, a trigger at the far
@@ -74,10 +82,14 @@ export default function Menu({ label = 'Actions', trigger, children, align = 'ri
   return (
     <div className="menu-wrap" ref={wrap}>
       <button
-        className="btn btn-ghost btn-sm"
+        type="button"
+        className={buttonClassName}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? id : undefined}
+        aria-label={ariaLabel}
+        title={title}
+        disabled={disabled}
         onClick={() => setOpen((v) => !v)}
       >
         {trigger || <><Icon name="ellipsis" /><span className="sr-only">{label}</span></>}
@@ -86,7 +98,7 @@ export default function Menu({ label = 'Actions', trigger, children, align = 'ri
         // Clicks bubble to here rather than each item wiring its own close,
         // so an action can never leave the menu open by forgetting to.
         <div
-          className="menu"
+          className={`menu${menuClassName ? ` ${menuClassName}` : ''}`}
           id={id}
           role="menu"
           ref={pop}
@@ -110,19 +122,35 @@ function clippingBox(el) {
   return null;
 }
 
-export function MenuItem({ onClick, danger = false, disabled = false, children }) {
+/**
+ * One item. `checked` (true or false, not absent) makes it one of a set of
+ * choices — a menuitemradio with a tick on the chosen one. `icon` is a Lucide
+ * name drawn before the words, `hint` a shortcut or a note after them.
+ */
+export function MenuItem({ onClick, danger = false, disabled = false, checked, icon, hint, children }) {
+  const choice = typeof checked === 'boolean';
   return (
     <button
-      className={`menu-item${danger ? ' danger' : ''}`}
-      role="menuitem"
+      type="button"
+      className={`menu-item${danger ? ' danger' : ''}${choice ? ' is-choice' : ''}`}
+      role={choice ? 'menuitemradio' : 'menuitem'}
+      aria-checked={choice ? checked : undefined}
       disabled={disabled}
       onClick={onClick}
     >
-      {children}
+      {icon && <Icon name={icon} size={15} className="menu-item-icon" />}
+      <span className="menu-item-text">{children}</span>
+      {hint && <span className="menu-item-hint">{hint}</span>}
+      {choice && <span className="menu-item-check" aria-hidden>{checked && <Icon name="check" size={15} />}</span>}
     </button>
   );
 }
 
 export function MenuSeparator() {
   return <div className="menu-sep" role="separator" />;
+}
+
+/** A group's name inside a menu: not an item, never focused. */
+export function MenuLabel({ children }) {
+  return <div className="menu-label small muted" role="presentation">{children}</div>;
 }

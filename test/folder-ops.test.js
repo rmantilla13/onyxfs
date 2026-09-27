@@ -1,11 +1,11 @@
 // The pure half of folder create / rename / move / delete: which names are
 // allowed, and what a rename does to each stored object.
 
-import { test } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cleanFolder, folderNameProblem, folderPathProblem, isWithin, rebase, escapeLike,
-  keyFor, planRename, mapLimit, settleLimit, parentOf, baseName, crumbsFor,
+  keyFor, planRename, mapLimit, settleLimit, parentOf, baseName, crumbsFor, folderSummaries, describeFolder,
 } from '../lib/folder-ops.js';
 
 test('folder names: one segment, not reserved, not blank', () => {
@@ -106,4 +106,37 @@ test('breadcrumbs: the root, every ancestor, then the folder itself', () => {
   // Paths arrive from the URL, so an untidy one still yields real folders.
   assert.deepEqual(crumbsFor('/a//b/').map((c) => c.path), ['', 'a', 'a/b']);
   assert.equal(crumbsFor('x', 'Library')[0].name, 'Library');
+});
+
+describe('folderSummaries', () => {
+  // The sidebar tree: every folder with its parent and its own file count.
+  const tree = [
+    { folder: 'Footage', parent: '', count: 0 },
+    { folder: 'Footage/Day 1', parent: 'Footage', count: 2 },
+    { folder: 'Footage/Day 2', parent: 'Footage', count: 1 },
+    { folder: 'Footage/Day 2/Selects', parent: 'Footage/Day 2', count: 4 },
+    { folder: 'Photography', parent: '', count: 8 },
+    { folder: 'Archive', parent: '', count: 0 },
+    // Shared on its own: its parent is not in the tree.
+    { folder: 'Clients/Acme/Deliverables', parent: 'Clients/Acme', count: 3 },
+  ];
+  const s = folderSummaries(tree);
+
+  test('a folder holds its own files and everything beneath it', () => {
+    assert.deepEqual(s.get('Footage'), { files: 0, total: 7, subfolders: 2 });
+    assert.deepEqual(s.get('Footage/Day 2'), { files: 1, total: 5, subfolders: 1 });
+    assert.deepEqual(s.get('Photography'), { files: 8, total: 8, subfolders: 0 });
+    assert.deepEqual(s.get('Clients/Acme/Deliverables'), { files: 3, total: 3, subfolders: 0 });
+    assert.equal(s.get('Clients/Acme'), undefined, 'no summary is made up for a folder the tree does not list');
+  });
+
+  test('and says so in a few words', () => {
+    assert.equal(describeFolder(s.get('Footage')), '7 files · 2 folders');
+    assert.equal(describeFolder(s.get('Footage/Day 1')), '2 files');
+    assert.equal(describeFolder(s.get('Archive')), 'Empty');
+    assert.equal(describeFolder({ files: 1, total: 1, subfolders: 1 }), '1 file · 1 folder');
+    assert.equal(describeFolder(undefined), '');
+    assert.equal(describeFolder(s.get('Footage'), { short: true }), '7 files', 'a list column says the files');
+    assert.equal(describeFolder({ files: 0, total: 0, subfolders: 3 }, { short: true }), '3 folders', 'or the folders, when there are no files');
+  });
 });

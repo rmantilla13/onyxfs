@@ -72,17 +72,20 @@ function FacetGroup({ def, selected, onToggle }) {
 }
 
 /**
- * What is filtered, while the panel is closed: one chip per selected value,
- * each of which removes itself. Without this a closed panel hides the reason
- * half the folder is missing.
+ * What is filtered: one chip per selected value, each of which removes
+ * itself. Without this a closed panel hides the reason half the folder is
+ * missing. The files toolbar shows them in its own row (`inline`), beside
+ * the Filters button that edits them; Clear all is offered once there are
+ * two to clear.
  */
-export function ActiveFilters({ defs, selected, onToggle, onClear, onEdit }) {
+export function ActiveFilters({ defs, selected, onToggle, onClear, onEdit, inline = false }) {
   const labels = new Map(defs.map((d) => [d.key, d.label]));
   const chips = Object.entries(selected || {}).flatMap(([key, values]) =>
     (values || []).map((value) => ({ key, value, label: labels.get(key) || key })));
   if (!chips.length) return null;
+  const Wrap = inline ? 'span' : 'div';
   return (
-    <div className="filter-chips" role="group" aria-label="Active filters">
+    <Wrap className={`filter-chips${inline ? ' is-inline' : ''}`} role="group" aria-label="Active filters">
       {chips.map((c) => (
         <button
           key={`${c.key}\u0000${c.value}`}
@@ -97,9 +100,9 @@ export function ActiveFilters({ defs, selected, onToggle, onClear, onEdit }) {
           <Icon name="x" size={12} />
         </button>
       ))}
-      <button type="button" className="btn btn-ghost btn-sm" onClick={onEdit}>Edit</button>
-      <button type="button" className="btn btn-ghost btn-sm" onClick={onClear}>Clear all</button>
-    </div>
+      {onEdit && <button type="button" className="btn btn-ghost btn-sm" onClick={onEdit}>Edit</button>}
+      {(!inline || chips.length > 1) && <button type="button" className="btn btn-ghost btn-sm" onClick={onClear}>Clear all</button>}
+    </Wrap>
   );
 }
 

@@ -3,6 +3,7 @@
 import Dialog from '@/app/components/ui/Dialog';
 import FilespaceMembers from '@/app/components/FilespaceMembers';
 import { fmtSize } from '@/lib/media';
+import { driveColor } from '@/lib/drive-color';
 import Icon from '@/app/components/ui/Icon';
 
 /**
@@ -13,7 +14,8 @@ import Icon from '@/app/components/ui/Icon';
  *
  * "All files" sits above them: the whole library, as far as the viewer may
  * see it. Usage is counted on the server (countFilesUnderPrefix); the library
- * total is only shown to admins.
+ * total is only shown to admins. Each drive's icon is in its own colour
+ * (lib/drive-color.js), the colour of the dot beside its name on its page.
  */
 export function DriveList({ drives = [], usage = {}, library = null, activeId = '', pendingId = null, canCreate = false, onOpen, onNew }) {
   const sorted = [...drives].sort((a, b) => String(a.name).localeCompare(String(b.name)));
@@ -67,6 +69,7 @@ function DriveRow({ id, name, detail, role, active, pending = false, onClick, li
       <button
         type="button"
         className={`drive-row${active ? ' is-active' : ''}${pending ? ' is-pending' : ''}`}
+        style={{ '--drive': driveColor(library ? '' : id) }}
         aria-busy={pending || undefined}
         aria-current={active ? 'page' : undefined}
         data-drive={library ? '' : id}

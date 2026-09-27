@@ -1,6 +1,7 @@
 'use client';
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
 import { reviewBadges } from '@/app/components/review/badges';
@@ -9,43 +10,69 @@ import { createUploadQueue, filesFromDrop, filesFromInput, joinFolder } from '@/
 import FileGrid from '@/app/components/ui/FileGrid';
 import FileList from '@/app/components/ui/FileList';
 import FilterPanel, { ActiveFilters, countActive } from '@/app/components/ui/FilterPanel';
-import ColumnPicker, { NewFieldDialog } from '@/app/components/ui/ColumnPicker';
 import InfoDialog from '@/app/components/ui/InfoDialog';
 import ShareDialog from '@/app/components/ShareDialog';
 import { DriveList, DriveMembersDialog } from '@/app/components/Drives';
 import NewDriveDialog from '@/app/components/drives/NewDriveDialog';
 import { useDeleteDrive } from '@/app/components/drives/DeleteDriveConfirm';
 import { modKey, isTyping } from '@/lib/keys';
-import { fmtSize } from '@/lib/media';
 import { listingCache, listingKey, returnSlot } from '@/lib/listing-cache';
 import { mergeFirstPage, keepUnchanged } from '@/lib/listing-merge';
 import { setHandoff, getHandoff, rememberReturn, markReady, holdPictures, releasePictures } from '@/lib/file-handoff';
 import {
-  VIEW_STORAGE_KEY, parseView, availableColumns, parseColumns, resolveColumns,
-  COLUMNS_STORAGE_KEY, DEFAULT_COLUMNS, METADATA_PREFIX,
+  VIEW_STORAGE_KEY, parseView, availableColumns, resolveColumns, COLUMNS_STORAGE_KEY, METADATA_PREFIX,
 } from '@/lib/list-columns';
+import {
+  BUILTIN_VIEWS, DEFAULT_VIEW_ID, LOCAL_VIEWS_KEY, SIDEBAR_KEY, resolveView, stateFromView, viewSettings, sameSettings,
+  parseLocalViews, withLocalView, legacyView, viewsForDrive, listingParams, isRecursive, normalizeDisplay,
+} from '@/lib/views';
+import { driveColor } from '@/lib/drive-color';
 import UploadPanel from '@/app/components/ui/UploadPanel';
 import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
 import { usePrompt } from '@/app/components/ui/Prompt';
 import { useFolderPicker } from '@/app/components/ui/FolderPicker';
-import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
+import { MenuItem, MenuSeparator, MenuLabel } from '@/app/components/ui/Menu';
 import { useContextMenu } from '@/app/components/ui/ContextMenu';
 import useMarquee, { MarqueeRect } from '@/app/components/ui/useMarquee';
 import useMacApp from '@/app/components/useMacApp';
 import { canFor, canForSome } from './can-for';
 import { fileKey, folderKey, parseKey } from '@/lib/selection';
 import FolderDrop, { DRAG_FILES, DRAG_FOLDER, startFolderDrag } from './FolderDrop';
-import { FolderTiles, FolderRows } from './FolderItems';
+import { FolderTiles, FolderRows, MAX_TILES } from './FolderItems';
+import FilesHeader from './FilesHeader';
+import FilesToolbar, { MoreMenu } from './FilesToolbar';
+import DisplayPopover from './DisplayPopover';
+import ViewMenu from './ViewMenu';
 import useSelectionModel from './useSelectionModel';
 import useLongPress from './useLongPress';
 import { isTouch } from './usePointerIntent';
 import {
-  folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, crumbsFor, folderStats,
+  folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, folderStats, folderSummaries,
 } from '@/lib/folder-ops';
 import Icon from '@/app/components/ui/Icon';
 
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
+// The grid and the list are what most pages show; the other two layouts
+// load with the first page that shows one — rendered on the server all the
+// same, and preloaded for it — and the dialogs for keeping views and adding
+// a field load when one is first opened.
+const TileGrid = dynamic(() => import('@/app/components/ui/TileGrid'));
+const ColumnView = dynamic(() => import('./ColumnView'));
+const SaveViewDialog = dynamic(() => import('./ViewDialogs').then((m) => m.SaveViewDialog), { ssr: false });
+const ManageViewsDialog = dynamic(() => import('./ViewDialogs').then((m) => m.ManageViewsDialog), { ssr: false });
+const NewFieldDialog = dynamic(() => import('@/app/components/ui/NewFieldDialog'), { ssr: false });
+// Once the page is idle, the other layouts are fetched too, so choosing one
+// in Display never waits on the network.
+let layoutsAsked = false;
+function prefetchLayouts() {
+  if (layoutsAsked || typeof window === 'undefined') return;
+  layoutsAsked = true;
+  const go = () => { import('@/app/components/ui/TileGrid'); import('./ColumnView'); };
+  if ('requestIdleCallback' in window) window.requestIdleCallback(go, { timeout: 4000 });
+  else setTimeout(go, 2000);
+}
 
 // The opening shell and Quick Look are not needed to show a folder, so they
 // are not part of the page's first load. They are fetched ahead of the
@@ -68,14 +95,12 @@ function loadViewers() {
   return viewers.promise;
 }
 const NO_FACETS = [];
-
-const KINDS = [
-  { key: 'image', label: 'Images' },
-  { key: 'video', label: 'Video' },
-  { key: 'audio', label: 'Audio' },
-  { key: 'doc', label: 'Documents' },
-  { key: 'other', label: 'Other' },
+const LAYOUT_CHOICES = [
+  { key: 'grid', label: 'Grid' }, { key: 'list', label: 'List' }, { key: 'tile', label: 'Tiles' }, { key: 'column', label: 'Columns' },
 ];
+
+// What a view filtered to kinds of file calls them, for its empty state.
+const KIND_WORDS = { image: 'images', video: 'videos', audio: 'audio files', doc: 'documents', other: 'other files' };
 
 // What a drag-to-select may not start on: anything with a press of its own.
 const MARQUEE_SKIP = [
@@ -86,17 +111,42 @@ const MARQUEE_SKIP = [
 // How many files Select all will load and select in one go. Beyond it, a
 // folder is moved a few thousand at a time.
 const SELECT_ALL_CAP = 5000;
+// Downloading the selection: past this many it asks first, and the files
+// start this far apart, which browsers take better than all at once.
+const DOWNLOAD_ASK = 10;
+const DOWNLOAD_GAP_MS = 350;
 // Moves in flight at once: each is a copy and a delete in the bucket.
 const MOVE_PARALLEL = 6;
 
-// Whether the filter panel was left open, per browser.
+// Whether the filter panel was left open, and whether the sidebar is shown
+// (lib/views.js SIDEBAR_KEY), per browser.
 const FILTERS_STORAGE_KEY = 'onyx.files.filters';
+const SIDEBAR_STORAGE_KEY = SIDEBAR_KEY;
 
-// The grid/list choice and the filter panel are kept in cookies as well as
-// localStorage, so the server renders the page the way it will be shown
-// (app/files/page.js reads them): a list is a list from the first byte.
+// The built-in views' changes, the filter panel and the sidebar are kept in
+// cookies as well as localStorage, so the server renders the page the way it
+// will be shown (app/files/page.js reads them): a list is a list from the
+// first byte, and a hidden sidebar never flashes open.
 function setViewCookie(name, value) {
   try { document.cookie = `${name}=${encodeURIComponent(value)}; path=/files; max-age=31536000; samesite=lax`; } catch {}
+}
+function clearViewCookie(name) {
+  try { document.cookie = `${name}=; path=/files; max-age=0; samesite=lax`; } catch {}
+}
+
+// A cookie holds about 4 KB. A built-in's fields are what can make its copy
+// large, and they are the part a first paint can most do without: past this,
+// the cookie keeps everything else and the fields come from localStorage.
+const COOKIE_MAX = 3000;
+function localViewsCookie(local) {
+  const full = JSON.stringify(local);
+  if (encodeURIComponent(full).length <= COOKIE_MAX) return full;
+  const lean = Object.fromEntries(Object.entries(local).map(([id, v]) => {
+    if (!v.display) return [id, v];
+    const { fields: _fields, ...rest } = v.display;
+    return [id, { ...v, display: rest }];
+  }));
+  return JSON.stringify(lean);
 }
 
 // Where the open folder came from, kept in the history entry itself. Only
@@ -108,24 +158,6 @@ const historyState = () => {
   return { depth: Number(s?.onyxDepth) || 0, from: typeof s?.onyxFrom === 'string' ? s.onyxFrom : null };
 };
 
-// Keys must stay in step with SORTS in lib/file-query.js — an unknown key
-// falls back to `new` on the server, which reads as "sorting is broken"
-// rather than as a typo. The list view's column headers pick from the same
-// keys (lib/list-columns.js).
-const SORTS = [
-  { key: 'new', label: 'Newest' },
-  { key: 'old', label: 'Oldest' },
-  { key: 'modified', label: 'Recently modified' },
-  { key: 'modified_old', label: 'Least recently modified' },
-  { key: 'name', label: 'Name A–Z' },
-  { key: 'name_desc', label: 'Name Z–A' },
-  { key: 'size', label: 'Largest' },
-  { key: 'small', label: 'Smallest' },
-  { key: 'type', label: 'Type A–Z' },
-  { key: 'type_desc', label: 'Type Z–A' },
-];
-
-
 /**
  * One page of a listing from GET /api/files: { files, cursor }. The same
  * request whether it is for the folder on screen or a prefetch.
@@ -133,23 +165,12 @@ const SORTS = [
  * A folder lists what is in it, like a disk: its own files, with its
  * subfolders as tiles — at the top level too, which used to list every file
  * in the library, so an uploaded folder's files looked as if they had been
- * poured out beside it. Searching or filtering by kind looks through
- * everything beneath the folder instead: that is a search, and a search
- * that stops at one level finds nothing.
+ * poured out beside it. A view that flattens (`flat`), and a search, look
+ * through everything beneath the folder instead (lib/views.js listingOpts,
+ * which the server render uses too).
  */
-async function fetchListing({ filespaceId, folder, query, kinds, sort }, after = null) {
-  const p = new URLSearchParams();
-  if (query || kinds.length) {
-    if (folder) p.set('folderPrefix', folder);
-  } else {
-    p.set('folder', folder || '');
-  }
-  if (query) p.set('q', query);
-  if (kinds.length) p.set('kind', kinds.join(','));
-  p.set('sort', sort);
-  if (filespaceId) p.set('filespace', filespaceId);
-  if (after) p.set('cursor', after);
-  p.set('folders', '0');
+async function fetchListing({ filespaceId, folder, query, kinds, sort, flat = false }, after = null) {
+  const p = listingParams({ folder, query, kinds, sort, flat }, { filespaceId, cursor: after });
   const r = await fetch(`/api/files?${p}`);
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Request failed (${r.status})`);
   const data = await r.json();
@@ -164,10 +185,17 @@ async function fetchListing({ filespaceId, folder, query, kinds, sort }, after =
  * first page of the folder in the URL and the folder tree, so the directory
  * is on screen in the first paint. Its `key` (listingKey) says which listing
  * it answers; a drive switch brings a new one.
+ *
+ * `view` is the view the server rendered it with (lib/views.js resolveView,
+ * this browser's changes to a built-in included, from their cookie copy
+ * `initialLocal`, and `initialLegacy` — the grid/list choice kept before
+ * there were views); `views` the person's saved views they can still see;
+ * `initialQuery` a search from the URL (?q=).
  */
 export default function FilesClient({
   flags, canWrite, schema: initialSchema, filespaceId, isAdmin = false,
-  drives = [], initial = null, initialView = 'grid', initialFiltersOpen = false,
+  drives = [], initial = null, initialFiltersOpen = false, initialSidebarOpen = true,
+  view: initialViewDef = null, views: initialViews = [], initialLocal = {}, initialLegacy = null, initialQuery = '',
 }) {
   // Back from a file this page opened: the listing as it was left — every
   // page that had loaded, the search and filters, the scroll and the file
@@ -199,26 +227,55 @@ export default function FilesClient({
   // survives a reload, and the browser's Back and Forward — the mouse's back
   // button, ⌘[ — walk between folders the way they do between pages.
   const folder = cleanFolder(searchParams.get('folder') || '');
-  const [nav, setNav] = useState({ depth: 0, from: null });
-  const [query, setQuery] = useState(() => returned?.query || '');
-  const [kinds, setKinds] = useState(() => returned?.kinds || []);
-  const [sort, setSort] = useState(() => returned?.sort || 'new');
-  // Grid or list: what the server rendered from the cookie, so the first
-  // paint is already the right one. localStorage is still read after mount
-  // for a browser that has it but no cookie yet.
-  const [view, setView] = useState(initialView === 'list' ? 'list' : 'grid');
-  const [facets, setFacets] = useState(() => returned?.facets || {});
+
+  // ── The view ──────────────────────────────────────────────────────────────
+  // What is on screen is a view (lib/views.js): one of the built-ins or one
+  // of the person's own, named in the URL (?view=) so it can be linked. The
+  // page holds its settings as state — kinds, facets, search, sort, display —
+  // so they can be changed; a built-in's changes are kept in this browser
+  // (`local`), a saved view's are unsaved until Save to view.
+  const [customViews, setCustomViews] = useState(initialViews);
+  const [local, setLocal] = useState(initialLocal || {});
+  const [legacy, setLegacy] = useState(initialLegacy);
+  const [first] = useState(() => {
+    if (returned?.display) {
+      return {
+        viewId: returned.viewId || DEFAULT_VIEW_ID, kinds: returned.kinds || [], facets: returned.facets || {},
+        query: returned.query || '', sort: returned.sort || 'new', display: normalizeDisplay(returned.display),
+      };
+    }
+    const v = initialViewDef || resolveView(DEFAULT_VIEW_ID, { local: initialLocal, legacy: initialLegacy });
+    const st = stateFromView(v);
+    // Metadata filters follow the flag: with it off there is nothing to show
+    // them in, and a filter nobody can see is a folder that looks half empty.
+    return { viewId: v.id, ...st, facets: flags.metadata ? st.facets : {}, query: initialQuery || st.query };
+  });
+  const [viewId, setViewId] = useState(first.viewId);
+  const [query, setQuery] = useState(first.query);
+  const [kinds, setKinds] = useState(first.kinds);
+  const [sort, setSort] = useState(first.sort);
+  const [facets, setFacets] = useState(first.facets);
+  const [display, setDisplay] = useState(first.display);
+  const view = useMemo(
+    () => resolveView(viewId, { custom: customViews, local, legacy }) || resolveView(DEFAULT_VIEW_ID, { local, legacy }),
+    [viewId, customViews, local, legacy],
+  );
+  // Columns always show one folder at a time; every other layout may flatten.
+  const flat = display.flatten && display.layout !== 'column';
+  const layout = display.layout;
   const [selected, setSelected] = useState(() => new Set());
   // The Mac app's offline and Finder actions, when running inside it.
   const mac = useMacApp();
   const [uploadSnap, setUploadSnap] = useState(null);
   const [dragging, setDragging] = useState(false);
   // The facet filters live in a panel under the toolbar, open only while
-  // someone is adjusting them; what is applied shows as chips when it is shut.
+  // someone is adjusting them; what is applied shows as chips beside Filters.
   const [filtersOpen, setFiltersOpen] = useState(!!initialFiltersOpen);
-  // The list view's columns, as keys (lib/list-columns.js).
-  const [columnKeys, setColumnKeys] = useState(DEFAULT_COLUMNS);
+  const [sidebarOpen, setSidebarOpen] = useState(!!initialSidebarOpen);
   const [addingField, setAddingField] = useState(false);
+  // Save current view…, and Manage views…
+  const [savingView, setSavingView] = useState(false);
+  const [managingViews, setManagingViews] = useState(false);
   // What "Get info" is showing, if anything (InfoDialog).
   const [info, setInfo] = useState(null);
   // The file the Share dialog is open for.
@@ -248,7 +305,7 @@ export default function FilesClient({
 
   // Which listing is on screen, as a key: the cache (lib/listing-cache.js)
   // and the server-rendered first page are both matched against it.
-  const currentKey = listingKey({ filespaceId, folder, query, kinds, sort });
+  const currentKey = listingKey({ filespaceId, folder, query, kinds, sort, flat });
 
   /**
    * Fetch one page. `after` is the opaque cursor from the previous page; with
@@ -259,12 +316,12 @@ export default function FilesClient({
    */
   const fetchPage = useCallback(async (after = null, quiet = false) => {
     const token = ++requestRef.current;
-    const key = listingKey({ filespaceId, folder, query, kinds, sort });
+    const key = listingKey({ filespaceId, folder, query, kinds, sort, flat });
     if (after) setLoadingMore(true);
     else if (!quiet) setLoading(true);
     setError(null);
     try {
-      const data = await fetchListing({ filespaceId, folder, query, kinds, sort }, after);
+      const data = await fetchListing({ filespaceId, folder, query, kinds, sort, flat }, after);
       if (!after) listingCache.set(key, data);
       if (token !== requestRef.current) return; // superseded
       if (after) {
@@ -292,15 +349,18 @@ export default function FilesClient({
     } finally {
       if (token === requestRef.current) { setLoading(false); setLoadingMore(false); }
     }
-  }, [folder, query, kinds, sort, filespaceId]);
+  }, [folder, query, kinds, sort, flat, filespaceId]);
 
   const fetchPageRef = useRef(fetchPage);
   fetchPageRef.current = fetchPage;
 
   // After anything that changes files: drop every cached listing (which
   // folders a move or an upload touched is not worth working out) and fetch.
-  const load = useCallback(() => { listingCache.clear(); return fetchPage(null); }, [fetchPage]);
-  const refresh = useCallback(() => { listingCache.clear(); return fetchPage(null, true); }, [fetchPage]);
+  // `generation` counts those changes, for what keeps listings of its own
+  // (the Column layout's other columns).
+  const [generation, setGeneration] = useState(0);
+  const load = useCallback(() => { listingCache.clear(); setGeneration((g) => g + 1); return fetchPage(null); }, [fetchPage]);
+  const refresh = useCallback(() => { listingCache.clear(); setGeneration((g) => g + 1); return fetchPage(null, true); }, [fetchPage]);
 
   // Opening a folder, changing the sort, searching: from the cache when it
   // has this listing — at once, and refetched quietly behind it if it is not
@@ -323,7 +383,7 @@ export default function FilesClient({
   // time, and not for a listing the cache already has fresh.
   const prefetching = useRef(null);
   const prefetch = useCallback((path) => {
-    const params = { filespaceId, folder: path, query, kinds, sort };
+    const params = { filespaceId, folder: path, query, kinds, sort, flat };
     const key = listingKey(params);
     if (listingCache.isFresh(key) || prefetching.current === key) return;
     prefetching.current = key;
@@ -331,7 +391,7 @@ export default function FilesClient({
       .then((data) => listingCache.set(key, data))
       .catch(() => {})
       .finally(() => { if (prefetching.current === key) prefetching.current = null; });
-  }, [filespaceId, query, kinds, sort]);
+  }, [filespaceId, query, kinds, sort, flat]);
   const hover = useRef({ path: null, timer: null });
   const onFolderHover = (e) => {
     const el = e.target?.closest?.('[data-folder]');
@@ -397,14 +457,28 @@ export default function FilesClient({
     loadFolders();
   }, [loadFolders, loadUsage, filespaceId]);
 
+  useEffect(() => { prefetchLayouts(); }, []);
+
+  // What this browser keeps, read after mount: the server cannot see
+  // localStorage, and reading it during the first render would mismatch the
+  // HTML it sent. Its cookie copies are what the server rendered from; these
+  // may be newer, or all there is for a browser that has no cookie yet —
+  // including the grid/list choice and list columns from before views,
+  // which All files starts from until it has changes of its own.
+  const restoredView = useRef(!!returned?.display);
   useEffect(() => {
+    let nextLocal = null;
+    let nextLegacy = null;
     try {
-      const stored = localStorage.getItem(VIEW_STORAGE_KEY);
-      if (stored) {
-        const v = parseView(stored);
-        setView(v);
-        setViewCookie(VIEW_STORAGE_KEY, v);
-      }
+      const raw = localStorage.getItem(LOCAL_VIEWS_KEY);
+      if (raw) nextLocal = parseLocalViews(raw);
+    } catch {}
+    try {
+      const layoutWas = localStorage.getItem(VIEW_STORAGE_KEY);
+      const colsWere = localStorage.getItem(COLUMNS_STORAGE_KEY);
+      let fields;
+      try { fields = colsWere ? JSON.parse(colsWere) : undefined; } catch {}
+      nextLegacy = legacyView({ layout: layoutWas ? parseView(layoutWas) : undefined, fields });
     } catch {}
     try {
       const f = localStorage.getItem(FILTERS_STORAGE_KEY);
@@ -412,31 +486,43 @@ export default function FilesClient({
         setFiltersOpen(f === 'open');
         setViewCookie(FILTERS_STORAGE_KEY, f);
       }
+      const side = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+      if (side) {
+        setSidebarOpen(side !== 'closed');
+        setViewCookie(SIDEBAR_STORAGE_KEY, side);
+      }
     } catch {}
+    const L = nextLocal || initialLocal || {};
+    const G = nextLegacy || initialLegacy;
+    if (nextLocal) { setLocal(nextLocal); setViewCookie(LOCAL_VIEWS_KEY, localViewsCookie(nextLocal)); }
+    if (nextLegacy) setLegacy(nextLegacy);
+    // A built-in on screen takes this browser's settings for it, unless the
+    // page is being put back as it was left (Back from a file).
+    if (restoredView.current) return;
+    const v = resolveView(first.viewId, { custom: initialViews, local: L, legacy: G });
+    if (!v?.builtin) return;
+    setSort((s) => (s === v.sort ? s : v.sort));
+    setDisplay((d) => (JSON.stringify(d) === JSON.stringify(v.display) ? d : v.display));
+  // Once, after mount.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const changeView = (next) => {
-    setView(next);
-    try { localStorage.setItem(VIEW_STORAGE_KEY, next); } catch {}
-    setViewCookie(VIEW_STORAGE_KEY, next);
-  };
   const toggleFilters = (open = !filtersOpen) => {
     setFiltersOpen(open);
     try { localStorage.setItem(FILTERS_STORAGE_KEY, open ? 'open' : 'closed'); } catch {}
     setViewCookie(FILTERS_STORAGE_KEY, open ? 'open' : 'closed');
   };
+  const toggleSidebar = () => {
+    const open = !sidebarOpen;
+    setSidebarOpen(open);
+    try { localStorage.setItem(SIDEBAR_STORAGE_KEY, open ? 'open' : 'closed'); } catch {}
+    setViewCookie(SIDEBAR_STORAGE_KEY, open ? 'open' : 'closed');
+  };
 
-  // ── Columns (list view) ───────────────────────────────────────────────────
-  // Stored per browser, like the grid/list choice, and read after mount for
-  // the same hydration reason. Metadata columns follow the feature flag.
+  // ── Fields (the list's columns, the cards' and tiles' line) ─────────────
+  // The view's `fields` are column keys (lib/list-columns.js); a metadata
+  // field an admin removed, or one the flag hides, is left out.
   const available = useMemo(() => availableColumns(schema, { metadata: !!flags.metadata }), [schema, flags.metadata]);
-  useEffect(() => {
-    try { setColumnKeys(parseColumns(localStorage.getItem(COLUMNS_STORAGE_KEY), available)); } catch {}
-  }, [available]);
-  const changeColumns = useCallback((keys) => {
-    setColumnKeys(keys);
-    try { localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(keys)); } catch {}
-  }, []);
-  const columns = useMemo(() => resolveColumns(columnKeys, available), [columnKeys, available]);
+  const columns = useMemo(() => resolveColumns(display.fields, available), [display.fields, available]);
 
   // ── Folder navigation ─────────────────────────────────────────────────────
   // Opening a folder pushes a history entry; a correction — the folder was
@@ -457,14 +543,13 @@ export default function FilesClient({
       return;
     }
     if (next === folder) return;
-    const entry = { depth: cur.depth + 1, from: folder };
-    window.history.pushState({ onyxDepth: entry.depth, onyxFrom: entry.from }, '', url);
-    setNav(entry);
+    window.history.pushState({ onyxDepth: cur.depth + 1, onyxFrom: folder }, '', url);
   }, [folder]);
 
   // Where the keyboard goes once the next listing is on screen: the first
   // item, after a folder is opened from the pane (double-click, Return, ⌘↓);
-  // the folder we came out of — selected — after Back, as Finder does.
+  // the folder we came out of — selected — after Back, as Finder does; the
+  // item clicked in a column to the left, in the Column layout (`select`).
   const arrival = useRef(null);
   const folderNow = useRef(folder);
   folderNow.current = folder;
@@ -477,8 +562,8 @@ export default function FilesClient({
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const s = selRef.current;
       if (!s) return;
-      if (a.from != null) {
-        const k = folderKey(a.from);
+      if (a.from != null || a.select) {
+        const k = a.select || folderKey(a.from);
         if (s.order.includes(k)) { s.setKeys([k], { anchor: k, focus: k }); s.focusItem(k); }
         return;
       }
@@ -488,12 +573,7 @@ export default function FilesClient({
   };
 
   useEffect(() => {
-    const sync = () => setNav(historyState());
-    const onPop = () => {
-      arrival.current = { key: null, from: folderNow.current, at: Date.now() };
-      sync();
-    };
-    sync();
+    const onPop = () => { arrival.current = { key: null, from: folderNow.current, at: Date.now() }; };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
@@ -502,36 +582,30 @@ export default function FilesClient({
   const goUp = useCallback(() => {
     if (!folder) return;
     const up = parentOf(folder);
-    arrival.current = { key: listingKey({ filespaceId, folder: cleanFolder(up), query, kinds, sort }), from: folder, at: Date.now() };
+    arrival.current = { key: listingKey({ filespaceId, folder: cleanFolder(up), query, kinds, sort, flat }), from: folder, at: Date.now() };
     navigate(up);
-  }, [folder, navigate, filespaceId, query, kinds, sort]);
-
-  // Back is history when we put the previous folder there; opened from a link
-  // (nothing of ours to go back through), it is the enclosing folder instead.
-  const back = nav.depth > 0
-    ? { label: `Back to ${nav.from ? baseName(nav.from) : rootName}`, go: () => window.history.back() }
-    : folder
-      ? { label: `Up to ${parentOf(folder) ? baseName(parentOf(folder)) : rootName}`, go: goUp }
-      : null;
+  }, [folder, navigate, filespaceId, query, kinds, sort, flat]);
 
   // Drop the selection whenever the result set changes underneath it.
   // Without this, switching folders with 40 files selected left "Trash 40"
   // acting on rows that were no longer on screen.
   // Only on a real change: not on mounting (the way back from a file puts
   // back what was selected), and not when an effect is merely run again.
-  const listedAs = useRef(JSON.stringify([folder, query, kinds, filespaceId]));
+  const listedAs = useRef(JSON.stringify([folder, query, kinds, filespaceId, flat]));
   useEffect(() => {
-    const now = JSON.stringify([folder, query, kinds, filespaceId]);
+    const now = JSON.stringify([folder, query, kinds, filespaceId, flat]);
     if (now === listedAs.current) return;
     listedAs.current = now;
     setSelected(new Set());
-  }, [folder, query, kinds, filespaceId]);
+  }, [folder, query, kinds, filespaceId, flat]);
 
-  // Debounce so typing in the search box doesn't fire a request per keystroke.
+  // What is listed follows what is asked for — a folder, a view's settings, a
+  // search — once per change: a view sets several at once, and they land in
+  // one render, so one request.
   useEffect(() => {
-    const t = setTimeout(show, query ? 250 : 0);
+    const t = setTimeout(show, 0);
     return () => clearTimeout(t);
-  }, [show, query]);
+  }, [show]);
 
   // Infinite scroll. Observing a sentinel below the grid costs nothing while
   // it is off screen, and at 100k files a "load more" button would be a lot of
@@ -559,17 +633,21 @@ export default function FilesClient({
     [files, facets, schema]
   );
 
-  // The open folder's own subfolders, shown as tiles above its files so a
-  // folder can be opened, dropped on and right-clicked from the main pane,
-  // not only from the tree. Hidden while searching or filtering: results are
-  // a flat list across folders.
-  const showTiles = !query && !kinds.length && !hasAnyFacet(facets);
+  // The open folder's own subfolders, shown above its files so a folder can
+  // be opened, dropped on and right-clicked from the main pane, not only from
+  // the tree. Hidden while the listing is flattened or searched, or filtered
+  // by metadata: those are a flat list across folders.
+  const recursive = isRecursive({ flat, query });
+  const showTiles = !recursive && !hasAnyFacet(facets);
   const subfolders = useMemo(() => {
     const paths = new Set(folders.map((f) => f.folder));
     return folders.filter((f) => (paths.has(f.parent) ? f.parent : '') === folder);
   }, [folders, folder]);
   // The folders shown as items in the pane, selectable like the files.
   const itemFolders = useMemo(() => (showTiles ? subfolders : []), [showTiles, subfolders]);
+  // What each folder holds, for its card: from the tree, which counts only
+  // what the viewer may see.
+  const summaries = useMemo(() => folderSummaries(folders), [folders]);
 
   const toggleFacet = (key, value) => {
     setFacets((prev) => {
@@ -581,15 +659,209 @@ export default function FilesClient({
     });
   };
 
+  // ── Changing the view ─────────────────────────────────────────────────────
+  // The view and the search are in the URL, replaced rather than pushed:
+  // Back walks between folders, as it always has, and a view is kept while
+  // it does. Our own history keys only, as in navigate().
+  const replaceParams = useCallback((changes) => {
+    const params = new URLSearchParams(window.location.search);
+    for (const [k, v] of Object.entries(changes)) {
+      if (v) params.set(k, v);
+      else params.delete(k);
+    }
+    const qs = params.toString();
+    const cur = historyState();
+    window.history.replaceState({ onyxDepth: cur.depth, onyxFrom: cur.from }, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
+  }, []);
+  // Back and Forward restore an entry's URL as it was pushed; the view on
+  // screen stays, so the URL is put back to say so.
+  const viewNow = useRef({ viewId, query });
+  viewNow.current = { viewId, query };
+  useEffect(() => {
+    const onPop = () => {
+      const { viewId: v, query: q } = viewNow.current;
+      const params = new URLSearchParams(window.location.search);
+      const want = { view: v === DEFAULT_VIEW_ID ? null : v, q: q || null };
+      if ((params.get('view') || null) !== want.view || (params.get('q') || null) !== want.q) replaceParams(want);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [replaceParams]);
+
+  // A built-in's sort and display are kept in this browser (and a cookie,
+  // for the server render); a saved view's wait for Save to view.
+  const persistLocal = useCallback((next) => {
+    setLocal(next);
+    try { localStorage.setItem(LOCAL_VIEWS_KEY, JSON.stringify(next)); } catch {}
+    setViewCookie(LOCAL_VIEWS_KEY, localViewsCookie(next));
+  }, []);
+
   // The cursor is keyed to the sort column — it is the last row's value of
   // that column plus its id — so a cursor taken under one ordering selects a
   // meaningless slice under another. Dropping it here also unmounts the
   // infinite-scroll sentinel, which otherwise had a window to request the
-  // next page of the OLD ordering before the refetch replaced the grid.
-  const changeSort = (next) => { setSort(next); setCursor(null); };
+  // next page of the OLD ordering before the refetch replaced the grid. The
+  // same goes for a listing that flattens, or stops.
+  // Only a change: the same sort picked again is no new listing, and a
+  // cursor dropped for nothing would stop the scroll at the first page.
+  const changeSort = (next) => {
+    if (next === sort) return;
+    setSort(next);
+    setCursor(null);
+    if (view.builtin) keepBuiltin(view.id, { sort: next, display });
+  };
+  const changeDisplay = (patch) => {
+    const next = normalizeDisplay({ ...display, ...patch }, display);
+    if ((next.flatten && next.layout !== 'column') !== flat) setCursor(null);
+    setDisplay(next);
+    if (view.builtin) keepBuiltin(view.id, { sort, display: next });
+  };
+  // The grid/list choice and columns from before views are All files'
+  // starting point only until it is changed here: from then on its own
+  // settings are the whole of it — including when they are the defaults,
+  // which keep no entry (withLocalView), and would otherwise let the old
+  // choice back in on the next load.
+  const forgetLegacy = () => {
+    if (!legacy) return;
+    setLegacy(null);
+    try { localStorage.removeItem(VIEW_STORAGE_KEY); localStorage.removeItem(COLUMNS_STORAGE_KEY); } catch {}
+    clearViewCookie(VIEW_STORAGE_KEY);
+  };
+  const keepBuiltin = (id, settings) => {
+    if (id === DEFAULT_VIEW_ID) forgetLegacy();
+    persistLocal(withLocalView(local, id, settings));
+  };
+  // For callbacks memoized before this render (the new-field dialog's).
+  const changeDisplayRef = useRef(changeDisplay);
+  changeDisplayRef.current = changeDisplay;
+  const resetView = () => {
+    if (!view.builtin) return;
+    const { [view.id]: _, ...rest } = local;
+    persistLocal(rest);
+    if (view.id === DEFAULT_VIEW_ID) forgetLegacy();
+    const v = resolveView(view.id);
+    if (listingKey({ filespaceId, folder, query, kinds, sort: v.sort, flat: v.display.flatten && v.display.layout !== 'column' }) !== currentKey) setCursor(null);
+    setSort(v.sort);
+    setDisplay(v.display);
+  };
 
-  const toggleKind = (k) =>
-    setKinds((prev) => (prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]));
+  // Everything a view decides, at once: its filters, search, sort and
+  // display. The folder stays; a new view is a new way of looking at it.
+  const applyView = useCallback((id, { custom = customViews } = {}) => {
+    const v = resolveView(id, { custom, local, legacy });
+    if (!v) return;
+    const st = stateFromView(v);
+    const nextFlat = st.display.flatten && st.display.layout !== 'column';
+    if (listingKey({ filespaceId, folder, query: st.query, kinds: st.kinds, sort: st.sort, flat: nextFlat }) !== currentKey) setCursor(null);
+    setViewId(v.id);
+    setKinds(st.kinds);
+    setFacets(flags.metadata ? st.facets : {});
+    setQuery(st.query);
+    setSort(st.sort);
+    setDisplay(st.display);
+    replaceParams({ view: v.id === DEFAULT_VIEW_ID ? null : v.id, q: st.query || null });
+  }, [customViews, local, legacy, replaceParams, flags.metadata, filespaceId, folder, currentKey]);
+
+  // The search, from the top bar's palette ("Filter this view by …") or the
+  // chip that shows it. Part of the view on screen, and in the URL.
+  const applyQuery = useCallback((q) => {
+    const next = String(q || '').trim().slice(0, 200);
+    if (next !== query) setCursor(null);
+    setQuery(next);
+    replaceParams({ q: next || null });
+  }, [replaceParams, query]);
+
+  // The page's settings, as a view's (lib/views.js): what Save current view
+  // keeps, and what a saved view is compared with to know it has changed.
+  const current = useMemo(() => viewSettings({ kinds, facets, query, sort, display }), [kinds, facets, query, sort, display]);
+  const dirty = !view.builtin && !sameSettings(view, current);
+  const offeredViews = useMemo(() => viewsForDrive(customViews, filespaceId), [customViews, filespaceId]);
+  // Another drive is a server render of this same component, which keeps its
+  // state: the view the server rendered for it is put on screen, with its
+  // search (none, unless the link had one) — not the last drive's view,
+  // which may be kept for that drive alone. The server's first page for it
+  // is already cached under the key these make (the `initial` effect).
+  const driveWas = useRef(filespaceId);
+  useEffect(() => {
+    if (driveWas.current === filespaceId) return;
+    driveWas.current = filespaceId;
+    const v = initialViewDef || resolveView(DEFAULT_VIEW_ID, { local, legacy });
+    const st = stateFromView(v);
+    setCustomViews(initialViews);
+    setViewId(v.id);
+    setKinds(st.kinds);
+    setFacets(flags.metadata ? st.facets : {});
+    setQuery(initialQuery || st.query);
+    setSort(st.sort);
+    setDisplay(st.display);
+  // Only on a drive switch: a refresh of this drive re-renders these too.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filespaceId]);
+
+  // A link to a view that is not this person's — someone else's, one since
+  // deleted, or kept for a drive they have left — rendered All files (the
+  // server's fallback); the URL is put right, and they are told why.
+  useEffect(() => {
+    const asked = searchParams.get('view');
+    if (!asked || asked === first.viewId || returned) return;
+    replaceParams({ view: first.viewId === DEFAULT_VIEW_ID ? null : first.viewId });
+    toast.error('That view is not one you can open here, so this is All files.');
+  // Once, for the link the page was opened with.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const driveNames = useMemo(() => new Map(drives.map((d) => [d.id, d.name])), [drives]);
+
+  const viewRequest = async (url, method, body) => {
+    try {
+      const r = await fetch(url, { method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+      const data = await r.json().catch(() => ({}));
+      return r.ok ? { data } : { error: data.error || `The view could not be saved (HTTP ${r.status}).` };
+    } catch {
+      return { error: 'Could not reach the server. Check the connection and try again.' };
+    }
+  };
+  const saveViewAs = async (name, driveId) => {
+    const { data, error: problem } = await viewRequest('/api/views', 'POST', { name, driveId, ...current });
+    if (problem) return problem;
+    const next = [...customViews, data.view];
+    setCustomViews(next);
+    setViewId(data.view.id);
+    replaceParams({ view: data.view.id });
+    setSavingView(false);
+    toast.success(`Saved “${data.view.name}”. It is in Select view, here and in the Mac app.`);
+    return null;
+  };
+  const saveViewChanges = async () => {
+    const { data, error: problem } = await viewRequest(`/api/views/${encodeURIComponent(view.id)}`, 'PATCH', current);
+    if (problem) { toast.error(problem); return; }
+    setCustomViews((prev) => prev.map((v) => (v.id === data.view.id ? data.view : v)));
+    toast.success(`Saved the changes to “${data.view.name}”.`);
+  };
+  const revertView = () => applyView(view.id);
+  const renameView = async (v, name) => {
+    const { data, error: problem } = await viewRequest(`/api/views/${encodeURIComponent(v.id)}`, 'PATCH', { name });
+    if (problem) return problem;
+    setCustomViews((prev) => prev.map((x) => (x.id === v.id ? data.view : x)));
+    return null;
+  };
+  const rescopeView = async (v, driveId) => {
+    const { data, error: problem } = await viewRequest(`/api/views/${encodeURIComponent(v.id)}`, 'PATCH', { driveId });
+    if (problem) return problem;
+    const next = customViews.map((x) => (x.id === v.id ? data.view : x));
+    setCustomViews(next);
+    // Kept for another drive: not offered here any more.
+    if (v.id === viewId && driveId && driveId !== filespaceId) applyView(DEFAULT_VIEW_ID, { custom: next });
+    return null;
+  };
+  const deleteView = async (v) => {
+    const { error: problem } = await viewRequest(`/api/views/${encodeURIComponent(v.id)}`, 'DELETE');
+    if (problem) return problem;
+    const next = customViews.filter((x) => x.id !== v.id);
+    setCustomViews(next);
+    if (v.id === viewId) applyView(DEFAULT_VIEW_ID, { custom: next });
+    toast.success(`Deleted the view “${v.name}”.`);
+    return null;
+  };
 
   // ── Upload ────────────────────────────────────────────────────────────────
   // A queue, a few files at a time (lib/upload-client.js). Each file goes
@@ -1000,7 +1272,7 @@ export default function FilesClient({
       setSelectingAll(true);
       try {
         while (after && rows.length < SELECT_ALL_CAP) {
-          const page = await fetchListing({ filespaceId, folder, query, kinds, sort }, after);
+          const page = await fetchListing({ filespaceId, folder, query, kinds, sort, flat }, after);
           if (token !== requestRef.current) return; // the listing changed under us
           rows = [...rows, ...page.files];
           after = page.cursor;
@@ -1104,7 +1376,7 @@ export default function FilesClient({
     canWrite && '-',
     { label: 'Get info', hint: at === folder ? `${modKey()}I` : undefined, onSelect: () => infoForFolder(at) },
     at === folder && at && { label: 'Enclosing folder', hint: `${modKey()}↑`, onSelect: goUp },
-    { label: view === 'list' ? 'View as grid' : 'View as list', onSelect: () => changeView(view === 'list' ? 'grid' : 'list') },
+    ...LAYOUT_CHOICES.filter((l) => l.key !== layout).map((l) => ({ label: `View as ${l.label}`, onSelect: () => changeDisplay({ layout: l.key }) })),
     flags.metadata && { label: filtersOpen ? 'Hide filters' : 'Show filters', onSelect: () => toggleFilters() },
     '-',
     { label: 'Select all', hint: `${modKey()}A`, disabled: !visible.length, onSelect: selectAll },
@@ -1119,9 +1391,20 @@ export default function FilesClient({
   // routes, and members are managed by admins and the drive's owners.
   const [drivePending, startDriveOpen] = useTransition();
   const [pendingDrive, setPendingDrive] = useState(null);
+  // The view goes along — a built-in, or one of their own kept for
+  // everywhere; one kept for this drive stays with it — and the search does
+  // not: it was a search of here.
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const openDrive = useCallback((id) => {
     setPendingDrive(id || '');
-    startDriveOpen(() => router.push(id ? `/files?filespace=${encodeURIComponent(id)}` : '/files'));
+    const v = viewRef.current;
+    const keep = v.id !== DEFAULT_VIEW_ID && (v.builtin || !v.driveId) ? v.id : null;
+    const params = new URLSearchParams();
+    if (id) params.set('filespace', id);
+    if (keep) params.set('view', keep);
+    const qs = params.toString();
+    startDriveOpen(() => router.push(`/files${qs ? `?${qs}` : ''}`));
   }, [router]);
   const canManageDrive = (d) => isAdmin || d?.role === 'owner';
 
@@ -1187,14 +1470,17 @@ export default function FilesClient({
   // (CommandPalette). Through a ref, like the page keys, so the listener is
   // added once and still acts on this render's folder and selection.
   const commands = useRef(null);
-  commands.current = (name) => {
+  commands.current = (name, detail = {}) => {
     if (name === 'new-folder' && canWrite) newFolder();
     else if (name === 'upload' && canWrite) inputRef.current?.click();
     else if (name === 'info') (selected.size ? infoForFiles([...selected]) : infoForFolder(folder));
     else if (name === 'new-drive' && isAdmin) setNewDrive(true);
+    // "Filter this view by …": the palette's search, as this listing's.
+    else if (name === 'filter') applyQuery(detail.query);
+    else if (name === 'view' && typeof detail.id === 'string') applyView(detail.id);
   };
   useEffect(() => {
-    const on = (e) => commands.current?.(e.detail?.name);
+    const on = (e) => commands.current?.(e.detail?.name, e.detail || {});
     window.addEventListener('onyx:command', on);
     return () => window.removeEventListener('onyx:command', on);
   }, []);
@@ -1389,7 +1675,7 @@ export default function FilesClient({
     listingCache.extend(currentKey, { files, cursor });
     // A tap opens rather than selects: it comes back unselected.
     returnSlot.save({
-      filespaceId, folder, query, kinds, sort, facets, files, cursor, scrollY: window.scrollY, focusId: f.id,
+      filespaceId, folder, query, kinds, sort, facets, viewId, display, files, cursor, scrollY: window.scrollY, focusId: f.id,
       select: !isTouch(),
     });
     const top = document.querySelector('.topnav')?.getBoundingClientRect().bottom || 0;
@@ -1417,9 +1703,35 @@ export default function FilesClient({
   }, []);
 
   const openFolderItem = useCallback((path) => {
-    arrival.current = { key: listingKey({ filespaceId, folder: cleanFolder(path), query, kinds, sort }), at: Date.now() };
+    arrival.current = { key: listingKey({ filespaceId, folder: cleanFolder(path), query, kinds, sort, flat }), at: Date.now() };
     navigate(path);
-  }, [navigate, filespaceId, query, kinds, sort]);
+  }, [navigate, filespaceId, query, kinds, sort, flat]);
+
+  // The Column layout: a click in a column to the left opens that folder
+  // with what was clicked selected, as Finder's columns do.
+  const openColumnAt = useCallback((path, key) => {
+    arrival.current = { key: listingKey({ filespaceId, folder: cleanFolder(path), query, kinds, sort, flat }), select: key, at: Date.now() };
+    if (cleanFolder(path) === folder) {
+      landedRef.current?.(arrival.current.key);
+      return;
+    }
+    navigate(path);
+  }, [navigate, filespaceId, query, kinds, sort, flat, folder]);
+  // A column's files: the first page of that folder under the view's kinds
+  // and sort — from the cache when it has them, into it when it does not.
+  const loadColumn = useCallback(async (path) => {
+    const params = { filespaceId, folder: path, query: '', kinds, sort, flat: false };
+    const key = listingKey(params);
+    const hit = listingCache.get(key);
+    const data = hit || await fetchListing(params);
+    if (!hit) listingCache.set(key, data);
+    return { files: data.files || [], more: !!data.cursor };
+  }, [filespaceId, kinds, sort]);
+  const columnKey = useMemo(() => JSON.stringify([filespaceId, kinds, sort, generation]), [filespaceId, kinds, sort, generation]);
+  const matchesFacets = useMemo(
+    () => (hasAnyFacet(facets) ? (f) => fileMatchesFacets(f, facets, schema) : null),
+    [facets, schema],
+  );
 
   // Quick Look is opened through here (Space, the menus, the phone bar).
   const quickLookApi = useRef(null);
@@ -1566,12 +1878,12 @@ export default function FilesClient({
     const body = await r.json().catch(() => ({}));
     if (!r.ok) return body.error || `Could not add the field (HTTP ${r.status}).`;
     const key = `${METADATA_PREFIX}${body.field.key}`;
-    changeColumns([...columnKeys.filter((k) => k !== key), key]);
+    changeDisplayRef.current({ fields: [...display.fields.filter((k) => k !== key), key] });
     setSchema(body.schema);
     setAddingField(false);
-    toast.success(`Added “${body.field.label}”. Click a cell in its column to fill it in.`);
+    toast.success(`Added “${body.field.label}”. ${layout === 'list' ? 'Click a cell in its column to fill it in.' : 'It shows under each name; fill it in from List.'}`);
     return null;
-  }, [columnKeys, changeColumns, toast]);
+  }, [display.fields, layout, toast]);
 
   // ── Drag to select ────────────────────────────────────────────────────────
   // A press on empty space in the listing — the gaps between cards, the room
@@ -1591,7 +1903,7 @@ export default function FilesClient({
       // The page itself below or beside the listing counts too — the gutter
       // between the sidebar and the first card included — as long as it is
       // level with the pane and clear of the sidebar.
-      if (t === e.currentTarget || t.classList.contains('files-layout')) {
+      if (t === e.currentTarget || t.classList.contains('files-layout') || t.classList.contains('files-content')) {
         const b = pane.getBoundingClientRect();
         const side = e.currentTarget.querySelector('.files-layout > aside')?.getBoundingClientRect();
         return e.clientY >= b.top && e.clientX > (side && side.width ? side.right : b.left - 1);
@@ -1636,17 +1948,28 @@ export default function FilesClient({
   // A folder's file count from the tree: how many placeholder cards to show
   // while its first page loads (one screen's worth at most).
   const expected = folders.find((f) => f.folder === folder)?.count;
+  // What there is none of: "No videos in Footage" says more than "Nothing
+  // here", and a view that does not flatten says where else to look.
+  const emptyWords = useMemo(() => {
+    const what = kinds.length === 1 ? KIND_WORDS[kinds[0]] : kinds.length ? 'files of those kinds' : null;
+    const where = folder ? `“${baseName(folder)}”` : rootName;
+    if (query) return `Nothing in ${where} matches “${query}”.`;
+    if (what) return `No ${what} in ${where}${!flat ? ' itself. Turn on Flatten directories in Display to look in its folders too.' : '.'}`;
+    return null;
+  }, [kinds, folder, rootName, query, flat]);
   const emptyState = useMemo(() => {
-    if (loading && noFiles) return <SkeletonItems view={view} count={expected} />;
+    if (loading && noFiles) return <SkeletonItems layout={layout} count={expected} />;
     if (showTiles && subfolders.length > 0 && noFiles) return null;
     return (
       <div className="empty">
         {noFiles
-          ? canWrite ? 'Nothing here yet. Drop files anywhere on this page to upload.' : 'Nothing here yet.'
+          ? emptyWords || (canWrite ? 'Nothing here yet. Drop files anywhere on this page to upload.' : 'Nothing here yet.')
           : 'No files match those filters.'}
       </div>
     );
-  }, [loading, noFiles, view, expected, showTiles, subfolders.length, canWrite]);
+  }, [loading, noFiles, layout, expected, showTiles, subfolders.length, canWrite, emptyWords]);
+  // The view's fields as column definitions: the list's columns, and the
+  // line under each name on a card or a tile.
   const gridProps = useMemo(() => ({
     marqueeRef: marqueeTarget,
     navRef: sel.navRef,
@@ -1657,7 +1980,9 @@ export default function FilesClient({
     labelFor,
     badgesFor,
     emptyState,
-  }), [sel.navRef, visible, selected, itemHandlers, requestThumb, labelFor, badgesFor, emptyState]);
+    fields: columns,
+    rootName,
+  }), [sel.navRef, visible, selected, itemHandlers, requestThumb, labelFor, badgesFor, emptyState, columns, rootName]);
   // A stable drop handler for the folder items, which are memoized.
   const treeDrop = useRef(null);
   treeDrop.current = (target, e) => onTreeDrop(target, e);
@@ -1672,6 +1997,69 @@ export default function FilesClient({
     if (items) openMenu({ anchor, returnFocus: anchor }, items);
   };
 
+  // ── Downloading the selection ─────────────────────────────────────────────
+  // Each selected file, one after another: the bytes come from the bucket,
+  // never through here, so there is no archive to make. Past a few, it asks
+  // first — the browser may want leave to save several files at once.
+  const downloadSelection = async () => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    if (ids.length > DOWNLOAD_ASK) {
+      const ok = await confirm({
+        title: `Download ${ids.length} files?`,
+        body: 'Each is saved as a file of its own, and your browser may ask whether this page may download several files.',
+        confirmLabel: 'Download',
+      });
+      if (!ok) return;
+    }
+    ids.forEach((id, i) => setTimeout(() => downloadFile({ id }), i * DOWNLOAD_GAP_MS));
+    if (sel.selectedFolders.size) toast.success(`Downloading ${ids.length} file${ids.length === 1 ? '' : 's'}. Folders are not downloaded: open one and select its files.`);
+  };
+
+  // The search chip's "change it": the top bar's palette, with the search in it.
+  const editQuery = () => window.dispatchEvent(new CustomEvent('onyx:open-palette', { detail: { query } }));
+  const loadMoreColumn = useCallback(() => {
+    if (cursorRef.current && !loading && !loadingMore) fetchPageRef.current(cursorRef.current);
+  }, [loading, loadingMore]);
+
+  const canMoveSel = selected.size > 0 && canForSome(selected, files, 'edit', { canWrite });
+  const canDeleteSel = selected.size > 0 && canForSome(selected, files, 'delete', { canWrite });
+  const canReset = view.builtin && (!!local[view.id] || (view.id === DEFAULT_VIEW_ID && !!legacy));
+  const cards = layout === 'grid' || layout === 'tile';
+  const fileCount = `${visible.length.toLocaleString()}${visible.length !== files.length ? ` of ${files.length.toLocaleString()}` : ''}${cursor ? '+' : ''}`;
+  // Everything the old header and toolbar did that has no button of its own
+  // now: selecting, acting on the selection, this folder, refreshing.
+  /* icons: check-check square folder-open trash info folder-plus upload pencil refresh-cw */
+  const moreItems = (
+    <>
+      <MenuItem icon="check-check" hint={`${modKey()}A`} disabled={!visible.length && !itemFolders.length} onClick={selectAll}>
+        {selectingAll ? 'Selecting…' : 'Select all'}
+      </MenuItem>
+      <MenuItem icon="square" disabled={!anySelected} onClick={() => sel.clear()}>Deselect all</MenuItem>
+      {canMoveSel && <MenuItem icon="folder-open" onClick={moveSelectedUI}>Move {selected.size} file{selected.size === 1 ? '' : 's'}…</MenuItem>}
+      {canDeleteSel && <MenuItem icon="trash" danger onClick={trashSelected}>Delete {selected.size} file{selected.size === 1 ? '' : 's'}…</MenuItem>}
+      <MenuItem icon="info" hint={`${modKey()}I`} onClick={() => (selected.size ? infoForFiles([...selected]) : infoForFolder(folder))}>Get info</MenuItem>
+      {canWrite && (
+        <>
+          <MenuSeparator />
+          <MenuItem icon="folder-plus" onClick={() => newFolder()}>New folder…</MenuItem>
+          <MenuItem icon="upload" onClick={() => folderInputRef.current?.click()}>Upload folder…</MenuItem>
+        </>
+      )}
+      {folder && canWrite && (
+        <>
+          <MenuSeparator />
+          <MenuLabel>This folder</MenuLabel>
+          <MenuItem icon="pencil" onClick={() => renameFolderUI(folder)}>Rename…</MenuItem>
+          <MenuItem icon="folder-open" onClick={() => moveFolderUI(folder)}>Move…</MenuItem>
+          <MenuItem icon="trash" danger onClick={() => deleteFolderUI(folder)}>Delete folder…</MenuItem>
+        </>
+      )}
+      <MenuSeparator />
+      <MenuItem icon="refresh-cw" onClick={() => { load(); loadFolders(); }}>Refresh</MenuItem>
+    </>
+  );
+
   // The bottom padding travels as a custom property because the inline
   // shorthand below outranks any stylesheet rule: the phone selection bar is
   // fixed, so the page has to reserve room for it, and only the stylesheet
@@ -1680,7 +2068,7 @@ export default function FilesClient({
     <main
       ref={mainRef}
       className={`shell files-main${anySelected ? ' is-selecting' : ''}${sel.selectionMode ? ' is-selection-mode' : ''}${opening && viewersReady && viewers.FileOpening ? ' is-opening' : ''}`}
-      style={{ padding: '24px 24px var(--files-pad-b, 64px)' }}
+      style={{ paddingBottom: 'var(--files-pad-b, 64px)' }}
       onDragOver={(e) => e.preventDefault()}
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
@@ -1691,213 +2079,185 @@ export default function FilesClient({
       onFocus={onFolderHover}
       onPointerDown={marquee.onPointerDown}
     >
-      <div className={`row files-head${selected.size > 0 ? ' has-selection' : ''}`} style={{ marginBottom: 20 }}>
-        {/* All files is the top of the tree: nothing to go back up to, so no
-            button — the heading sits flush with the page. Inside a folder,
-            Back is history when there is some and the enclosing folder when
-            there is not. */}
-        {folder && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon files-back"
-            onClick={back?.go}
-            aria-label={back?.label || 'Back'}
-            title={back?.label}
-          >
-            <Icon name="chevron-left" />
-          </button>
-        )}
-        <Breadcrumbs folder={folder} rootName={rootName} onOpen={navigate} canWrite={canWrite} onDrop={onTreeDrop} />
-        <span className="muted small">
-          {visible.length}{visible.length !== files.length ? ` of ${files.length}` : ''}{cursor ? '+' : ''}
-        </span>
-        {folder && canWrite && (
-          <Menu label="Folder actions" align="left">
-            <MenuItem onClick={() => renameFolderUI(folder)}>Rename…</MenuItem>
-            <MenuItem onClick={() => moveFolderUI(folder)}>Move…</MenuItem>
-            <MenuSeparator />
-            <MenuItem danger onClick={() => deleteFolderUI(folder)}>Delete folder…</MenuItem>
-          </Menu>
-        )}
-        <div className="spacer" />
-        {selected.size > 0 && (selected.size < visible.length || cursor) && (
-          <button className="btn btn-ghost" onClick={selectAll} disabled={selectingAll} title={`Select all (${modKey()}A)`}>
-            {selectingAll ? 'Selecting…' : 'Select all'}
-          </button>
-        )}
-        {selected.size > 0 && canForSome(selected, files, 'edit', { canWrite }) && (
-          <button className="btn" onClick={moveSelectedUI}>
-            Move {selected.size}…
-          </button>
-        )}
-        {selected.size > 0 && canForSome(selected, files, 'delete', { canWrite }) && (
-          <button className="btn btn-danger" onClick={trashSelected}>
-            Remove {selected.size}
-          </button>
-        )}
-        {canWrite && (
-          <>
-            <input
-              ref={inputRef}
-              type="file"
-              multiple
-              hidden
-              onChange={(e) => { enqueue(filesFromInput(e.target.files)); e.target.value = ''; }}
-            />
-            <input
-              ref={folderInputRef}
-              type="file"
-              webkitdirectory=""
-              hidden
-              onChange={(e) => { enqueue(filesFromInput(e.target.files)); e.target.value = ''; }}
-            />
-            <button className="btn files-create" onClick={() => newFolder()}>New folder</button>
-            <button className="btn files-create" onClick={() => folderInputRef.current?.click()}>Upload folder</button>
-            <button className="btn btn-primary files-create" onClick={() => inputRef.current?.click()}>Upload</button>
-          </>
-        )}
-      </div>
-
-      <div className="files-toolbar">
-        <input
-          className="input"
-          type="search"
-          placeholder="Search files…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <select
-          className="input"
-          style={{ width: 'auto' }}
-          aria-label="Sort by"
-          value={sort}
-          onChange={(e) => changeSort(e.target.value)}
-        >
-          {SORTS.map((o) => (
-            <option key={o.key} value={o.key}>{o.label}</option>
-          ))}
-        </select>
-        <div className="view-toggle" role="group" aria-label="View">
-          <button type="button" className="btn" aria-pressed={view === 'grid'} aria-label="Grid view" title="Grid view" onClick={() => changeView('grid')}>
-            <Icon name="layout-grid" />
-          </button>
-          <button type="button" className="btn" aria-pressed={view === 'list'} aria-label="List view" title="List view" onClick={() => changeView('list')}>
-            <Icon name="list" />
-          </button>
-        </div>
-        <div className="kind-row">
-        <div className="kind-strip edge-scroll">
-          {KINDS.map((k) => (
-            <button
-              key={k.key}
-              className="btn"
-              onClick={() => toggleKind(k.key)}
-              style={kinds.includes(k.key) ? { background: 'var(--ink)', color: 'var(--paper)', borderColor: 'var(--ink)' } : undefined}
-            >
-              {k.label}
-            </button>
-          ))}
-        </div>
-        {flags.metadata && (
-          <button
-            type="button"
-            className={`btn files-filters-btn${filtersOpen ? ' is-open' : ''}`}
-            onClick={() => toggleFilters()}
-            aria-expanded={filtersOpen}
-            aria-controls="files-filters"
-          >
-            <Icon name="list-filter" size={14} />
-            Filters
-            {hasAnyFacet(facets) && <span className="count-badge">{countActive(facets)}</span>}
-          </button>
-        )}
-        </div>
-      </div>
-
-      {flags.metadata && (filtersOpen ? (
-        <FilterPanel
-          id="files-filters"
-          defs={facetDefs}
-          selected={facets}
-          onToggle={toggleFacet}
-          onClear={() => setFacets({})}
-          onClose={() => toggleFilters(false)}
-        />
-      ) : (
-        <ActiveFilters
-          defs={facetDefs}
-          selected={facets}
-          onToggle={toggleFacet}
-          onClear={() => setFacets({})}
-          onEdit={() => toggleFilters(true)}
-        />
-      ))}
-
-      {error && (
-        <div className="card" style={{ padding: 16, marginBottom: 16, borderColor: 'var(--danger)' }}>
-          <p className="small" style={{ margin: 0, color: 'var(--danger)' }}>{error}</p>
-        </div>
+      {canWrite && (
+        <>
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => { enqueue(filesFromInput(e.target.files)); e.target.value = ''; }}
+          />
+          <input
+            ref={folderInputRef}
+            type="file"
+            webkitdirectory=""
+            hidden
+            onChange={(e) => { enqueue(filesFromInput(e.target.files)); e.target.value = ''; }}
+          />
+        </>
       )}
 
-      <div className="files-layout">
-          <aside>
-            <DriveList
-              drives={drives}
-              usage={driveUsage}
-              library={usage.library}
-              activeId={filespaceId}
-              pendingId={drivePending ? pendingDrive : null}
-              canCreate={isAdmin}
-              onOpen={openDrive}
-              onNew={() => setNewDrive(true)}
-            />
-            <div className="side-folders">
-              <Section title={activeDrive ? `Folders in ${activeDrive.name}` : 'Folders'}>
-                <div className="folder-list edge-scroll">
-                  <FolderDrop target="" enabled={canWrite} onDrop={onTreeDrop}>
-                    <FolderLink active={!folder} onClick={() => navigate('')} path="">{rootName}</FolderLink>
-                  </FolderDrop>
-                  <FolderTree
-                    folders={folders}
-                    selected={folder}
-                    onSelect={navigate}
-                    canWrite={canWrite}
-                    onDrop={onItemDrop}
-                    storageKey={`onyx.tree.open:${filespaceId || 'all'}`}
-                  />
-                </div>
-              </Section>
-            </div>
-          </aside>
+      <div className={`files-layout${sidebarOpen ? '' : ' is-collapsed'}`}>
+        <aside id="files-sidebar" className="files-sidebar" aria-label="Drives and folders">
+          <DriveList
+            drives={drives}
+            usage={driveUsage}
+            library={usage.library}
+            activeId={filespaceId}
+            pendingId={drivePending ? pendingDrive : null}
+            canCreate={isAdmin}
+            onOpen={openDrive}
+            onNew={() => setNewDrive(true)}
+          />
+          <div className="side-folders">
+            <Section title={activeDrive ? `Folders in ${activeDrive.name}` : 'Folders'}>
+              <div className="folder-list edge-scroll">
+                <FolderDrop target="" enabled={canWrite} onDrop={onTreeDrop}>
+                  <FolderLink active={!folder} onClick={() => navigate('')} path="">{rootName}</FolderLink>
+                </FolderDrop>
+                <FolderTree
+                  folders={folders}
+                  summaries={summaries}
+                  selected={folder}
+                  onSelect={navigate}
+                  canWrite={canWrite}
+                  onDrop={onItemDrop}
+                  storageKey={`onyx.tree.open:${filespaceId || 'all'}`}
+                />
+              </div>
+            </Section>
+          </div>
+        </aside>
 
-          <section className="files-pane" ref={paneRef}>
-            {view === 'grid' && itemFolders.length > 0 && (
-              <FolderTiles
-                folders={itemFolders}
-                selected={sel.selectedFolders}
-                handlers={sel.handlers}
-                canWrite={canWrite}
-                onDrop={onItemDrop}
-                navRef={sel.navRef}
+        <div className="files-content">
+          <FilesHeader
+            folder={folder}
+            rootName={rootName}
+            color={driveColor(filespaceId)}
+            canWrite={canWrite}
+            onOpen={navigate}
+            onDrop={onTreeDrop}
+            onUploadFiles={() => inputRef.current?.click()}
+            onUploadFolder={() => folderInputRef.current?.click()}
+            onNewFolder={() => newFolder()}
+            filespaceId={filespaceId}
+            onOpenFile={openFile}
+            onShowRecent={viewId === 'recent' ? undefined : () => applyView('recent')}
+            sidebarOpen={sidebarOpen}
+            onToggleSidebar={toggleSidebar}
+          />
+
+          <FilesToolbar
+            sort={sort}
+            onSort={changeSort}
+            filters={flags.metadata ? { open: filtersOpen, onToggle: () => toggleFilters(), count: countActive(facets) } : null}
+            query={query}
+            onClearQuery={() => applyQuery('')}
+            onEditQuery={editQuery}
+            chips={flags.metadata && hasAnyFacet(facets) ? (
+              <ActiveFilters inline defs={facetDefs} selected={facets} onToggle={toggleFacet} onClear={() => setFacets({})} />
+            ) : null}
+            viewMenu={(
+              <ViewMenu
+                view={view}
+                builtins={BUILTIN_VIEWS}
+                mine={offeredViews}
+                dirty={dirty}
+                driveNames={driveNames}
+                onView={applyView}
+                onSaveChanges={saveViewChanges}
+                onRevert={revertView}
+                onSaveAs={() => setSavingView(true)}
+                onManage={() => setManagingViews(true)}
+                canManage={customViews.length > 0}
               />
             )}
-            {view === 'list' ? (
+            selectedCount={anySelected}
+            onDownload={downloadSelection}
+            downloadCount={selected.size}
+            moreMenu={<MoreMenu>{moreItems}</MoreMenu>}
+            display={(
+              <DisplayPopover
+                display={display}
+                available={available}
+                defaults={view.defaults?.display || normalizeDisplay(view.display)}
+                onChange={changeDisplay}
+                builtin={view.builtin}
+                viewName={view.name}
+                dirty={dirty}
+                onSave={saveViewChanges}
+                onRevert={revertView}
+                canReset={canReset}
+                onReset={resetView}
+                onAddField={isAdmin && flags.metadata ? () => setAddingField(true) : undefined}
+                searching={!!query}
+              />
+            )}
+          />
+
+          {flags.metadata && filtersOpen && (
+            <FilterPanel
+              id="files-filters"
+              defs={facetDefs}
+              selected={facets}
+              onToggle={toggleFacet}
+              onClear={() => setFacets({})}
+              onClose={() => toggleFilters(false)}
+            />
+          )}
+
+          {error && (
+            <div className="card files-error">
+              <p className="small" style={{ margin: 0, color: 'var(--danger)' }}>{error}</p>
+            </div>
+          )}
+
+          <section
+            className="files-pane"
+            ref={paneRef}
+            data-layout={layout}
+            data-card-size={display.size}
+            data-thumb={display.thumb}
+          >
+            {layout === 'column' ? (
+              <ColumnView
+                folder={folder}
+                rootName={rootName}
+                tree={folders}
+                itemFolders={itemFolders}
+                files={visible}
+                more={!!cursor}
+                onLoadMore={loadMoreColumn}
+                pending={loading}
+                selected={selected}
+                selectedFolders={sel.selectedFolders}
+                handlers={itemHandlers}
+                navRef={sel.navRef}
+                marqueeRef={marqueeTarget}
+                loadColumn={loadColumn}
+                columnKey={columnKey}
+                matches={matchesFacets}
+                onNavigate={openColumnAt}
+                onOpenFolder={openFolderItem}
+                onGoUp={goUp}
+                onOpenFile={openFile}
+                canWrite={canWrite}
+                onDrop={onItemDrop}
+                labelFor={labelFor}
+                badgesFor={badgesFor}
+                onMissingThumb={requestThumb}
+                fields={columns}
+                cardSize={display.size}
+                emptyText={emptyWords || (noFiles ? 'Nothing here' : 'No files match those filters.')}
+              />
+            ) : layout === 'list' ? (
               <FileList
                 {...gridProps}
                 pending={loading}
                 sort={sort}
                 onSort={changeSort}
                 columns={columns}
-                picker={(waiting) => (
-                  <ColumnPicker
-                    available={available}
-                    visible={columnKeys}
-                    waiting={waiting}
-                    onChange={changeColumns}
-                    onReset={() => changeColumns(DEFAULT_COLUMNS)}
-                    onAddField={isAdmin && flags.metadata ? () => setAddingField(true) : undefined}
-                  />
-                )}
                 canEdit={canWrite}
                 onEdit={editCell}
                 suggestionsFor={suggestionsFor}
@@ -1906,6 +2266,7 @@ export default function FilesClient({
                 before={itemFolders.length > 0 ? (cols) => (
                   <FolderRows
                     folders={itemFolders}
+                    summaries={summaries}
                     columns={cols}
                     selected={sel.selectedFolders}
                     handlers={sel.handlers}
@@ -1916,22 +2277,52 @@ export default function FilesClient({
                 ) : null}
               />
             ) : (
-              // While a folder loads, the listing that was on screen stays,
-              // dimmed (`pending`) — or, with nothing before it, cards of the
-              // same shape: never an empty pane.
-              <FileGrid {...gridProps} pending={loading} />
+              <>
+                {itemFolders.length > 0 && (
+                  <div className="files-section">
+                    <h2 className="files-section-label">
+                      Folders<span className="files-section-count"> · {Math.min(itemFolders.length, MAX_TILES).toLocaleString()}</span>
+                    </h2>
+                    <FolderTiles
+                      folders={itemFolders}
+                      summaries={summaries}
+                      cardSize={display.size}
+                      selected={sel.selectedFolders}
+                      handlers={sel.handlers}
+                      canWrite={canWrite}
+                      onDrop={onItemDrop}
+                      navRef={sel.navRef}
+                    />
+                  </div>
+                )}
+                {!noFiles && cards && (
+                  <h2 className="files-section-label">
+                    Files<span className="files-section-count"> · {fileCount}</span>
+                  </h2>
+                )}
+                {layout === 'tile' ? (
+                  <TileGrid {...gridProps} pending={loading} cardSize={display.size} />
+                ) : (
+                  // While a folder loads, the listing that was on screen stays,
+                  // dimmed (`pending`) — or, with nothing before it, cards of the
+                  // same shape: never an empty pane.
+                  <FileGrid {...gridProps} pending={loading} thumbFit={display.thumb} cardSize={display.size} />
+                )}
+              </>
             )}
             {/* Sentinel for infinite scroll. Rendered only while a next page
-                exists, so reaching the end is what stops the observer. */}
-            {cursor && <div ref={sentinelRef} style={{ height: 1 }} />}
-            {loadingMore && <div className="empty" style={{ padding: 24 }}>Loading more…</div>}
+                exists, so reaching the end is what stops the observer. The
+                Column layout pages its own column instead. */}
+            {cursor && layout !== 'column' && <div ref={sentinelRef} style={{ height: 1 }} />}
+            {loadingMore && layout !== 'column' && <div className="empty" style={{ padding: 24 }}>Loading more…</div>}
           </section>
+        </div>
       </div>
       {/* Phone only, and shown by the stylesheet rather than a viewport check
-          in JS: the header's Trash button scrolls away, leaving a selection
-          with nothing to act on. Rendered whenever something is selected —
-          .files-selbar is display:none above the phone breakpoint, so a JS
-          check here could only disagree with the CSS during hydration. */}
+          in JS: the toolbar scrolls away, leaving a selection with nothing to
+          act on. Rendered whenever something is selected — .files-selbar is
+          display:none above the phone breakpoint, so a JS check here could
+          only disagree with the CSS during hydration. */}
       {anySelected > 0 && (
         <div className="files-selbar" role="toolbar" aria-label="Selection">
           <span className="small">{anySelected} selected</span>
@@ -2001,10 +2392,30 @@ export default function FilesClient({
       {promptElement}
       {pickerElement}
       {contextMenuElement}
-      {isAdmin && flags.metadata && (
-        <NewFieldDialog open={addingField} onClose={() => setAddingField(false)} onCreate={createField} />
+      {isAdmin && flags.metadata && addingField && (
+        <NewFieldDialog open onClose={() => setAddingField(false)} onCreate={createField} />
       )}
       <ShareDialog file={sharing} open={!!sharing} onClose={() => setSharing(null)} />
+      {savingView && (
+        <SaveViewDialog
+          open
+          onClose={() => setSavingView(false)}
+          onSave={saveViewAs}
+          drive={activeDrive}
+          suggestion={view.builtin && view.id !== DEFAULT_VIEW_ID ? `${view.name} — ${rootName}` : ''}
+        />
+      )}
+      {managingViews && (
+        <ManageViewsDialog
+          open
+          onClose={() => setManagingViews(false)}
+          views={customViews}
+          drives={drives}
+          onRename={renameView}
+          onRescope={rescopeView}
+          onDelete={deleteView}
+        />
+      )}
       {isAdmin && (
         <NewDriveDialog
           open={newDrive}
@@ -2038,10 +2449,11 @@ export default function FilesClient({
  * from before to keep on screen. `count` is the folder's file count from the
  * tree, when it is known; never more than a screen's worth.
  */
-function SkeletonItems({ view, count }) {
-  const n = Math.max(1, Math.min(Number.isFinite(count) && count > 0 ? count : 12, view === 'list' ? 16 : 18));
+function SkeletonItems({ layout, count }) {
+  const rows = layout === 'list' || layout === 'column';
+  const n = Math.max(1, Math.min(Number.isFinite(count) && count > 0 ? count : 12, rows ? 16 : 18));
   const items = Array.from({ length: n }, (_, i) => i);
-  if (view === 'list') {
+  if (rows) {
     return (
       <div className="filelist-skeleton" aria-busy="true" aria-label="Loading">
         {items.map((i) => (
@@ -2068,42 +2480,10 @@ function SkeletonItems({ view, count }) {
   );
 }
 
-/**
- * The open folder as a path: every ancestor is a way back up, and a drop
- * target, so files can be dragged to a folder above without the tree. The
- * last crumb is the page's heading. Each crumb carries data-folder, so the
- * page's context menu treats it as that folder.
- */
-function Breadcrumbs({ folder, rootName, onOpen, canWrite, onDrop }) {
-  const crumbs = crumbsFor(folder, rootName);
-  const here = crumbs[crumbs.length - 1];
-  return (
-    <nav className="crumbs" aria-label="Folder path">
-      <ol>
-        {crumbs.slice(0, -1).map((c) => (
-          <li key={c.path || '/'} className="crumb-item">
-            <FolderDrop target={c.path} enabled={canWrite} onDrop={onDrop} className="crumb-drop">
-              <button type="button" className="crumb" data-folder={c.path} title={c.path || c.name} onClick={() => onOpen(c.path)}>
-                {c.name}
-              </button>
-            </FolderDrop>
-            <span className="crumb-sep" aria-hidden>/</span>
-          </li>
-        ))}
-        <li className="crumb-item crumb-here">
-          <h1 className="files-title truncate" aria-current="page" title={here.path || here.name}>{here.name}</h1>
-        </li>
-      </ol>
-    </nav>
-  );
-}
-
 function Section({ title, children }) {
   return (
-    <div style={{ marginBottom: 20 }}>
-      <h3 className="small muted" style={{ textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 11, marginBottom: 6 }}>
-        {title}
-      </h3>
+    <div className="side-section">
+      <h3 className="side-title">{title}</h3>
       {children}
     </div>
   );
@@ -2136,12 +2516,16 @@ function readOpen(key) {
  * a folder opens it and everything above it, so the row just chosen is on
  * screen rather than inside a collapsed branch.
  *
+ * Beside each name, the files in it and everything beneath it — the number
+ * its card on the page leads with (`summaries`, lib/folder-ops.js). Its own
+ * files alone would put a 0 beside a folder that holds only subfolders.
+ *
  * With write access, a folder can be dragged onto another to move it, and
  * files dragged from the grid (or the desktop) can be dropped on one.
  */
 // Memoized: a click or an arrow in the pane re-renders the page, and the tree
 // of a big library is hundreds of rows that have not changed.
-const FolderTree = memo(function FolderTree({ folders, selected, onSelect, canWrite, onDrop, storageKey }) {
+const FolderTree = memo(function FolderTree({ folders, summaries, selected, onSelect, canWrite, onDrop, storageKey }) {
   const [open, setOpen] = useState(() => new Set());
   const loaded = useRef(null);
 
@@ -2229,7 +2613,7 @@ const FolderTree = memo(function FolderTree({ folders, selected, onSelect, canWr
           draggable={canWrite}
           onDragStart={canWrite ? (e) => startFolderDrag(e, f.folder) : undefined}
         >
-          {f.name} {f.count != null && <span className="muted">{f.count}</span>}
+          {f.name} {f.count != null && <span className="muted">{summaries?.get(f.folder)?.total ?? f.count}</span>}
         </FolderLink>
       </FolderDrop>
     );

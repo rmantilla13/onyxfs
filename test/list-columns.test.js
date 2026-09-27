@@ -32,7 +32,7 @@ test('a header opens in its natural direction and then flips', () => {
 test('the active column and direction are read back from the sort', () => {
   assert.deepEqual(columnOf('small'), { key: 'size', dir: 'asc' });
   assert.deepEqual(columnOf('type_desc'), { key: 'type', dir: 'desc' });
-  // Newest and Oldest are the Added column, now that there is one to show.
+  // Newest and Oldest are the Created column, now that there is one to show.
   assert.deepEqual(columnOf('new'), { key: 'added', dir: 'desc' });
   assert.deepEqual(columnOf('old'), { key: 'added', dir: 'asc' });
   assert.equal(columnOf('nope'), null);

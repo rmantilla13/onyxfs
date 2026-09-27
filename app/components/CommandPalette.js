@@ -7,20 +7,25 @@ import { fmtSize } from '@/lib/media';
 import { crumbsFor } from '@/lib/folder-ops';
 import { kindLabel } from '@/lib/file-info';
 import { thumbSources } from '@/lib/renditions';
+import { BUILTIN_VIEWS } from '@/lib/builtin-views';
 import Icon from '@/app/components/ui/Icon';
 
 /**
- * ⌘K: one box for finding anything and doing anything.
+ * ⌘K: one box for finding anything and doing anything — the only search box
+ * in the app. On the files page what is typed is first of all a filter for
+ * the view on screen ("Filter this view by …"), then:
  *
  *   files     the whole library, searched on the server as you type (the
  *             same /api/files the grid reads — so only what you may see)
  *   folders   the folder tree, filtered here
  *   drives    the filespaces you can open
+ *   views     the files page's views, by name
  *   actions   everything the nav and the menus offer, by name
  *
- * ↑ ↓ move across all of them, Enter runs, Esc closes. An action that belongs
- * to the files page (New folder, Upload) is sent to it as an `onyx:command`
- * event; FilesClient listens.
+ * ↑ ↓ move across all of them, Enter runs, Esc closes. What belongs to the
+ * files page (the filter, a view, New folder, Upload) is sent to it as an
+ * `onyx:command` event; FilesClient listens. `initialQuery` opens it with a
+ * search already in it — the files toolbar's search chip, to change it.
  */
 const MAX_FILES = 8;
 const MAX_FOLDERS = 6;
@@ -39,7 +44,7 @@ export function useCommandPaletteShortcut(setOpen) {
   }, [setOpen]);
 }
 
-export default function CommandPalette({ open, onClose, drives = [], isAdmin = false, onShortcuts }) {
+export default function CommandPalette({ open, onClose, drives = [], isAdmin = false, onShortcuts, initialQuery = '' }) {
   const router = useRouter();
   const pathname = usePathname();
   const onFiles = pathname === '/files';
@@ -59,11 +64,13 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
     if (open && !el.open) el.showModal();
     if (!open && el.open) el.close();
     if (open) {
-      setQ('');
+      setQ(initialQuery || '');
       setFiles([]);
       setActive(0);
-      requestAnimationFrame(() => input.current?.focus());
+      requestAnimationFrame(() => { input.current?.focus(); input.current?.select(); });
     }
+  // The query it opens with is read when it opens, not followed after.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // The folder tree, once per opening.
@@ -101,9 +108,9 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
     const e = new CustomEvent('onyx:navigate-folder', { detail: { folder }, cancelable: true });
     if (window.dispatchEvent(e)) router.push(`/files?folder=${encodeURIComponent(folder)}`);
   }, [onClose, router]);
-  const command = useCallback((name) => {
+  const command = useCallback((name, detail = {}) => {
     onClose();
-    window.dispatchEvent(new CustomEvent('onyx:command', { detail: { name } }));
+    window.dispatchEvent(new CustomEvent('onyx:command', { detail: { ...detail, name } }));
   }, [onClose]);
 
   const actions = useMemo(() => [
@@ -133,6 +140,15 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
 
   const sections = useMemo(() => {
     const out = [];
+    // On the files page, what was typed filters the view on screen: the
+    // first thing offered, so Enter does it (FilesClient applies it as the
+    // listing's search, the chip beside Filters shows it).
+    if (onFiles && q.trim()) {
+      out.push({
+        title: 'This view',
+        items: [{ id: 'filter', label: `Filter this view by “${q.trim()}”`, icon: 'filter', run: () => command('filter', { query: q.trim() }) }],
+      });
+    }
     if (files.length) {
       out.push({
         title: 'Files',
@@ -172,12 +188,20 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
         })),
       });
     }
+    // The files page's built-in views, by name: "video", "recent".
+    const vw = onFiles && term ? BUILTIN_VIEWS.filter((v) => match(v.name)) : [];
+    if (vw.length) {
+      out.push({
+        title: 'Views',
+        items: vw.map((v) => ({ id: `w:${v.id}`, label: `Show ${v.name}`, hint: 'View', icon: 'view', run: () => command('view', { id: v.id }) })),
+      });
+    }
     const ac = actions.filter((a) => match(a.label));
     if (ac.length) out.push({ title: 'Actions', items: ac });
     return out;
     // `match` closes over `term`, which is in the list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, folders, drives, actions, term, go, goFolder, driveOf]);
+  }, [files, folders, drives, actions, term, go, goFolder, driveOf, onFiles, q, command]);
 
   const flat = useMemo(() => sections.flatMap((s) => s.items), [sections]);
   useEffect(() => { setActive(0); }, [q]);
@@ -208,7 +232,7 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
             className="palette-input"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search files, folders, drives and actions…"
+            placeholder={onFiles ? 'Filter this view, or search files, folders and drives…' : 'Search files, folders, drives and actions…'}
             aria-label="Search"
             aria-controls="palette-list"
             aria-activedescendant={flat[active] ? `pal-${active}` : undefined}
@@ -237,7 +261,12 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
                     onClick={() => it.run()}
                   >
                     <span className="palette-icon" aria-hidden>
-                      {it.thumb ? <img src={it.thumb} alt="" loading="lazy" decoding="async" /> : it.icon === 'folder' ? <FolderGlyph /> : it.icon === 'drive' ? <DriveGlyph /> : <span className="palette-dot" />}
+                      {it.thumb ? <img src={it.thumb} alt="" loading="lazy" decoding="async" />
+                        : it.icon === 'folder' ? <FolderGlyph />
+                          : it.icon === 'drive' ? <DriveGlyph />
+                            : it.icon === 'filter' ? <Icon name="list-filter" />
+                              : it.icon === 'view' ? <Icon name="layers" />
+                                : <span className="palette-dot" />}
                     </span>
                     <span className="palette-label truncate">{it.label}</span>
                     {it.hint && <span className="palette-hint truncate">{it.hint}</span>}

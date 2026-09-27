@@ -7,6 +7,7 @@ import { thumbSources } from '@/lib/renditions';
 import { fileKey } from '@/lib/selection';
 import { watch } from '@/lib/thumb-observer';
 import Icon from '@/app/components/ui/Icon';
+import { FieldLine } from './FieldValue';
 
 /**
  * One file card, for the library grid and the public share grid — which had
@@ -54,21 +55,27 @@ function smallerThan(md, box) {
  * sibling; Get info its sm. `eager` is for the first row of the grid, which
  * is on screen before anything else is.
  */
-export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface = 'card', sizes, eager = false }) {
+export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface = 'card', sizes, boxHeight, eager = false, fitMode = 'fill' }) {
   const kind = effectiveKind(file);
   const drawable = drawableKind(file);
   // URLs that failed to load in this tile. A broken-image icon is never the
   // answer: a dead sibling falls back to the grid poster, that to a small
   // original, and that to the label.
   const [failed, setFailed] = useState(() => new Set());
-  // `cover` fills the tile. A picture smaller than the tile in both
-  // directions — an icon, a small screenshot — is shown at its own size
+  // `cover` fills the tile; a view set to Fit (`fitMode`) shows the whole
+  // picture inside it instead. Either way a picture smaller than the tile in
+  // both directions — an icon, a small screenshot — is shown at its own size
   // instead of blown up into a blur. Decided from the recorded dimensions
   // when there are some, so it never switches once the picture is up.
-  const box = typeof sizes === 'number' && sizes > 0 ? { width: sizes, height: sizes * 0.75 } : CARD_BOX;
+  // The box it fills: a grid card's 4:3 at its column's width, or a tile's
+  // own (`boxHeight`).
+  const box = typeof sizes === 'number' && sizes > 0 ? { width: sizes, height: boxHeight || sizes * 0.75 } : CARD_BOX;
   const known = Number(file.metadata?.width) > 0 && Number(file.metadata?.height) > 0;
   const [measuredFit, setMeasuredFit] = useState(null);
-  const fit = surface === 'card' && known ? (smallerThan(file.metadata, box) ? 'scale-down' : 'cover') : measuredFit || 'cover';
+  const whole = fitMode === 'fit' ? 'contain' : 'cover';
+  const fit = surface === 'card' && known
+    ? (smallerThan(file.metadata, box) ? 'scale-down' : whole)
+    : measuredFit === 'scale-down' ? 'scale-down' : whole;
   const upgradeAsked = useRef(false);
   const ref = useRef(null);
   const imgRef = useRef(null);
@@ -150,17 +157,36 @@ export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface 
   );
 });
 
-function Body({ file, label, badges, onMissingThumb, sizes, eager }) {
+/**
+ * Under the picture: the name, and the view's metadata fields as one line
+ * (`fields`, lib/views.js) with any badges at its end. With no fields the
+ * badges sit on the name's line, so the card is one line shorter — every
+ * card in a grid shares the view's fields, so they stay one height, which
+ * the virtualized grid relies on. Without `fields` at all (the share page)
+ * the line is the size, as it always was.
+ */
+function Body({ file, label, badges, onMissingThumb, sizes, eager, fields, thumbFit, rootName }) {
+  const line = fields === undefined
+    ? <span>{fmtSize(file.size)}</span>
+    : fields.length ? <FieldLine file={file} fields={fields} rootName={rootName} className="field-line truncate" /> : null;
   return (
     <>
-      <Thumb file={file} label={label} onMissingThumb={onMissingThumb} sizes={sizes} eager={eager} />
+      <Thumb file={file} label={label} onMissingThumb={onMissingThumb} sizes={sizes} eager={eager} fitMode={thumbFit} />
       <div className="filecard-text">
-        <div className="small truncate" title={file.name}>{file.name}</div>
-        <div className="row small muted" style={{ gap: 6, marginTop: 4 }}>
-          <span>{fmtSize(file.size)}</span>
-          <div className="spacer" />
-          {badges}
-        </div>
+        {line ? (
+          <>
+            <div className="filecard-name truncate" title={file.name}>{file.name}</div>
+            <div className="filecard-meta small muted">
+              {line}
+              {badges && <span className="filecard-badges">{badges}</span>}
+            </div>
+          </>
+        ) : (
+          <div className="filecard-meta">
+            <span className="filecard-name truncate" title={file.name}>{file.name}</span>
+            {badges && <span className="filecard-badges">{badges}</span>}
+          </div>
+        )}
       </div>
     </>
   );
@@ -180,10 +206,25 @@ function FileCard({
   eager = false,
   sizes,
   onMissingThumb,
+  fields,
+  thumbFit = 'fill',
+  rootName,
 }) {
   const shownLabel = label ?? labelFor?.(file);
   const shownBadges = badges ?? badgesFor?.(file) ?? null;
-  const body = <Body file={file} label={shownLabel} badges={shownBadges} onMissingThumb={onMissingThumb} sizes={sizes} eager={eager} />;
+  const body = (
+    <Body
+      file={file}
+      label={shownLabel}
+      badges={shownBadges}
+      onMissingThumb={onMissingThumb}
+      sizes={sizes}
+      eager={eager}
+      fields={fields}
+      thumbFit={thumbFit}
+      rootName={rootName}
+    />
+  );
   if (href) {
     return <a className="card filecard" href={href} download={downloadName}>{body}</a>;
   }

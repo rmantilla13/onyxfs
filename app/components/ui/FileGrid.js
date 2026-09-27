@@ -67,6 +67,14 @@ function FileGrid({
   marqueeRef,
   // Filled in with { files: { cols, rowsPerPage, focus(i) } } for the keyboard.
   navRef,
+  // The view's display settings (lib/views.js): the metadata fields under
+  // each name, whether a picture fills its box or fits in it, and the card
+  // size — which the stylesheet turns into a column width (files-pane's
+  // data-card-size), so it is measured back like any other layout change.
+  fields,
+  thumbFit = 'fill',
+  cardSize = 'm',
+  rootName,
 }) {
   const outer = useRef(null);
   const ref = useRef(null);
@@ -133,7 +141,10 @@ function FileGrid({
   }, [metrics.pitch, rowCount]);
 
   useEffect(() => { observeThumbLatency(); }, []);
-  useLayoutEffect(() => { measure(); }, [measure, files.length]);
+  // A new card size or set of fields changes the card, not the grid's box,
+  // so no resize is observed: measured again when they change.
+  const fieldCount = fields ? fields.length : -1;
+  useLayoutEffect(() => { measure(); }, [measure, files.length, cardSize, fieldCount]);
   useLayoutEffect(() => { updateRange(); }, [updateRange]);
 
   useEffect(() => {
@@ -267,6 +278,9 @@ function FileGrid({
       eager={i < EAGER_CARDS}
       sizes={sizes}
       onMissingThumb={onMissingThumb}
+      fields={fields}
+      thumbFit={thumbFit}
+      rootName={rootName}
     />
   );
 

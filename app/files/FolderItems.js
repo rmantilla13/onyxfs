@@ -4,13 +4,16 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import FolderDrop, { startFolderDrag } from './FolderDrop';
 import { folderKey } from '@/lib/selection';
 import { overlaps } from '@/lib/marquee';
-import Icon from '@/app/components/ui/Icon';
+import FolderGlyph from '@/app/components/ui/FolderGlyph';
+import { describeFolder } from '@/lib/folder-ops';
 
 // Past this many subfolders the tree is the better way in; the items are not
 // virtualized.
 export const MAX_TILES = 300;
 
-const FolderIcon = ({ className }) => <Icon name="folder" size={20} strokeWidth={1.75} className={className} />;
+// The folder glyph on a card, by the view's card size.
+const GLYPH = { s: 42, m: 58, l: 70 };
+
 
 /**
  * The keyboard and the marquee's view of a set of folder items: which one
@@ -93,7 +96,7 @@ function useFolderNav({ folders, navRef, columns }) {
   return { list, active, onFocus };
 }
 
-const FolderTile = memo(function FolderTile({ folder: f, selected, tabbable, handlers, canWrite, onDrop }) {
+const FolderTile = memo(function FolderTile({ folder: f, detail, glyph, selected, tabbable, handlers, canWrite, onDrop }) {
   const key = folderKey(f.folder);
   return (
     <FolderDrop target={f.folder} enabled={canWrite} onDrop={onDrop} className="folder-tile-wrap">
@@ -110,22 +113,26 @@ const FolderTile = memo(function FolderTile({ folder: f, selected, tabbable, han
         draggable={canWrite}
         onDragStart={canWrite ? (e) => startFolderDrag(e, f.folder) : undefined}
       >
-        <FolderIcon className="folder-tile-icon" />
-        <span className="folder-tile-name truncate">{f.name}</span>
-        {f.count != null && <span className="small muted">{f.count}</span>}
+        <FolderGlyph size={glyph} className="folder-tile-icon" />
+        <span className="folder-tile-text">
+          <span className="folder-tile-name truncate">{f.name}</span>
+          {detail && <span className="folder-tile-meta truncate">{detail}</span>}
+        </span>
       </div>
     </FolderDrop>
   );
 });
 
 /**
- * The open folder's subfolders as tiles above its files. They are items like
- * the files: a click selects (⌘ and ⇧ as for files), a double-click, Return,
- * ⌘↓ or a tap opens, arrows cross between them and the files. Each is a drop
- * target for moves and uploads, draggable onto another folder on its own, and
- * carries data-folder so the page's context menu finds it.
+ * The open folder's subfolders as cards above its files — larger than a
+ * file's, with a solid folder where a file has its picture, so the two never
+ * read as one kind of thing. They are items like the files: a click selects
+ * (⌘ and ⇧ as for files), a double-click, Return, ⌘↓ or a tap opens, arrows
+ * cross between them and the files. Each is a drop target for moves and
+ * uploads, draggable onto another folder on its own, and carries data-folder
+ * so the page's context menu finds it. `summaries` is folderSummaries().
  */
-export const FolderTiles = memo(function FolderTiles({ folders, selected, handlers, canWrite, onDrop, navRef }) {
+export const FolderTiles = memo(function FolderTiles({ folders, summaries, cardSize = 'm', selected, handlers, canWrite, onDrop, navRef }) {
   const shown = folders.slice(0, MAX_TILES);
   const { list, active, onFocus } = useFolderNav({ folders: shown, navRef });
   return (
@@ -134,6 +141,8 @@ export const FolderTiles = memo(function FolderTiles({ folders, selected, handle
         <FolderTile
           key={f.folder}
           folder={f}
+          detail={describeFolder(summaries?.get(f.folder))}
+          glyph={GLYPH[cardSize] || GLYPH.m}
           selected={selected.has(f.folder)}
           tabbable={i === active}
           handlers={handlers}
@@ -152,17 +161,18 @@ export const FolderTiles = memo(function FolderTiles({ folders, selected, handle
 
 /**
  * The list view's version of the folder tiles: the open folder's subfolders
- * as rows above its files, in the list's columns. Same behaviour as a tile.
- * A folder has a size (its file count) and a type; the other columns are
- * about files and stay empty.
+ * as rows above its files, in the list's columns — a solid folder, the name
+ * in semibold and a faint tint, so they read as folders before a word of
+ * them is. Same behaviour as a tile. A folder has a size (what it holds)
+ * and a type; the other columns are about files and stay empty.
  */
-function folderCell(f, c) {
-  if (c.key === 'size') return f.count ? `${f.count} file${f.count === 1 ? '' : 's'}` : '—';
+function folderCell(summary, c) {
+  if (c.key === 'size') return describeFolder(summary, { short: true }) || '—';
   if (c.key === 'type') return 'Folder';
   return '';
 }
 
-const FolderRow = memo(function FolderRow({ folder: f, columns, selected, tabbable, handlers, canWrite, onDrop }) {
+const FolderRow = memo(function FolderRow({ folder: f, summary, columns, selected, tabbable, handlers, canWrite, onDrop }) {
   const key = folderKey(f.folder);
   return (
     <FolderDrop target={f.folder} enabled={canWrite} onDrop={onDrop}>
@@ -179,10 +189,10 @@ const FolderRow = memo(function FolderRow({ folder: f, columns, selected, tabbab
         draggable={canWrite}
         onDragStart={canWrite ? (e) => startFolderDrag(e, f.folder) : undefined}
       >
-        <span className="filelist-thumb filelist-folder-icon" aria-hidden><FolderIcon /></span>
+        <span className="filelist-thumb filelist-folder-icon" aria-hidden><FolderGlyph size={24} /></span>
         <span className="filelist-name"><span className="truncate">{f.name}</span></span>
         {columns.map((c) => (
-          <span key={c.key} className="filelist-cell muted truncate">{folderCell(f, c)}</span>
+          <span key={c.key} className="filelist-cell muted truncate">{folderCell(summary, c)}</span>
         ))}
         <span aria-hidden />
       </div>
@@ -190,7 +200,7 @@ const FolderRow = memo(function FolderRow({ folder: f, columns, selected, tabbab
   );
 });
 
-export const FolderRows = memo(function FolderRows({ folders, columns, selected, handlers, canWrite, onDrop, navRef }) {
+export const FolderRows = memo(function FolderRows({ folders, summaries, columns, selected, handlers, canWrite, onDrop, navRef }) {
   const shown = folders.slice(0, MAX_TILES);
   const { list, active, onFocus } = useFolderNav({ folders: shown, navRef, columns: 1 });
   return (
@@ -199,6 +209,7 @@ export const FolderRows = memo(function FolderRows({ folders, columns, selected,
         <FolderRow
           key={f.folder}
           folder={f}
+          summary={summaries?.get(f.folder)}
           columns={columns}
           selected={selected.has(f.folder)}
           tabbable={i === active}
