@@ -14,7 +14,7 @@ import { SORT_KEYS } from '../lib/file-query.js';
 import { listingKey } from '../lib/listing-cache.js';
 import { availableColumns } from '../lib/list-columns.js';
 import { normalizeSchema } from '../lib/dam.js';
-import { driveColor, DRIVE_COLORS, LIBRARY_COLOR } from '../lib/drive-color.js';
+import { driveColor, driveColorHex, mixOklch, DRIVE_COLORS, LIBRARY_COLOR } from '../lib/drive-color.js';
 
 const byId = (id) => BUILTIN_VIEWS.find((v) => v.id === id);
 
@@ -22,7 +22,7 @@ describe('the built-in views', () => {
   test('each has the defaults the files page promises', () => {
     const want = {
       all: { layout: 'grid', kinds: [] },
-      recent: { layout: 'grid', kinds: [], flatten: true, sort: 'modified' },
+      recent: { layout: 'grid', kinds: [], flatten: true, sort: 'activity' },
       images: { layout: 'tile', kinds: ['image'], fields: ['dimensions'] },
       video: { layout: 'grid', kinds: ['video'], fields: ['duration', 'dimensions', 'size'] },
       audio: { layout: 'list', kinds: ['audio'], fields: ['duration', 'size', 'modified'] },
@@ -39,8 +39,10 @@ describe('the built-in views', () => {
       if (w.flatten) assert.equal(v.display.flatten, true, `${id} flattens`);
       if (w.sort) assert.equal(v.sort, w.sort, `${id} sort`);
     }
-    assert.equal(resolveView('recent').sort, 'modified', 'Recent is newest-modified first');
-    assert.equal(sortParts('modified').dir, 'desc');
+    // Latest activity, not Modified: that is the file's own date, and a file
+    // that has only just come can have one from years ago.
+    assert.equal(resolveView('recent').sort, 'activity', 'Recent is what came or changed last, first');
+    assert.deepEqual(sortParts('activity'), { field: 'activity', dir: 'desc' });
   });
 
   test('every kind a built-in filters on is one the server knows, and every field one a view may show', () => {
@@ -305,9 +307,16 @@ describe('the Sort menu', () => {
     assert.equal(sortFor('size'), 'size', 'a field opens largest first');
     assert.equal(sortFor('name'), 'name', 'and names A to Z');
     assert.equal(sortFor('nope', 'asc'), 'new');
-    assert.deepEqual(sortParts('bogus'), { field: 'added', dir: 'desc' });
+    assert.deepEqual(sortParts('bogus'), { field: 'uploaded', dir: 'desc' });
     assert.equal(describeSort('modified'), 'Date modified, newest first');
     assert.equal(describeSort('small'), 'Size, smallest first');
+    // Four dates, as a file manager has them: the file's own two, when it
+    // came (the default), and when anything about it last changed here.
+    assert.equal(describeSort('created_old'), 'Date created, oldest first');
+    assert.equal(describeSort('new'), 'Date added, newest first');
+    assert.equal(describeSort('activity'), 'Last activity, newest first');
+    assert.deepEqual(SORT_FIELDS.map((f) => f.label), ['Date modified', 'Date created', 'Date added', 'Last activity', 'Name', 'Size', 'Type']);
+    for (const sort of VIEW_SORT_KEYS) assert.ok(SORT_FIELDS.some((f) => f.asc === sort || f.desc === sort), `${sort} is in the menu`);
   });
 });
 
@@ -327,5 +336,40 @@ describe('a drive’s colour', () => {
     // A handful of ids spread over more than one colour.
     const seen = new Set(Array.from({ length: 40 }, (_, i) => driveColor(`drive-${i}`)));
     assert.ok(seen.size >= 5, `only ${seen.size} colours for 40 drives`);
+  });
+
+  // The Onyx palette, spelled out: what the Mac is told, whatever the brand
+  // defaults become.
+  const palette = { accent: '#3D5AFE', accentAlt: '#E040FB', accentCool: '#22D3EE', warning: '#C2410C', danger: '#B42318' };
+
+  test('as #RRGGBB for the Mac: the colour the page draws', () => {
+    // Pinned against Chrome's own color-mix(in oklch, …), drawn to an sRGB
+    // canvas. The last one is past sRGB: Chrome clips it (#AD8100), CSS
+    // Color 4's mapping keeps its hue a little better.
+    assert.equal(mixOklch('#22D3EE', '#C2410C', 0.5), '#81A628', 'cyan and amber meet at a green');
+    assert.equal(mixOklch('#3D5AFE', '#E040FB', 0.5), '#974EFF');
+    assert.equal(mixOklch('#22D3EE', '#C2410C', 0.7), '#39C185');
+    assert.equal(mixOklch('#22D3EE', '#C2410C', 0.3), '#AA8200');
+    assert.equal(mixOklch('#22D3EE', '#22D3EE', 0.5), '#22D3EE');
+    assert.equal(mixOklch('#808080', '#22D3EE', 1), '#808080', 'a grey stays grey');
+
+    assert.equal(driveColorHex('', palette), '#3D5AFE', 'the library is the accent');
+    const byEntry = new Map();
+    for (let i = 0; i < 400; i++) byEntry.set(driveColor(`drive-${i}`), driveColorHex(`drive-${i}`, palette));
+    assert.equal(byEntry.size, DRIVE_COLORS.length, 'every entry reached');
+    assert.equal(byEntry.get('var(--accent-alt)'), '#E040FB');
+    assert.equal(byEntry.get('var(--warning)'), '#C2410C');
+    assert.equal(byEntry.get('color-mix(in oklch, var(--accent-cool), var(--warning))'), '#81A628');
+    assert.equal(byEntry.get('color-mix(in oklch, var(--accent-cool) 30%, var(--warning))'), '#AA8200');
+    assert.equal(new Set(byEntry.values()).size, DRIVE_COLORS.length, 'no two entries the same colour');
+  });
+
+  test('as #RRGGBB for any palette, or null for one missing a colour', () => {
+    const own = { accent: '#00aa77', accentAlt: '#123456', accentCool: '#ABCDEF', warning: '#FEDCBA' };
+    for (let i = 0; i < 100; i++) assert.match(driveColorHex(`d-${i}`, own), /^#[0-9A-F]{6}$/);
+    assert.equal(driveColorHex('', own), '#00AA77');
+    const partial = { ...palette, warning: undefined };
+    assert.ok(Array.from({ length: 100 }, (_, i) => driveColorHex(`d-${i}`, partial)).includes(null));
+    assert.equal(driveColorHex('', null), null);
   });
 });

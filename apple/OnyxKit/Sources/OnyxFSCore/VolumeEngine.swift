@@ -34,6 +34,8 @@ public protocol VolumeEngine: AnyObject, Sendable {
     func write(_ id: UInt64, at offset: Int64, data: Data) async throws -> Int
     func setSize(_ id: UInt64, to size: UInt64) async throws -> VolumeNode
     func setModified(_ id: UInt64, to date: Date) async throws -> VolumeNode
+    /// The file's birth time, as Finder sets it on a copy.
+    func setCreated(_ id: UInt64, to date: Date) async throws -> VolumeNode
     /// The last writer closed it (or asked for it to be synced): its bytes
     /// go to the app, which uploads them.
     func finishWriting(_ id: UInt64) async throws
@@ -72,6 +74,11 @@ public struct VolumeNode: Sendable, Equatable {
     public var created: Date
     /// Only on this Mac (.DS_Store and the like): never on the web.
     public var localOnly: Bool
+
+    /// Hidden in Finder, as macOS's own files are on any disk. Most hide by
+    /// their dot; the Time Machine marker at the root
+    /// (com.apple.timemachine.donotpresent) and a folder's Icon\r have none.
+    public var hidden: Bool { localOnly }
 }
 
 public struct VolumeStatistics: Sendable, Equatable {

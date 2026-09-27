@@ -6,6 +6,9 @@ import Testing
 /// PUT to it, fails on command.
 actor FakeServer: UploadTransport {
     var calls: [String] = []
+    /// What each recorded or swapped job said of the file's own dates:
+    /// (created, modified), by path.
+    var dates: [String: (Date?, Date?)] = [:]
     var objects: [String: Data] = [:]
     /// Large uploads open, by id: their parts.
     var uploads: [String: [Int: Data]] = [:]
@@ -69,12 +72,14 @@ actor FakeServer: UploadTransport {
 
     func record(_ job: UploadJob, key: String, publicUrl: String?) async throws -> OnyxAPI.RecordedFile {
         try log("record \(job.path)")
+        dates[job.path] = (job.fileCreatedAt, job.fileModifiedAt)
         return .init(id: "file-\(job.name)", name: job.name, folder: job.folder, size: job.size)
     }
 
     /// The swap: the same file, new bytes, changed at t=2 s.
     func replaceContent(_ job: UploadJob, key: String) async throws -> OnyxAPI.RecordedFile {
         try log("swap \(job.replaceOf ?? "?") <- \(key)")
+        dates[job.path] = (job.fileCreatedAt, job.fileModifiedAt)
         return .init(id: job.replaceOf ?? "?", name: job.name, folder: job.folder, size: job.size, updatedAt: EpochMillis(2_000))
     }
 
@@ -140,6 +145,30 @@ func settle(_ queue: UploadQueue) async {
 
     /// Over the threshold: in parts. Part 5 fails once; the retry asks the
     /// bucket what it already has and sends only what is missing.
+    @Test func aFilesOwnDatesAreRecordedWithIt() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 0, sleep: { _ in })
+        let born = Date(timeIntervalSince1970: 1_551_000_000), changed = Date(timeIntervalSince1970: 1_551_530_000)
+        try await queue.enqueue(from: try source(Data("x".utf8)), scope: "drive.d1", filespaceId: "d1",
+                                folder: "Footage", name: "Old.mov", mime: "video/quicktime", created: born, modified: changed)
+        try await queue.enqueue(from: try source(Data("y".utf8)), scope: "drive.d1", filespaceId: "d1",
+                                folder: "Footage", name: "Cut.mov", mime: "video/quicktime", replaceOf: "f9", modified: changed)
+        await settle(queue)
+        let recorded = try #require(await server.dates["/Footage/Old.mov"])
+        #expect(recorded.0 == born && recorded.1 == changed)
+        // New contents carry when they were written; the file keeps its own created date.
+        let swapped = try #require(await server.dates["/Footage/Cut.mov"])
+        #expect(swapped.0 == nil && swapped.1 == changed)
+    }
+
+    @Test func aJobSavedBeforeDatesWereKeptStillLoads() throws {
+        // A queue written by an older build: no fileCreatedAt, no fileModifiedAt.
+        let json = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","scope":"drive.d1","filespaceId":"d1","folder":"","name":"a.mov","staged":"/tmp/a","size":1,"mime":"video/quicktime","state":"queued","attempts":0}"#
+        let job = try JSONDecoder().decode(UploadJob.self, from: Data(json.utf8))
+        #expect(job.fileCreatedAt == nil && job.fileModifiedAt == nil && job.name == "a.mov")
+    }
+
     @Test func aLargeFileGoesInPartsAndResumesWhereItStopped() async throws {
         let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
         let server = FakeServer()

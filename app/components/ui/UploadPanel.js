@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { fmtSize } from '@/lib/media';
+import { batchComplete } from '@/lib/upload-queue';
 import Icon from '@/app/components/ui/Icon';
 
 /**
@@ -12,10 +13,18 @@ import Icon from '@/app/components/ui/Icon';
  * bar glides instead of jumping in 5% steps and never triggers layout. The
  * queue reports at most once a frame (lib/upload-client.js), which is what
  * keeps a thousand-file drop from re-rendering this per progress event.
+ *
+ * A batch that finished with nothing left to do (batchComplete) dismisses
+ * itself three seconds later, which is what `onClear` does when someone presses
+ * the ×. Anything else stays: a failure holds its message and its Retry, and so
+ * does a row someone canceled.
  */
 
 // A long drop renders its first rows and a count, not a thousand-row list.
 const MAX_ROWS = 300;
+
+// How long "3 files uploaded" stays before the tray sees itself out.
+const DISMISS_MS = 3000;
 
 function fmtEta(seconds) {
   if (seconds == null || !Number.isFinite(seconds)) return '';
@@ -43,6 +52,28 @@ export default function UploadPanel({ snapshot, onCancel, onRetry, onRetryFailed
   const [collapsed, setCollapsed] = useState(false);
   const listRef = useRef(null);
   const touched = useRef(0);
+  // Pointer over the tray, or focus inside it: someone is reading the list of
+  // what landed, or reaching for a button. Dismissing under them would be the
+  // one moment it is unwelcome.
+  const [held, setHeld] = useState(false);
+
+  // In a ref, and out of the effect's dependencies: the parent passes an inline
+  // arrow, so a new identity arrives with every render — and re-running the
+  // effect would restart the three seconds each time the grid refreshed behind
+  // this, which is exactly when it refreshes.
+  const clear = useRef(onClear);
+  clear.current = onClear;
+
+  const finished = batchComplete(snapshot);
+  useEffect(() => {
+    if (!finished || held) return undefined;
+    const timer = setTimeout(() => clear.current?.(), DISMISS_MS);
+    return () => clearTimeout(timer);
+  }, [finished, held]);
+
+  // Focus moving between two buttons inside the tray is not focus leaving it;
+  // without the containment check the hold would drop and re-take on every Tab.
+  const onBlurCapture = (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setHeld(false); };
 
   // Keep the file that is uploading now in view as the queue works down a
   // long list, unless someone has just scrolled it themselves.
@@ -71,7 +102,14 @@ export default function UploadPanel({ snapshot, onCancel, onRetry, onRetryFailed
   const status = running ? 'uploading' : counts.error ? 'error' : 'done';
 
   return (
-    <section className="upload-panel" aria-label="Uploads">
+    <section
+      className="upload-panel"
+      aria-label="Uploads"
+      onPointerEnter={() => setHeld(true)}
+      onPointerLeave={() => setHeld(false)}
+      onFocusCapture={() => setHeld(true)}
+      onBlurCapture={onBlurCapture}
+    >
       <div className="upload-head">
         <div style={{ minWidth: 0, flex: 1 }}>
           <div className="small" style={{ fontWeight: 600 }} aria-live="polite">{title}</div>

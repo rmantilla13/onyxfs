@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// What an onyxfs volume keeps on this Mac only: the bytes of local-only
@@ -40,6 +41,9 @@ public actor LocalStore {
     struct Index: Codable {
         var files: [String: Entry] = [:]
         var attributes: [String: [String: Attribute]] = [:]
+        /// The SHA-256 of the drive's icon as last placed (placeVolumeIcon):
+        /// an icon at the root with other bytes is the person's own.
+        var volumeIcon: String?
     }
 
     private let root: URL
@@ -201,7 +205,70 @@ public actor LocalStore {
         save()
     }
 
+    // MARK: - The drive's icon
+
+    static let volumeIconPath = "/.VolumeIcon.icns"
+    static let rootAttributesPath = "/" + AppleDouble.rootName
+
+    /// The drive's icon on its disk, where macOS looks for a disk's own:
+    /// `.VolumeIcon.icns` at the root, and Finder's custom-icon flag in the
+    /// root's Finder info, which on this volume is in `._.` (AppleDouble).
+    /// Both are macOS's files, so they live here, never on the web.
+    ///
+    /// Placed as the disk mounts, before Finder first looks at it, and again
+    /// whenever the app draws the drive a new one. An icon the person gave
+    /// the disk themselves (Get Info) is theirs, and stays; one removed
+    /// comes back at the next mount, as the disk's own.
+    public func placeVolumeIcon(_ icon: Data) throws {
+        let digest = Self.digest(icon)
+        let path = Self.volumeIconPath
+        if let current = try? contents(path) {
+            // Bytes this store did not put there: the person's icon. Our
+            // own are ours even with no record of them (an older Onyx saved
+            // the index without it).
+            guard current == icon || Self.digest(current) == index.volumeIcon else { return }
+            if current != icon { try rewrite(path, with: icon) }
+        } else {
+            if exists(path) { remove(path) } // there, but unreadable
+            try createFile(path)
+            try rewrite(path, with: icon)
+        }
+        if index.volumeIcon != digest {
+            index.volumeIcon = digest
+            save()
+        }
+
+        let attributes = Self.rootAttributesPath
+        if let current = try? contents(attributes) {
+            // Finder may keep more of the root's here: only the flag changes.
+            if let flagged = AppleDouble.settingFinderFlags(AppleDouble.hasCustomIcon, in: current), flagged != current {
+                try rewrite(attributes, with: flagged)
+            }
+        } else {
+            if exists(attributes) { remove(attributes) }
+            try createFile(attributes)
+            try rewrite(attributes, with: AppleDouble.file(finderFlags: AppleDouble.hasCustomIcon))
+        }
+    }
+
     // MARK: -
+
+    /// A local file's bytes, whole.
+    private func contents(_ path: String) throws -> Data {
+        guard let blob = index.files[path]?.blob, let data = try? Data(contentsOf: blobURL(blob)) else {
+            throw Failure.posix(ENOENT)
+        }
+        return data
+    }
+
+    private func rewrite(_ path: String, with data: Data) throws {
+        try truncate(path, to: 0)
+        _ = try write(path, at: 0, data)
+    }
+
+    private static func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
 
     private func blobURL(_ blob: String) -> URL { blobs.appendingPathComponent(blob) }
 

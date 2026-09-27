@@ -927,6 +927,56 @@ describe('folder names are per drive', () => {
   });
 });
 
+describe('the file’s own dates', () => {
+  const SHOT = Date.parse('2026-09-05T12:30:00Z');
+  const SAVED = Date.parse('2026-09-05T13:02:10Z');
+
+  async function recordWith(who, dates) {
+    const p = await presign(who, { filename: 'Take 9.mov', contentType: 'video/quicktime', size: 100, folder: 'Cuts', filespaceId: 'd1' });
+    put(p.body.putUrl, Buffer.alloc(100, 1));
+    return record(who, {
+      name: p.body.name, url: p.body.publicUrl, storage: 's3', storageKey: p.body.key, size: 100, folder: 'Cuts', filespace: 'd1', ...dates,
+    });
+  }
+
+  test('recorded with the upload, and read back wherever the file is', async () => {
+    const who = mac(ED);
+    const r = await recordWith(who, { fileCreatedAt: SHOT, fileModifiedAt: SAVED });
+    assert.equal(r.status, 200);
+    assert.deepEqual([r.body.file.fileCreatedAt, r.body.file.fileModifiedAt], [SHOT, SAVED]);
+    assert.notEqual(r.body.file.createdAt, SHOT, 'the row’s own time is when it was added');
+    const one = await getFile(who, r.body.file.id);
+    assert.deepEqual([one.body.file.fileCreatedAt, one.body.file.fileModifiedAt], [SHOT, SAVED]);
+    const list = await call(filesRoute.GET, '/api/files?filespace=d1&folder=Cuts&folders=0', who);
+    const listed = list.body.files.find((f) => f.id === r.body.file.id);
+    assert.deepEqual([listed.fileCreatedAt, listed.fileModifiedAt], [SHOT, SAVED]);
+  });
+
+  test('a date that could not be real is dropped, and the upload recorded all the same', async () => {
+    const r = await recordWith(mac(ED), { fileCreatedAt: 'last week', fileModifiedAt: Date.now() + 3 * 86400_000 });
+    assert.equal(r.status, 200);
+    assert.deepEqual([r.body.file.fileCreatedAt, r.body.file.fileModifiedAt], [null, null]);
+  });
+
+  test('new contents move the modified date — to the one sent, else to now — and keep the created one', async () => {
+    const who = mac(ED);
+    const { body: { file } } = await recordWith(who, { fileCreatedAt: SHOT, fileModifiedAt: SAVED });
+    const p = await presign(who, { replaceOf: file.id, size: 120 });
+    put(p.body.putUrl, Buffer.alloc(120, 2));
+    const later = Date.parse('2026-09-06T08:00:00Z');
+    const sent = await swap(who, file.id, { key: p.body.key, fileModifiedAt: later });
+    assert.deepEqual([sent.body.file.fileCreatedAt, sent.body.file.fileModifiedAt], [SHOT, later]);
+
+    globalThis.__mw.now = Date.parse('2026-09-26T09:00:00Z');
+    const q = await presign(who, { replaceOf: file.id, size: 130 });
+    put(q.body.putUrl, Buffer.alloc(130, 3));
+    const unsaid = await swap(who, file.id, { key: q.body.key, fileModifiedAt: 'soon' });
+    assert.equal(unsaid.status, 200);
+    assert.equal(unsaid.body.file.fileModifiedAt, globalThis.__mw.now, 'a swap never leaves it where the old bytes had it');
+    assert.equal(unsaid.body.file.fileCreatedAt, SHOT);
+  });
+});
+
 describe('the session path, unchanged', () => {
   test('a browser uploads, renames, moves and trashes exactly as before', async () => {
     const who = web(ED);

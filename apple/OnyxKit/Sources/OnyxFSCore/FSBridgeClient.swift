@@ -138,6 +138,25 @@ public final class FSBridgeClient: Sendable {
         try await get("volume", [], as: FSVolumeInfo.self)
     }
 
+    /// GET /fs/v1/icon: the drive's disk icon, an .icns. Nil when the app has
+    /// none to give (404 — an app from before icons says the same), or sent
+    /// something that is not one.
+    public func volumeIcon() async throws -> Data? {
+        var request = self.request("GET", "icon", query: [])
+        request.setValue("image/icns", forHTTPHeaderField: "Accept")
+        let (body, response) = try await Self.send(request, on: bridge)
+        if response.statusCode == 404 { return nil }
+        try Self.check(response, body)
+        return Self.isIcns(body) ? body : nil
+    }
+
+    /// "icns", then the length of the whole.
+    static func isIcns(_ data: Data) -> Bool {
+        guard data.count > 8, data.prefix(4) == Data("icns".utf8) else { return false }
+        let length = data.dropFirst(4).prefix(4).reduce(0) { $0 << 8 | Int($1) }
+        return length == data.count
+    }
+
     // MARK: - Writes
 
     /// PUT /fs/v1/file: uploads the file at `fileURL` to `path`, streamed
@@ -145,11 +164,14 @@ public final class FSBridgeClient: Sendable {
     /// memory). The app keeps the bytes and answers at once with the entry,
     /// `pending` until its upload to storage finishes. A file already at
     /// `path` is replaced in place: same id, new bytes.
-    public func putFile(path: String, from fileURL: URL, mtime: Date? = nil) async throws -> FSEntry {
+    public func putFile(path: String, from fileURL: URL, mtime: Date? = nil, btime: Date? = nil) async throws -> FSEntry {
         var request = self.request("PUT", "file", query: [("path", path)])
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         if let mtime {
             request.setValue(Self.seconds(mtime.timeIntervalSince1970), forHTTPHeaderField: "X-Onyx-Mtime")
+        }
+        if let btime {
+            request.setValue(Self.seconds(btime.timeIntervalSince1970), forHTTPHeaderField: "X-Onyx-Btime")
         }
         let body: Data
         let response: HTTPURLResponse

@@ -38,7 +38,7 @@ export default function AuthorizeClient({ brandName, logo, email, challenge, sta
           <>
             <h1 style={{ fontSize: 22, marginBottom: 8 }}>Nothing to authorize</h1>
             <p className="muted small" style={{ margin: 0 }}>
-              Open this page from the {brandName} desktop app — it needs to supply its own challenge.
+              Open this page from the {brandName} app — it needs to supply its own challenge.
               You can also use a <a href="/space/pair" style={{ textDecoration: 'underline' }}>pairing code</a>.
             </p>
           </>
@@ -51,11 +51,11 @@ export default function AuthorizeClient({ brandName, logo, email, challenge, sta
           <>
             <h1 style={{ fontSize: 22, marginBottom: 8 }}>Connect {brandName}</h1>
             <p className="muted small" style={{ marginBottom: 20 }}>
-              This will let {label ? <strong>{label}</strong> : 'the desktop app on this computer'} access the drives granted to <strong>{email}</strong>.
+              This will let {label ? <strong>{label}</strong> : 'the app on this device'} access the drives granted to <strong>{email}</strong>.
               It can be revoked at any time.
             </p>
             <button className="btn btn-primary" onClick={approve} disabled={status === 'working'} style={{ width: '100%', justifyContent: 'center' }}>
-              {status === 'working' ? 'Connecting…' : 'Authorize this computer'}
+              {status === 'working' ? 'Connecting…' : 'Authorize'}
             </button>
             {error && <p className="small" style={{ color: 'var(--danger)', marginTop: 12 }}>{error}</p>}
           </>

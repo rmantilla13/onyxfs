@@ -50,6 +50,7 @@ public actor DriveEngine {
     struct Writing {
         var dirty = false
         var modified: Date?
+        var created: Date?
     }
 
     let bridge: any EngineBridge
@@ -214,6 +215,16 @@ public actor DriveEngine {
         return Self.public(node)
     }
 
+    /// Finder sets a copy's birth time to its original's: kept, and sent
+    /// with the bytes as the file's own created date.
+    public func setCreated(_ id: UInt64, to date: Date) async throws -> VolumeNode {
+        guard var node = nodes[id] else { throw VolumeError.posix(ESTALE) }
+        node.created = date
+        nodes[id] = node
+        if !node.localOnly, writing[id] != nil { writing[id]?.created = date }
+        return Self.public(node)
+    }
+
     public func setModified(_ id: UInt64, to date: Date) async throws -> VolumeNode {
         guard var node = nodes[id] else { throw VolumeError.posix(ESTALE) }
         node.modified = date
@@ -236,7 +247,9 @@ public actor DriveEngine {
             return
         }
         guard let url = await staging.url(id) else { writing[id] = nil; return }
-        let entry = try await wrap { try await self.bridge.putFile(node.path, from: url, modified: state.modified) }
+        let entry = try await wrap {
+            try await self.bridge.putFile(node.path, from: url, modified: state.modified, created: state.created)
+        }
         node.fileId = entry.id
         node.version = entry.version
         node.size = UInt64(max(0, entry.size))
@@ -412,8 +425,10 @@ public actor DriveEngine {
             listing[Self.fold(name)] = node.id
         }
         if id == Self.rootID {
+            // Dated as the disk is: 1970 reads as the last day of 1969 in Finder.
+            let mounted = nodes[Self.rootID]?.created ?? now()
             for marker in LocalOnly.rootMarkers where listing[Self.fold(marker)] == nil {
-                listing[Self.fold(marker)] = insert(name: marker, parent: id, isDirectory: false, size: 0, modified: Date(timeIntervalSince1970: 0),
+                listing[Self.fold(marker)] = insert(name: marker, parent: id, isDirectory: false, size: 0, modified: mounted,
                                                     fileId: nil, version: "", localOnly: true, unsent: false).id
             }
         }
@@ -436,6 +451,7 @@ public actor DriveEngine {
             node.isDirectory = entry.isDirectory
             node.size = UInt64(max(0, entry.size))
             node.modified = entry.modified
+            node.created = entry.created ?? entry.modified
             node.fileId = entry.id
             node.version = entry.version
             node.local = entry.local
@@ -450,6 +466,7 @@ public actor DriveEngine {
         var node = insert(name: entry.name, parent: parent, isDirectory: entry.isDirectory, size: UInt64(max(0, entry.size)),
                           modified: entry.modified, fileId: entry.id, version: entry.version, localOnly: false, unsent: false)
         node.local = entry.local
+        node.created = entry.created ?? entry.modified
         nodes[node.id] = node
         return node
     }

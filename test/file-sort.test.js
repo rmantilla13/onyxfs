@@ -50,23 +50,38 @@ const EXPECT = {
   small: (a, b) => cmp(a.size ?? -1, b.size ?? -1) || cmp(a.id, b.id),
   type: (a, b) => cmp(a.mime ?? '', b.mime ?? '') || cmp(a.id, b.id),
   type_desc: (a, b) => cmp(b.mime ?? '', a.mime ?? '') || cmp(b.id, a.id),
-  modified: (a, b) => cmp(b.updatedAt, a.updatedAt) || cmp(b.id, a.id),
-  modified_old: (a, b) => cmp(a.updatedAt, b.updatedAt) || cmp(a.id, b.id),
+  // The file's own date where it has one, else the row's.
+  modified: (a, b) => cmp(b.fileModifiedAt ?? b.updatedAt, a.fileModifiedAt ?? a.updatedAt) || cmp(b.id, a.id),
+  modified_old: (a, b) => cmp(a.fileModifiedAt ?? a.updatedAt, b.fileModifiedAt ?? b.updatedAt) || cmp(a.id, b.id),
+  created: (a, b) => cmp(b.fileCreatedAt ?? b.createdAt, a.fileCreatedAt ?? a.createdAt) || cmp(b.id, a.id),
+  created_old: (a, b) => cmp(a.fileCreatedAt ?? a.createdAt, b.fileCreatedAt ?? b.createdAt) || cmp(a.id, b.id),
+  // When anything about it last changed here: the row's alone.
+  activity: (a, b) => cmp(b.updatedAt, a.updatedAt) || cmp(b.id, a.id),
+  activity_old: (a, b) => cmp(a.updatedAt, b.updatedAt) || cmp(a.id, b.id),
 };
 
 test('every sort pages through NULLs without losing or repeating a row', { skip }, async () => {
   assert.deepEqual(Object.keys(EXPECT).sort(), [...SORT_KEYS].sort(), 'a new sort needs an expectation here');
   const made = [];
   for (const [i, [name, mime, size]] of SEED.entries()) {
+    // Own dates on some rows only, older than the row times and tying with
+    // them now and then, so the ordering and the paging cross between the
+    // file's date and the row's.
     made.push(await db.createFile({
       name, mime, size, folder: T, storage: 'blob', url: `http://blob.test/${T}/${name}`,
       createdBy: 'test@example.com', createdAt: 1_700_000_000_000 + (i % 3) * 1000, updatedAt: 1_700_000_000_000 + ((i * 5) % 7) * 1000,
+      fileCreatedAt: i % 2 ? 1_699_999_990_000 + (i % 4) * 1000 : null,
+      fileModifiedAt: i % 3 ? 1_700_000_000_000 + ((i * 3) % 5) * 1000 : null,
     }));
   }
-  const rows = (await db.sql`SELECT id, name, mime, size, created_at, updated_at FROM files WHERE folder = ${T}`)
-    .map((r) => ({ id: r.id, name: r.name, mime: r.mime, size: r.size == null ? null : Number(r.size), createdAt: Number(r.created_at), updatedAt: Number(r.updated_at) }));
+  const rows = (await db.sql`SELECT id, name, mime, size, created_at, updated_at, file_created_at, file_modified_at FROM files WHERE folder = ${T}`)
+    .map((r) => ({
+      id: r.id, name: r.name, mime: r.mime, size: r.size == null ? null : Number(r.size), createdAt: Number(r.created_at), updatedAt: Number(r.updated_at),
+      fileCreatedAt: r.file_created_at == null ? null : Number(r.file_created_at), fileModifiedAt: r.file_modified_at == null ? null : Number(r.file_modified_at),
+    }));
   assert.equal(rows.length, SEED.length);
   assert.ok(rows.some((r) => r.size == null) && rows.some((r) => r.mime == null), 'the seed must contain NULLs');
+  assert.ok(rows.some((r) => r.fileModifiedAt == null) && rows.some((r) => r.fileModifiedAt != null), 'and rows with and without their own dates');
 
   for (const sort of SORT_KEYS) {
     const seen = [];

@@ -8,8 +8,8 @@ export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Access requests · Admin' };
 
 /**
- * Admin → Access requests: the people who asked to sign in, and the
- * decision. It uses the invite API as it is (approve, deny, add, revoke);
+ * Admin → Access requests: who may sign in — the people admins added, and
+ * the requests made before the sign-in page stopped taking them. It uses the invite API as it is (approve, deny, add, revoke);
  * choosing a role and drives on approval, and the "You're in" email, come
  * with Phase 1's extension of that API.
  */

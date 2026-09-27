@@ -39,6 +39,31 @@ import Testing
         #expect(try await engine.read(local.id, at: 0, count: 100) == Data("local".utf8))
     }
 
+    @Test func theDrivesIconIsOnTheDisk() async throws {
+        let server = Server()
+        try await server.add("/Readme.md", Data("hello".utf8))
+        let icns = try #require(DriveIcon.icns(color: "#22D3EE", name: "Client Deliverables"))
+        let mount = try await Mount(server, icon: icns)
+        defer { mount.remove() }
+        let engine = mount.engine
+
+        let top = try await engine.children(of: DriveEngine.rootID)
+        #expect(Set(top.map(\.name)) == ["Readme.md", ".metadata_never_index", "com.apple.timemachine.donotpresent",
+                                         ".VolumeIcon.icns", "._."])
+        let icon = try await engine.lookup(".VolumeIcon.icns", in: DriveEngine.rootID)
+        #expect(icon.hidden && icon.size == UInt64(icns.count))
+        #expect(try await engine.read(icon.id, at: 0, count: icns.count + 1) == icns)
+        let root = try await engine.lookup("._.", in: DriveEngine.rootID)
+        #expect(root.hidden)
+        #expect(AppleDouble.finderFlags(of: try await engine.read(root.id, at: 0, count: 8192)) == AppleDouble.hasCustomIcon)
+        #expect(await server.calls.isEmpty, "none of it reaches the server")
+
+        // A drive with no icon mounts as it did.
+        let plain = try await Mount(Server())
+        defer { plain.remove() }
+        #expect(!(try await plain.engine.children(of: DriveEngine.rootID).map(\.name).contains(".VolumeIcon.icns")))
+    }
+
     @Test func findersChangesReachTheServerAndComeBack() async throws {
         let server = Server()
         let readme = try await server.add("/Readme.md", Data("version one".utf8))
@@ -132,10 +157,10 @@ struct Mount {
     let dir: URL
     let port: Int
 
-    init(_ server: Server, readOnly: Bool = false) async throws {
+    init(_ server: Server, readOnly: Bool = false, icon: Data? = nil) async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("onyxfs-rt-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        drive = Drive(readOnly: readOnly)
+        drive = Drive(readOnly: readOnly, icon: icon)
         await server.attach(drive)
         app = FSBridge()
         app.register(FSResponder(scope: RoundTripTests.scope, source: drive, firstGeneration: 1_000))
@@ -146,10 +171,13 @@ struct Mount {
         let url = URL(string: "onyxfs-drive://127.0.0.1:\(port)/\(RoundTripTests.scope)?ticket=\(ticket)&name=Client%20Deliverables&v=1")!
         let client = try await FSBridgeClient.connect(to: try FSMountResource(url: url), configuration: Loopback.configuration)
         let store = try ChunkStore(directory: dir.appendingPathComponent("chunks"), limitBytes: client.session.cacheLimitBytes)
+        let local = try LocalStore(directory: dir.appendingPathComponent("local"))
+        // As EngineFactory does, before anything is listed.
+        if let icon = try await client.volumeIcon() { try await local.placeVolumeIcon(icon) }
         bridge = ClientBridge(client: client, store: store)
         engine = DriveEngine(bridge: bridge, volume: bridge.initialVolume,
                              staging: try StagingArea(directory: dir.appendingPathComponent("staging")),
-                             local: try LocalStore(directory: dir.appendingPathComponent("local")))
+                             local: local)
     }
 
     func remove() {
@@ -165,10 +193,14 @@ actor Drive: OnyxKit.FSSource {
     private var index = MirrorIndex(Replica())
     private var info: OnyxKit.FSVolumeInfo
     private var kept: [String: URL] = [:]
+    private let icon: Data?
 
-    init(readOnly: Bool) {
+    init(readOnly: Bool, icon: Data? = nil) {
         info = OnyxKit.FSVolumeInfo(name: "Client Deliverables", readOnly: readOnly, cacheLimitBytes: 0)
+        self.icon = icon
     }
+
+    func volumeIcon() -> Data? { icon }
 
     func show(_ index: MirrorIndex) {
         self.index = index
@@ -238,11 +270,11 @@ actor Server: FSWriteTarget {
 
     // MARK: FSWriteTarget
 
-    func write(path: String, from file: URL, modified: Date?) async throws {
+    func write(path: String, from file: URL, modified: Date?, created: Date?) async throws {
         let bytes = try Data(contentsOf: file)
         try? FileManager.default.removeItem(at: file)
         calls.append("write \(path) \(bytes.count)")
-        put(path, bytes)
+        put(path, bytes, modified: modified, created: created)
         await publish()
     }
 
@@ -275,18 +307,24 @@ actor Server: FSWriteTarget {
 
     // MARK: -
 
+    /// As the server records an upload: the file's own dates beside the
+    /// row's (lib/file-record.js), its created date kept when new bytes
+    /// replace old.
     @discardableResult
-    private func put(_ path: String, _ bytes: Data) -> String {
+    private func put(_ path: String, _ bytes: Data, modified: Date? = nil, created: Date? = nil) -> String {
         let (folder, name) = Self.split(path)
         clock += 1_000
-        let item: FileItem
+        var item: FileItem
         if let old = file(at: path) {
             item = Self.item(old.id, name, in: folder, size: Int64(bytes.count), version: old.version + 1, updated: clock)
+            item.fileCreatedAt = old.fileCreatedAt
             files.removeAll { $0.id == old.id }
         } else {
             made += 1
             item = Self.item("f\(made)", name, in: folder, size: Int64(bytes.count), version: 1, updated: clock)
+            item.fileCreatedAt = created.map { EpochMillis(Int64($0.timeIntervalSince1970 * 1000)) }
         }
+        item.fileModifiedAt = modified.map { EpochMillis(Int64($0.timeIntervalSince1970 * 1000)) }
         files.append(item)
         Loopback.store(Self.object(item.id, "v\(item.version)"), bytes)
         return item.id

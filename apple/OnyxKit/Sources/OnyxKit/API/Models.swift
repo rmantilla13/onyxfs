@@ -44,13 +44,81 @@ public struct FileItem: Codable, Sendable, Identifiable, Equatable {
     /// re-downloading a 40 GB master.
     public let contentHash: String?
     public let createdBy: String?
+    /// When the row was written, and when anything about it last changed —
+    /// the server's clock.
     public let createdAt: EpochMillis?
     public let updatedAt: EpochMillis?
+    /// When the file itself was made and last changed, as where it came from
+    /// said: a Mac's file system, a browser's lastModified, a photo's capture
+    /// date. Nil when the source said nothing, which is every file recorded
+    /// before these existed (lib/file-dates.js falls back to the row's).
+    public var fileCreatedAt: EpochMillis? = nil
+    public var fileModifiedAt: EpochMillis? = nil
     public let deletedAt: EpochMillis?
     /// Monotonic change sequence. The delta cursor is a `seq`, never a date:
     /// two writes in the same millisecond can straddle a timestamp cursor and
     /// one of them is then lost forever.
     public let seq: Int64?
+
+    // What a listing (GET /api/files) says besides: the pictures to show a
+    // file by, what it is, and what this account may do with it. The change
+    // feed's rows carry some of these; nothing depends on them being there.
+
+    /// The grid thumbnail's key. A thumbnail never changes under its key, so
+    /// a cache of the picture is keyed on this — never on the presigned URL,
+    /// which is new on every listing.
+    public var thumbnailKey: String? = nil
+    /// The thumbnail's smaller siblings (`thumbSizes`), presigned: `sm`
+    /// covers a card, `xs` a list row.
+    public var smUrl: String? = nil
+    public var xsUrl: String? = nil
+    public var thumbSizes: [String]? = nil
+    /// A video's player poster, or an image's large preview (up to 2400 px),
+    /// presigned; its key, for caching as the thumbnail's is.
+    public var posterUrl: String? = nil
+    public var posterKey: String? = nil
+    public var metadata: FileMetadata? = nil
+    public var can: FilePermissions? = nil
+    /// in_review | changes_requested | approved (lib/review.js); nil when
+    /// the file is not in review.
+    public var reviewStatus: String? = nil
+    public var openComments: Int? = nil
+}
+
+/// The measurements a file's `metadata` carries, read leniently: the object
+/// also holds a drive's own fields (tags, a client name), which are not this
+/// client's to interpret, and a number may have been stored as a string.
+public struct FileMetadata: Codable, Sendable, Equatable {
+    public var width: Double?
+    public var height: Double?
+    /// Seconds, for video and audio.
+    public var duration: Double?
+
+    enum CodingKeys: String, CodingKey { case width, height, duration }
+
+    public init(width: Double? = nil, height: Double? = nil, duration: Double? = nil) {
+        self.width = width; self.height = height; self.duration = duration
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func number(_ key: CodingKeys) -> Double? {
+            if let d = try? c.decodeIfPresent(Double.self, forKey: key) { return d.isFinite && d > 0 ? d : nil }
+            if let s = try? c.decodeIfPresent(String.self, forKey: key), let d = Double(s) { return d.isFinite && d > 0 ? d : nil }
+            return nil
+        }
+        width = number(.width)
+        height = number(.height)
+        duration = number(.duration)
+    }
+}
+
+/// What this account may do with a file, as the listing says (`can`). The
+/// server checks every change again; this decides only what is offered.
+public struct FilePermissions: Codable, Sendable, Equatable {
+    public var edit: Bool?
+    public var delete: Bool?
+    public var share: Bool?
 }
 
 /// Something that changed and is gone, as far as the caller is concerned:
@@ -100,6 +168,10 @@ public struct Filespace: Codable, Sendable, Identifiable, Equatable, Hashable {
     /// listed every drive but sees only the ones it belongs to). Absent from
     /// older servers, where every listed drive was.
     public let member: Bool?
+    /// The drive's own colour, "#RRGGBB" — the dot beside its name on the
+    /// web — which its disk icon is drawn in (DriveIcon). Absent from older
+    /// servers.
+    public let color: String?
 
     public var isMember: Bool { member ?? true }
 
@@ -113,9 +185,9 @@ public struct Filespace: Codable, Sendable, Identifiable, Equatable, Hashable {
     public var mayAddFiles: Bool { role == "editor" || role == "owner" }
 
     public init(id: String, name: String, bucket: String? = nil, prefix: String? = nil,
-                region: String? = nil, role: String? = nil, member: Bool? = nil) {
+                region: String? = nil, role: String? = nil, member: Bool? = nil, color: String? = nil) {
         self.id = id; self.name = name; self.bucket = bucket; self.prefix = prefix
-        self.region = region; self.role = role; self.member = member
+        self.region = region; self.role = role; self.member = member; self.color = color
     }
 }
 

@@ -33,6 +33,12 @@ public protocol FSSource: Sendable {
     /// The drive's name and what this account may do in it, as the app
     /// knows them now.
     func volumeInfo() async -> FSVolumeInfo
+    /// The drive's disk icon, an .icns (DriveIcon); nil for none.
+    func volumeIcon() async -> Data?
+}
+
+extension FSSource {
+    public func volumeIcon() async -> Data? { nil }
 }
 
 public struct FSSnapshot: Sendable {
@@ -197,6 +203,14 @@ public struct FSResponder: Sendable {
         return Self.json(200, volumeJSON(await source.volumeInfo(), view))
     }
 
+    /// `GET /fs/v1/icon`: the drive's disk icon, an .icns, which the extension
+    /// puts where macOS looks for a disk's own. 404 when it has none.
+    func icon() async -> DAVResponse {
+        guard let icon = await source.volumeIcon(), !icon.isEmpty else { return Self.error(404, "This drive has no icon.") }
+        return DAVResponse(status: 200, headers: [("Content-Type", "image/icns"), ("Cache-Control", "no-store")],
+                           body: .data(icon))
+    }
+
     // MARK: - Pieces
 
     private func volumeJSON(_ info: FSVolumeInfo, _ view: FSView) -> VolumeJSON {
@@ -321,6 +335,8 @@ public struct FSResponder: Sendable {
         let id: String?
         let size: Int64
         let mtime: Double
+        /// When the file was made (its birth time), seconds since 1970.
+        let btime: Double
         let version: String
         let local: Bool
         let pending: Bool
@@ -332,12 +348,14 @@ public struct FSResponder: Sendable {
             size = node.isFolder ? 0 : node.size
             let t = node.modified.timeIntervalSince1970
             mtime = t.isFinite ? t : 0
+            let b = node.created.timeIntervalSince1970
+            btime = b.isFinite ? b : mtime
             version = node.version
             local = !node.isFolder && (node.staged != nil || node.fileId.map(keptOffline.contains) == true)
             pending = node.pending
         }
 
-        enum CodingKeys: String, CodingKey { case name, type, id, size, mtime, version, local, pending }
+        enum CodingKeys: String, CodingKey { case name, type, id, size, mtime, btime, version, local, pending }
 
         func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -346,6 +364,7 @@ public struct FSResponder: Sendable {
             if let id { try c.encode(id, forKey: .id) } else { try c.encodeNil(forKey: .id) }
             try c.encode(size, forKey: .size)
             try c.encode(mtime, forKey: .mtime)
+            try c.encode(btime, forKey: .btime)
             try c.encode(version, forKey: .version)
             try c.encode(local, forKey: .local)
             try c.encode(pending, forKey: .pending)
