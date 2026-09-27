@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 122
+-- Statements: 123
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -320,6 +320,8 @@ ALTER TABLE folders ADD COLUMN IF NOT EXISTS created_by TEXT;
 ALTER TABLE folders ADD COLUMN IF NOT EXISTS filespace TEXT DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS folders_parent_idx ON folders (parent);
+
+CREATE UNIQUE INDEX IF NOT EXISTS folders_scope_name_idx ON folders ((COALESCE(filespace, '')), name);
 
 CREATE TABLE IF NOT EXISTS file_shares (
   token TEXT PRIMARY KEY,

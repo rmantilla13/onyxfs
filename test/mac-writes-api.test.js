@@ -120,6 +120,7 @@ const restoreRoute = await import('../app/api/admin/trash/restore/route.js');
 // ── the world ──
 const STORAGE = { provider: 's3', bucket: 'onyx', accessKeyId: 'k', secretAccessKey: 's', region: 'us-east-1', endpoint: 'http://s3.test', prefix: 'files' };
 const D1 = { id: 'd1', name: 'Team', bucket: 'onyx', prefix: 'team', region: 'us-east-1' };
+const D2 = { id: 'd2', name: 'Studio', bucket: 'onyx', prefix: 'studio', region: 'us-east-1' };
 const ROLES = { version: 2, defaultRole: 'member', roles: [{ id: 'no-desktop', name: 'No desktop', caps: { 'desktop.mount': false } }], assignments: {} };
 const BOSS = 'boss@mw.test'; // ADMIN_EMAILS
 const ED = 'ed@mw.test'; // a Member, editor of the drive: the Mac's owner
@@ -133,7 +134,7 @@ function reset() {
   globalThis.__mw = {
     now: Date.now(), seq: 100, session: null,
     settings: new Map([['storage.config', STORAGE], ['roles.config', ROLES]]),
-    people: new Map(), invites: new Set(), tokens: new Map(), drives: [D1], grants: new Map(), acl: new Map(),
+    people: new Map(), invites: new Set(), tokens: new Map(), drives: [D1, D2], grants: new Map(), acl: new Map(),
     files: new Map(), folders: new Map(), uploads: new Map(), uploadKeys: new Map(), transcripts: new Map(),
     audit: [], tombstones: [],
     s3: { objects: new Map(), multipart: new Map(), calls: [] },
@@ -142,6 +143,8 @@ function reset() {
     globalThis.__mw.people.set(email, { id: randomUUID(), email, roleId, status: 'active', quotaBytes: null, maxUploadBytes: null });
     globalThis.__mw.invites.add(email);
     globalThis.__mw.grants.set(`d1|${email}`, driveRole);
+    // The second drive: ED and ED2 edit it too; nobody else is in it.
+    if (email === ED || email === ED2) globalThis.__mw.grants.set(`d2|${email}`, 'editor');
   }
 }
 beforeEach(reset);
@@ -780,6 +783,147 @@ describe('new contents for a file', () => {
     const out = await swap(web(ED2), f.id, { key: p.body.key });
     assert.equal(out.status, 200);
     assert.equal(row(f.id).createdBy, ED, 'still its uploader’s file');
+  });
+});
+
+describe('folder names are per drive', () => {
+  // `globalNames` stands for the old primary key on folder names alone, still
+  // in place until the guard that drops it has run.
+  const rowsIn = (tag) => [...globalThis.__mw.folders.values()].filter((r) => r.tag === tag).map((r) => r.name).sort();
+
+  test('two drives each make "Selects" — and "untitled folder", as Finder does — and the library its own', async () => {
+    const who = mac(ED);
+    for (const name of ['Selects', 'untitled folder']) {
+      const one = await folders.create(who, { name, filespaceId: 'd1' });
+      const two = await folders.create(who, { name, filespaceId: 'd2' });
+      assert.deepEqual([one.status, two.status], [201, 201], name);
+      assert.deepEqual(two.body, { folder: { name } });
+    }
+    assert.equal((await folders.create(web(BOSS), { name: 'Selects' })).status, 201, 'and the library');
+    assert.deepEqual(rowsIn('team'), ['Selects', 'untitled folder']);
+    assert.deepEqual(rowsIn('studio'), ['Selects', 'untitled folder']);
+    assert.deepEqual(rowsIn(''), ['Selects']);
+    assert.ok(stored('team/Selects/') && stored('studio/Selects/'), 'each drive’s marker, in its own prefix');
+  });
+
+  test('the same name twice in one drive: 409, or 200 with ensure', async () => {
+    const who = mac(ED);
+    await folders.create(who, { name: 'Selects', filespaceId: 'd1' });
+    const again = await folders.create(who, { name: 'Selects', filespaceId: 'd1' });
+    assert.deepEqual([again.status, again.body], [409, { error: 'A folder named “Selects” already exists here.' }]);
+    const nested = await folders.create(who, { name: 'Day 1/Cam A', filespaceId: 'd1' });
+    assert.equal(nested.status, 201);
+    const nestedAgain = await folders.create(who, { name: 'Day 1/Cam A', filespaceId: 'd1' });
+    assert.deepEqual([nestedAgain.status, nestedAgain.body], [409, { error: 'A folder named “Cam A” already exists here.' }]);
+    assert.deepEqual((await folders.create(who, { name: 'Selects', filespaceId: 'd1', ensure: true })).body, { folder: { name: 'Selects' } });
+  });
+
+  test('while the old key on names stands, another drive’s name is still refused, as before', async () => {
+    globalThis.__mw.globalNames = true;
+    const who = mac(ED);
+    assert.equal((await folders.create(who, { name: 'Selects', filespaceId: 'd1' })).status, 201);
+    for (const ensure of [false, true]) {
+      const two = await folders.create(who, { name: 'Selects', filespaceId: 'd2', ensure });
+      assert.deepEqual([two.status, two.body], [409, {
+        error: 'A folder at “Selects” already exists in another filespace, and folder names are not yet per-filespace. Choose another name.',
+      }], 'not a 200 for a folder that would not show up');
+    }
+    assert.deepEqual(rowsIn('studio'), []);
+    // A rename onto another drive's name gets as far as the one statement,
+    // which the old key refuses: the copies are undone, nothing moves.
+    await folders.create(who, { name: 'Picks', filespaceId: 'd2' });
+    const f = await upload(who, { name: 'A.mov', folder: 'Selects', filespaceId: 'd1' });
+    const out = await folders.move(who, { from: 'Selects', to: 'Picks', filespaceId: 'd1' });
+    assert.deepEqual([out.status, out.body], [409, {
+      error: 'A folder at “Picks” already exists in another filespace, and folder names are not yet per-filespace. Nothing was renamed.',
+    }]);
+    assert.equal(row(f.id).storageKey, 'team/Selects/A.mov');
+    assert.ok(stored('team/Selects/A.mov') && !stored('team/Picks/A.mov'), 'the copy was undone');
+  });
+
+  test('rename and move in one drive leave the other drive’s folder of that name as it is', async () => {
+    const who = mac(ED);
+    for (const d of ['d1', 'd2']) await folders.create(who, { name: 'Selects/Empty', filespaceId: d });
+    const mine = await upload(who, { name: 'A.mov', folder: 'Selects', filespaceId: 'd1' });
+    const theirs = await upload(who, { name: 'B.mov', folder: 'Selects', filespaceId: 'd2' });
+
+    const renamed = await folders.move(who, { from: 'Selects', to: 'Picks', filespaceId: 'd1' });
+    assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
+    assert.deepEqual([renamed.body.files, renamed.body.folders, renamed.body.outside], [1, 2, 1], 'the other drive’s file is outside, and stays');
+    assert.deepEqual(rowsIn('team'), ['Picks', 'Picks/Empty']);
+    assert.deepEqual(rowsIn('studio'), ['Selects', 'Selects/Empty']);
+    assert.equal(row(mine.id).storageKey, 'team/Picks/A.mov');
+    assert.equal(row(theirs.id).folder, 'Selects');
+    assert.equal(row(theirs.id).storageKey, 'studio/Selects/B.mov');
+    assert.ok(stored('studio/Selects/B.mov') && stored('team/Picks/A.mov') && !stored('team/Selects/A.mov'));
+
+    // Onto a name the other drive has: this drive's own "Selects" is free again.
+    const moved = await folders.move(who, { from: 'Picks', to: 'Archive/Selects', filespaceId: 'd1' });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.deepEqual(rowsIn('team'), ['Archive', 'Archive/Selects', 'Archive/Selects/Empty']);
+    assert.deepEqual(rowsIn('studio'), ['Selects', 'Selects/Empty']);
+    // The other drive's "Selects" is no obstacle; this drive's own is.
+    await folders.create(who, { name: 'Selects', filespaceId: 'd1' });
+    const clash = await folders.move(who, { from: 'Archive/Selects', to: 'Selects', filespaceId: 'd1' });
+    assert.deepEqual([clash.status, clash.body], [409, { error: '“Selects” already exists. Choose another name, or move the files into it instead.' }]);
+  });
+
+  test('delete in one drive leaves the other drive’s folder of that name, and its file', async () => {
+    const who = mac(ED);
+    for (const d of ['d1', 'd2']) await folders.create(who, { name: 'Selects/Empty', filespaceId: d });
+    const mine = await upload(who, { name: 'A.mov', folder: 'Selects', filespaceId: 'd1' });
+    const theirs = await upload(who, { name: 'B.mov', folder: 'Selects', filespaceId: 'd2' });
+    const gone = await folders.remove(who, 'Selects', 'd1');
+    assert.deepEqual(gone.body, { deleted: 1, failed: 0, error: null, outside: 1, more: false, trashed: true });
+    assert.ok(row(mine.id).deletedAt);
+    assert.equal(row(theirs.id).deletedAt, null);
+    assert.deepEqual(rowsIn('team'), []);
+    assert.deepEqual(rowsIn('studio'), ['Selects', 'Selects/Empty']);
+    assert.ok(stored('studio/Selects/Empty/') && !stored('team/Selects/Empty/'), 'only this drive’s markers go');
+  });
+
+  test('the delete confirmation counts this drive’s folder alone', async () => {
+    const who = mac(ED);
+    for (const d of ['d1', 'd2']) await folders.create(who, { name: 'Selects/Empty', filespaceId: d });
+    await upload(who, { name: 'A.mov', folder: 'Selects', filespaceId: 'd1' });
+    await upload(who, { name: 'B.mov', folder: 'Selects', filespaceId: 'd2' });
+    await upload(who, { name: 'C.mov', folder: 'Selects/Sub', filespaceId: 'd2' });
+    const one = await call(foldersRoute.GET, '/api/files/folders?summary=Selects&filespace=d1', who);
+    assert.deepEqual(one.body, { files: 1, folders: 1, outside: 2 });
+    const two = await call(foldersRoute.GET, '/api/files/folders?summary=Selects&filespace=d2', who);
+    assert.deepEqual(two.body, { files: 2, folders: 2, outside: 1 });
+  });
+
+  test('each drive’s listing shows its own folders', async () => {
+    const who = mac(ED);
+    await folders.create(who, { name: 'Selects', filespaceId: 'd1' });
+    await folders.create(who, { name: 'Only One', filespaceId: 'd1' });
+    await folders.create(who, { name: 'Selects', filespaceId: 'd2' });
+    await folders.create(who, { name: 'Only Two', filespaceId: 'd2' });
+    assert.deepEqual((await folders.list(who, 'd1')).body.folders.map((f) => f.folder), ['Only One', 'Selects']);
+    assert.deepEqual((await folders.list(who, 'd2')).body.folders.map((f) => f.folder), ['Only Two', 'Selects']);
+  });
+
+  test('a drive editor restructures its own folder, whatever the library has of that name', async () => {
+    const who = mac(ED);
+    await folders.create(web(BOSS), { name: 'Board' });
+    await folders.create(who, { name: 'Board', filespaceId: 'd1' });
+    assert.equal((await folders.move(who, { from: 'Board', to: 'Board 2', filespaceId: 'd1' })).status, 200);
+    assert.equal((await folders.remove(who, 'Board 2', 'd1')).status, 200);
+    assert.deepEqual(rowsIn(''), ['Board'], 'the library’s is untouched');
+  });
+
+  test('folder access cannot follow a folder to a name another drive uses', async () => {
+    const who = mac(ED);
+    await folders.create(who, { name: 'Selects', filespaceId: 'd1' });
+    await folders.create(who, { name: 'Picks', filespaceId: 'd2' });
+    globalThis.__mw.folderGrants = ['Selects']; // someone was given access to "Selects"
+    const out = await folders.move(who, { from: 'Selects', to: 'Picks', filespaceId: 'd1' });
+    assert.deepEqual([out.status, out.body], [409, {
+      error: '“Picks” is also a folder in another drive or in the library, and the access given on “Selects” would reach it there as well. Choose another name, or remove that access first.',
+    }]);
+    assert.deepEqual(rowsIn('team'), ['Selects']);
+    assert.equal((await folders.move(who, { from: 'Selects', to: 'Keepers', filespaceId: 'd1' })).status, 200, 'a name no one else uses is fine');
   });
 });
 

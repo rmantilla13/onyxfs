@@ -9,8 +9,13 @@
 // fileWriteDecision over the real driveAccess, getFilespaceForWrite the real
 // canWriteDrive, canModifyFolder the real folderRoleAllows — imported from
 // the modules that define them — so a refusal here is the rule refusing.
-// The UPDATEs keep their WHERE clauses (replaceFileContent's above all). The
-// SQL itself is test/replace-content-db.test.js's, against a real database.
+// The UPDATEs keep their WHERE clauses (replaceFileContent's above all).
+//
+// Folder rows are keyed as the table's unique index keys them: a name within
+// a scope (the drive's prefix, '' for the library). `globalNames` stands for
+// the old primary key on the name alone, while it is still there. The SQL
+// itself is test/replace-content-db.test.js's and test/folder-scope-db.test.js's,
+// against a real database.
 
 import { fileWriteDecision, folderRoleAllows, strongestFolderRole } from '../../lib/db.js';
 import { driveAccess, canWriteDrive, DRIVE_WRITE_ROLES } from '../../lib/drive-access.js';
@@ -104,11 +109,8 @@ export async function canModifyFile(file, p = {}, { action = 'files.edit' } = {}
 }
 export async function canModifyFolder(folder, p = {}, { driveRole = null, tag = null } = {}) {
   if (p.isAdmin) return true;
-  let fromDrive = null;
-  if (DRIVE_WRITE_ROLES.has(driveRole) && tag) {
-    const outside = [...s().folders].some(([name, t]) => under(name, folder) && t !== String(tag));
-    fromDrive = outside ? null : driveRole;
-  }
+  // As folderRoleFor: every path in a drive is the drive's own.
+  const fromDrive = DRIVE_WRITE_ROLES.has(driveRole) && tag ? driveRole : null;
   return folderRoleAllows(strongestFolderRole([fromDrive]), 'modify');
 }
 
@@ -219,7 +221,7 @@ export async function listFileFoldersForUser(p = {}, opts = {}) {
   const counts = new Map();
   for (const f of files) if (f.folder) counts.set(f.folder, (counts.get(f.folder) || 0) + 1);
   const tag = clean(opts.filespace);
-  for (const [name, t] of s().folders) if (t === tag && !counts.has(name)) counts.set(name, 0);
+  for (const { tag: t, name } of rowsOf()) if (t === tag && !counts.has(name)) counts.set(name, 0);
   return [...counts].sort().map(([folder, count]) => ({ folder, count }));
 }
 
@@ -263,20 +265,39 @@ export async function deleteUpload(id) { s().uploads.delete(id); return { ok: tr
 export async function listUploads(email) { return [...s().uploads.values()].filter((u) => u.createdBy === norm(email)).map(copy); }
 
 // ── folders ──
+// s().folders: Map `${tag}\u0000${name}` → { tag, name } (a control
+// character can never be in a folder name, lib/folder-ops.js).
+const fkey = (tag, name) => `${tag}\u0000${name}`;
+const rowsOf = () => [...s().folders.values()];
+const nameTaken = (tag, name) => rowsOf().some((r) => r.name === name && (r.tag === tag || s().globalNames));
 function addFolder(path, tag) {
   let p = '';
+  let made = false;
   for (const seg of path.split('/')) {
     p = p ? `${p}/${seg}` : seg;
-    if (!s().folders.has(p)) s().folders.set(p, tag);
+    const inserted = !nameTaken(tag, p);
+    if (inserted) s().folders.set(fkey(tag, p), { tag, name: p });
+    if (p === path) made = inserted;
   }
+  return made;
 }
-export async function createFolder(name, { filespace } = {}) { addFolder(clean(name), String(filespace || '')); return { name: clean(name) }; }
-export async function folderRowTag(name) { return s().folders.has(name) ? s().folders.get(name) : null; }
+export async function createFolder(name, { filespace } = {}) {
+  const tag = String(filespace || '');
+  const created = addFolder(clean(name), tag);
+  return { name: clean(name), created, existed: !created && s().folders.has(fkey(tag, clean(name))) };
+}
 export async function listFolderRowsUnder(name, { tag = '' } = {}) {
-  return [...s().folders].filter(([n, t]) => n.startsWith(`${name}/`) && (t === tag || t === '')).map(([n]) => n);
+  return rowsOf().filter((r) => r.tag === tag && r.name.startsWith(`${name}/`)).map((r) => r.name);
 }
-export async function folderPathInUse(path) {
-  return [...s().folders.keys()].some((n) => under(n, path)) || live().some((f) => under(f.folder, path));
+export async function folderPathInUse(path, { tag = '', prefix = null } = {}) {
+  const within = prefix ? `${clean(prefix)}/` : null;
+  return rowsOf().some((r) => r.tag === tag && under(r.name, path))
+    || live().some((f) => under(f.folder, path) && (!within || String(f.storageKey || '').startsWith(within)));
+}
+export async function renameSpreadsGrants(from, to, { tag = '', outside = 0 } = {}) {
+  if (tag && (outside > 0 || rowsOf().some((r) => r.tag !== tag && under(r.name, from)))) return false;
+  const granted = (s().folderGrants || []).some((g) => under(g, from));
+  return granted && (rowsOf().some((r) => r.tag !== tag && under(r.name, to)) || live().some((f) => under(f.folder, to)));
 }
 export async function listFolderSubtreeFiles(folder) {
   if (!folder) return [];
@@ -286,6 +307,12 @@ export async function listFolderSubtreeFiles(folder) {
   }));
 }
 export async function renameFolder(from, to, { tag = '', moves = [], catalog = [] } = {}) {
+  const mine = rowsOf().filter((r) => r.tag === tag && under(r.name, from));
+  // As the one statement: every row lands, or the whole rename fails.
+  for (const r of mine) {
+    const next = to + r.name.slice(from.length);
+    if (nameTaken(tag, next) && !mine.some((m) => m.name === next)) throw new Error('duplicate key value violates unique constraint');
+  }
   let files = 0;
   for (const m of [...moves, ...catalog]) {
     const row = s().files.get(m.id);
@@ -295,19 +322,17 @@ export async function renameFolder(from, to, { tag = '', moves = [], catalog = [
     touch(row);
     files++;
   }
-  let folders = 0;
-  for (const [n, t] of [...s().folders]) {
-    if (!under(n, from) || !(t === tag || t === '')) continue;
-    s().folders.delete(n);
-    s().folders.set(to + n.slice(from.length), t);
-    folders++;
+  for (const r of mine) s().folders.delete(fkey(tag, r.name));
+  for (const r of mine) {
+    const name = to + r.name.slice(from.length);
+    s().folders.set(fkey(tag, name), { tag, name });
   }
   const parent = to.includes('/') ? to.slice(0, to.lastIndexOf('/')) : '';
   if (parent) addFolder(parent, tag);
-  if (!s().folders.has(to)) s().folders.set(to, tag);
-  return { ok: true, from, to, files, folders };
+  if (!s().folders.has(fkey(tag, to)) && !nameTaken(tag, to)) s().folders.set(fkey(tag, to), { tag, name: to });
+  return { ok: true, from, to, files, folders: mine.length };
 }
 export async function deleteFolderRows(name, { tag = '' } = {}) {
-  for (const [n, t] of [...s().folders]) if (under(n, name) && (t === tag || t === '')) s().folders.delete(n);
+  for (const r of rowsOf()) if (r.tag === tag && under(r.name, name)) s().folders.delete(fkey(tag, r.name));
   return { ok: true, remaining: live().filter((f) => under(f.folder, name)).length };
 }
