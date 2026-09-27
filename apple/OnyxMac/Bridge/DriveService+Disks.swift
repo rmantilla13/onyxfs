@@ -40,15 +40,19 @@ extension DriveService {
 
     /// Mounts the drive as a disk if this Mac can: macOS 27, the extension
     /// switched on in System Settings, and this copy entitled to mount.
-    /// False when it cannot, and the NFS way is taken instead.
+    /// False when it cannot — or tried and the disk did not mount — and the
+    /// NFS way is taken instead.
     func mountAsDisk(_ scope: SyncDomain, name: String, mirror: DriveMirror) async -> Bool {
         guard #available(macOS 27.0, *), let disks else { return false }
         await disks.refreshAvailability()
         guard disks.availability == .ready else { return false }
         do {
             let resource = try await onyxfsResourceURL(for: scope)
-            await disks.mount(scope, name: name, resource: resource)
-            return true
+            if await disks.mount(scope, name: name, resource: resource) { return true }
+            // Its bridge session and writer are for a disk that is not there.
+            writers[scope.identifier] = nil
+            endOnyxfsSessions(for: scope)
+            return false
         } catch {
             appLog.error("onyxfs: no resource for \(scope.identifier, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return false
@@ -95,6 +99,12 @@ extension DriveService {
     }
 
     var drivesAreDisks: Bool { diskMode == .disks }
+
+    /// Why the last drive that should have been a disk is in ~/Onyx instead.
+    var diskFailure: String? {
+        guard #available(macOS 27.0, *) else { return nil }
+        return disks?.lastFailure
+    }
 
     func openFileSystemSettings() {
         guard #available(macOS 27.0, *) else { return }

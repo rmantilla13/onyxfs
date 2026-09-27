@@ -36,6 +36,9 @@ final class DiskMounter: ObservableObject {
 
     @Published private(set) var availability: Availability = .unknown
     @Published private(set) var states: [String: MountManager.State] = [:]
+    /// Why the last disk that failed to mount did (that drive went to
+    /// ~/Onyx instead), for Settings; nil once a disk mounts.
+    @Published private(set) var lastFailure: String?
     /// Ejected from Finder (or unmounted by anything but Onyx): the drive is
     /// no longer wanted there, as with an NFS mount.
     var onEjected: ((SyncDomain) -> Void)?
@@ -85,10 +88,16 @@ final class DiskMounter: ObservableObject {
     /// by the extension (EACCES) and the bridge (403) as it is now — a
     /// viewer made an editor needs no remount, and Finder keeps its own
     /// window files on a drive it may only view.
-    func mount(_ scope: SyncDomain, name: String, resource: URL) async {
+    ///
+    /// False when it did not mount: the drive has no disk state left, so
+    /// the caller mounts it the NFS way and that mount's state is the one
+    /// shown. (Whatever the cause — the app not entitled to mount, the
+    /// extension refusing — the drive is still reachable.)
+    @discardableResult
+    func mount(_ scope: SyncDomain, name: String, resource: URL) async -> Bool {
         let id = scope.identifier
         switch states[id] {
-        case .mounted?, .mounting?: return
+        case .mounted?, .mounting?: return true
         default: break
         }
         states[id] = .mounting
@@ -100,13 +109,17 @@ final class DiskMounter: ObservableObject {
             // Turned off while it mounted.
             guard states[id] == .mounting else {
                 Self.unmountPath(path)
-                return
+                return true
             }
             states[id] = .mounted(path)
+            lastFailure = nil
             appLog.info("onyxfs: \(id, privacy: .public) is a disk at \(path.path, privacy: .public)")
+            return true
         } catch {
-            states[id] = .failed(Self.describe(error))
-            appLog.error("onyxfs: mounting \(id, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            states[id] = nil
+            lastFailure = Self.describe(error)
+            appLog.error("onyxfs: mounting \(id, privacy: .public) failed, so it mounts in ~/Onyx: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 

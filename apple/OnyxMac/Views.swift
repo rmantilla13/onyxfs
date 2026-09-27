@@ -636,7 +636,16 @@ struct DiskModeNote: View {
     var body: some View {
         switch finder.diskMode {
         case .disks:
-            EmptyView()
+            if let failure = finder.diskFailure {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(lucide: "hard-drive").foregroundStyle(.secondary)
+                    Text("A drive could not be a disk of its own, so it is in your Onyx folder instead: \(failure)")
+                        .font(.caption)
+                    Spacer()
+                }
+                .padding(10)
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+            }
         case .needsEnabling:
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Image(lucide: "hard-drive").foregroundStyle(.secondary)
