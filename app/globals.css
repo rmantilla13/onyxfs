@@ -1852,6 +1852,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 .player-time { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .player-select { width: auto; padding: 2px 6px; font-size: var(--t-xs); }
 .player-volume input { width: 80px; }
+.cover-scrub { flex: 1 1 auto; min-width: 0; accent-color: var(--accent); }
 
 /* Screen-reader-only label, for the controls whose icon carries the meaning. */
 .sr-only {

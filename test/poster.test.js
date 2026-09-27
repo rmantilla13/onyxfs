@@ -6,7 +6,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   gridPosterSize, playerPosterSize, playerPosterFor, isUndersizedPoster, downscalePlan,
-  posterTimes, frameStats, isBlankFrame, chooseFrame,
+  posterTimes, coverTime, frameStats, isBlankFrame, chooseFrame,
   GRID_POSTER_BOX, GRID_POSTER_MAX_EDGE, PLAYER_POSTER_MAX_EDGE, LEGACY_THUMB_MAX, MAX_INTERMEDIATE_EDGE,
 } from '../lib/poster.js';
 
@@ -203,6 +203,21 @@ describe('posterTimes', () => {
 
   test('unknown length: just past the start', () => {
     for (const d of [0, NaN, Infinity, undefined, -3]) assert.deepEqual(posterTimes(d), [0.1]);
+  });
+});
+
+describe('coverTime', () => {
+  test('a chosen time is kept, within the clip and short of its last instant', () => {
+    assert.equal(coverTime(12.5, 60), 12.5);
+    assert.equal(coverTime(0, 60), 0);
+    assert.equal(coverTime(60, 60), 59.999);
+    assert.equal(coverTime(90, 60), 59.999);
+  });
+
+  test('nothing usable is the start; an unknown length keeps the time', () => {
+    for (const t of [-1, NaN, undefined, null, 'x']) assert.equal(coverTime(t, 60), 0);
+    assert.equal(coverTime(7, 0), 7);
+    assert.equal(coverTime(7, NaN), 7);
   });
 });
 

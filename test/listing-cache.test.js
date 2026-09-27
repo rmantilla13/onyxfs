@@ -104,4 +104,14 @@ describe('extend and the return slot', () => {
     now.tick(KEEP_MS + 1);
     assert.equal(r.take({ filespaceId: '', folder: '' }), null, 'stale');
   });
+
+  test('a row changed on the file page is folded into the saved listing', async () => {
+    const { createReturnSlot } = await import('../lib/listing-cache.js');
+    const now = clock();
+    const r = createReturnSlot({ now });
+    r.updateFile('a', () => { throw new Error('nothing saved, nothing to change'); });
+    r.save({ filespaceId: '', folder: '', files: [{ id: 'a', thumbnailUrl: 'old' }, { id: 'b', thumbnailUrl: 'b' }] });
+    r.updateFile('a', (f) => ({ ...f, thumbnailUrl: 'new' }));
+    assert.deepEqual(r.take({ filespaceId: '', folder: '' }).files, [{ id: 'a', thumbnailUrl: 'new' }, { id: 'b', thumbnailUrl: 'b' }]);
+  });
 });
