@@ -6,16 +6,18 @@ import FilePreview from './FilePreview';
 import FileDetailFrame from './FileDetailFrame';
 import { getHandoff, returnFor } from '@/lib/file-handoff';
 import { lazyThumbnailBackfill, mergeBackfilled } from '@/lib/backfill';
+import { listingCache, returnSlot } from '@/lib/listing-cache';
 import Dialog from '@/app/components/ui/Dialog';
 import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
 import { Panel, Field } from '@/app/components/ui/Layout';
 import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
 import { deriveAuto } from '@/lib/dam';
-import { effectiveKind, fmtSize } from '@/lib/media';
+import { effectiveKind, fmtSize, coverChangeable } from '@/lib/media';
 import { toRate, rateLabel, timecode, ASSUMED_RATE } from '@/lib/video-time';
 import { anchorLabel, commentFrame, snippet } from '@/lib/review';
 import ShareDialog from '@/app/components/ShareDialog';
+import CoverDialog from '@/app/components/video/CoverDialog';
 import ReviewPanel from '@/app/components/review/ReviewPanel';
 import ReviewStatusTag from '@/app/components/review/ReviewStatusTag';
 import AnnotationLayer from '@/app/components/review/AnnotationLayer';
@@ -63,6 +65,8 @@ export default function FileDetail({
   const [file, setFile] = useState(initial);
   const [sharing, setSharing] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  // Change cover…: the player's position when it was chosen, or null.
+  const [covering, setCovering] = useState(null);
   const [name, setName] = useState(initial.name || '');
   const [busy, setBusy] = useState(false);
   const router = useRouter();
@@ -347,6 +351,9 @@ export default function FileDetail({
         {canWrite && (
           <Menu label="File actions">
             <MenuItem onClick={() => { setName(file.name); setRenaming(true); }}>Rename…</MenuItem>
+            {coverChangeable(file) && (
+              <MenuItem onClick={() => { player.current?.pause?.(); setCovering({ at: player.current?.time?.() ?? null }); }}>Change cover…</MenuItem>
+            )}
             <MenuSeparator />
             <MenuItem danger onClick={trash}>Move to trash</MenuItem>
           </Menu>
@@ -485,6 +492,21 @@ export default function FileDetail({
       </Dialog>
 
       {canShare && <ShareDialog file={file} open={sharing} onClose={() => setSharing(false)} />}
+      {covering && (
+        <CoverDialog
+          file={file}
+          startAt={covering.at}
+          onClose={() => setCovering(null)}
+          onChanged={(row) => {
+            setFile((x) => mergeBackfilled(x, row));
+            // The old picture is deleted: ← Back must not bring its URL back.
+            returnSlot.updateFile(row.id, (x) => mergeBackfilled(x, row));
+            listingCache.clear();
+            setCovering(null);
+            toast.success('Cover changed.');
+          }}
+        />
+      )}
       {confirmElement}
     </FileDetailFrame>
   );

@@ -27,6 +27,7 @@ import {
   parseLocalViews, withLocalView, legacyView, viewsForDrive, listingParams, isRecursive, normalizeDisplay,
 } from '@/lib/views';
 import { driveColor } from '@/lib/drive-color';
+import { coverChangeable } from '@/lib/media';
 import UploadPanel from '@/app/components/ui/UploadPanel';
 import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
@@ -63,6 +64,7 @@ const ColumnView = dynamic(() => import('./ColumnView'));
 const SaveViewDialog = dynamic(() => import('./ViewDialogs').then((m) => m.SaveViewDialog), { ssr: false });
 const ManageViewsDialog = dynamic(() => import('./ViewDialogs').then((m) => m.ManageViewsDialog), { ssr: false });
 const NewFieldDialog = dynamic(() => import('@/app/components/ui/NewFieldDialog'), { ssr: false });
+const CoverDialog = dynamic(() => import('@/app/components/video/CoverDialog'), { ssr: false });
 // Once the page is idle, the other layouts are fetched too, so choosing one
 // in Display never waits on the network.
 let layoutsAsked = false;
@@ -280,6 +282,8 @@ export default function FilesClient({
   const [info, setInfo] = useState(null);
   // The file the Share dialog is open for.
   const [sharing, setSharing] = useState(null);
+  // The video whose cover is being changed (CoverDialog).
+  const [covering, setCovering] = useState(null);
   // Drives: the New drive dialog, and the drive whose members are open.
   const [newDrive, setNewDrive] = useState(false);
   const [membersOf, setMembersOf] = useState(null);
@@ -1343,6 +1347,7 @@ export default function FilesClient({
       can.edit && '-',
       can.edit && { label: 'Rename…', onSelect: () => renameFileUI(f) },
       can.edit && { label: 'Move…', onSelect: () => moveFilesUI([f.id]) },
+      can.edit && coverChangeable(f) && { label: 'Change cover…', onSelect: () => setCovering(f) },
       { label: selNow.has(f.id) ? 'Deselect' : 'Select', hint: '⇧Space', onSelect: () => toggleSelect(f) },
       can.delete && '-',
       can.delete && { label: 'Delete…', danger: true, onSelect: () => removeFiles([f.id]) },
@@ -2396,6 +2401,18 @@ export default function FilesClient({
         <NewFieldDialog open onClose={() => setAddingField(false)} onCreate={createField} />
       )}
       <ShareDialog file={sharing} open={!!sharing} onClose={() => setSharing(null)} />
+      {covering && (
+        <CoverDialog
+          file={covering}
+          onClose={() => setCovering(null)}
+          onChanged={(row) => {
+            setFiles((prev) => prev.map((x) => (x.id === row.id ? mergeBackfilled(x, row) : x)));
+            listingCache.clear();
+            setCovering(null);
+            toast.success(`Changed the cover of “${covering.name}”.`);
+          }}
+        />
+      )}
       {savingView && (
         <SaveViewDialog
           open
