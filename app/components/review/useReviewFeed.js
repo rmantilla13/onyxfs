@@ -15,8 +15,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * What you post appears at once — inserted optimistically, then replaced by
  * the server's row. Rows are merged by `seq`, the server's change counter, so
  * a poll that raced a mutation can never put an older copy back.
+ *
+ * `base` is where the review is served: a member's is the file's API; a
+ * review link's guests' is the link itself (/s/<token> — app/s/[token]),
+ * which answers in the same shape. `author` is who an optimistic comment is
+ * shown as until the server's row arrives: a guest has a name and no address.
  */
-export default function useReviewFeed(fileId, { enabled = true, interval = 8000, me = null } = {}) {
+export default function useReviewFeed(fileId, { enabled = true, interval = 8000, me = null, base: at = null, author = null } = {}) {
   const [state, setState] = useState({
     comments: new Map(),
     decisions: new Map(),
@@ -29,6 +34,7 @@ export default function useReviewFeed(fileId, { enabled = true, interval = 8000,
   const cursor = useRef(0);
   const etag = useRef(null);
   const busy = useRef(false);
+  const base = at || `/api/files/${encodeURIComponent(fileId)}`;
 
   const merge = useCallback((payload) => setState((prev) => {
     const comments = new Map(prev.comments);
@@ -59,7 +65,7 @@ export default function useReviewFeed(fileId, { enabled = true, interval = 8000,
     busy.current = true;
     try {
       for (let page = 0; page < 20; page++) {
-        const r = await fetch(`/api/files/${encodeURIComponent(fileId)}/review?after=${cursor.current}`, {
+        const r = await fetch(`${base}/review?after=${cursor.current}`, {
           cache: 'no-store',
           headers: etag.current ? { 'if-none-match': etag.current } : undefined,
         });
@@ -76,7 +82,7 @@ export default function useReviewFeed(fileId, { enabled = true, interval = 8000,
     } finally {
       busy.current = false;
     }
-  }, [fileId, merge]);
+  }, [fileId, base, merge]);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -104,8 +110,6 @@ export default function useReviewFeed(fileId, { enabled = true, interval = 8000,
     return out;
   }, []);
 
-  const base = `/api/files/${encodeURIComponent(fileId)}`;
-
   const post = useCallback(async (input) => {
     const temp = {
       ...input,
@@ -113,7 +117,7 @@ export default function useReviewFeed(fileId, { enabled = true, interval = 8000,
       pending: true,
       fileId,
       parentId: input.parentId || null,
-      author: { email: me, name: null },
+      author: author || { email: me, name: null },
       anchor: input.anchor || 'general',
       mentions: input.mentions || [],
       resolvedAt: null,
@@ -141,7 +145,7 @@ export default function useReviewFeed(fileId, { enabled = true, interval = 8000,
       });
       throw e;
     }
-  }, [base, fileId, me, send]);
+  }, [base, fileId, me, author, send]);
 
   const update = useCallback(async (id, patch) => {
     const out = await send(`${base}/comments/${encodeURIComponent(id)}`, 'PATCH', patch);

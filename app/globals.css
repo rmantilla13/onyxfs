@@ -628,6 +628,19 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .share-head { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s4); }
 .share-name { font-size: var(--t-xl); margin: 0 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .share-foot { margin: var(--s3) 0 0; }
+/* A review link: the file page's two columns, so it gets the app's width. */
+.share-page.is-wide .share-brand,
+.share-page.is-wide .share-body { max-width: 1400px; }
+/* Who a guest is commenting as, and the name they give first. */
+.share-guest { margin: 0; }
+.share-guest-name { color: var(--ink); font-weight: 600; }
+.share-guest-change {
+  padding: 0; border: 0; background: none;
+  color: var(--accent-deep); font: inherit;
+  text-decoration: underline; text-underline-offset: 2px;
+  cursor: pointer;
+}
+.share-guest-change:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
 
 /* The Share dialog. */
 .share-dialog-file { margin: 0 0 var(--s4); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -643,6 +656,33 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .share-kind.is-on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .share-kind input { margin-top: 3px; }
 .share-kind-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+/* What a link's people can do: View · Comment · Comment & approve. Radios,
+   drawn as one segmented control; the line under it says what the chosen
+   one means for this file. */
+.share-review { display: flex; flex-direction: column; gap: var(--s2); margin: 0; padding: 0; border: 0; min-width: 0; }
+.share-review legend { margin-bottom: var(--s2); padding: 0; }
+.share-segments {
+  display: inline-flex; align-self: flex-start; flex-wrap: wrap; gap: 3px; max-width: 100%;
+  padding: 3px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+.share-segment {
+  position: relative;
+  display: inline-flex; align-items: center;
+  padding: 6px var(--s3);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--t-sm); font-weight: 500; white-space: nowrap;
+  cursor: pointer;
+}
+/* Still focusable and still a radio to a screen reader; only not drawn. */
+.share-segment input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+.share-segment.is-on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-1); }
+.share-segment:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.share-review:disabled .share-segments { opacity: 0.55; }
+.share-review:disabled .share-segment { cursor: not-allowed; }
+.share-review-detail { margin: 0; }
 .share-options { display: flex; align-items: flex-end; gap: var(--s3); flex-wrap: wrap; }
 .share-create { margin-left: auto; }
 .share-list-title { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: var(--s5) 0 var(--s2); }
@@ -662,6 +702,9 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .share-tag { flex: none; min-width: 68px; text-align: center; }
 .share-tag-public { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent-deep); }
 .share-tag-password { background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning); }
+/* A link's level, changeable in place; one that takes comments says so. */
+.share-level { flex: none; width: auto; padding: 4px var(--s2); font-size: var(--t-sm); }
+.share-level.is-review { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--accent-deep); }
 .share-revoke { color: var(--danger); }
 
 /* ── Get info ───────────────────────────────────────────────────────────── */
@@ -1544,6 +1587,9 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   .only-mobile { display: inline-flex; }
   .share-kinds { grid-template-columns: minmax(0, 1fr); }
   .share-row { flex-wrap: wrap; }
+  /* The link keeps the first line beside its tag; its level, Copy and
+     Revoke wrap under it rather than squeezing it to nothing. */
+  .share-row-main { flex: 1 1 200px; }
   .share-page { padding: var(--s4); }
   /* A phone has no keyboard to take shortcuts from, and needs the room. */
   .topnav-search { padding-right: var(--s3); }

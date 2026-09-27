@@ -3,25 +3,47 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import Dialog from '@/app/components/ui/Dialog';
 import { useToast } from '@/app/components/ui/Toast';
-import { SHARE_KINDS, SHARE_EXPIRY, MIN_PASSWORD, expiryLabel } from '@/lib/share-kinds';
+import { SHARE_KINDS, SHARE_EXPIRY, SHARE_REVIEW, MIN_PASSWORD, expiryLabel } from '@/lib/share-kinds';
+import { effectiveKind } from '@/lib/media';
 
 const KIND_LABEL = Object.fromEntries(SHARE_KINDS.map((k) => [k.id, k.label]));
+const LEVEL_LABEL = { view: 'View only', comment: 'Can comment', approve: 'Can approve' };
+const LEVEL_RANK = { view: 0, comment: 1, approve: 2 };
 const dateFmt = typeof Intl !== 'undefined' ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }) : null;
+
+/** What a level lets people do, said for this file: frames on a video, spots on a picture. */
+function levelDetail(level, video) {
+  if (level === 'comment') {
+    return video
+      ? 'They can comment on frames and ranges, draw on the picture, and reply.'
+      : 'They can pin comments to spots, draw on the picture, and reply.';
+  }
+  if (level === 'approve') return 'They can comment, and approve it or ask for changes — which counts toward its status.';
+  return 'They can open and download it.';
+}
 
 /**
  * Links to one file: make one — public, password or private, with an expiry
  * — and see, copy or revoke the ones that exist. The server decides who may
  * (GET/POST /api/files/[id]/shares); this only asks.
  *
+ * A public or password link to a photo or a video can also take comments,
+ * made with the review tools on the share page — and approvals, when the
+ * sharer asks for those too (SHARE_REVIEW). `canReview` says the server
+ * would let this person make such a link; it decides again. A link's level
+ * can be changed after it is sent (PATCH …/shares/[token]) — turning
+ * comments on needs `canReview`, turning them off anyone here may do.
+ *
  * A new link is copied as it is made, because copying it is the next thing
  * anyone does. The clipboard can refuse (no focus, an old browser), so the
  * link is always in the list with its own Copy button too.
  */
-export default function ShareDialog({ file, open, onClose }) {
+export default function ShareDialog({ file, open, onClose, canReview = false }) {
   const [shares, setShares] = useState(null);
   const [kind, setKind] = useState('public');
   const [password, setPassword] = useState('');
   const [expires, setExpires] = useState('never');
+  const [review, setReview] = useState('view');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [fresh, setFresh] = useState(null);
@@ -29,6 +51,8 @@ export default function ShareDialog({ file, open, onClose }) {
   const id = useId();
 
   const base = file ? `/api/files/${file.id}/shares` : null;
+  const video = file ? effectiveKind(file) === 'video' : false;
+  const level = kind === 'private' ? 'view' : review;
 
   useEffect(() => {
     if (!open || !base) return undefined;
@@ -36,6 +60,9 @@ export default function ShareDialog({ file, open, onClose }) {
     setShares(null);
     setError(null);
     setFresh(null);
+    // Comments and approvals are asked for each time, never carried over
+    // from the last file the dialog was open for.
+    setReview('view');
     fetch(base)
       .then(async (r) => {
         const body = await r.json().catch(() => ({}));
@@ -73,7 +100,12 @@ export default function ShareDialog({ file, open, onClose }) {
       const r = await fetch(base, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ kind, password: kind === 'password' ? password : undefined, expires }),
+        body: JSON.stringify({
+          kind,
+          password: kind === 'password' ? password : undefined,
+          expires,
+          review: canReview && level !== 'view' ? level : undefined,
+        }),
       });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) { setError(body.error || `Could not make the link (HTTP ${r.status}).`); return; }
@@ -82,7 +114,8 @@ export default function ShareDialog({ file, open, onClose }) {
       setFresh(share.token);
       setPassword('');
       const copied = await copy(share.token, true);
-      toast.success(copied ? 'Link made and copied.' : 'Link made.');
+      const what = share.review ? 'Review link' : 'Link';
+      toast.success(copied ? `${what} made and copied.` : `${what} made.`);
     } finally {
       setBusy(false);
     }
@@ -95,6 +128,24 @@ export default function ShareDialog({ file, open, onClose }) {
     setShares((list) => (list || []).filter((s) => s.token !== token));
     toast.success('Link revoked. It stops working now.');
   };
+
+  const changeLevel = async (token, next) => {
+    const r = await fetch(`${base}/${encodeURIComponent(token)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ review: next }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) { toast.error(body.error || `Could not change the link (HTTP ${r.status}).`); return; }
+    if (body.share) setShares((list) => (list || []).map((s) => (s.token === token ? body.share : s)));
+    toast.success(next === 'view'
+      ? 'The link is view only now. Comments already made stay on the file.'
+      : `People with the link ${next === 'approve' ? 'can comment and approve' : 'can comment'} now.`);
+  };
+
+  // A link's level can go up only for someone who may make review links,
+  // and down for anyone here — the route holds both to the same rule.
+  const levelsFor = (s) => SHARE_REVIEW.filter((l) => canReview || LEVEL_RANK[l.id] <= LEVEL_RANK[s.review || 'view']);
 
   if (!file) return null;
   return (
@@ -114,6 +165,31 @@ export default function ShareDialog({ file, open, onClose }) {
             </label>
           ))}
         </fieldset>
+
+        {canReview && (
+          <fieldset className="share-review" disabled={kind === 'private'}>
+            <legend className="small muted">What they can do</legend>
+            <div className="share-segments">
+              {SHARE_REVIEW.map((l) => (
+                <label key={l.id} className={`share-segment${level === l.id ? ' is-on' : ''}`}>
+                  <input
+                    type="radio"
+                    name="review"
+                    value={l.id}
+                    checked={level === l.id}
+                    onChange={() => { setReview(l.id); setError(null); }}
+                  />
+                  <span>{l.label}</span>
+                </label>
+              ))}
+            </div>
+            <p className="small muted share-review-detail">
+              {kind === 'private'
+                ? 'A private link opens only for members, who comment on the file itself.'
+                : levelDetail(level, video)}
+            </p>
+          </fieldset>
+        )}
 
         <div className="share-options">
           {kind === 'password' && (
@@ -155,6 +231,7 @@ export default function ShareDialog({ file, open, onClose }) {
           {shares.map((s) => {
             const expiry = expiryLabel(s.expiresAt);
             const expired = expiry === 'Expired';
+            const editable = !expired && s.kind !== 'private' && (canReview || !!s.review);
             return (
               <li key={s.token} className={`share-row${s.token === fresh ? ' is-fresh' : ''}${expired ? ' is-expired' : ''}`}>
                 <span className={`tag share-tag share-tag-${s.kind}`}>{KIND_LABEL[s.kind] || s.kind}</span>
@@ -168,6 +245,7 @@ export default function ShareDialog({ file, open, onClose }) {
                   />
                   <span className="small muted">
                     {[
+                      !editable && s.review ? LEVEL_LABEL[s.review] : null,
                       expiry || 'Never expires',
                       `${s.viewCount} view${s.viewCount === 1 ? '' : 's'}`,
                       s.createdAt && dateFmt ? `made ${dateFmt.format(new Date(s.createdAt))}` : null,
@@ -175,6 +253,16 @@ export default function ShareDialog({ file, open, onClose }) {
                     ].filter(Boolean).join(' · ')}
                   </span>
                 </div>
+                {editable && (
+                  <select
+                    className={`input share-level${s.review ? ' is-review' : ''}`}
+                    value={s.review || 'view'}
+                    onChange={(e) => changeLevel(s.token, e.target.value)}
+                    aria-label="What people with this link can do"
+                  >
+                    {levelsFor(s).map((l) => <option key={l.id} value={l.id}>{LEVEL_LABEL[l.id]}</option>)}
+                  </select>
+                )}
                 {!expired && <button type="button" className="btn btn-sm" onClick={() => copy(s.token)}>Copy</button>}
                 <button type="button" className="btn btn-sm btn-ghost share-revoke" onClick={() => revoke(s.token)}>Revoke</button>
               </li>

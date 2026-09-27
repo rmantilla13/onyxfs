@@ -21,11 +21,16 @@ const TOOL_ICON = { pen: 'pencil', arrow: 'arrow-up-right', rect: 'square' }; /*
  * to the frame it was drawn on. Internal comments are for signed-in people
  * only: guests on a review link never see them.
  *
+ * `guest` is the composer a review link's guest gets (the share page): no
+ * Internal — everything a guest writes is for everyone — and no @mentions.
+ * The server holds a guest to both whatever this sends.
+ *
  * Posting clears the composer at once — the comment appears optimistically —
  * and a failure puts everything back, with the reason.
  */
 export default function Composer({
   fileId, kind, model, knownRate, frame, range, draftApi, onPost, onFocus, onAnchor, textareaRef, srcSize = { w: 0, h: 0 },
+  guest = false,
 }) {
   const { draft, set, undo, clearDrawing, reset } = draftApi;
   const [body, setBody] = useState('');
@@ -49,7 +54,9 @@ export default function Composer({
     if (busy) return;
     const text = body.trim();
     if (!text && !drawn) { setError('Write a comment or draw on the picture.'); return; }
-    const input = { body: text, audience: internal ? 'internal' : 'all', mentions: mentionsIn(text, people), anchor: 'general' };
+    const input = guest
+      ? { body: text, anchor: 'general' }
+      : { body: text, audience: internal ? 'internal' : 'all', mentions: mentionsIn(text, people), anchor: 'general' };
     if (video && (draft.anchored || drawn)) {
       Object.assign(input, useRange
         ? { anchor: 'range', frameIn: range.inFrame, frameOut: range.outFrame, fps: model.fps }
@@ -90,6 +97,7 @@ export default function Composer({
         onEscape={(e) => { set({ tool: null, placing: false }); e.currentTarget.blur(); }}
         textareaRef={textareaRef}
         placeholder={video ? 'Comment on this frame…' : 'Add a comment…'}
+        mentions={!guest}
       />
 
       <div className="review-composer-row">
@@ -113,10 +121,12 @@ export default function Composer({
           {((video && draft.anchored && !drawn) || (!video && draft.pin)) && <Icon name="x" size={12} />}
         </button>
 
-        <label className="review-internal small" title="Only people signed in to this workspace see it — never guests on a review link.">
-          <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} />
-          Internal
-        </label>
+        {!guest && (
+          <label className="review-internal small" title="Only people signed in to this workspace see it — never guests on a review link.">
+            <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} />
+            Internal
+          </label>
+        )}
 
         <div className="spacer" />
         <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>

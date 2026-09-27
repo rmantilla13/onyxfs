@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 133
+-- Statements: 136
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -368,6 +368,8 @@ ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS pw_locked_until BIGINT;
 
 CREATE INDEX IF NOT EXISTS file_shares_created_by_idx ON file_shares (created_by);
 
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS review TEXT;
+
 CREATE SEQUENCE IF NOT EXISTS review_change_seq;
 
 CREATE TABLE IF NOT EXISTS review_comments (
@@ -405,6 +407,8 @@ CREATE INDEX IF NOT EXISTS review_comments_parent_idx ON review_comments (parent
 
 CREATE INDEX IF NOT EXISTS review_comments_stack_idx ON review_comments (stack_id) WHERE stack_id IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS review_comments_share_idx ON review_comments (share_token, created_at) WHERE share_token IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS review_decisions (
   file_id     TEXT NOT NULL,
   reviewer    TEXT NOT NULL,
@@ -415,6 +419,8 @@ CREATE TABLE IF NOT EXISTS review_decisions (
   seq         BIGINT NOT NULL DEFAULT nextval('review_change_seq'),
   PRIMARY KEY (file_id, reviewer)
 );
+
+ALTER TABLE review_decisions ADD COLUMN IF NOT EXISTS reviewer_name TEXT;
 
 CREATE TABLE IF NOT EXISTS review_watchers (
   file_id         TEXT NOT NULL,

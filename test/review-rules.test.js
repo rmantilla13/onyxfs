@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import {
   reviewDecision, deriveReviewStatus, validateAnnotation, validateComment, validateDecision,
   normalizeMentions, commentFrame, anchorLabel, containRect, pointOnPicture, snippet, userReviewer,
-  BODY_MAX,
+  guestReviewer, guestName, commentForGuest, decisionForGuest, visibleToLink,
+  BODY_MAX, GUEST_NAME_MAX,
 } from '../lib/review.js';
 import { secondsOfFrame, frameAt } from '../lib/video-time.js';
 
@@ -287,4 +288,69 @@ test('snippets and reviewer keys', () => {
   assert.equal(snippet('  a\n\n b  '), 'a b');
   assert.equal(snippet('x'.repeat(200), 10).length, 10);
   assert.equal(userReviewer(' Me@X.io '), 'user:me@x.io');
+});
+
+describe('guests on a review link', () => {
+  test('a guest is a key of their own, never an address', () => {
+    assert.equal(guestReviewer('AbCdEfGh12345678'), 'guest:AbCdEfGh12345678');
+    assert.notEqual(guestReviewer('x'), userReviewer('x'));
+  });
+
+  test('a name is text: no control characters, no runs of space, not too long', () => {
+    assert.equal(guestName('  Jane   Doe  '), 'Jane Doe');
+    assert.equal(guestName('Jane\u0000\u0007\nDoe'), 'Jane Doe');
+    assert.equal(guestName('Jane\u200b\u202eDoe'), 'Jane Doe', 'no invisible or direction-flipping characters');
+    assert.equal(guestName('Zoë Ōta'), 'Zoë Ōta');
+    assert.equal(guestName('x'.repeat(200)).length, GUEST_NAME_MAX);
+    assert.equal([...guestName('😀'.repeat(100))].length, GUEST_NAME_MAX, 'counted in characters, never cut mid-emoji');
+    for (const empty of ['', '   ', '\u0000\u200b', null, undefined]) assert.equal(guestName(empty), '');
+  });
+
+  test('a comment reaches a guest with no address in it', () => {
+    const member = {
+      id: 'c1', body: 'Fix the logo @mo', audience: 'all', mentions: ['mo@studio.test'],
+      author: { email: 'olive@studio.test', name: null, guest: false, guestId: null },
+      resolvedBy: 'mo@studio.test', resolvedAt: 5,
+    };
+    const seen = commentForGuest(member);
+    assert.deepEqual(seen.author, { email: null, name: 'olive', guest: false, guestId: null });
+    assert.deepEqual(seen.mentions, []);
+    assert.equal(seen.resolvedBy, 'mo');
+    assert.equal(seen.body, member.body, 'the words are theirs to read');
+    assert.ok(!JSON.stringify(seen).includes('@studio.test'), 'no address anywhere');
+    assert.equal(commentForGuest({ ...member, author: { ...member.author, name: 'Olive Owner' } }).author.name, 'Olive Owner');
+
+    const guest = { id: 'c2', body: 'Too dark', author: { email: null, name: 'Jane', guest: true, guestId: 'g1' }, mentions: [], resolvedBy: null };
+    assert.deepEqual(commentForGuest(guest).author, { email: null, name: 'Jane', guest: true, guestId: 'g1' });
+  });
+
+  test('a decision reaches a guest with a name and no address', () => {
+    assert.deepEqual(
+      decisionForGuest({ reviewer: 'guest:g1', email: null, name: 'Jane', guest: true, status: 'approved' }),
+      { reviewer: 'guest:g1', email: null, name: 'Jane', guest: true, status: 'approved' },
+    );
+    const member = decisionForGuest({ reviewer: 'user:olive@studio.test', email: 'olive@studio.test', name: null, status: 'approved' });
+    assert.equal(member.email, null);
+    assert.equal(member.name, 'olive');
+  });
+
+  test('each link is its own conversation: internal and other links\' threads are never visible', () => {
+    const T = 'tokenA';
+    const see = (row) => visibleToLink(row, T);
+    // The team's comments for everyone: every link sees them.
+    assert.equal(see({ audience: 'all', shareToken: null, root: null }), true);
+    // Internal: no link, ever — nor a reply in an internal thread.
+    assert.equal(see({ audience: 'internal', shareToken: null, root: null }), false);
+    assert.equal(see({ audience: 'all', shareToken: null, root: { audience: 'internal', shareToken: null } }), false);
+    // This link's guests, and the team's replies in their threads.
+    assert.equal(see({ audience: 'all', shareToken: T, root: null }), true);
+    assert.equal(see({ audience: 'all', shareToken: null, root: { audience: 'all', shareToken: T } }), true);
+    // Another link's guests: not their comments, not their threads, not their replies on the team's.
+    assert.equal(see({ audience: 'all', shareToken: 'tokenB', root: null }), false);
+    assert.equal(see({ audience: 'all', shareToken: null, root: { audience: 'all', shareToken: 'tokenB' } }), false);
+    assert.equal(see({ audience: 'all', shareToken: 'tokenB', root: { audience: 'all', shareToken: null } }), false);
+    // Nothing without a link to see it through.
+    assert.equal(visibleToLink({ audience: 'all', shareToken: null, root: null }, null), false);
+    assert.equal(visibleToLink(null, T), false);
+  });
 });
