@@ -1,90 +1,53 @@
-import SwiftUI
 import OnyxKit
-#if canImport(AuthenticationServices)
-import AuthenticationServices
-#endif
-#if canImport(UIKit)
-import UIKit
-#endif
+import SwiftUI
 
+/// Signed out: the sign-in. Signed in: the places in a sidebar, and the
+/// folder open beside it — side by side on an iPad, one after the other on
+/// an iPhone.
 struct RootView: View {
-    @EnvironmentObject var model: AppModel
+    @Environment(Session.self) private var session
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if model.isSignedIn { library } else { signedOut }
-            }
-            .navigationTitle("Onyx")
-            .toolbar {
-                if model.isSignedIn {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Sign out") { Task { await model.signOut() } }
-                    }
+        switch session.phase {
+        case .signedOut: SignInView()
+        case .signedIn: Browser()
+        }
+    }
+}
+
+/// A folder within a place ("" is its top).
+struct FolderRoute: Hashable {
+    let place: Place
+    let folder: String
+}
+
+private struct Browser: View {
+    @Environment(Session.self) private var session
+    @Environment(\.horizontalSizeClass) private var width
+    @State private var place: Place?
+    @State private var path: [FolderRoute] = []
+
+    var body: some View {
+        NavigationSplitView {
+            PlacesView(selection: $place)
+        } detail: {
+            if let place {
+                NavigationStack(path: $path) {
+                    FolderView(route: FolderRoute(place: place, folder: ""))
+                        .navigationDestination(for: FolderRoute.self) { FolderView(route: $0) }
                 }
+                // Another place starts from its top.
+                .id(place.id)
+            } else {
+                ContentUnavailableView("Choose a drive", systemImage: "externaldrive",
+                                       description: Text("Its folders and files open here."))
             }
         }
-        .task { if model.isSignedIn { await model.refresh() } }
-    }
-
-    private var signedOut: some View {
-        ContentUnavailableView {
-            Label("Onyx", systemImage: "externaldrive.connected.to.line.below")
-        } description: {
-            Text("Sign in to browse your library. Your files also appear in the Files app.")
-        } actions: {
-            Button("Sign in") {
-                Task { await model.signIn(anchor: anchor()) }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.busy)
+        .onChange(of: place) { path = [] }
+        // Side by side, the first drive is open rather than an empty half of
+        // the screen; one after the other (an iPhone), the list comes first.
+        .onChange(of: session.drives, initial: true) {
+            if width == .regular, place == nil { place = session.drives.first }
         }
-    }
-
-    private var library: some View {
-        List(model.files) { file in
-            HStack(spacing: 12) {
-                Image(systemName: icon(for: file.kind))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(file.name).lineLimit(1)
-                    Text(subtitle(for: file)).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .listStyle(.plain)
-        .refreshable { await model.refresh() }
-        .overlay {
-            if model.files.isEmpty && !model.busy {
-                ContentUnavailableView("Nothing here yet", systemImage: "tray")
-            }
-        }
-    }
-
-    private func subtitle(for file: FileItem) -> String {
-        var parts: [String] = []
-        if !file.folder.isEmpty { parts.append(file.folder) }
-        if let size = file.size {
-            parts.append(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private func icon(for kind: String) -> String {
-        switch kind {
-        case "video": return "film"
-        case "image": return "photo"
-        case "audio": return "waveform"
-        case "doc":   return "doc.text"
-        default:      return "doc"
-        }
-    }
-
-    private func anchor() -> ASPresentationAnchor {
-        // The key window. ASWebAuthenticationSession needs something to
-        // present from and will not start without it.
-        (UIApplication.shared.connectedScenes.first as? UIWindowScene)?
-            .keyWindow ?? ASPresentationAnchor()
     }
 }

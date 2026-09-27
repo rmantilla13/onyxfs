@@ -14,8 +14,21 @@ One Swift codebase. On the Mac it is **Onyx.app**:
   can live in any folder, including an external disk (Settings → Storage).
 - **A menu bar item** that keeps Finder in sync while the window is closed.
 
-The iOS app (`OnyxIOS/`) shares OnyxKit and the extension source; it is not
-built yet.
+On iPhone and iPad it is **Onyx** (`OnyxIOS/`), native SwiftUI:
+
+- **The drives, browsed as the web lists them.** Folders as icons or a list,
+  sorted by name, date or size, searched beneath the folder you are in, a
+  page at a time — from the same access-checked listing the web reads.
+- **A file full screen.** Photos zoom, video and sound stream from storage
+  (picture in picture, AirPlay), documents open in Quick Look; swipe
+  through a folder, share a file, see its details.
+- **Sign-in as on the Mac.** The web's own sign-in in a sheet (the magic
+  link opened from Mail finishes it through `onyxfs://`), or a pairing code
+  from `/space/pair`.
+
+Next: drives in the Files app (the File Provider extension here, which the
+two platforms share), uploads from the camera roll, and a Save to Onyx
+share sheet.
 
 ## Build it, no Xcode needed
 
@@ -100,6 +113,58 @@ and not checked in. Xcode also builds the iOS targets:
 brew install xcodegen
 ONYX_TEAM_ID=TEAMID xcodegen generate && open Onyx.xcodeproj
 ```
+
+### The iOS app, from the command line
+
+Xcode must be installed, but need not be the selected developer directory:
+`DEVELOPER_DIR` points each command at it. A simulator build is signed to
+run locally (`CODE_SIGN_IDENTITY=-`), which gives it the Keychain the
+sign-in needs:
+
+```sh
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+xcodebuild -project Onyx.xcodeproj -scheme OnyxIOS \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro' CODE_SIGN_IDENTITY=- build
+xcrun simctl install booted <DerivedData>/Build/Products/Debug-iphonesimulator/Onyx.app
+xcrun simctl launch booted io.onyxfs.app --server http://localhost:3000 --pair CODE
+```
+
+`--server` and `--pair` sign in without a tap, as on the Mac: the code
+comes from `/space/pair` on a signed-in web session (or `POST
+/api/desktop/authorize` with `{"kind":"pairing"}`). The simulator shares the
+Mac's network, so `localhost` is `npm run dev:local`'s server.
+
+### TestFlight
+
+```sh
+scripts/release-ios.sh --upload
+```
+
+This builds the app, signs it for the App Store and uploads it. TestFlight
+has it once Apple has processed it, usually within minutes. Without
+`--upload` it stops at `build/ios/Onyx.xcarchive`, and nothing leaves the Mac.
+
+Before the first upload:
+
+1. In [App Store Connect](https://appstoreconnect.apple.com/apps), **+ → New
+   App**: iOS, bundle ID `io.onyxfs.app`, any SKU. The name must be unique on
+   the App Store; the home screen still says Onyx (`CFBundleDisplayName`).
+2. Sign Xcode in to the developer account (**Settings → Accounts**). The upload
+   makes the Apple Distribution certificate and the App Store profile itself.
+   No iPhone need be registered to the team: the archive is signed for the
+   App Store at export, never for development. An App Store Connect API key
+   works instead; see the script's header.
+
+Each build number is the time it was built, so every upload is newer than the
+last. Bump `MARKETING_VERSION` in `project.yml` for a new version. Add yourself
+to a group under **TestFlight → Internal Testing**, and builds reach you
+through the TestFlight app. Testers outside the team need Beta App Review,
+which needs an account for the reviewer to sign in with.
+
+`OnyxIOS/PrivacyInfo.xcprivacy` gives the reasons for the APIs Apple asks
+about (user defaults, file dates, disk space). A new use of one needs its
+reason there, or the upload is refused. The Files extension
+(`OnyxFileProviderIOS`) is not embedded yet; it comes with the Files app.
 
 ### Updates
 

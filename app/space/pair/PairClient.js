@@ -35,7 +35,7 @@ export default function PairClient({ brandName, logo }) {
         <BrandLogo logo={logo} name={brandName} height={30} markSize={40} className="auth-logo" />
         <h1 style={{ fontSize: 22, marginBottom: 8 }}>Pair {brandName}</h1>
         <p className="muted small" style={{ marginBottom: 20 }}>
-          Type this code into the desktop app. It works once and expires in five minutes.
+          Type this code into the Mac or iPhone app. It works once and expires in five minutes.
         </p>
 
         {code ? (
