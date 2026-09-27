@@ -8,6 +8,12 @@ import PackageDescription
 /// shapes this app makes, so S3 access is hand-rolled on CryptoKit instead
 /// (see S3/SigV4.swift, whose output is pinned against the AWS SDK's own
 /// signer). Anything added here ships inside that ceiling too.
+///
+/// OnyxFSCore is the engine of the onyxfs file-system extension (ONYXFS.md):
+/// the bridge protocol and its client, the volume's tree and writes, the
+/// chunk cache and the streaming reader. Plain Swift on Foundation and
+/// CryptoKit, no FSKit — so it is tested here, the extension stays a thin
+/// translation, and links only this, not the rest of OnyxKit.
 let package = Package(
     name: "OnyxKit",
     platforms: [.macOS(.v13), .iOS(.v16)],
@@ -17,10 +23,8 @@ let package = Package(
     ],
     targets: [
         .target(name: "OnyxKit"),
-        .testTarget(name: "OnyxKitTests", dependencies: ["OnyxKit"]),
-        // The onyxfs file system's engine (ONYXFS.md): plain Swift, no FSKit,
-        // so it is tested here and the extension stays a thin translation.
         .target(name: "OnyxFSCore"),
+        .testTarget(name: "OnyxKitTests", dependencies: ["OnyxKit"]),
         .testTarget(name: "OnyxFSCoreTests", dependencies: ["OnyxFSCore"]),
     ]
 )
