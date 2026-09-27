@@ -427,6 +427,10 @@ describe('the Mac’s writes', () => {
     assert.deepEqual(trashed.body, { ok: true, trashed: true }, 'the trash flag is read on the server');
     assert.ok(stored(`_trash/${f.id}/team/Selects/Take 2.mov`), 'moved out of the drive');
     assert.ok(!stored('team/Selects/Take 2.mov'));
+    const retried = await trashFile(who, f.id);
+    assert.deepEqual([retried.status, retried.body], [200, { ok: true, trashed: true }], 'asked again, the same answer');
+    assert.ok(stored(`_trash/${f.id}/team/Selects/Take 2.mov`), 'and the trashed object stays where it is');
+    assert.equal((await trashFile(mac(DV), f.id)).status, 403, 'still only for someone who could delete it');
     assert.equal((await getFile(who, f.id)).status, 404);
 
     const notAdmin = await restore(who, [f.id]);
@@ -447,6 +451,17 @@ describe('the Mac’s writes', () => {
     assert.deepEqual(out.body, { ok: true, trashed: false });
     assert.equal(row(f.id), undefined);
     assert.equal(stored('team/Cuts/Take 1.mov'), null);
+    assert.deepEqual((await trashFile(mac(ED), f.id)).body, { ok: true }, 'asked again: already gone');
+  });
+
+  test('with the trash off, a file already in the trash is left to the purge, not stranded', async () => {
+    const f = await upload(mac(ED));
+    await trashFile(mac(ED), f.id);
+    globalThis.__mw.settings.set('features.flags', { trash: false });
+    const out = await trashFile(mac(ED), f.id);
+    assert.deepEqual(out.body, { ok: true, trashed: true });
+    assert.ok(row(f.id), 'the row stays for the purge, which deletes the object at its trash key');
+    assert.ok(stored(`_trash/${f.id}/team/Cuts/Take 1.mov`));
   });
 
   test('folders: create (and ensure), list, rename with the files in it, delete', async () => {

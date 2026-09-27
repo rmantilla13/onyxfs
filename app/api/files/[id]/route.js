@@ -290,6 +290,12 @@ export async function DELETE(req, { params }) {
     if (!(await canModifyFile(file, principal, { action: 'files.delete' }))) {
       return NextResponse.json({ error: 'No access' }, { status: 403 });
     }
+    // Already in the trash: a delete asked for again (a Mac retrying after
+    // its answer was lost). Its object is at trash_key, not storage_key, so
+    // going on would fail to move it — or, with the trash off, drop the row
+    // and strand the object. It is deleted; say so. After the checks, so the
+    // answer tells no one who could not delete it that it is there.
+    if (file.deletedAt) return NextResponse.json({ ok: true, trashed: true });
 
     // Global, and read here: see the note above. A degraded read (flags
     // unreadable) keeps the trash, the reversible choice.
