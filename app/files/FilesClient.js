@@ -1021,7 +1021,14 @@ export default function FilesClient({
     });
     if (created == null) return;
     await loadFolders();
-    navigate(joinFolder(parent, created));
+    // Stay in the folder that is open, as Finder does: the new one is
+    // selected where it now shows, not opened. (Made inside another folder,
+    // it is not in this pane, and nothing here moves.)
+    const k = folderKey(joinFolder(parent, created));
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const s = selRef.current;
+      if (s?.order.includes(k)) { s.setKeys([k], { anchor: k, focus: k }); s.focusItem(k); }
+    }));
     toast.success(`Folder “${created}” created.`);
   };
 
