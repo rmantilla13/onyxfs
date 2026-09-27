@@ -19,9 +19,14 @@ const MAX = 200;
  * meantime, to the next free one ("a (2).jpg"), so a restore never
  * overwrites anything. Then restoreFile clears the trash flags and advances
  * the sequence, which is how synced devices learn it is back.
+ *
+ * Admins only, as Admin → Trash is: restoring is an admin's call. Unlike the
+ * rest of /api/admin this also takes Onyx for Mac's bearer token, for Put
+ * Back in Finder (requireAdmin(req)) — held to the same test, so no one
+ * restores from the Mac who could not from the web.
  */
 export async function POST(req) {
-  const guard = await requireAdmin();
+  const guard = await requireAdmin(req);
   if (guard.error) return guard.error;
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }

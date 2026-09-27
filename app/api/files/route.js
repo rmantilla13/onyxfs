@@ -22,9 +22,13 @@ export const maxDuration = 30;
  * `folders` (the sidebar tree) comes with the first page only, and not at all
  * with `folders=0`. It does not depend on the page or the filters, and
  * building it counts every file in the library.
+ *
+ * Both methods here take the browser's session or Onyx for Mac's bearer
+ * token (requirePrincipal(req)), since both are on the path the Mac records
+ * its uploads at (lib/bearer-gate.js).
  */
 export async function GET(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
   const url = new URL(req.url);
@@ -76,10 +80,12 @@ export async function GET(req) {
  * creator — able to open, move and delete it. So the key must be one this
  * person was handed for an upload (presign or multipart; lib/db.js
  * claimUploadKey), taken once, and one no other row already points at.
- * Anything else is someone else's object, or nobody's we know of.
+ * Anything else is someone else's object, or nobody's we know of. Nor is a
+ * key issued for new contents of an existing file (`replaceOf`): those are
+ * swapped in by POST /api/files/[id]/content and become no file of their own.
  */
 export async function POST(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
   let body = {};

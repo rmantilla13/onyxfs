@@ -11,6 +11,7 @@ import {
 import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
 import { normalizeSchema, validateMetadataPatch } from '@/lib/dam';
 import { keyFor, fileNameProblem } from '@/lib/folder-ops';
+import { ifMatchVersion } from '@/lib/file-record';
 
 export const runtime = 'nodejs';
 
@@ -23,9 +24,15 @@ export const TRASH_PREFIX = '_trash';
 // s3PresignGet already documents as the playable-video default.
 const DETAIL_URL_TTL = 21600;
 
-/** GET /api/files/[id] — one file, authorized and presigned for playback. */
-export async function GET(_req, { params }) {
-  const g = await requirePrincipal();
+/**
+ * GET /api/files/[id] — one file, authorized and presigned for playback.
+ *
+ * Every method here takes the browser's session or Onyx for Mac's bearer
+ * token (requirePrincipal(req): the same principal either way, and a token
+ * only for a role that may use the desktop app).
+ */
+export async function GET(req, { params }) {
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal } = g;
 
@@ -47,23 +54,6 @@ export async function GET(_req, { params }) {
 }
 
 /**
- * The version an `If-Match` header is asserting, or undefined when the request
- * states no condition. HTTP clients quote an entity tag by habit, so `"7"`,
- * `W/"7"` and a bare `7` all mean the same thing here. `*` is the standard
- * "any current representation", i.e. no condition at all.
- *
- * A value we cannot parse comes back NaN, which fails the equality check at
- * the call site and so lands in the 409 branch — a precondition that cannot be
- * verified must not be treated as satisfied.
- */
-function ifMatchVersion(raw) {
-  if (raw == null) return undefined;
-  const v = raw.trim().replace(/^W\//i, '').replace(/^"(.*)"$/s, '$1').trim();
-  if (!v || v === '*') return undefined;
-  return Number(v);
-}
-
-/**
  * PATCH /api/files/[id] — rename / move / tag / note / metadata.
  *
  * Authorized per file, not merely per session. Being signed in used to be the
@@ -80,7 +70,7 @@ function ifMatchVersion(raw) {
  * A folder change is a MOVE, and moves the object too — see below.
  */
 export async function PATCH(req, { params }) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
   const { id } = params;
@@ -283,8 +273,8 @@ export async function PATCH(req, { params }) {
  * never from a request parameter. Letting the caller pick would make a
  * disabled-trash deployment's safety net bypassable with a query string.
  */
-export async function DELETE(_req, { params }) {
-  const g = await requirePrincipal();
+export async function DELETE(req, { params }) {
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
   const { id } = params;
@@ -300,6 +290,12 @@ export async function DELETE(_req, { params }) {
     if (!(await canModifyFile(file, principal, { action: 'files.delete' }))) {
       return NextResponse.json({ error: 'No access' }, { status: 403 });
     }
+    // Already in the trash: a delete asked for again (a Mac retrying after
+    // its answer was lost). Its object is at trash_key, not storage_key, so
+    // going on would fail to move it — or, with the trash off, drop the row
+    // and strand the object. It is deleted; say so. After the checks, so the
+    // answer tells no one who could not delete it that it is there.
+    if (file.deletedAt) return NextResponse.json({ ok: true, trashed: true });
 
     // Global, and read here: see the note above. A degraded read (flags
     // unreadable) keeps the trash, the reversible choice.
