@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createUploadQueue, joinFolder, filesFromInput } from '../lib/upload-client.js';
+import { batchComplete } from '../lib/upload-queue.js';
 
 const tick = () => new Promise((r) => setImmediate(r));
 
@@ -144,4 +145,87 @@ test('filesFromInput keeps the folders of a folder pick and skips OS junk', () =
     ['b.jpg', 'Shoot/RAW'],
     ['loose.pdf', ''],
   ]);
+});
+
+// The tray dismisses itself on this and nothing else
+// (app/components/ui/UploadPanel.js), so what it refuses matters more than what
+// it accepts: every case below leaves a control on screen that someone still
+// needs, and a tray that vanished would take it with it.
+test('batchComplete is true only when every row landed', async () => {
+  const h = harness({ concurrency: 3 });
+  h.queue.add([{ file: file('a') }, { file: file('b') }, { file: file('c') }]);
+  assert.equal(batchComplete(h.snap()), false, 'still running');
+
+  await h.finish(h.calls[0]);
+  assert.equal(batchComplete(h.snap()), false, 'one of three');
+  await h.finish(h.calls[1]);
+  await h.finish(h.calls[2]);
+  assert.equal(batchComplete(h.snap()), true);
+});
+
+test('…not with a failure, which holds the only Retry for it', async () => {
+  const h = harness({ concurrency: 2 });
+  h.queue.add([{ file: file('a') }, { file: file('b') }]);
+  await h.finish(h.calls[0]);
+  await h.fail(h.calls[1], 'Bucket said no.');
+  assert.equal(h.snap().running, false, 'the batch is over');
+  assert.equal(batchComplete(h.snap()), false);
+
+  // Retried and landed, it is complete — the error text and its button are gone.
+  h.queue.retry(h.snap().items.find((i) => i.status === 'error').id);
+  await h.finish(h.running()[0]);
+  assert.equal(batchComplete(h.snap()), true);
+});
+
+test('…nor with a row someone canceled: a stopped batch did not complete', async () => {
+  const h = harness({ concurrency: 1 });
+  h.queue.add([{ file: file('a') }, { file: file('b') }]);
+  h.queue.cancel(2);
+  await h.finish(h.calls[0]);
+  assert.equal(h.snap().running, false);
+  assert.equal(h.snap().counts.error, 0, 'a cancel is not a failure');
+  assert.equal(batchComplete(h.snap()), false, 'and the canceled row still offers Retry');
+});
+
+test('…and never on an empty or absent snapshot, which is no batch at all', () => {
+  for (const bad of [null, undefined, {}, { items: [] }, { items: null }]) {
+    assert.equal(batchComplete(bad), false, JSON.stringify(bad));
+  }
+});
+
+test('clear() empties it, which is what the dismissal does', async () => {
+  const h = harness({ concurrency: 2 });
+  h.queue.add([{ file: file('a') }, { file: file('b') }]);
+  await h.finish(h.calls[0]);
+  await h.finish(h.calls[1]);
+  assert.equal(batchComplete(h.snap()), true);
+  h.queue.clear();
+  assert.equal(h.snap().items.length, 0, 'the panel renders nothing from this');
+  assert.equal(batchComplete(h.snap()), false);
+});
+
+// The tray's own wiring, read from the source: a React component needs a DOM to
+// render and this suite has none, but the two mistakes that would break the
+// dismissal are both visible in the text.
+test('the tray dismisses on the predicate, and the timer survives a re-render', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const panel = await readFile(new URL('../app/components/ui/UploadPanel.js', import.meta.url), 'utf8');
+
+  assert.match(panel, /const finished = batchComplete\(snapshot\)/, 'it dismisses on something other than batchComplete');
+  assert.match(panel, /setTimeout\(\(\) => clear\.current\?\.\(\), DISMISS_MS\)/);
+  assert.match(panel, /return \(\) => clearTimeout\(timer\)/, 'an upload starting again must cancel the pending dismissal');
+  assert.match(panel, /const DISMISS_MS = 3000;/);
+
+  // onClear reaches the timer through a ref, and the effect does NOT depend on
+  // it. The parent passes an inline arrow, so depending on it would restart the
+  // three seconds on every render — and the grid refreshes right after a batch
+  // lands, which is exactly then.
+  assert.match(panel, /\}, \[finished, held\]\);/, 'the dismissal effect depends on more than finished and held');
+  assert.doesNotMatch(panel, /\}, \[finished, held, onClear\]\)/);
+
+  // And it waits while someone is reading it or reaching for a button.
+  for (const handler of ['onPointerEnter', 'onPointerLeave', 'onFocusCapture', 'onBlurCapture']) {
+    assert.ok(panel.includes(handler), `the tray does not pause on ${handler}`);
+  }
+  assert.match(panel, /if \(!e\.currentTarget\.contains\(e\.relatedTarget\)\) setHeld\(false\)/, 'tabbing inside the tray would drop the hold');
 });
