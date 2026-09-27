@@ -478,19 +478,19 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 [data-theme='dark'] .brand-logo .brand-logo-light { display: none; }
 [data-theme='dark'] .brand-logo .brand-logo-dark { display: block; }
 .brand-logo-name { font-family: var(--font-display); letter-spacing: -0.02em; }
-/* Our wordmark: ink letters, and "/FS" in the aura colours sliding behind
+/* Our wordmark: ink letters, and "FS" in the aura colours sliding behind
    them — slowly, so it reads as light moving rather than a banner. The
    reduced-motion rule at the top stops it on its last frame. */
 .onyx-wordmark { position: relative; display: block; color: var(--ink); }
 .onyx-wordmark svg { display: block; }
-/* "/FS": the letters' box (180-276 of the 276-unit wordmark), masked to their
+/* "FS": the letters' box (256-368 of the 368-unit wordmark), masked to their
    shapes. The sweep inside is two periods of the gradient wide and slides one
    period — a transform, so the compositor runs it without the page. */
 .onyx-fs {
   position: absolute;
   top: 0; bottom: 0;
-  left: calc(100% * 180 / 276);
-  width: calc(100% * 96 / 276);
+  left: calc(100% * 256 / 368);
+  width: calc(100% * 112 / 368);
   overflow: hidden;
   -webkit-mask-size: 100% 100%; mask-size: 100% 100%;
   -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
