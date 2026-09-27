@@ -64,9 +64,10 @@ struct OnyxResource {
     }
 
     /// The same drive is the same container and volume every time it is
-    /// mounted, whichever ticket brought it.
+    /// mounted, whichever ticket brought it — and a different one in Onyx
+    /// Dev, whose disk of the same drive may be mounted beside it.
     var uuid: UUID {
-        var bytes = Array(SHA256.hash(data: Data("onyxfs:\(scope)".utf8)).prefix(16))
+        var bytes = Array(SHA256.hash(data: Data("\(FileSystemKind.shortName):\(scope)".utf8)).prefix(16))
         bytes[6] = (bytes[6] & 0x0F) | 0x50
         bytes[8] = (bytes[8] & 0x3F) | 0x80
         return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],

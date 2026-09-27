@@ -126,11 +126,12 @@ if [[ "$WITH_FS" == "1" ]]; then
   set_key "$P" LSMinimumSystemVersion string 27.0
   /usr/libexec/PlistBuddy -c "Delete :CFBundleSupportedPlatforms" "$P" 2>/dev/null || true
   /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms array" -c "Add :CFBundleSupportedPlatforms:0 string MacOSX" "$P"
-  # A dev build's file system is a kind of its own, "onyxfsdev". FSKit keeps
-  # one module per short name, so under the real one's it would not be
-  # listed beside it; and each app, as it opens, unmounts the disks of its
-  # kind that an earlier run left — under one name, a dev build opening
-  # would eject the real Onyx's drives.
+  # A dev build's file system is a kind of its own, "onyxfsdev". Each app,
+  # as it opens, unmounts the disks of its kind that an earlier run left —
+  # under one name, a dev build opening would eject the real Onyx's drives —
+  # and `mount -t onyxfs` could reach either copy. (FSKit does list two
+  # modules of one name side by side; one missing from its list is
+  # fskit_agent holding an earlier build, ONYXFS.md.)
   if [[ "${ONYX_DEV:-0}" == "1" ]]; then
     plist "$P" "Set :EXAppExtensionAttributes:FSShortName onyxfsdev"
     plist "$P" "Set :EXAppExtensionAttributes:FSPersonalities:Onyx:FSName Onyx Dev"
