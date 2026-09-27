@@ -340,11 +340,6 @@ final class DriveService: ObservableObject {
         await writers[scope.identifier]?.mirrorChanged()
     }
 
-    // TEMPORARY until the bridge's onyxfs routes land (feat/onyxfs-bridge):
-    // they provide these two.
-    func onyxfsResourceURL(for scope: SyncDomain) async throws -> URL { throw OnyxError.decoding("onyxfs bridge not built yet") }
-    func endOnyxfsSessions(for scope: SyncDomain) {}
-
     func reveal(_ scope: SyncDomain) {
         if diskState(of: scope) != nil { diskReveal(scope) } else { mounts.reveal(scope) }
     }
