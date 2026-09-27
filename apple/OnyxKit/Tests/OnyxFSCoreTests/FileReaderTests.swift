@@ -13,6 +13,7 @@ struct FileReaderTests {
         let stub: Stub
         let client: FSBridgeClient
         let store: ChunkStore
+        let folder: URL
 
         func reader(_ entry: FSEntry, tuning: FileReader.Tuning = .quick,
                     now: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 }) -> FileReader {
@@ -28,14 +29,17 @@ struct FileReaderTests {
     func setUp(cacheLimit: Int64 = 1 << 30) async throws -> Setup {
         let stub = Stub()
         let client = try await stub.connect()
-        let store = try ChunkStore(directory: try temporaryFolder(), limitBytes: cacheLimit)
-        return Setup(stub: stub, client: client, store: store)
+        // Each test removes it when it ends (`defer { removeFolder(s.folder) }`).
+        let folder = try temporaryFolder()
+        let store = try ChunkStore(directory: folder, limitBytes: cacheLimit)
+        return Setup(stub: stub, client: client, store: store, folder: folder)
     }
 
     // MARK: - Streaming
 
     @Test func aHundredMiBStreamsSequentiallyWithReadAhead() async throws {
         let s = try await setUp(cacheLimit: 0)    // the app's "no limit"
+        defer { removeFolder(s.folder) }
         let size = 100 * Self.MiB
         let file = s.stub.addFile("/Master.mov", size: size)
         let reader = s.reader(file)
@@ -84,6 +88,7 @@ struct FileReaderTests {
 
     @Test func randomSeeksReadExactBytes() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         let size = 40 * Self.MiB + 12_345
         let file = s.stub.addFile("/Odd.mov", size: size, seed: 3)
         let reader = s.reader(file)
@@ -103,6 +108,7 @@ struct FileReaderTests {
 
     @Test func readsAtTheEndReturnWhatExists() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         let size = 2 * Self.chunk + 100
         let file = s.stub.addFile("/Short tail.mov", size: size, seed: 5)
         let reader = s.reader(file)
@@ -120,6 +126,7 @@ struct FileReaderTests {
 
     @Test func aReadAcrossAChunkBoundaryIsWhole() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         let size = 3 * Self.chunk
         let file = s.stub.addFile("/Across.mov", size: size)
         let reader = s.reader(file)
@@ -133,6 +140,7 @@ struct FileReaderTests {
 
     @Test func aRefusedLinkIsReplacedOnce() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         let file = s.stub.addFile("/Take.mov", size: 20 * Self.MiB)
         s.stub.refuseSignatures(through: 1)   // the first link has expired
         let reader = s.reader(file)
@@ -143,6 +151,7 @@ struct FileReaderTests {
 
     @Test func aLinkStorageKeepsRefusingIsAnErrorThatPasses() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         let file = s.stub.addFile("/Take.mov", size: 20 * Self.MiB)
         s.stub.refuseEverySignature()
         let reader = s.reader(file)
@@ -155,6 +164,7 @@ struct FileReaderTests {
 
     @Test func aLinkIsReplacedAMinuteBeforeItExpires() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         let file = s.stub.addFile("/Long.mov", size: 50 * Self.MiB)
         let clock = TestClock()
         let reader = s.reader(file, now: { Date().timeIntervalSince1970 + clock.offset })
@@ -172,6 +182,7 @@ struct FileReaderTests {
 
     @Test func networkErrorsAreTriedThreeTimes() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         let file = s.stub.addFile("/Flaky.mov", size: 50 * Self.MiB)
         let reader = s.reader(file)
 
@@ -196,6 +207,7 @@ struct FileReaderTests {
 
     @Test func readersOfOneChunkShareOneFetch() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         let file = s.stub.addFile("/Shared.mov", size: 30 * Self.MiB)
         let reader = s.reader(file)
         s.stub.hold(0..<1)     // chunk 0 waits
@@ -214,6 +226,7 @@ struct FileReaderTests {
 
     @Test func aCancelledReadLeavesTheFetchToFinishAndBeCached() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         let file = s.stub.addFile("/Cancelled.mov", size: 30 * Self.MiB)
         let reader = s.reader(file)
         s.stub.hold(0..<1)
@@ -234,6 +247,7 @@ struct FileReaderTests {
 
     @Test func readAheadDroppedAfterASeekIsNeverCached() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         let size = 100 * Self.MiB
         let file = s.stub.addFile("/Scrub.mov", size: size)
         let reader = s.reader(file)
@@ -257,6 +271,7 @@ struct FileReaderTests {
 
     @Test func closeStopsReadAhead() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         let file = s.stub.addFile("/Closed.mov", size: 100 * Self.MiB)
         let reader = s.reader(file)
         s.stub.hold(Self.chunk..<(100 * Self.MiB))
@@ -271,6 +286,7 @@ struct FileReaderTests {
     @Test func aSmallCacheStillStreams() async throws {
         // Room for three chunks: read-ahead shrinks to fit, and old chunks go.
         let s = try await setUp(cacheLimit: 3 * (Self.chunk + 32))
+        defer { removeFolder(s.folder) }
         let size = 40 * Self.MiB
         let file = s.stub.addFile("/Big for its cache.mov", size: size, seed: 11)
         let reader = s.reader(file)
@@ -290,6 +306,7 @@ struct FileReaderTests {
 
     @Test func aLocalFileIsReadThroughTheBridgeAndNotCachedAgain() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         let size = 20 * Self.MiB
         let file = s.stub.addFile("/Kept.mov", size: size, seed: 9, local: true)
         let reader = s.reader(file)
@@ -305,6 +322,7 @@ struct FileReaderTests {
 
     @Test func aFileThatTurnsOutToBeLocalIsReadLocally() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         var file = s.stub.addFile("/Pinned since.mov", size: 20 * Self.MiB, seed: 4, local: true)
         file.local = false   // the entry the reader was opened from is older
         let reader = s.reader(file)
@@ -315,6 +333,7 @@ struct FileReaderTests {
 
     @Test func aNewerVersionIsFollowedBeforeAnythingIsRead() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         var file = s.stub.addFile("/Replaced.mov", size: 20 * Self.MiB, seed: 8, version: "v2")
         file.version = "v1"    // the entry was listed before the web replaced the file
         let reader = s.reader(file)
@@ -324,6 +343,7 @@ struct FileReaderTests {
 
     @Test func aNewVersionAfterBytesWereReadIsStale() async throws {
         let s = try await setUp()
+        defer { removeFolder(s.folder) }
         let file = s.stub.addFile("/Changing.mov", size: 40 * Self.MiB)
         let reader = s.reader(file)
         _ = try await reader.read(offset: 0, length: 4096)
@@ -336,6 +356,7 @@ struct FileReaderTests {
 
     @Test func aStagingFileIsReadFromDiskAsItGrows() async throws {
         let folder = try temporaryFolder()
+        defer { removeFolder(folder) }
         let url = folder.appendingPathComponent("staging.bin")
         try Pattern.bytes(0..<10_000, seed: 1).write(to: url)
         let reader = FileReader(staging: url)

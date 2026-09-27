@@ -175,6 +175,7 @@ struct FSBridgeClientTests {
     @Test func putFileStreamsTheFileAndAnswersWithThePendingEntry() async throws {
         let stub = Stub()
         let folder = try temporaryFolder()
+        defer { removeFolder(folder) }
         let upload = folder.appendingPathComponent("upload.bin")
         let content = Pattern.bytes(0..<(3 << 20) + 17, seed: 99)
         try content.write(to: upload)
@@ -241,7 +242,9 @@ struct FSBridgeClientTests {
         let stub = Stub()
         let client = try await stub.connect()
         stub.writeRefusal = status
-        let file = try temporaryFolder().appendingPathComponent("f")
+        let folder = try temporaryFolder()
+        defer { removeFolder(folder) }
+        let file = folder.appendingPathComponent("f")
         try Data("x".utf8).write(to: file)
         await #expect(throws: expected) { try await client.putFile(path: "/f", from: file) }
         await #expect(throws: expected) { try await client.mkdir(path: "/New") }
@@ -259,6 +262,7 @@ struct FSBridgeClientTests {
         await #expect(throws: expected) { try await client.rename(from: "/a", to: "/b") }
         await #expect(throws: expected) { try await client.delete(path: "/a") }
         let folder = try temporaryFolder()
+        defer { removeFolder(folder) }
         let file = folder.appendingPathComponent("f")
         try Data("x".utf8).write(to: file)
         await #expect(throws: expected) { try await client.putFile(path: "/f", from: file) }

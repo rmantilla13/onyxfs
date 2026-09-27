@@ -18,7 +18,9 @@ struct ChunkStoreTests {
     func limit(_ chunks: Int) -> Int64 { Int64(chunks * (Self.chunk + ChunkStore.digestLength)) }
 
     @Test func aHitIsTheBytesWritten() async throws {
-        let store = try ChunkStore(directory: try temporaryFolder(), limitBytes: limit(10))
+        let storeFolder = try temporaryFolder()
+        defer { removeFolder(storeFolder) }
+        let store = try ChunkStore(directory: storeFolder, limitBytes: limit(10))
         await store.write(Self.key, index: 3, data: bytes(3))
         #expect(await store.read(Self.key, index: 3, expectedLength: Self.chunk, range: 0..<Self.chunk) == bytes(3))
         #expect(await store.read(Self.key, index: 3, expectedLength: Self.chunk, range: 100..<5000)
@@ -41,6 +43,7 @@ struct ChunkStoreTests {
 
     @Test func theLeastRecentlyUsedGoFirst() async throws {
         let folder = try temporaryFolder()
+        defer { removeFolder(folder) }
         let store = try ChunkStore(directory: folder, limitBytes: limit(3))
         for index in 0..<3 {
             await store.write(Self.key, index: index, data: bytes(index))
@@ -63,7 +66,9 @@ struct ChunkStoreTests {
 
     @Test func aLimitOfZeroIsNoLimit() async throws {
         // The app's "no limit" arrives as cacheLimitBytes 0: keep everything.
-        let store = try ChunkStore(directory: try temporaryFolder(), limitBytes: 0)
+        let storeFolder = try temporaryFolder()
+        defer { removeFolder(storeFolder) }
+        let store = try ChunkStore(directory: storeFolder, limitBytes: 0)
         for index in 0..<20 { await store.write(Self.key, index: index, data: bytes(index)) }
         let stats = await store.stats()
         #expect(stats.chunks == 20 && stats.evictions == 0 && stats.limitBytes == .max)
@@ -74,7 +79,9 @@ struct ChunkStoreTests {
         // the disk has room for two and a half chunks beyond it.
         let chunkBytes = Int64(Self.chunk + ChunkStore.digestLength)
         let free = ChunkStore.spareSpace + chunkBytes * 5 / 2
-        let store = try ChunkStore(directory: try temporaryFolder(), limitBytes: 0, freeSpace: { _ in free })
+        let storeFolder = try temporaryFolder()
+        defer { removeFolder(storeFolder) }
+        let store = try ChunkStore(directory: storeFolder, limitBytes: 0, freeSpace: { _ in free })
         for index in 0..<4 {
             await store.write(Self.key, index: index, data: bytes(index))
             try await Task.sleep(nanoseconds: 2_000_000)
@@ -85,7 +92,9 @@ struct ChunkStoreTests {
         #expect(stats.chunks == 2 && stats.evictions == 2 && stats.skipped == 0)
 
         // No room, and nothing of ours to make it with: the chunk is not kept.
-        let full = try ChunkStore(directory: try temporaryFolder(), limitBytes: 0,
+        let fullFolder = try temporaryFolder()
+        defer { removeFolder(fullFolder) }
+        let full = try ChunkStore(directory: fullFolder, limitBytes: 0,
                                   freeSpace: { _ in ChunkStore.spareSpace + chunkBytes / 2 })
         await full.write(Self.key, index: 0, data: bytes(0))
         #expect(await !full.contains(Self.key, index: 0))
@@ -94,6 +103,7 @@ struct ChunkStoreTests {
 
     @Test func aVersionsFolderGoesWithItsLastChunk() async throws {
         let folder = try temporaryFolder()
+        defer { removeFolder(folder) }
         let store = try ChunkStore(directory: folder, limitBytes: limit(1))
         let other = ChunkStore.Key(fileId: "file-2", version: "v1")
         await store.write(Self.key, index: 0, data: bytes(0))
@@ -104,6 +114,7 @@ struct ChunkStoreTests {
 
     @Test func aRestartKeepsWhatWasThere() async throws {
         let folder = try temporaryFolder()
+        defer { removeFolder(folder) }
         do {
             let store = try ChunkStore(directory: folder, limitBytes: limit(10))
             for index in 0..<4 { await store.write(Self.key, index: index, data: bytes(index)) }
@@ -123,6 +134,7 @@ struct ChunkStoreTests {
 
     @Test func aRestartWithASmallerLimitEvictsAtOnce() async throws {
         let folder = try temporaryFolder()
+        defer { removeFolder(folder) }
         do {
             let store = try ChunkStore(directory: folder, limitBytes: limit(10))
             for index in 0..<6 {
@@ -139,6 +151,7 @@ struct ChunkStoreTests {
 
     @Test func aShortChunkIsAMissAndIsDeleted() async throws {
         let folder = try temporaryFolder()
+        defer { removeFolder(folder) }
         let store = try ChunkStore(directory: folder, limitBytes: limit(10))
         await store.write(Self.key, index: 0, data: bytes(0))
         let file = folder.appendingPathComponent(Self.key.hex).appendingPathComponent("0")
@@ -155,13 +168,16 @@ struct ChunkStoreTests {
     @Test func aChunkOfTheWrongLengthForTheFileIsAMiss() async throws {
         // The reader expects a full chunk where a short one was kept: the
         // file grew under the same version. Never hand out a short answer.
-        let store = try ChunkStore(directory: try temporaryFolder(), limitBytes: limit(10))
+        let storeFolder = try temporaryFolder()
+        defer { removeFolder(storeFolder) }
+        let store = try ChunkStore(directory: storeFolder, limitBytes: limit(10))
         await store.write(Self.key, index: 0, data: bytes(0, length: 500))
         #expect(await store.read(Self.key, index: 0, expectedLength: Self.chunk, range: 0..<100) == nil)
     }
 
     @Test func damagedBytesFromAnEarlierRunAreCaughtByTheDigest() async throws {
         let folder = try temporaryFolder()
+        defer { removeFolder(folder) }
         do {
             let store = try ChunkStore(directory: folder, limitBytes: limit(10))
             await store.write(Self.key, index: 0, data: bytes(0))
@@ -182,6 +198,7 @@ struct ChunkStoreTests {
 
     @Test func leftoversAreClearedAtStart() async throws {
         let folder = try temporaryFolder()
+        defer { removeFolder(folder) }
         let staging = folder.appendingPathComponent(".tmp")
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         try Data(count: 5000).write(to: staging.appendingPathComponent("half-written"))
@@ -199,7 +216,9 @@ struct ChunkStoreTests {
     }
 
     @Test func manyWritersAndReadersAtOnce() async throws {
-        let store = try ChunkStore(directory: try temporaryFolder(), limitBytes: limit(8))
+        let storeFolder = try temporaryFolder()
+        defer { removeFolder(storeFolder) }
+        let store = try ChunkStore(directory: storeFolder, limitBytes: limit(8))
         await withTaskGroup(of: Void.self) { group in
             for index in 0..<32 {
                 group.addTask {

@@ -554,6 +554,12 @@ func eventually(_ condition: () async -> Bool) async throws {
     throw TimedOut()
 }
 
+/// Tests remove what they write: the streaming tests alone leave a hundred
+/// megabytes of chunks a run.
+func removeFolder(_ url: URL) {
+    try? FileManager.default.removeItem(at: url)
+}
+
 /// A folder of its own under the temporary directory.
 func temporaryFolder(_ name: String = #function) throws -> URL {
     let url = FileManager.default.temporaryDirectory
