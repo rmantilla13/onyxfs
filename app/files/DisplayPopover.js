@@ -69,12 +69,17 @@ function Segmented({ label, options, value, onChange, small = false, disabled = 
 }
 
 /** The metadata fields: what is shown, in order, then everything else by group. */
-function FieldsPage({ available, fields, defaults, onChange, onBack, onAddField }) {
+function FieldsPage({ available, fields, defaults, onChange: change, onBack, onAddField }) {
   const byKey = new Map(available.map((c) => [c.key, c]));
   const shown = fields.map((k) => byKey.get(k)).filter(Boolean);
   const hidden = available.filter((c) => !fields.includes(c.key));
   const groups = [...new Set(hidden.map((c) => c.group))];
   const keys = shown.map((c) => c.key);
+  // Fields the view has that cannot be shown here and now — the workspace's
+  // metadata fields while the flag is off — stay in it, after these, for
+  // when they can: a change to the others must not quietly drop them.
+  const kept = fields.filter((k) => !byKey.has(k));
+  const onChange = (next) => change([...next, ...kept]);
   return (
     <div className="display-sub">
       <button type="button" className="display-back" onClick={onBack}>

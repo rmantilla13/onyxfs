@@ -55,7 +55,7 @@ function smallerThan(md, box) {
  * sibling; Get info its sm. `eager` is for the first row of the grid, which
  * is on screen before anything else is.
  */
-export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface = 'card', sizes, eager = false, fitMode = 'fill' }) {
+export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface = 'card', sizes, boxHeight, eager = false, fitMode = 'fill' }) {
   const kind = effectiveKind(file);
   const drawable = drawableKind(file);
   // URLs that failed to load in this tile. A broken-image icon is never the
@@ -67,7 +67,9 @@ export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface 
   // both directions — an icon, a small screenshot — is shown at its own size
   // instead of blown up into a blur. Decided from the recorded dimensions
   // when there are some, so it never switches once the picture is up.
-  const box = typeof sizes === 'number' && sizes > 0 ? { width: sizes, height: sizes * 0.75 } : CARD_BOX;
+  // The box it fills: a grid card's 4:3 at its column's width, or a tile's
+  // own (`boxHeight`).
+  const box = typeof sizes === 'number' && sizes > 0 ? { width: sizes, height: boxHeight || sizes * 0.75 } : CARD_BOX;
   const known = Number(file.metadata?.width) > 0 && Number(file.metadata?.height) > 0;
   const [measuredFit, setMeasuredFit] = useState(null);
   const whole = fitMode === 'fit' ? 'contain' : 'cover';

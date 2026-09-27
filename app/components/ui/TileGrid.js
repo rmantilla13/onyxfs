@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Thumb } from './FileCard';
 import { FieldLine } from './FieldValue';
-import { justifyRows, rowsInView, tileHits, tileStep, aspectOf } from '@/lib/justify';
+import { justifyRows, rowsInView, tileHits, tileStep, aspectOf, MIN_ASPECT, MAX_ASPECT } from '@/lib/justify';
 import { fileKey } from '@/lib/selection';
 import { rowsPerViewport } from '@/lib/nav-geometry';
 
@@ -34,6 +34,19 @@ const EAGER_TILES = 8;
 // The top nav, which a tile scrolled up to must clear.
 const NAV_CLEARANCE = 72;
 
+/**
+ * A tile's box is its picture's shape, so filling it shows the picture
+ * whole — except one past the ratios a box may have (lib/justify.js), a
+ * strip of a panorama, which is fitted inside its box instead.
+ */
+function tileFit(f) {
+  const w = Number(f?.metadata?.width);
+  const h = Number(f?.metadata?.height);
+  if (!(w > 0 && h > 0)) return 'fill';
+  const a = w / h;
+  return a < MIN_ASPECT || a > MAX_ASPECT ? 'fit' : 'fill';
+}
+
 const Tile = memo(function Tile({ file: f, box, caption, selected, tabbable, handlers, labelFor, badgesFor, onMissingThumb, fields, rootName, eager, style }) {
   const key = fileKey(f.id);
   const drag = handlers?.dragStart;
@@ -53,7 +66,7 @@ const Tile = memo(function Tile({ file: f, box, caption, selected, tabbable, han
       onDragStart={drag ? (e) => drag(e, key) : undefined}
     >
       <div className="tile-pic" style={box ? { height: box.height } : undefined}>
-        <Thumb file={f} label={labelFor?.(f)} onMissingThumb={onMissingThumb} sizes={box?.width} eager={eager} />
+        <Thumb file={f} label={labelFor?.(f)} onMissingThumb={onMissingThumb} sizes={box?.width} boxHeight={box?.height} eager={eager} fitMode={tileFit(f)} />
       </div>
       <div className="tile-caption" style={{ height: caption }}>
         <span className="tile-name truncate" title={f.name}>{f.name}</span>

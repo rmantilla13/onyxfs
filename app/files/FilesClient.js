@@ -112,6 +112,9 @@ const SIDEBAR_STORAGE_KEY = SIDEBAR_KEY;
 function setViewCookie(name, value) {
   try { document.cookie = `${name}=${encodeURIComponent(value)}; path=/files; max-age=31536000; samesite=lax`; } catch {}
 }
+function clearViewCookie(name) {
+  try { document.cookie = `${name}=; path=/files; max-age=0; samesite=lax`; } catch {}
+}
 
 // A cookie holds about 4 KB. A built-in's fields are what can make its copy
 // large, and they are the part a first paint can most do without: past this,
@@ -679,16 +682,34 @@ export default function FilesClient({
   // infinite-scroll sentinel, which otherwise had a window to request the
   // next page of the OLD ordering before the refetch replaced the grid. The
   // same goes for a listing that flattens, or stops.
+  // Only a change: the same sort picked again is no new listing, and a
+  // cursor dropped for nothing would stop the scroll at the first page.
   const changeSort = (next) => {
+    if (next === sort) return;
     setSort(next);
     setCursor(null);
-    if (view.builtin) persistLocal(withLocalView(local, view.id, { sort: next, display }));
+    if (view.builtin) keepBuiltin(view.id, { sort: next, display });
   };
   const changeDisplay = (patch) => {
     const next = normalizeDisplay({ ...display, ...patch }, display);
     if ((next.flatten && next.layout !== 'column') !== flat) setCursor(null);
     setDisplay(next);
-    if (view.builtin) persistLocal(withLocalView(local, view.id, { sort, display: next }));
+    if (view.builtin) keepBuiltin(view.id, { sort, display: next });
+  };
+  // The grid/list choice and columns from before views are All files'
+  // starting point only until it is changed here: from then on its own
+  // settings are the whole of it — including when they are the defaults,
+  // which keep no entry (withLocalView), and would otherwise let the old
+  // choice back in on the next load.
+  const forgetLegacy = () => {
+    if (!legacy) return;
+    setLegacy(null);
+    try { localStorage.removeItem(VIEW_STORAGE_KEY); localStorage.removeItem(COLUMNS_STORAGE_KEY); } catch {}
+    clearViewCookie(VIEW_STORAGE_KEY);
+  };
+  const keepBuiltin = (id, settings) => {
+    if (id === DEFAULT_VIEW_ID) forgetLegacy();
+    persistLocal(withLocalView(local, id, settings));
   };
   // For callbacks memoized before this render (the new-field dialog's).
   const changeDisplayRef = useRef(changeDisplay);
@@ -697,15 +718,11 @@ export default function FilesClient({
     if (!view.builtin) return;
     const { [view.id]: _, ...rest } = local;
     persistLocal(rest);
-    if (view.id === DEFAULT_VIEW_ID && legacy) {
-      setLegacy(null);
-      try { localStorage.removeItem(VIEW_STORAGE_KEY); localStorage.removeItem(COLUMNS_STORAGE_KEY); } catch {}
-      setViewCookie(VIEW_STORAGE_KEY, '');
-    }
+    if (view.id === DEFAULT_VIEW_ID) forgetLegacy();
     const v = resolveView(view.id);
+    if (listingKey({ filespaceId, folder, query, kinds, sort: v.sort, flat: v.display.flatten && v.display.layout !== 'column' }) !== currentKey) setCursor(null);
     setSort(v.sort);
     setDisplay(v.display);
-    setCursor(null);
   };
 
   // Everything a view decides, at once: its filters, search, sort and
@@ -714,30 +731,53 @@ export default function FilesClient({
     const v = resolveView(id, { custom, local, legacy });
     if (!v) return;
     const st = stateFromView(v);
+    const nextFlat = st.display.flatten && st.display.layout !== 'column';
+    if (listingKey({ filespaceId, folder, query: st.query, kinds: st.kinds, sort: st.sort, flat: nextFlat }) !== currentKey) setCursor(null);
     setViewId(v.id);
     setKinds(st.kinds);
     setFacets(flags.metadata ? st.facets : {});
     setQuery(st.query);
     setSort(st.sort);
     setDisplay(st.display);
-    setCursor(null);
     replaceParams({ view: v.id === DEFAULT_VIEW_ID ? null : v.id, q: st.query || null });
-  }, [customViews, local, legacy, replaceParams, flags.metadata]);
+  }, [customViews, local, legacy, replaceParams, flags.metadata, filespaceId, folder, currentKey]);
 
   // The search, from the top bar's palette ("Filter this view by …") or the
   // chip that shows it. Part of the view on screen, and in the URL.
   const applyQuery = useCallback((q) => {
     const next = String(q || '').trim().slice(0, 200);
+    if (next !== query) setCursor(null);
     setQuery(next);
-    setCursor(null);
     replaceParams({ q: next || null });
-  }, [replaceParams]);
+  }, [replaceParams, query]);
 
   // The page's settings, as a view's (lib/views.js): what Save current view
   // keeps, and what a saved view is compared with to know it has changed.
   const current = useMemo(() => viewSettings({ kinds, facets, query, sort, display }), [kinds, facets, query, sort, display]);
   const dirty = !view.builtin && !sameSettings(view, current);
   const offeredViews = useMemo(() => viewsForDrive(customViews, filespaceId), [customViews, filespaceId]);
+  // Another drive is a server render of this same component, which keeps its
+  // state: the view the server rendered for it is put on screen, with its
+  // search (none, unless the link had one) — not the last drive's view,
+  // which may be kept for that drive alone. The server's first page for it
+  // is already cached under the key these make (the `initial` effect).
+  const driveWas = useRef(filespaceId);
+  useEffect(() => {
+    if (driveWas.current === filespaceId) return;
+    driveWas.current = filespaceId;
+    const v = initialViewDef || resolveView(DEFAULT_VIEW_ID, { local, legacy });
+    const st = stateFromView(v);
+    setCustomViews(initialViews);
+    setViewId(v.id);
+    setKinds(st.kinds);
+    setFacets(flags.metadata ? st.facets : {});
+    setQuery(initialQuery || st.query);
+    setSort(st.sort);
+    setDisplay(st.display);
+  // Only on a drive switch: a refresh of this drive re-renders these too.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filespaceId]);
+
   // A link to a view that is not this person's — someone else's, one since
   // deleted, or kept for a drive they have left — rendered All files (the
   // server's fallback); the URL is put right, and they are told why.

@@ -190,9 +190,10 @@ function ColumnView({
       );
     }
   }, [wanted, columnKey, loadColumn]);
+  // null while a column's files are on their way.
   const filesOf = (p) => {
     const res = loaded[`${columnKey}\u0000${p}`];
-    if (!res) return { files: res === null || res === undefined ? null : [], more: false };
+    if (!res) return { files: null, more: false };
     return { files: matches ? res.files.filter(matches) : res.files, more: res.more };
   };
 
@@ -244,6 +245,7 @@ function ColumnView({
     if (scroll) el.scrollIntoView({ block: 'nearest' });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order]);
+  const registered = useRef({});
   if (navRef) {
     const hits = (rect, attr) => {
       const out = [];
@@ -252,28 +254,34 @@ function ColumnView({
       }
       return out;
     };
-    navRef.current.folders = {
+    const folderNav = {
       cols: 1,
       focus: (i, opts) => { const f = foldersRef.current[i]; if (f) focusKey(folderKey(f.folder), opts); },
       reveal: (i) => { const f = foldersRef.current[i]; if (f) rowFor(folderKey(f.folder))?.scrollIntoView({ block: 'nearest' }); },
       hits: (rect) => hits(rect, 'data-folder').map(folderKey),
     };
-    navRef.current.files = {
+    const fileNav = {
       cols: 1,
       rowsPerPage: Math.max(1, Math.floor((height || 400) / 32) - 1),
       focus: (i, opts) => { const f = filesRef.current[i]; if (f) focusKey(fileKey(f.id), opts); },
       reveal: (i) => { const f = filesRef.current[i]; if (f) rowFor(fileKey(f.id))?.scrollIntoView({ block: 'nearest' }); },
       update: () => {},
     };
+    navRef.current.folders = folderNav;
+    navRef.current.files = fileNav;
+    registered.current = { folderNav, fileNav };
     if (marqueeRef) {
       marqueeRef.current = {
         hitsIn: (rect) => hits(rect, 'data-file-id').map((id) => filesRef.current.findIndex((f) => String(f.id) === id)).filter((i) => i >= 0),
       };
     }
   }
-  // Gone with the layout: the next one registers its own.
+  // Gone with the layout — unless the next one has registered its own
+  // already, which it does as it renders, before this runs.
   useEffect(() => () => {
-    if (navRef?.current) { delete navRef.current.folders; delete navRef.current.files; }
+    const { folderNav, fileNav } = registered.current;
+    if (navRef?.current?.folders === folderNav) delete navRef.current.folders;
+    if (navRef?.current?.files === fileNav) delete navRef.current.files;
   }, [navRef]);
 
   const onFocus = (e) => {
