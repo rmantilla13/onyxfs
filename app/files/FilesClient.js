@@ -2118,6 +2118,7 @@ export default function FilesClient({
                 </FolderDrop>
                 <FolderTree
                   folders={folders}
+                  summaries={summaries}
                   selected={folder}
                   onSelect={navigate}
                   canWrite={canWrite}
@@ -2515,12 +2516,16 @@ function readOpen(key) {
  * a folder opens it and everything above it, so the row just chosen is on
  * screen rather than inside a collapsed branch.
  *
+ * Beside each name, the files in it and everything beneath it — the number
+ * its card on the page leads with (`summaries`, lib/folder-ops.js). Its own
+ * files alone would put a 0 beside a folder that holds only subfolders.
+ *
  * With write access, a folder can be dragged onto another to move it, and
  * files dragged from the grid (or the desktop) can be dropped on one.
  */
 // Memoized: a click or an arrow in the pane re-renders the page, and the tree
 // of a big library is hundreds of rows that have not changed.
-const FolderTree = memo(function FolderTree({ folders, selected, onSelect, canWrite, onDrop, storageKey }) {
+const FolderTree = memo(function FolderTree({ folders, summaries, selected, onSelect, canWrite, onDrop, storageKey }) {
   const [open, setOpen] = useState(() => new Set());
   const loaded = useRef(null);
 
@@ -2608,7 +2613,7 @@ const FolderTree = memo(function FolderTree({ folders, selected, onSelect, canWr
           draggable={canWrite}
           onDragStart={canWrite ? (e) => startFolderDrag(e, f.folder) : undefined}
         >
-          {f.name} {f.count != null && <span className="muted">{f.count}</span>}
+          {f.name} {f.count != null && <span className="muted">{summaries?.get(f.folder)?.total ?? f.count}</span>}
         </FolderLink>
       </FolderDrop>
     );
