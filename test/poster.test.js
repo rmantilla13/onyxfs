@@ -6,7 +6,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   gridPosterSize, playerPosterSize, playerPosterFor, isUndersizedPoster, downscalePlan,
-  posterTimes, coverTime, frameStats, isBlankFrame, chooseFrame,
+  posterTimes, laterPosterTimes, coverTime, frameStats, isBlankFrame,
   GRID_POSTER_BOX, GRID_POSTER_MAX_EDGE, PLAYER_POSTER_MAX_EDGE, LEGACY_THUMB_MAX, MAX_INTERMEDIATE_EDGE,
 } from '../lib/poster.js';
 
@@ -206,6 +206,24 @@ describe('posterTimes', () => {
   });
 });
 
+describe('laterPosterTimes', () => {
+  test('well into the second half, after the last of posterTimes', () => {
+    assert.deepEqual(laterPosterTimes(60), [42, 54]);
+    assert.deepEqual(laterPosterTimes(3600), [2520, 3240]);
+    for (const d of [0.4, 1, 1.5, 2, 3, 5, 9.9, 60, 7200]) {
+      const t = [...posterTimes(d), ...laterPosterTimes(d)];
+      t.forEach((x, i) => {
+        assert.ok(x > 0 && x < d, `${d}s: ${x}`);
+        if (i) assert.ok(x > t[i - 1], `${d}s: ${t}`);
+      });
+    }
+  });
+
+  test('unknown length: nothing more to try', () => {
+    for (const d of [0, NaN, Infinity, undefined, -3]) assert.deepEqual(laterPosterTimes(d), []);
+  });
+});
+
 describe('coverTime', () => {
   test('a chosen time is kept, within the clip and short of its last instant', () => {
     assert.equal(coverTime(12.5, 60), 12.5);
@@ -246,15 +264,8 @@ describe('frame selection', () => {
     assert.ok(!isBlankFrame(null), 'no reading is not a reason to reject a frame');
   });
 
-  test('chooseFrame takes the first real picture, else the least blank', () => {
-    const black = { mean: 2, spread: 1 };
-    const fade = { mean: 9, spread: 4 };
-    const picture = { mean: 110, spread: 50 };
-    assert.equal(chooseFrame([picture]), 0);
-    assert.equal(chooseFrame([black, picture]), 1);
-    assert.equal(chooseFrame([black, picture, { mean: 120, spread: 70 }]), 1);
-    assert.equal(chooseFrame([black, fade, black]), 1);
-    assert.equal(chooseFrame([]), null);
+  test('a transparent frame — what WebKit draws from a video it is not painting — is blank', () => {
+    assert.ok(isBlankFrame(frameStats(new Uint8ClampedArray(64 * 4))));
   });
 });
 
