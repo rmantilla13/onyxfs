@@ -478,41 +478,14 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 [data-theme='dark'] .brand-logo .brand-logo-light { display: none; }
 [data-theme='dark'] .brand-logo .brand-logo-dark { display: block; }
 .brand-logo-name { font-family: var(--font-display); letter-spacing: -0.02em; }
-/* Our wordmark: ink letters, and "/FS" in the aura colours sliding behind
-   them — slowly, so it reads as light moving rather than a banner. The
-   reduced-motion rule at the top stops it on its last frame. */
-.onyx-wordmark { position: relative; display: block; color: var(--ink); }
+/* Our wordmark (OnyxWordmark): "ONYX" in ink, "FS" in the logo's cyan. On
+   paper that pale #94E0F7 all but vanishes, so there it is the same hue,
+   deeper. Our own mark, so its own colours: a white-label deployment shows
+   its lockup or its mark instead. */
+.onyx-wordmark { display: block; color: var(--ink); }
 .onyx-wordmark svg { display: block; }
-/* "/FS": the letters' box (180-276 of the 276-unit wordmark), masked to their
-   shapes. The sweep inside is two periods of the gradient wide and slides one
-   period — a transform, so the compositor runs it without the page. */
-.onyx-fs {
-  position: absolute;
-  top: 0; bottom: 0;
-  left: calc(100% * 180 / 276);
-  width: calc(100% * 96 / 276);
-  overflow: hidden;
-  -webkit-mask-size: 100% 100%; mask-size: 100% 100%;
-  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
-}
-.onyx-fs-sweep {
-  position: absolute;
-  top: 0; bottom: 0; left: 0;
-  width: 200%;
-  background: linear-gradient(90deg,
-    var(--aura-a) 0%, var(--aura-b) 16.667%, var(--aura-c) 33.333%,
-    var(--aura-a) 50%, var(--aura-b) 66.667%, var(--aura-c) 83.333%, var(--aura-a) 100%);
-  /* Once, as the page arrives — never on its own after that. A running
-     animation has the compositor draw a frame every vsync: left looping, it
-     kept an idle Onyx for Mac waking about 340 times a second (and a browser
-     tab doing the same). */
-  animation: onyx-fs-sweep 7s linear 1;
-  will-change: transform;
-}
-@keyframes onyx-fs-sweep {
-  from { transform: translateX(0); }
-  to { transform: translateX(-50%); }
-}
+.onyx-wordmark .onyx-fs { fill: #1499C2; }
+[data-theme='dark'] .onyx-wordmark .onyx-fs { fill: #94E0F7; }
 .auth-logo { margin-bottom: var(--s5); }
 
 .avatar {
