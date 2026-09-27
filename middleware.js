@@ -58,6 +58,11 @@ export const config = {
   //                submits with its bearer token while the web reads and
   //                requests them with the cookie. Dual-guarded by resolveActor
   //                in every handler (lib/transcript-guard.js), like the delta.
+  // api/files/<id>/proxy, api/proxies
+  //                Proxy renditions: the same arrangement, the same guard
+  //                (lib/proxy-guard.js). A Mac transcodes a heavy master and
+  //                needs the claim, the progress report and the completion to
+  //                answer a bearer token rather than 302 to a sign-in page.
   // api/health     Has its own admin-or-CRON_SECRET check, and has to stay
   //                reachable when sign-in itself is broken so it can say why.
   // api/cron       Bearer-token authed.
@@ -77,6 +82,6 @@ export const config = {
   // unauthenticated user opening the desktop hand-off link SHOULD be sent to
   // sign in and bounced back afterwards.
   matcher: [
-    '/((?!api/auth|api/desktop|api/space|api/files/delta|api/files/[^/]+/transcript|api/transcripts|api/health|api/cron|signin|verify|download|s/|_next/static|_next/image|_vercel|favicon.ico|icon.png|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
+    '/((?!api/auth|api/desktop|api/space|api/files/delta|api/files/[^/]+/transcript|api/transcripts|api/files/[^/]+/proxy|api/proxies|api/health|api/cron|signin|verify|download|s/|_next/static|_next/image|_vercel|favicon.ico|icon.png|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
   ],
 };

@@ -35,11 +35,13 @@ import '@/app/components/review/review.css';
  * onComment, and the ref, which reaches the player) are all optional: the
  * share page renders this with none of them. So are the transcript's:
  * `onTime` (the playhead, for the line to light) and `captions` (a video's
- * subtitles track).
+ * subtitles track), and `proxy` — useProxy's return value, which lets the
+ * player prefer a rendition and offer to have one made. Without it the player
+ * falls back to whatever the row was presigned with.
  */
 const FilePreview = forwardRef(function FilePreview({
   file, startAt = 0, overlay = null, markers = null, onMarkerClick, onFrameChange, onRangeChange, onComment,
-  handoff = null, onOriginalBlob, onTime, captions = null,
+  handoff = null, onOriginalBlob, onTime, captions = null, proxy = null,
 }, ref) {
   const kind = effectiveKind(file);
   const [failed, setFailed] = useState(false);
@@ -85,6 +87,7 @@ const FilePreview = forwardRef(function FilePreview({
         onComment={onComment}
         onTime={onTime}
         captions={captions}
+        proxy={proxy}
       />
     );
   }

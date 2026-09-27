@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 131
+-- Statements: 133
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -531,6 +531,28 @@ ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS quota_bytes BIGINT;
 ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS ai_allowed BOOLEAN NOT NULL DEFAULT false;
 
 ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS share_kinds TEXT;
+
+CREATE TABLE IF NOT EXISTS proxies (
+  file_id         TEXT PRIMARY KEY,
+  status          TEXT NOT NULL DEFAULT 'queued',
+  proxy_key       TEXT,
+  source_key      TEXT,
+  width           INT,
+  height          INT,
+  size            BIGINT,
+  duration        REAL,
+  progress        REAL,
+  error           TEXT,
+  requested_by    TEXT,
+  requested_at    TIMESTAMPTZ,
+  claimed_by      TEXT,
+  claimed_device  TEXT,
+  lease_until     TIMESTAMPTZ,
+  finished_at     TIMESTAMPTZ,
+  updated_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS proxies_queue_idx ON proxies (requested_at) WHERE status IN ('queued', 'working');
 
 CREATE TABLE IF NOT EXISTS desktop_auth_codes (
   code TEXT PRIMARY KEY,
