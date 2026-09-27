@@ -300,6 +300,17 @@ final class AppModel: ObservableObject {
             await startup?.value
             await finder.pin(PinRule(scope: scope, target: .folder(path: "")))
         }
+        // `--mount <drive id>`: what Show in Finder does — a disk of its own
+        // where this Mac can, else ~/Onyx — once the drives are listed.
+        if let id = value("--mount") {
+            await startup?.value
+            if !drivesLoaded { await refresh() }
+            if let drive = finderDrives.first(where: { $0.id == id }) {
+                await setMounted(.drive(id: drive.id), name: drive.name, true)
+            } else {
+                appLog.error("--mount: no drive \(id, privacy: .public) to mount")
+            }
+        }
         // Where to look for updates, instead of the server — for trying the
         // updater against a local feed. What it installs is verified the same.
         updater.start(feed: value("--update-feed").flatMap(URL.init(string:)))

@@ -1,4 +1,5 @@
 import AppKit
+import DiskArbitration
 import FSKit
 import OnyxKit
 
@@ -45,8 +46,14 @@ final class DiskMounter: ObservableObject {
 
     /// io.onyxfs.app.fs, or io.onyxfs.app.dev.fs for a dev build.
     static var extensionBundleID: String { (Bundle.main.bundleIdentifier ?? "io.onyxfs.app") + ".fs" }
-    /// FSShortName in OnyxFS/Info.plist: what `mount` and statfs call it.
-    static let fileSystemType = "onyxfs"
+    /// FSShortName in the extension's Info.plist: what `mount` and statfs call
+    /// it — "onyxfs", or "onyxfsdev" for a dev build, so a dev build and the
+    /// real Onyx each clear only their own disks (clearStale).
+    nonisolated static let fileSystemType: String = {
+        let appex = Bundle.main.bundleURL.appendingPathComponent("Contents/Extensions/OnyxFS.appex")
+        let attributes = Bundle(url: appex)?.object(forInfoDictionaryKey: "EXAppExtensionAttributes") as? [String: Any]
+        return attributes?["FSShortName"] as? String ?? "onyxfs"
+    }()
 
     private var watching: NSObjectProtocol?
 
@@ -161,6 +168,8 @@ final class DiskMounter: ObservableObject {
         default: break
         }
         states[id] = .mounting
+        // A disk the last run left under this drive's name goes first.
+        await staleCleared?.value
         do {
             let path = try await FSClient.shared.mountSingleVolume(
                 resource: FSGenericURLResource(url: resource),
@@ -168,7 +177,7 @@ final class DiskMounter: ObservableObject {
                 options: [])
             // Turned off while it mounted.
             guard states[id] == .mounting else {
-                Self.unmountPath(path)
+                Self.forceUnmount([path])
                 return true
             }
             states[id] = .mounted(path)
@@ -199,7 +208,7 @@ final class DiskMounter: ObservableObject {
             return nil
         }
         states = [:]
-        for url in urls { Self.unmountPath(url) }
+        Self.forceUnmount(urls)
     }
 
     func reveal(_ scope: SyncDomain) {
@@ -209,15 +218,24 @@ final class DiskMounter: ObservableObject {
 
     /// onyxfs volumes left by an earlier run of the app. Their extension's
     /// session with the bridge ended when that run did, so they can list
-    /// nothing any more: they go before this run mounts its own.
-    static func clearStale() {
-        for url in FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: []) ?? [] {
-            var fs = statfs()
-            guard statfs(url.path, &fs) == 0 else { continue }
-            let type = withUnsafeBytes(of: fs.f_fstypename) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
-            if type == fileSystemType { unmountPath(url) }
+    /// nothing any more — and one left in place takes the drive's name, so
+    /// this run's disk would be "Footage 1". They go before this run mounts
+    /// its own: `mount` waits for this.
+    func clearStale() {
+        staleCleared = Task.detached(priority: .userInitiated) {
+            var stale: [URL] = []
+            for url in FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: []) ?? [] {
+                var fs = statfs()
+                guard statfs(url.path, &fs) == 0 else { continue }
+                let type = withUnsafeBytes(of: fs.f_fstypename) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+                if type == Self.fileSystemType { stale.append(url) }
+            }
+            Self.forceUnmount(stale)
         }
     }
+
+    /// clearStale's work, until it is done.
+    private var staleCleared: Task<Void, Never>?
 
     // MARK: -
 
@@ -236,12 +254,42 @@ final class DiskMounter: ObservableObject {
         } catch {
             // In use (a file open in an editor): unmounted by force, as
             // quitting would do anyway.
-            unmountPath(url)
+            forceUnmount([url])
         }
     }
 
-    nonisolated private static func unmountPath(_ url: URL) {
-        if Darwin.unmount(url.path, 0) != 0 { _ = Darwin.unmount(url.path, MNT_FORCE) }
+    /// Unmounted by force through Disk Arbitration, as Finder's Eject does,
+    /// waiting at most `timeout` for all of them. fskitd mounted these, not
+    /// this app, so unmount(2) is EPERM here: Disk Arbitration is the way
+    /// this app may take its own disks down.
+    ///
+    /// Blocks: for quitting, which cannot wait for anything, and for work
+    /// already off the main thread. Not for long: on macOS 27.0 an onyxfs
+    /// disk takes some 10 s to go whatever this app does (Disk Arbitration
+    /// waits out an approval nobody gives, then unmounts in milliseconds),
+    /// and the request goes on without this app, so quitting does not wait
+    /// for it.
+    nonisolated static func forceUnmount(_ urls: [URL], timeout: TimeInterval = 2) {
+        guard !urls.isEmpty, let session = DASessionCreate(kCFAllocatorDefault) else { return }
+        let queue = DispatchQueue(label: "io.onyxfs.disks.unmount")
+        DASessionSetDispatchQueue(session, queue)
+        defer { DASessionSetDispatchQueue(session, nil) }
+        let group = DispatchGroup()
+        for url in urls {
+            guard let disk = DADiskCreateFromVolumePath(kCFAllocatorDefault, session, url as CFURL) else { continue }
+            group.enter()
+            DADiskUnmount(disk, DADiskUnmountOptions(kDADiskUnmountOptionForce), { _, dissenter, context in
+                if let dissenter {
+                    let status = DADissenterGetStatus(dissenter)
+                    appLog.error("onyxfs: unmounting a disk failed: \(String(format: "0x%08x", status), privacy: .public)")
+                }
+                guard let context else { return }
+                Unmanaged<DispatchGroup>.fromOpaque(context).takeRetainedValue().leave()
+            }, Unmanaged.passRetained(group).toOpaque())
+        }
+        if group.wait(timeout: .now() + timeout) == .timedOut {
+            appLog.info("onyxfs: disks still unmounting after \(Int(timeout), privacy: .public) s; they go on their own")
+        }
     }
 
     private static func describe(_ error: Error) -> String {

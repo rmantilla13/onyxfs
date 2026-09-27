@@ -172,13 +172,22 @@ logic is testable with `swift test`.
   files so the kernel caches pages. Items: `OnyxItem: FSItem` carrying the
   NodeTable id. Owner = the mounting user; modes 0555/0444.
 - Info.plist (`EXAppExtensionAttributes`): `EXExtensionPointIdentifier`
-  `com.apple.fskit.fsmodule`, `FSShortName` `onyxfs`, `FSSupportedSchemes`
+  `com.apple.fskit.fsmodule`, `FSShortName` `onyxfs` (`onyxfsdev` in a dev
+  build: FSKit lists one module per short name, and each app clears the
+  stale disks of its own kind at launch), `FSSupportedSchemes`
   `["onyxfs-drive"]`, `FSActivateOptionSyntax` `{ shortOptions: "" }`, plus the
   keys needed for generic URL resources.
 - Entitlements: `com.apple.security.app-sandbox`,
   `com.apple.developer.fskit.fsmodule`, `com.apple.security.network.client`.
   Needs a Developer ID provisioning profile for `io.onyxfs.app.fs` with the
   FSKit capability (`apple/.signing/OnyxFS.provisionprofile`).
+- Entry point: ExtensionFoundation's `EXExtensionMain` (`-e _EXExtensionMain`
+  in Package.swift), as Xcode links an ExtensionKit extension. It reads the
+  `-LaunchArguments` ExtensionKit starts the process with, then calls
+  main.swift. Linked to start at main.swift instead, the extension traps in
+  `_EXRunningExtension` before any Onyx code runs (0.5.0 and 0.5.1), and
+  every drive falls back to ~/Onyx. Run by hand, a correctly linked one
+  says "An XPC Service cannot be run directly." and exits.
 
 ## The app side
 
@@ -187,10 +196,15 @@ logic is testable with `swift test`.
   from a DriveMirror index + PinStore + a presign function.
 - `DiskMounter` (OnyxMac, macOS 27) — is our module installed and enabled
   (`FSClient.shared.installedExtensions`)? Mount with
-  `mountSingleVolume`; unmount (`FileManager.unmountVolume(at:)`); remount
-  after the app restarts (sessions died with it); report mounting / mounted /
-  failed like MountManager. DriveService uses it when available, else
-  MountManager (NFS).
+  `mountSingleVolume`; unmount through Disk Arbitration
+  (`FileManager.unmountVolume(at:)`, or `DADiskUnmount` by force when
+  quitting and for disks an earlier run left) — fskitd mounted the volume,
+  so unmount(2) is EPERM for the app; remount after the app restarts
+  (sessions died with it); report mounting / mounted / failed like
+  MountManager. DriveService uses it when available, else MountManager
+  (NFS). On macOS 27.0 an eject takes some 10 s: Disk Arbitration waits out
+  an unmount approval that no one gives for an FSKit volume (a disk image
+  goes in under half a second), then unmounts at once.
 - Settings → Finder: which way drives mount; when the module is not enabled,
   a button that opens System Settings' File System Extensions pane
   (`FSClient.shared.openFileSystemExtensionsSettings()`).
