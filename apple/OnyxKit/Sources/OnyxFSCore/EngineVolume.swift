@@ -61,10 +61,12 @@ public final class EngineVolume: VolumeEngine, @unchecked Sendable {
     public func xattrNames(of id: UInt64) async throws -> [String] { try await engine.xattrNames(of: id) }
 
     public func observeChanges(_ handler: @escaping @Sendable (Set<UInt64>, Bool) -> Void) {
+        let engine = self.engine
+        let refresh: @Sendable () async -> Void = { [weak self] in await self?.refreshCache() }
         Task {
-            await engine.observeChanges { [weak self] ids, everything in
+            await engine.observeChanges { ids, everything in
                 Task {
-                    await self?.refreshCache()
+                    await refresh()
                     handler(ids, everything)
                 }
             }
