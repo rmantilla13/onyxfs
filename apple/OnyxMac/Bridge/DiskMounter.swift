@@ -16,8 +16,9 @@ import OnyxKit
 /// It needs macOS 27 (FSClient's mountSingleVolume, which mounts into
 /// /Volumes without an administrator), the extension enabled in System
 /// Settings › General › Login Items & Extensions › File System Extensions,
-/// and the app signed with the mount entitlement. Without any of them
-/// `availability` says which, and DriveService mounts the NFS way instead.
+/// the app signed with the mount entitlement, and macOS to have taken in
+/// this copy's extension. Without any of them `availability` says which,
+/// and DriveService mounts the NFS way instead.
 ///
 /// The states are MountManager's, so the menus, Settings and the page show a
 /// disk exactly as they show a mount.
@@ -33,6 +34,12 @@ final class DiskMounter: ObservableObject {
         case notInstalled
         /// Installed, but switched off in System Settings.
         case disabled
+        /// This copy carries its extension, signed to run, but FSKit does not
+        /// list it: macOS is still holding on to an earlier one. Seen after
+        /// 0.5.2 replaced a 0.5.1 whose extension had failed as it started —
+        /// fskit_agent listed no module for it until fskit_agent restarted,
+        /// which a restart of the Mac does.
+        case notLoaded
     }
 
     @Published private(set) var availability: Availability = .unknown
@@ -46,8 +53,14 @@ final class DiskMounter: ObservableObject {
 
     /// io.onyxfs.app.fs, or io.onyxfs.app.dev.fs for a dev build.
     static var extensionBundleID: String { (Bundle.main.bundleIdentifier ?? "io.onyxfs.app") + ".fs" }
-    /// FSShortName in OnyxFS/Info.plist: what `mount` and statfs call it.
-    nonisolated static let fileSystemType = "onyxfs"
+    /// FSShortName in this copy's OnyxFS.appex: what `mount` and statfs call
+    /// it. onyxfs, or onyxfsdev in Onyx Dev (scripts/build-mac.sh), so each
+    /// ejects only its own disks.
+    nonisolated static let fileSystemType: String = {
+        let fs = Bundle.main.bundleURL.appendingPathComponent("Contents/Extensions/OnyxFS.appex")
+        let attributes = Bundle(url: fs)?.object(forInfoDictionaryKey: "EXAppExtensionAttributes") as? [String: Any]
+        return attributes?["FSShortName"] as? String ?? "onyxfs"
+    }()
 
     private var watching: NSObjectProtocol?
 
@@ -67,11 +80,11 @@ final class DiskMounter: ObservableObject {
     func refreshAvailability() async {
         do {
             let modules = try await FSClient.shared.installedExtensions
-            guard let ours = modules.first(where: { $0.bundleIdentifier == Self.extensionBundleID }) else {
-                availability = .notInstalled
-                return
+            if let ours = modules.first(where: { $0.bundleIdentifier == Self.extensionBundleID }) {
+                availability = ours.isEnabled ? .ready : .disabled
+            } else {
+                availability = BuildInfo.carriesFileSystem ? .notLoaded : .notInstalled
             }
-            availability = ours.isEnabled ? .ready : .disabled
         } catch {
             availability = .notInstalled
             appLog.error("onyxfs: listing file system extensions failed: \(error.localizedDescription, privacy: .public)")

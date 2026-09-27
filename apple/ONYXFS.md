@@ -30,18 +30,34 @@ Finder / Premiere / Resolve
                                                      (the extension range-reads storage directly)
 ```
 
-- File system type (`FSShortName`): `onyxfs`. Resource URL scheme: `onyxfs-drive` —
-  NOT `onyxfs:`, which is the app's registered sign-in hand-off scheme (CLAUDE.md).
+- File system type (`FSShortName`): `onyxfs` (dev builds: `onyxfsdev`).
+  Resource URL scheme: `onyxfs-drive` — NOT `onyxfs:`, which is the app's
+  registered sign-in hand-off scheme (CLAUDE.md).
 - Extension: `OnyxFS.appex` in `Onyx.app/Contents/Extensions/`, bundle id
   `io.onyxfs.app.fs` (dev builds: `io.onyxfs.app.dev.fs`), display name "Onyx".
+- Onyx Dev's file system is `onyxfsdev` (build-mac.sh sets it). Both called
+  `onyxfs`, FSKit's lookup by name reached whichever copy it picked, and each
+  app's sweep for disks an earlier run left (`DiskMounter.clearStale`, by
+  type name) would eject the other's. The app reads its own name from its
+  extension's Info.plist; the extension reports it to statfs and seeds each
+  drive's volume UUID with it.
+- macOS can hold on to an earlier extension. After 0.5.2 replaced a 0.5.1
+  whose extension had failed as it started (below), `fskit_agent` went on
+  listing no module for `io.onyxfs.app.fs` — switched on, registered,
+  signed — until it restarted; every drive went to `~/Onyx`, read-only, with
+  nothing said. Now a copy that carries its extension but finds it unlisted
+  says so (`DiskMounter.Availability.notLoaded`, Settings › Finder: restart
+  the Mac). While developing, `killall -9 fskit_agent` does the same (it
+  ignores SIGTERM, and SIP refuses `launchctl kickstart`); it also takes
+  down every other FSKit volume, Xcode's DeviceFS included.
 - Each drive mounts at `/Volumes/<Drive name>` through
   `FSClient.shared.mountSingleVolume(resource:bundleID:options:)` (macOS 27,
   entitlement `com.apple.developer.fskit.mount` on the app). The volume is
   local, ejectable, shows the drive's own size, has the drive's folders at its
   root, appears in Finder's sidebar under Locations and on the Desktop.
-- macOS 26 and older, or when the extension is not enabled/entitled: the
-  existing rclone NFS mount in `~/Onyx` stays as the fallback. Nothing is
-  removed.
+- macOS 26 and older, or when the extension is not enabled/entitled (or not
+  yet taken in by macOS, above): the existing rclone NFS mount in `~/Onyx`
+  stays as the fallback. Nothing is removed.
 
 **Read and write, in this build.** The owner: "make sure we have permission
 to read and write when copying files in Finder. Both Finder and web should
@@ -172,7 +188,9 @@ logic is testable with `swift test`.
   files so the kernel caches pages. Items: `OnyxItem: FSItem` carrying the
   NodeTable id. Owner = the mounting user; modes 0555/0444.
 - Info.plist (`EXAppExtensionAttributes`): `EXExtensionPointIdentifier`
-  `com.apple.fskit.fsmodule`, `FSShortName` `onyxfs`, `FSSupportedSchemes`
+  `com.apple.fskit.fsmodule`, `FSShortName` `onyxfs` (`onyxfsdev` in Onyx
+  Dev, set by build-mac.sh; also statfs's type name and the seed of each
+  drive's volume UUID, so the two copies' disks never share one), `FSSupportedSchemes`
   `["onyxfs-drive"]`, `FSActivateOptionSyntax` `{ shortOptions: "" }`, plus the
   keys needed for generic URL resources.
 - Entitlements: `com.apple.security.app-sandbox`,

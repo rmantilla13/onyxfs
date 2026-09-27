@@ -669,6 +669,18 @@ struct DiskModeNote: View {
             }
             .padding(10)
             .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+        case .needsRestart:
+            // macOS has not taken in this copy's file system yet
+            // (DiskMounter.Availability.notLoaded); nothing Onyx can do
+            // about it but say so.
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(lucide: "hard-drive").foregroundStyle(.secondary)
+                Text("Drives are in your Onyx folder, read-only, because macOS is still using an earlier copy of the Onyx file system. Restart your Mac to make each drive a disk of its own again.")
+                    .font(.caption)
+                Spacer()
+            }
+            .padding(10)
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
         case .folder:
             EmptyView()
         }

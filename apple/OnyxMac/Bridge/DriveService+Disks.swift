@@ -45,7 +45,10 @@ extension DriveService {
     func mountAsDisk(_ scope: SyncDomain, name: String, mirror: DriveMirror) async -> Bool {
         guard #available(macOS 27.0, *), let disks else { return false }
         await disks.refreshAvailability()
-        guard disks.availability == .ready else { return false }
+        guard disks.availability == .ready else {
+            appLog.info("onyxfs: \(scope.identifier, privacy: .public) mounts in ~/Onyx, as the file system is \(String(describing: disks.availability), privacy: .public)")
+            return false
+        }
         do {
             let resource = try await onyxfsResourceURL(for: scope)
             if await disks.mount(scope, name: name, resource: resource) { return true }
@@ -85,15 +88,17 @@ extension DriveService {
         uploadSummary = UploadSummary()
     }
 
-    enum DiskMode { case disks, needsEnabling, folder }
+    enum DiskMode { case disks, needsEnabling, needsRestart, folder }
 
     /// How drives mount on this Mac: as disks (onyxfs), or in ~/Onyx —
-    /// either because this Mac cannot, or because the extension is off.
+    /// because this Mac cannot, because the extension is off, or because
+    /// macOS has not taken in this copy's extension yet.
     var diskMode: DiskMode {
         guard #available(macOS 27.0, *), let disks else { return .folder }
         switch disks.availability {
         case .ready: return .disks
         case .disabled: return .needsEnabling
+        case .notLoaded: return .needsRestart
         case .unknown, .notInstalled: return .folder
         }
     }

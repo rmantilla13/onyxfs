@@ -39,4 +39,24 @@ enum BuildInfo {
         let groups = SecTaskCopyValueForEntitlement(task, "com.apple.security.application-groups" as CFString, nil)
         return ((groups as? [String]) ?? []).contains { $0.hasSuffix("io.onyxfs") }
     }()
+
+    /// This copy carries a file system FSKit can run: OnyxFS.appex signed with
+    /// FSKit's module entitlement, and the app with the one to mount it — a
+    /// build signed with its provisioning profiles (scripts/build-mac.sh).
+    /// When FSKit does not list such an extension, macOS has not taken it in
+    /// yet (DiskMounter.Availability.notLoaded), rather than this copy
+    /// having none.
+    static let carriesFileSystem: Bool = {
+        guard let task = SecTaskCreateFromSelf(nil),
+              SecTaskCopyValueForEntitlement(task, "com.apple.developer.fskit.mount" as CFString, nil) as? Bool == true
+        else { return false }
+        let fs = Bundle.main.bundleURL.appendingPathComponent("Contents/Extensions/OnyxFS.appex")
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(fs as CFURL, [], &code) == errSecSuccess, let code else { return false }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess
+        else { return false }
+        let entitlements = (info as? [String: Any])?[kSecCodeInfoEntitlementsDict as String] as? [String: Any]
+        return entitlements?["com.apple.developer.fskit.fsmodule"] as? Bool == true
+    }()
 }

@@ -124,6 +124,11 @@ if [[ "$WITH_FS" == "1" ]]; then
   set_key "$P" CFBundleShortVersionString string "$VERSION"
   set_key "$P" CFBundleVersion string "$BUILD_NUMBER"
   set_key "$P" LSMinimumSystemVersion string 27.0
+  # A dev build's file system has a name of its own. Both called onyxfs,
+  # FSKit's lookup by name (`mount -t onyxfs`) reaches whichever copy it
+  # picks, and each app's sweep for disks an earlier run left (by type name)
+  # ejects the other's.
+  [[ "${ONYX_DEV:-0}" == "1" ]] && plist "$P" "Set :EXAppExtensionAttributes:FSShortName onyxfsdev"
   /usr/libexec/PlistBuddy -c "Delete :CFBundleSupportedPlatforms" "$P" 2>/dev/null || true
   /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms array" -c "Add :CFBundleSupportedPlatforms:0 string MacOSX" "$P"
 fi

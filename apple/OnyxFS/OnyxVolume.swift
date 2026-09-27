@@ -54,7 +54,7 @@ final class OnyxVolume: FSVolume, FSVolume.Handler, FSVolume.PathConfOperations,
         let block: UInt64 = 4096
         let total = stats.totalBytes > stats.usedBytes ? stats.totalBytes : stats.usedBytes + (8 << 40)
         let free = total - stats.usedBytes
-        let result = FSStatFSResult(fileSystemTypeName: "onyxfs")
+        let result = FSStatFSResult(fileSystemTypeName: OnyxFileSystem.shortName)
         result.blockSize = Int(block)
         result.ioSize = 1 << 20
         result.totalBytes = total
