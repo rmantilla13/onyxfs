@@ -46,8 +46,14 @@ final class DiskMounter: ObservableObject {
 
     /// io.onyxfs.app.fs, or io.onyxfs.app.dev.fs for a dev build.
     static var extensionBundleID: String { (Bundle.main.bundleIdentifier ?? "io.onyxfs.app") + ".fs" }
-    /// FSShortName in OnyxFS/Info.plist: what `mount` and statfs call it.
-    nonisolated static let fileSystemType = "onyxfs"
+    /// FSShortName in the extension's Info.plist: what `mount` and statfs call
+    /// it — "onyxfs", or "onyxfsdev" for a dev build, so a dev build and the
+    /// real Onyx each clear only their own disks (clearStale).
+    nonisolated static let fileSystemType: String = {
+        let appex = Bundle.main.bundleURL.appendingPathComponent("Contents/Extensions/OnyxFS.appex")
+        let attributes = Bundle(url: appex)?.object(forInfoDictionaryKey: "EXAppExtensionAttributes") as? [String: Any]
+        return attributes?["FSShortName"] as? String ?? "onyxfs"
+    }()
 
     private var watching: NSObjectProtocol?
 

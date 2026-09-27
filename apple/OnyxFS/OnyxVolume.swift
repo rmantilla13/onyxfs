@@ -54,7 +54,7 @@ final class OnyxVolume: FSVolume, FSVolume.Handler, FSVolume.PathConfOperations,
         let block: UInt64 = 4096
         let total = stats.totalBytes > stats.usedBytes ? stats.totalBytes : stats.usedBytes + (8 << 40)
         let free = total - stats.usedBytes
-        let result = FSStatFSResult(fileSystemTypeName: "onyxfs")
+        let result = FSStatFSResult(fileSystemTypeName: FileSystemKind.shortName)
         result.blockSize = Int(block)
         result.ioSize = 1 << 20
         result.totalBytes = total
@@ -418,4 +418,14 @@ final class OnyxVolume: FSVolume, FSVolume.Handler, FSVolume.PathConfOperations,
             throw fs_errorForPOSIXError(EINTR)
         }
     }
+}
+
+/// This file system's short name, as its Info.plist declares it (FSShortName):
+/// "onyxfs", or "onyxfsdev" in a dev build (scripts/build-mac.sh) — what
+/// statfs reports, and what the app knows its own disks by.
+enum FileSystemKind {
+    static let shortName: String = {
+        let attributes = Bundle.main.object(forInfoDictionaryKey: "EXAppExtensionAttributes") as? [String: Any]
+        return attributes?["FSShortName"] as? String ?? "onyxfs"
+    }()
 }
