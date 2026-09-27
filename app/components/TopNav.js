@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import ProfileMenu from '@/app/components/ProfileMenu';
 import BrandLogo from '@/app/components/BrandLogo';
@@ -15,11 +15,13 @@ import FinderMenu from '@/app/components/mac/FinderMenu';
 /**
  * The bar across the top: the mark, one search box, and the account menu.
  *
- * The search box is the command palette (⌘K): files across the whole
- * library, folders, drives and every action, including the keyboard
- * shortcuts — which is why there is no separate Shortcuts button, and why
- * the drives are not repeated here (they live in the files sidebar, and in
- * the palette on every page).
+ * The search box is the command palette (⌘K), and the only one: on the
+ * files page it filters the view on screen ("Filter this view by …"), and
+ * everywhere it finds files across the whole library, folders, drives and
+ * every action, including the keyboard shortcuts — which is why there is no
+ * separate Shortcuts button, and why the drives are not repeated here (they
+ * live in the files sidebar, and in the palette on every page). The files
+ * toolbar's search chip reopens it with the search in it (`onyx:open-palette`).
  *
  * `filespaces` comes from the page (listFilespacesForSpace); the palette
  * lists them as drives.
@@ -32,6 +34,7 @@ import FinderMenu from '@/app/components/mac/FinderMenu';
  */
 export default function TopNav({ brandName, logo, email, isAdmin, build, filespaces = [], avatarUrl = null }) {
   const [palette, setPalette] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState('');
   const [shortcuts, setShortcuts] = useState(false);
   // The modifier is the platform's, which the server cannot know: render ⌘
   // and correct it after mount.
@@ -50,6 +53,15 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
     setOfferMacApp(!app && /Macintosh|Mac OS X/.test(ua) && !/iPhone|iPad/.test(ua) && navigator.maxTouchPoints < 2);
   }, []);
   useCommandPaletteShortcut(setPalette);
+  useEffect(() => {
+    const onOpen = (e) => {
+      setPaletteQuery(typeof e.detail?.query === 'string' ? e.detail.query : '');
+      setPalette(true);
+    };
+    window.addEventListener('onyx:open-palette', onOpen);
+    return () => window.removeEventListener('onyx:open-palette', onOpen);
+  }, []);
+  const closePalette = useCallback(() => { setPalette(false); setPaletteQuery(''); }, []);
   const mac = useMacApp();
   const bar = useRef(null);
   useMacBar(bar);
@@ -100,7 +112,8 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
       </div>
       <CommandPalette
         open={palette}
-        onClose={() => setPalette(false)}
+        onClose={closePalette}
+        initialQuery={paletteQuery}
         drives={filespaces}
         isAdmin={isAdmin}
         onShortcuts={() => setShortcuts(true)}

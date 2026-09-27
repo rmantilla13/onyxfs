@@ -29,6 +29,7 @@ function groups(mod) {
         [['Space'], 'Quick Look'],
         [['Double-click', 'Return', `${mod}↓`], 'Open'],
         [[`${mod}A`], 'Select everything in the folder'],
+        [['→', '←'], 'In Columns: open the selected folder, or go back up'],
         [['Drag'], 'On empty space: select what the rectangle touches (⇧ or ' + mod + ' adds to the selection)'],
         [['Esc'], 'Clear the selection'],
         [[`${mod}I`], 'Get info'],
@@ -84,7 +85,7 @@ function groups(mod) {
     {
       title: 'Anywhere',
       keys: [
-        [[`${mod}K`], 'Search files, folders and drives, or run a command'],
+        [[`${mod}K`], 'Search files, folders and drives, or run a command — on the files page, filter the view first'],
         [['↑', '↓', 'Enter'], 'In search: move, then open or run'],
         [['?'], 'These shortcuts'],
         [['Esc'], 'Close a dialog or menu'],
