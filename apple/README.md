@@ -14,8 +14,21 @@ One Swift codebase. On the Mac it is **Onyx.app**:
   can live in any folder, including an external disk (Settings → Storage).
 - **A menu bar item** that keeps Finder in sync while the window is closed.
 
-The iOS app (`OnyxIOS/`) shares OnyxKit and the extension source; it is not
-built yet.
+On iPhone and iPad it is **Onyx** (`OnyxIOS/`), native SwiftUI:
+
+- **The drives, browsed as the web lists them.** Folders as icons or a list,
+  sorted by name, date or size, searched beneath the folder you are in, a
+  page at a time — from the same access-checked listing the web reads.
+- **A file full screen.** Photos zoom, video and sound stream from storage
+  (picture in picture, AirPlay), documents open in Quick Look; swipe
+  through a folder, share a file, see its details.
+- **Sign-in as on the Mac.** The web's own sign-in in a sheet (the magic
+  link opened from Mail finishes it through `onyxfs://`), or a pairing code
+  from `/space/pair`.
+
+Next: drives in the Files app (the File Provider extension here, which the
+two platforms share), uploads from the camera roll, and a Save to Onyx
+share sheet.
 
 ## Build it, no Xcode needed
 
@@ -100,6 +113,26 @@ and not checked in. Xcode also builds the iOS targets:
 brew install xcodegen
 ONYX_TEAM_ID=TEAMID xcodegen generate && open Onyx.xcodeproj
 ```
+
+### The iOS app, from the command line
+
+Xcode must be installed, but need not be the selected developer directory:
+`DEVELOPER_DIR` points each command at it. A simulator build is signed to
+run locally (`CODE_SIGN_IDENTITY=-`), which gives it the Keychain the
+sign-in needs:
+
+```sh
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+xcodebuild -project Onyx.xcodeproj -scheme OnyxIOS \
+  -destination 'platform=iOS Simulator,name=iPhone 18 Pro' CODE_SIGN_IDENTITY=- build
+xcrun simctl install booted <DerivedData>/Build/Products/Debug-iphonesimulator/Onyx.app
+xcrun simctl launch booted io.onyxfs.app --server http://localhost:3000 --pair CODE
+```
+
+`--server` and `--pair` sign in without a tap, as on the Mac: the code
+comes from `/space/pair` on a signed-in web session (or `POST
+/api/desktop/authorize` with `{"kind":"pairing"}`). The simulator shares the
+Mac's network, so `localhost` is `npm run dev:local`'s server.
 
 ### Updates
 

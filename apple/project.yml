@@ -40,14 +40,33 @@ targets:
       - target: OnyxFileProvider
         embed: true
 
+  # Native SwiftUI: browse, search and preview the drives. iOS 18 for the
+  # zoom transitions and the web sign-in session SwiftUI now has.
   OnyxIOS:
     type: application
     platform: iOS
+    deploymentTarget: "18.0"
     sources: [OnyxIOS]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.onyxfs.app
+        # Onyx.app: what iOS calls it where it asks the person something
+        # ("Onyx wants to use … to sign in"), which goes by the bundle's name.
+        PRODUCT_NAME: Onyx
         INFOPLIST_FILE: OnyxIOS/Info.plist
+        # The standard keys are generated and merged with Info.plist's own.
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
+        TARGETED_DEVICE_FAMILY: "1,2"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_ENTITLEMENTS: OnyxIOS/OnyxIOS.entitlements
     dependencies:
       - package: OnyxKit
@@ -65,6 +84,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.onyxfs.app.fileprovider
         INFOPLIST_FILE: OnyxFileProvider/Info.plist
+        # The bundle keys are generated; scripts/build-mac.sh sets its own.
+        GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_ENTITLEMENTS: OnyxFileProvider/OnyxFileProvider.entitlements
     dependencies:
       - package: OnyxKit
@@ -72,11 +93,16 @@ targets:
   OnyxFileProviderIOS:
     type: app-extension
     platform: iOS
+    deploymentTarget: "18.0"
     sources: [OnyxFileProvider]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.onyxfs.app.fileprovider
         INFOPLIST_FILE: OnyxFileProvider/Info.plist
+        GENERATE_INFOPLIST_FILE: YES
+        # An extension's version is its app's.
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_ENTITLEMENTS: OnyxFileProvider/OnyxFileProvider.entitlements
     dependencies:
       - package: OnyxKit

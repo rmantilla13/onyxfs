@@ -5,7 +5,7 @@ import { authorizeParams } from '@/lib/pkce';
 import AuthorizeClient from './AuthorizeClient';
 
 export const dynamic = 'force-dynamic';
-export const metadata = { title: 'Connect the desktop app' };
+export const metadata = { title: 'Connect the app' };
 
 /**
  * Browser half of the desktop PKCE hand-off.
