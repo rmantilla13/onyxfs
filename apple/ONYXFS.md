@@ -35,12 +35,15 @@ Finder / Premiere / Resolve
   registered sign-in hand-off scheme (CLAUDE.md).
 - Extension: `OnyxFS.appex` in `Onyx.app/Contents/Extensions/`, bundle id
   `io.onyxfs.app.fs` (dev builds: `io.onyxfs.app.dev.fs`), display name "Onyx".
-- Onyx Dev's file system is `onyxfsdev` (build-mac.sh sets it). Both called
-  `onyxfs`, FSKit's lookup by name reached whichever copy it picked, and each
-  app's sweep for disks an earlier run left (`DiskMounter.clearStale`, by
-  type name) would eject the other's. The app reads its own name from its
-  extension's Info.plist; the extension reports it to statfs and seeds each
-  drive's volume UUID with it.
+- Onyx Dev's file system is `onyxfsdev`, personality "Onyx Dev"
+  (build-mac.sh sets both). Both called `onyxfs`, each app's sweep for disks
+  an earlier run left (`DiskMounter.clearStale`, by type name) ejected the
+  other's — and the real Onyx took its drives as ejected by the person, and
+  forgot them — and FSKit's lookup by name reached whichever copy it picked.
+  The app reads its own name from its extension's Info.plist; the extension
+  (`FileSystemKind.shortName`) reports it to statfs and seeds each drive's
+  volume UUID with it. FSKit itself lists two modules of one name side by
+  side.
 - macOS can hold on to an earlier extension. After 0.5.2 replaced a 0.5.1
   whose extension had failed as it started (below), `fskit_agent` went on
   listing no module for `io.onyxfs.app.fs` — switched on, registered,
@@ -188,9 +191,10 @@ logic is testable with `swift test`.
   files so the kernel caches pages. Items: `OnyxItem: FSItem` carrying the
   NodeTable id. Owner = the mounting user; modes 0555/0444.
 - Info.plist (`EXAppExtensionAttributes`): `EXExtensionPointIdentifier`
-  `com.apple.fskit.fsmodule`, `FSShortName` `onyxfs` (`onyxfsdev` in Onyx
-  Dev, set by build-mac.sh; also statfs's type name and the seed of each
-  drive's volume UUID, so the two copies' disks never share one), `FSSupportedSchemes`
+  `com.apple.fskit.fsmodule`, `FSShortName` `onyxfs` (`onyxfsdev` in a dev
+  build, set by build-mac.sh: each app clears the stale disks of its own kind
+  at launch; also statfs's type name and the seed of each drive's volume
+  UUID, so the two copies' disks never share one), `FSSupportedSchemes`
   `["onyxfs-drive"]`, `FSActivateOptionSyntax` `{ shortOptions: "" }`, plus the
   keys needed for generic URL resources.
 - Entitlements: `com.apple.security.app-sandbox`,

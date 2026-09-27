@@ -20,14 +20,6 @@ struct OnyxFSExtension: UnaryFileSystemExtension {
 final class OnyxFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations, @unchecked Sendable {
     private var volume: OnyxVolume?
 
-    /// FSShortName in this extension's Info.plist: onyxfs, or onyxfsdev in
-    /// Onyx Dev (scripts/build-mac.sh). What statfs calls the volume, and
-    /// what the app looks for to find disks an earlier run left.
-    static let shortName: String = {
-        let attributes = Bundle.main.object(forInfoDictionaryKey: "EXAppExtensionAttributes") as? [String: Any]
-        return attributes?["FSShortName"] as? String ?? "onyxfs"
-    }()
-
     func probeResource(resource: FSResource) async throws -> FSProbeResult {
         guard let url = (resource as? FSGenericURLResource)?.url, let parts = OnyxResource(url) else {
             return .notRecognized
@@ -58,7 +50,6 @@ final class OnyxFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations, @unc
 }
 
 /// The parts of a resource URL the file system needs before it connects.
-@available(macOS 27.0, *)
 struct OnyxResource {
     let scope: String
     let name: String
@@ -76,7 +67,7 @@ struct OnyxResource {
     /// mounted, whichever ticket brought it — and a different one in Onyx
     /// Dev, whose disk of the same drive may be mounted beside it.
     var uuid: UUID {
-        var bytes = Array(SHA256.hash(data: Data("\(OnyxFileSystem.shortName):\(scope)".utf8)).prefix(16))
+        var bytes = Array(SHA256.hash(data: Data("\(FileSystemKind.shortName):\(scope)".utf8)).prefix(16))
         bytes[6] = (bytes[6] & 0x0F) | 0x50
         bytes[8] = (bytes[8] & 0x3F) | 0x80
         return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
