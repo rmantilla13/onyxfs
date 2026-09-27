@@ -108,6 +108,14 @@ fi
 if [[ "$WITH_FS" == "1" ]]; then
   mkdir -p "$FSX/Contents/MacOS"
   cp "$BIN/OnyxFS" "$FSX/Contents/MacOS/OnyxFS"
+  # SwiftPM stamps each binary with the package's minimum macOS as the SDK it
+  # was built with (14.0), whatever SDK that really was. Frameworks read that
+  # stamp to decide which behaviour a program was built for, and this one is
+  # built for FSKit on macOS 27: it is stamped with what it is — this SDK, and
+  # macOS 27, all it runs on. The app keeps SwiftPM's stamp: a newer SDK
+  # would change how it looks.
+  vtool -set-build-version macos 27.0 "$(xcrun --show-sdk-version)" -replace \
+    -output "$FSX/Contents/MacOS/OnyxFS" "$FSX/Contents/MacOS/OnyxFS"
   cp OnyxFS/Info.plist "$FSX/Contents/Info.plist"
   P="$FSX/Contents/Info.plist"
   set_key "$P" CFBundleIdentifier string "$BUNDLE_ID.fs"
@@ -115,6 +123,9 @@ if [[ "$WITH_FS" == "1" ]]; then
   set_key "$P" CFBundleDisplayName string "$NAME"
   set_key "$P" CFBundleShortVersionString string "$VERSION"
   set_key "$P" CFBundleVersion string "$BUILD_NUMBER"
+  set_key "$P" LSMinimumSystemVersion string 27.0
+  /usr/libexec/PlistBuddy -c "Delete :CFBundleSupportedPlatforms" "$P" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms array" -c "Add :CFBundleSupportedPlatforms:0 string MacOSX" "$P"
 fi
 
 WORK="$(mktemp -d)"
