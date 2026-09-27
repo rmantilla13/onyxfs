@@ -172,7 +172,9 @@ logic is testable with `swift test`.
   files so the kernel caches pages. Items: `OnyxItem: FSItem` carrying the
   NodeTable id. Owner = the mounting user; modes 0555/0444.
 - Info.plist (`EXAppExtensionAttributes`): `EXExtensionPointIdentifier`
-  `com.apple.fskit.fsmodule`, `FSShortName` `onyxfs`, `FSSupportedSchemes`
+  `com.apple.fskit.fsmodule`, `FSShortName` `onyxfs` (`onyxfsdev` in a dev
+  build: FSKit lists one module per short name, and each app clears the
+  stale disks of its own kind at launch), `FSSupportedSchemes`
   `["onyxfs-drive"]`, `FSActivateOptionSyntax` `{ shortOptions: "" }`, plus the
   keys needed for generic URL resources.
 - Entitlements: `com.apple.security.app-sandbox`,
