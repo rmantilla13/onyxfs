@@ -280,7 +280,7 @@ apple/
 | 5.5 | Conflict policy, written down | Server keeps a `version` counter per file; a write carries the version it was based on; mismatch → the server keeps both, the loser is renamed `name (conflict from <device>)`. Decided here, not discovered later. |
 | 5.6 | iOS app proper | **Started.** Native SwiftUI (iOS 18): sign-in (sheet, magic link through Safari, pairing code), drives and folders from the web's listing, search, previews (photos, streaming video and sound, Quick Look), share. Next: camera-roll import, share-sheet extension, share links. |
 | 5.7 | macOS ingest worker | Move Phase 2.3 here: frames + SigLIP embeddings on upload, on the Neural Engine. The Tauri worker becomes Windows-only. |
-| 5.8 | Distribution | Apple Developer account, notarised direct download for macOS (Sparkle for updates, replacing Tauri's updater), TestFlight then App Store for iOS. |
+| 5.8 | Distribution | Apple Developer account, notarised direct download for macOS (Sparkle for updates, replacing Tauri's updater), TestFlight then App Store for iOS. **TestFlight:** `apple/scripts/release-ios.sh --upload` (apple/README.md). |
 
 #### Server work this needs (small)
 

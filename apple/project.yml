@@ -70,8 +70,8 @@ targets:
         CODE_SIGN_ENTITLEMENTS: OnyxIOS/OnyxIOS.entitlements
     dependencies:
       - package: OnyxKit
-      - target: OnyxFileProviderIOS
-        embed: true
+      # OnyxFileProviderIOS is embedded once the app registers its drives
+      # with the Files app; until then it would be an empty extension to sign.
 
   # One source directory, built twice. NSFileProviderReplicatedExtension is
   # the same API on both platforms, which is the whole reason this design

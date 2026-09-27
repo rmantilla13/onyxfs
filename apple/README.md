@@ -134,6 +134,38 @@ comes from `/space/pair` on a signed-in web session (or `POST
 /api/desktop/authorize` with `{"kind":"pairing"}`). The simulator shares the
 Mac's network, so `localhost` is `npm run dev:local`'s server.
 
+### TestFlight
+
+```sh
+scripts/release-ios.sh --upload
+```
+
+This builds the app, signs it for the App Store and uploads it. TestFlight
+has it once Apple has processed it, usually within minutes. Without
+`--upload` it stops at `build/ios/Onyx.xcarchive`, and nothing leaves the Mac.
+
+Before the first upload:
+
+1. In [App Store Connect](https://appstoreconnect.apple.com/apps), **+ → New
+   App**: iOS, bundle ID `io.onyxfs.app`, any SKU. The name must be unique on
+   the App Store; the home screen still says Onyx (`CFBundleDisplayName`).
+2. Sign Xcode in to the developer account (**Settings → Accounts**). The upload
+   makes the Apple Distribution certificate and the App Store profile itself.
+   No iPhone need be registered to the team: the archive is signed for the
+   App Store at export, never for development. An App Store Connect API key
+   works instead; see the script's header.
+
+Each build number is the time it was built, so every upload is newer than the
+last. Bump `MARKETING_VERSION` in `project.yml` for a new version. Add yourself
+to a group under **TestFlight → Internal Testing**, and builds reach you
+through the TestFlight app. Testers outside the team need Beta App Review,
+which needs an account for the reviewer to sign in with.
+
+`OnyxIOS/PrivacyInfo.xcprivacy` gives the reasons for the APIs Apple asks
+about (user defaults, file dates, disk space). A new use of one needs its
+reason there, or the upload is refused. The Files extension
+(`OnyxFileProviderIOS`) is not embedded yet; it comes with the Files app.
+
 ### Updates
 
 The app asks its server (`/api/desktop/mac/latest`) for the newest release
