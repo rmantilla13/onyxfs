@@ -404,6 +404,39 @@ describe('the Mac’s writes', () => {
     assert.match(r.body.file.contentHash, /^[0-9a-f]{32}-3$/);
   });
 
+  test('a heavy video is queued for a proxy; a light one is not', async () => {
+    const { PROXY_MIN_BYTES } = await import('../lib/proxies.js');
+    const who = mac(ED);
+    const queued = () => [...(globalThis.__mw.proxies || new Map()).keys()];
+
+    // A 300 MB master. The bytes are not written — 300 MB through the mock
+    // bucket would make this test cost seconds — so the object is planted at
+    // the presigned key with the size the route will HEAD for. Everything else
+    // is the real path: presign, uploadCheck, createFile, and the queue.
+    const size = PROXY_MIN_BYTES + 1;
+    const p = await presign(who, { filename: 'Master.mov', contentType: 'video/quicktime', size, folder: 'Cuts', filespaceId: 'd1' });
+    assert.equal(p.status, 200, JSON.stringify(p.body));
+    globalThis.__mw.s3.objects.set(`onyx/${p.body.key}`, { size, etag: 'f'.repeat(32) });
+    const heavy = await record(who, {
+      name: p.body.name, url: p.body.publicUrl, mime: 'video/quicktime', size, folder: 'Cuts', storage: 's3', storageKey: p.body.key, filespace: 'd1',
+    });
+    assert.equal(heavy.status, 200, JSON.stringify(heavy.body));
+    assert.deepEqual(queued(), [heavy.body.file.id], 'the master is waiting for a Mac to transcode');
+
+    // Under the threshold nothing is queued: streaming the original is fine,
+    // and a proxy would cost storage for nothing.
+    const light = await upload(who, { name: 'Take 1.mov' });
+    assert.deepEqual(queued(), [heavy.body.file.id], `a small file queued a proxy: ${light.id}`);
+
+    // And a purge takes the job with it — a queue holding work for a file that
+    // no longer exists would have a Mac claiming it for ever.
+    const admin = mac('boss@mw.test');
+    await trashFile(admin, heavy.body.file.id);
+    const { deleteFile } = await import('@/lib/db');
+    await deleteFile(heavy.body.file.id);
+    assert.deepEqual(queued(), []);
+  });
+
   test('rename, move, trash and — for an admin — restore, all with a token', async () => {
     const f = await upload(mac(ED));
     const who = mac(ED);

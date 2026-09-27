@@ -1,7 +1,7 @@
 import { cache } from 'react';
 import { redirect, notFound } from 'next/navigation';
 import { loadBrand } from '@/lib/brand-config';
-import { getFileById, canAccessFile, canModifyFile, listFilespacesForSpace } from '@/lib/db';
+import { getFileById, canAccessFile, canModifyFile, listFilespacesForSpace, attachProxies } from '@/lib/db';
 import { getSessionUser } from '@/lib/session';
 import { getPrincipal, can } from '@/lib/authz';
 import { presignFileUrls } from '@/lib/storage';
@@ -14,6 +14,7 @@ import { effectiveKind } from '@/lib/media';
 import { imagePreviewFor } from '@/lib/poster';
 import { isReviewableKind } from '@/lib/review';
 import { isTranscribableKind } from '@/lib/transcripts';
+import { isProxyableKind } from '@/lib/proxies';
 
 export const dynamic = 'force-dynamic';
 
@@ -90,10 +91,16 @@ export default async function FilePage({ params, searchParams }) {
   // "no such file" confirms the id exists to someone guessing.
   if (!(await canAccessFile(file, principal))) notFound();
 
+  // The proxy rendition, when this person has the flag: joined on before the
+  // presign, because presignFileUrls signs `proxyUrl` from `proxyKey` and a row
+  // without one simply gets no proxy. Chained inside the Promise.all rather than
+  // awaited before it, so the extra query overlaps the four beside it.
+  const proxies = isFeatureEnabled(principal.flags, 'proxies') && isProxyableKind(effectiveKind(file));
   const [brand, signedList, canWrite, canChange, filespaces] = await Promise.all([
     loadBrand(),
     // Six hours, so a paused video still seeks when it resumes.
-    presignFileUrls([file], { expiresIn: 21600 }),
+    (proxies ? attachProxies([file]) : Promise.resolve([file]))
+      .then((rows) => presignFileUrls(rows, { expiresIn: 21600 })),
     canModifyFile(file, principal),
     // The file alone, whatever the role: whether a link to it is theirs to make.
     canModifyFile(file, principal, { action: null }),
@@ -137,6 +144,9 @@ export default async function FilePage({ params, searchParams }) {
         // Transcripts: the flag as this person has it, for a video or an
         // audio file. The transcript routes read the flag again themselves.
         transcripts={isFeatureEnabled(principal.flags, 'transcripts') && isTranscribableKind(effectiveKind(file))}
+        // Proxies: the same arrangement — the flag as this person has it, for a
+        // video. The proxy routes read it again themselves.
+        proxies={proxies}
         // The Mac app is named after the brand, never "Onyx" hardcoded.
         brandName={brand.name}
       />

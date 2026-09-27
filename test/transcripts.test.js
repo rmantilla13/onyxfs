@@ -294,10 +294,13 @@ describe('the server half', () => {
     });
     const q = buildTranscriptQueueQuery({ principal: p });
     assert.match(q.text, /f\.deleted_at IS NULL/);
-    assert.match(q.text, /t\.status = 'queued' OR \(t\.status = 'working' AND \(t\.lease_until IS NULL OR t\.lease_until < now\(\)\)\)/);
+    // `j` is the queue table's alias — buildJobQueueQuery serves both queues,
+    // so the alias is the queue's rather than the transcripts table's own.
+    assert.match(q.text, /j\.status = 'queued' OR \(j\.status = 'working' AND \(j\.lease_until IS NULL OR j\.lease_until < now\(\)\)\)/);
+    assert.match(q.text, /FROM transcripts j/);
     assert.match(q.text, /LIKE ANY/, 'the drive boundary');
     assert.ok(q.params.some((v) => Array.isArray(v) && v.includes('secret/%')));
-    assert.match(q.text, /ORDER BY coalesce\(t\.requested_at/);
+    assert.match(q.text, /ORDER BY coalesce\(j\.requested_at/);
     const admin = buildTranscriptQueueQuery({ principal: { isAdmin: true } });
     assert.doesNotMatch(admin.text, /LIKE ANY/);
   });
@@ -316,7 +319,12 @@ describe('the server half', () => {
     assert.match(claim, /UPDATE transcripts SET[\s\S]*WHERE file_id = \$\{fileId\}\s+AND \(status = 'queued' OR \(status = 'working' AND/);
     assert.match(claim, /RETURNING \*/);
     assert.equal(T.LEASE_SECONDS, 600);
-    assert.equal((db.match(/interval '10 minutes'/g) || []).length, 2, 'the claim and every progress report');
+    // Scoped to the transcript functions, not the whole file: lib/db.js now
+    // holds a second worker queue with a lease of its own (proxies), and a
+    // file-wide count would grow with every queue instead of pinning that a
+    // transcript's lease is renewed in exactly two places.
+    const leases = db.slice(db.indexOf('export async function claimTranscript'), db.indexOf('async function deleteTranscriptRow'));
+    assert.equal((leases.match(/interval '10 minutes'/g) || []).length, 2, 'the claim and every progress report');
     for (const fn of ['reportTranscriptProgress', 'failTranscript', 'submitTranscript']) {
       const body = db.slice(db.indexOf(`export async function ${fn}`));
       assert.match(body.slice(0, 1200), /WHERE file_id = \$\{fileId\} AND status = 'working' AND claimed_by = \$\{email\}/, fn);

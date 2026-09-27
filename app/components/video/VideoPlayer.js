@@ -74,7 +74,7 @@ const SPEEDS = [0.25, 0.5, 1, 1.5, 2];
 
 const VideoPlayer = forwardRef(function VideoPlayer({
   file, startAt = 0, onRangeChange, markers = null, onMarkerClick, onFrameChange, overlay = null, onComment,
-  onTime, captions = null,
+  onTime, captions = null, proxy: job = null,
 }, ref) {
   const video = useRef(null);
   const track = useRef(null);
@@ -133,9 +133,22 @@ const VideoPlayer = forwardRef(function VideoPlayer({
     return () => { live = false; };
   }, [ratio, poster]);
 
-  const proxy = file?.proxyUrl || null;
+  // The rendition, preferred over the master whenever there is one. The live
+  // job's URL wins over the one the page was rendered with, so a transcode that
+  // finishes while this page is open is picked up without a reload — and a
+  // rendition of replaced footage (stale) is never used, whichever it came from.
+  // `job` is useProxy's whole return value: the row under `.proxy`, the actions
+  // beside it.
+  const row = job?.proxy || null;
+  const proxy = (row && !row.stale ? row.url : null) || file?.proxyUrl || null;
   const src = proxy || file?.url || null;
   const heavy = !proxy && Number(file?.size) > HEAVY_BYTES;
+  // The job's own status (lib/proxies.js PROXY_STATUSES, plus 'none' for a file
+  // with no job), live where this page is watching one and from the server's
+  // render otherwise. Never a paraphrase: a spelling that drifts from the
+  // queue's reads as "no proxy".
+  const proxyStatus = row?.status || file?.proxyStatus || null;
+  const making = proxyStatus === 'queued' || proxyStatus === 'working';
   const strip = useMemo(() => layoutFromMetadata(file?.metadata), [file?.metadata]);
   const stripUrl = file?.filmstripUrl || null;
 
@@ -651,9 +664,23 @@ const VideoPlayer = forwardRef(function VideoPlayer({
       {heavy && (
         <p className="small muted player-note">
           {Math.round(Number(file.size) / 1e9 * 10) / 10} GB original — seeking will buffer while it streams.
-          {file.proxyStatus === 'queued' || file.proxyStatus === 'running'
-            ? ' A streamable version is being prepared.'
-            : ' Downloading is faster if you need to scrub.'}
+          {proxyStatus === 'queued' ? ' A streamable version is waiting for a Mac to make it.'
+            : proxyStatus === 'working'
+              ? ` A streamable version is being made${row?.progress > 0 ? ` — ${Math.round(row.progress * 100)}%` : ''}${row?.device ? ` on ${row.device}` : ''}.`
+              : ' Downloading is faster if you need to scrub.'}
+          {/* Asking is only offered to someone who could act on the answer, and
+              only when nothing is already in flight. A failure says why and
+              offers the retry in the same breath — a red line with no way
+              forward is where people give up. */}
+          {job?.canRequest && !making && (
+            <>
+              {' '}
+              <button type="button" className="btn btn-ghost btn-sm" disabled={job.busy} onClick={job.request}>
+                {job.busy ? 'Asking…' : proxyStatus === 'failed' || row?.stale ? 'Try again' : 'Make a streamable version'}
+              </button>
+              {proxyStatus === 'failed' && row?.error ? ` Last attempt: ${row.error}` : ''}
+            </>
+          )}
         </p>
       )}
     </div>

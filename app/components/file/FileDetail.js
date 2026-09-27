@@ -27,6 +27,7 @@ import useReviewDraft from '@/app/components/review/useReviewDraft';
 import Icon from '@/app/components/ui/Icon';
 import TranscriptPanel from '@/app/components/transcript/TranscriptPanel';
 import useTranscript from '@/app/components/transcript/useTranscript';
+import useProxy from '@/app/components/video/useProxy';
 import { createMediaClock } from '@/app/components/transcript/mediaClock';
 import useMacApp from '@/app/components/useMacApp';
 import { toVTT } from '@/lib/transcripts';
@@ -56,11 +57,17 @@ import { toVTT } from '@/lib/transcripts';
  * loses nothing and captions stay on: the player reports its time to a
  * small clock the panel subscribes to, a line picked in the panel seeks the
  * player, and Captions turns the segments into a subtitles track on it.
+ *
+ * PROXY. With `proxies` on (the flag, decided on the server, for a video) the
+ * job is watched here, beside the transcript's, and handed to the player: it
+ * prefers the rendition over the master, shows how a transcode is getting on,
+ * and offers to have one made. No tab of its own — a proxy is not something to
+ * read, it is how the file plays.
  */
 export default function FileDetail({
   file: initial, canWrite = false, canShare = false, backHref = '/files', startAt = 0,
   review = false, me = null, focusComment = null, previewPossible = true,
-  transcripts = false, brandName = '',
+  transcripts = false, proxies = false, brandName = '',
 }) {
   const [file, setFile] = useState(initial);
   const [sharing, setSharing] = useState(false);
@@ -143,6 +150,9 @@ export default function FileDetail({
 
   // ── Transcript ──
   const transcript = useTranscript(file.id, { enabled: transcripts });
+  // ── Proxy ── watched for as long as the page is open, since a transcode
+  // finishing is what lets the player switch sources.
+  const proxy = useProxy(file.id, { enabled: proxies });
   const clock = useMemo(createMediaClock, []);
   const mac = useMacApp();
   const seekTo = useCallback((seconds) => player.current?.seekTo?.(seconds), []);
@@ -375,6 +385,7 @@ export default function FileDetail({
             onOriginalBlob={backfill && previewPossible ? onOriginalBlob : undefined}
             onTime={transcripts ? clock.set : undefined}
             captions={captions}
+            proxy={proxies ? proxy : null}
           />
       )}
       aside={(

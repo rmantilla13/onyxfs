@@ -104,10 +104,21 @@ describeDb('driver-level query deadlines', () => {
     });
 
     test('the error names the statement, so a log line is diagnosable', async () => {
-      await assert.rejects(
-        () => sql`SELECT pg_sleep(30) /* marker */`,
-        (e) => e.message.includes('pg_sleep'),
-      );
+      // The preceding test leaves a cancelled pg_sleep on this client's one
+      // connection. Under load the cancellation can tear the socket down, and
+      // the next statement then fails with a connection error before its own
+      // deadline — a real thing that happens, and not what this test is about.
+      // So the assertion is on the DEADLINE error: if one fires, it names the
+      // statement. A connection error is retried once, and a second one fails
+      // the test rather than being swallowed.
+      const attempt = async () => {
+        try { await sql`SELECT pg_sleep(30) /* marker */`; return { ok: true }; } catch (e) { return { e }; }
+      };
+      let { ok, e } = await attempt();
+      if (!ok && !/exceeded \d+ms and was cancelled/.test(e.message)) ({ ok, e } = await attempt());
+      assert.ok(!ok, 'pg_sleep(30) resolved, so no deadline fired at all');
+      assert.match(e.message, /exceeded \d+ms and was cancelled/);
+      assert.ok(e.message.includes('pg_sleep'), e.message);
     });
 
     test('the client still works afterwards', async () => {
