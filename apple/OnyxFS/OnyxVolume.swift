@@ -209,7 +209,7 @@ final class OnyxVolume: FSVolume, FSVolume.Handler, FSVolume.PathConfOperations,
         a.changeTime = modified
         a.accessTime = modified
         a.birthTime = Self.timespec(node.created)
-        a.flags = 0
+        a.flags = node.hidden ? UInt32(UF_HIDDEN) : 0
         return a
     }
 

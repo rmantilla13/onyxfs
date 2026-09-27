@@ -325,7 +325,10 @@ extension's cached chunks.
 - `mkdir`, `rename` (incl. `overItem`), `remove` → the bridge calls above.
 - **Local-only names** (`.DS_Store`, `._*`, `.Trashes`, `.Spotlight-V100`,
   `.fseventsd`, `.TemporaryItems`, `Icon\r`) live only in the extension's
-  container; they are never uploaded and never listed by the bridge.
+  container; they are never uploaded and never listed by the bridge. They
+  carry Finder's hidden flag (`UF_HIDDEN`), as on any disk — which is what
+  keeps the Time Machine marker at each disk's root
+  (`com.apple.timemachine.donotpresent`, no dot to hide it) out of sight.
 - **Extended attributes** are kept locally per item (so macOS does not
   write `._` AppleDouble files); never uploaded.
 - **Finder's Trash**: the volume has none — making `/.Trashes` is refused
