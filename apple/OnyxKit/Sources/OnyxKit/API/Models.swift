@@ -100,6 +100,10 @@ public struct Filespace: Codable, Sendable, Identifiable, Equatable, Hashable {
     /// listed every drive but sees only the ones it belongs to). Absent from
     /// older servers, where every listed drive was.
     public let member: Bool?
+    /// The drive's own colour, "#RRGGBB" — the dot beside its name on the
+    /// web — which its disk icon is drawn in (DriveIcon). Absent from older
+    /// servers.
+    public let color: String?
 
     public var isMember: Bool { member ?? true }
 
@@ -113,9 +117,9 @@ public struct Filespace: Codable, Sendable, Identifiable, Equatable, Hashable {
     public var mayAddFiles: Bool { role == "editor" || role == "owner" }
 
     public init(id: String, name: String, bucket: String? = nil, prefix: String? = nil,
-                region: String? = nil, role: String? = nil, member: Bool? = nil) {
+                region: String? = nil, role: String? = nil, member: Bool? = nil, color: String? = nil) {
         self.id = id; self.name = name; self.bucket = bucket; self.prefix = prefix
-        self.region = region; self.role = role; self.member = member
+        self.region = region; self.role = role; self.member = member; self.color = color
     }
 }
 

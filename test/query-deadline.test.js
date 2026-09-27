@@ -182,8 +182,22 @@ describeDb('driver-level query deadlines', () => {
       // connection but the second gives up first. A shared deadline made this
       // a coin flip: both timers fired in the same tick and the blocker's
       // cancel could free the connection before the other was judged.
-      const patient = withQueryDeadlines(own, 8000);
-      const impatient = withQueryDeadlines(own, 300);
+      //
+      // The impatient deadline is seconds, not milliseconds, and that is the
+      // point rather than an oversight. It races only the event loop: the
+      // statement has to be HANDED to the connection (which is what sets
+      // `state`) before its timer fires, or the driver correctly reports
+      // "NEVER REACHED A CONNECTION" and this test fails having found nothing
+      // wrong. At 300ms that race was lost whenever the machine was busy — a
+      // whole test suite running in parallel is exactly such a machine. There is
+      // no upper pressure to trade against: the blocker holds the connection for
+      // thirty seconds, so anything well under that is still head-of-line.
+      //
+      // The blocker's own deadline is what this test WAITS on at the end, so it
+      // is kept as low as it can be while still comfortably outlasting the
+      // impatient one — it is suite time, not headroom.
+      const patient = withQueryDeadlines(own, 6000);
+      const impatient = withQueryDeadlines(own, 2000);
 
       const blocker = patient`SELECT pg_sleep(30)`.catch(() => {});
       await assert.rejects(

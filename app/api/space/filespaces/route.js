@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { requireDesktopAuth } from '@/lib/desktop-guard';
 import { listFilespaces, listFilespacesForUser } from '@/lib/db';
 import { can } from '@/lib/authz';
+import { loadBrand } from '@/lib/brand-config';
+import { driveColorHex } from '@/lib/drive-color';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,6 +20,10 @@ export const dynamic = 'force-dynamic';
  * member, so the apps had to be told which drives were real (`member`). Now
  * the list is the membership, so `member` is always true; it stays in the
  * response for the clients that read it.
+ *
+ * `color` is the drive's own colour, the dot beside its name on the web, as
+ * #RRGGBB from the brand's palette: the Mac paints the drive's disk icon in
+ * it (apple/ONYXFS.md, "The drive's icon").
  */
 export async function GET(req) {
   const gate = await requireDesktopAuth(req);
@@ -41,9 +47,10 @@ export async function GET(req) {
     return NextResponse.json({ error: 'Drives could not be listed right now.' }, { status: 503, headers: { 'retry-after': '30' } });
   }
 
+  const { palette } = (await loadBrand()).visual;
   const filespaces = spaces.map((f) => ({
     id: f.id, name: f.name, bucket: f.bucket, prefix: f.prefix, region: f.region || null, role: f.role || 'viewer',
-    member: true,
+    member: true, color: driveColorHex(f.id, palette),
   }));
   return NextResponse.json({ filespaces, email: gate.email, isAdmin: principal.isAdmin });
 }

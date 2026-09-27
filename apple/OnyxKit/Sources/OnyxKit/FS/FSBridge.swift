@@ -179,6 +179,7 @@ public final class FSBridge: @unchecked Sendable {
         case "source": return await responder.source(id: query["id"])
         case "data": return await responder.data(id: query["id"], range: request.headers["range"])
         case "volume": return await responder.volume()
+        case "icon": return await responder.icon()
         default: // "changes"
             guard beginPoll(session) else {
                 var busy = FSResponder.error(503, "Too many waits for changes at once.")
@@ -192,7 +193,7 @@ public final class FSBridge: @unchecked Sendable {
         }
     }
 
-    static let readRoutes: Set<String> = ["list", "stat", "source", "data", "changes", "volume"]
+    static let readRoutes: Set<String> = ["list", "stat", "source", "data", "changes", "volume", "icon"]
     static let writeRoutes: Set<String> = ["file", "mkdir", "rename", "item"]
 
     /// The write side (ONYXFS.md, "Writes"): Finder's changes, made on the
