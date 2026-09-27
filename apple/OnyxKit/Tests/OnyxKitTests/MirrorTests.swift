@@ -295,9 +295,38 @@ struct MirrorIndexTests {
         #expect(index.file(id: "none")?.modified == fallback)
         #expect(index.entry(at: "A")?.modified == ms(9_000), "the newest file at any depth")
         #expect(index.entry(at: "A/B")?.modified == ms(9_000))
-        #expect(index.entry(at: "Empty")?.modified == fallback)
+        // Nothing beneath it to date it by: its parent's date, not the
+        // fallback, which Finder shows as the last day of 1969.
+        #expect(index.entry(at: "Empty")?.modified == ms(9_000))
         #expect(index.entry(at: "D")?.modified == fallback)
         #expect(index.entry(at: "")?.modified == ms(9_000))
+    }
+
+    @Test func aFilesOwnDatesAreWhatFinderShows() throws {
+        var shot = item("shot", "shot.jpg", in: "A", created: 50_000, updated: 60_000)
+        shot.fileCreatedAt = EpochMillis(1_000)   // taken years before it was added
+        shot.fileModifiedAt = EpochMillis(2_000)
+        let plain = item("plain", "plain.jpg", in: "A", created: 40_000, updated: 45_000)
+        let index = MirrorIndex(replica([shot, plain]))
+        let ms = { (v: Int64) in EpochMillis(v).date }
+
+        let own = try #require(index.file(id: "shot"))
+        #expect(own.modified == ms(2_000) && own.created == ms(1_000), "the file's own dates")
+        #expect(own.changed == ms(60_000), "when its row changed here, for what waits on the mirror")
+        let rows = try #require(index.file(id: "plain"))
+        #expect(rows.modified == ms(45_000) && rows.created == ms(40_000) && rows.changed == ms(45_000),
+                "without its own, the row's")
+        // A folder is as new as the newest change beneath it, not the
+        // newest file's own date, which can be years back.
+        #expect(index.entry(at: "A")?.modified == ms(60_000))
+    }
+
+    @Test func aReplicaSavedBeforeOwnDatesStillDecodes() throws {
+        // A replica written by an older build has no fileCreatedAt or
+        // fileModifiedAt: they read as nil, and the row's dates stand in.
+        let json = #"{ "id": "f", "name": "a.png", "folder": "", "mime": null, "size": 1, "version": 1, "contentHash": null, "createdAt": 5, "updatedAt": 6 }"#
+        let file = try JSONDecoder().decode(ReplicaFile.self, from: Data(json.utf8))
+        #expect(file.fileCreatedAt == nil && file.fileModifiedAt == nil && file.updatedAt == EpochMillis(6))
     }
 
     @Test func etagsSizesAndTypesComeFromTheFile() throws {

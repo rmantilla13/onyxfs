@@ -97,10 +97,12 @@ public struct MirrorIndex: Sendable, PinnableIndex {
         var preorder: [Int] = []
         var bytes: Int64 = 0
 
+        var parentOf: [Int: Int] = [:]
         var stack = [Pending(serverPath: "", name: "", path: "", key: "", parent: -1, slot: -1)]
         while let folder = stack.popLast() {
             let at = entries.count
             preorder.append(at)
+            parentOf[at] = folder.parent
             positions[folder.key] = at
             if folder.parent >= 0 { children[folder.parent]![folder.slot] = at }
             entries.append(MirrorEntry(kind: .folder, name: folder.name, path: folder.path, fileId: nil, size: 0,
@@ -125,7 +127,11 @@ public struct MirrorIndex: Sendable, PinnableIndex {
             // Subfolders take the first slots, filled in as each is laid out.
             var kids = [Int](repeating: -1, count: items.count)
             for (j, (file, name)) in namedFiles.enumerated() {
-                let modified = (file.updatedAt ?? file.createdAt)?.date ?? emptyFolderDate
+                // The row's time says when it changed here; the file's own
+                // dates are what Finder shows (MirrorEntry).
+                let changed = (file.updatedAt ?? file.createdAt)?.date ?? emptyFolderDate
+                let modified = file.fileModifiedAt?.date ?? changed
+                let created = (file.fileCreatedAt ?? file.createdAt)?.date ?? modified
                 let hash = file.contentHash.flatMap { $0.isEmpty ? nil : $0 }
                 let position = entries.count
                 kids[subs.count + j] = position
@@ -133,8 +139,9 @@ public struct MirrorIndex: Sendable, PinnableIndex {
                 byID[file.id] = position
                 entries.append(MirrorEntry(kind: .file, name: name, path: Self.join(folder.path, name),
                                            fileId: file.id, size: file.size ?? 0, modified: modified,
-                                           etag: hash ?? "v\(file.version)", mime: file.mime, contentHash: hash))
-                newest[at] = max(newest[at] ?? modified, modified)
+                                           etag: hash ?? "v\(file.version)", mime: file.mime, contentHash: hash,
+                                           created: created, changed: changed))
+                newest[at] = max(newest[at] ?? changed, changed)
                 // Saturating: a size is whatever the server says, and an
                 // overflow would stop the app rather than miscount.
                 let size = max(0, file.size ?? 0)
@@ -168,6 +175,15 @@ public struct MirrorIndex: Sendable, PinnableIndex {
                                           modified: latest, etag: nil, mime: nil)
             }
             slots[at] = Slot(children: kids, end: end)
+        }
+        // Parents before children: a folder with no file anywhere beneath it
+        // has no date of its own, and takes its parent's — not
+        // `emptyFolderDate`, which Finder shows as the last day of 1969.
+        for at in preorder where newest[at] == nil {
+            guard let parent = parentOf[at], parent >= 0 else { continue }
+            let e = entries[at], date = entries[parent].modified
+            entries[at] = MirrorEntry(kind: .folder, name: e.name, path: e.path, fileId: nil, size: 0,
+                                      modified: date, etag: nil, mime: nil)
         }
 
         self.entries = entries

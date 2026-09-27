@@ -228,7 +228,8 @@ public final class FSBridge: @unchecked Sendable {
                     return FSResponder.error(400, "PUT /fs/v1/file needs ?path= and the file as its body.")
                 }
                 let modified = request.headers["x-onyx-mtime"].flatMap(Double.init).map { Date(timeIntervalSince1970: $0) }
-                try await writer.write(path: path, from: file, modified: modified)
+                let created = request.headers["x-onyx-btime"].flatMap(Double.init).map { Date(timeIntervalSince1970: $0) }
+                try await writer.write(path: path, from: file, modified: modified, created: created)
                 return await responder.stat(path: path)
             case "mkdir":
                 guard let path = body["path"] as? String else { return FSResponder.error(400, #"The body must be {"path": "…"}."#) }
@@ -358,7 +359,9 @@ public final class FSBridge: @unchecked Sendable {
 /// Paths are the drive's ("/Footage/Take 1.mov"). Throws DriveWriter.Failure.
 public protocol FSWriteTarget: Sendable {
     /// `file` is taken (moved away) by the writer when it succeeds.
-    func write(path: String, from file: URL, modified: Date?) async throws
+    /// `modified` and `created`: the dates the file had where it was
+    /// written (X-Onyx-Mtime, X-Onyx-Btime), kept on the server.
+    func write(path: String, from file: URL, modified: Date?, created: Date?) async throws
     func makeFolder(path: String) async throws
     func move(from: String, to: String, replace: Bool) async throws
     func remove(path: String) async throws

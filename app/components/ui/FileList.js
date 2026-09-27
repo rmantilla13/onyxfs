@@ -7,6 +7,7 @@ import { rowWindow } from '@/lib/virtual-rows';
 import { listHits, overlaps } from '@/lib/marquee';
 import { LIST_COLUMNS, columnOf, nextSortFor, columnTemplate, fitColumns } from '@/lib/list-columns';
 import { deriveAuto } from '@/lib/dam';
+import { whenCreated, whenModified } from '@/lib/file-dates';
 import { fmtDuration } from '@/lib/media';
 import { fileKey } from '@/lib/selection';
 import { rowsPerViewport } from '@/lib/nav-geometry';
@@ -418,10 +419,12 @@ function Cell({ file, col, ctx, tabbable, selected, editing }) {
       const type = ctx.labelFor?.(file) || file.kind || '';
       return <span className="filelist-cell muted truncate" title={file.mime || undefined}>{type || '—'}</span>;
     }
+    // The file's own dates where it came with them (lib/file-dates.js), which
+    // is also what these two columns sort on.
     case 'modified':
-      return <span className="filelist-cell filelist-date muted"><When at={file.updatedAt} /></span>;
+      return <span className="filelist-cell filelist-date muted"><When at={whenModified(file)} /></span>;
     case 'added':
-      return <span className="filelist-cell filelist-date muted"><When at={file.createdAt} /></span>;
+      return <span className="filelist-cell filelist-date muted"><When at={whenCreated(file)} /></span>;
     case 'added_by':
       return <span className="filelist-cell muted truncate" title={file.createdBy || undefined}>{file.createdBy || '—'}</span>;
     case 'duration':

@@ -5,6 +5,15 @@ import Testing
 /// The mount URL and the JSON are the contract with the app, which is written
 /// separately: each is pinned to the letter.
 struct WireTests {
+    @Test func anEntrysBirthTimeIsReadWhenTheAppSendsIt() throws {
+        let with = try JSONDecoder().decode(FSEntry.self, from: Data(#"{"name":"a","type":"file","mtime":20,"btime":10}"#.utf8))
+        #expect(with.created == Date(timeIntervalSince1970: 10) && with.modified == Date(timeIntervalSince1970: 20))
+        #expect(ClientBridge.entry(with).created == Date(timeIntervalSince1970: 10))
+        // From an app that predates it: none, and the engine shows mtime for both.
+        let without = try JSONDecoder().decode(FSEntry.self, from: Data(#"{"name":"a","type":"file","mtime":20}"#.utf8))
+        #expect(without.created == nil && ClientBridge.entry(without).created == nil)
+    }
+
     @Test func aMountURLGivesItsPartsWithoutSpendingTheTicket() throws {
         let url = URL(string: "onyxfs-drive://127.0.0.1:61234/drive.abc-123?ticket=T0k3n_-x&name=Client%20Deliverables%20%26%20Caf%C3%A9&v=1")!
         let resource = try FSMountResource(url: url)

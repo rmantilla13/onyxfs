@@ -164,11 +164,14 @@ public final class FSBridgeClient: Sendable {
     /// memory). The app keeps the bytes and answers at once with the entry,
     /// `pending` until its upload to storage finishes. A file already at
     /// `path` is replaced in place: same id, new bytes.
-    public func putFile(path: String, from fileURL: URL, mtime: Date? = nil) async throws -> FSEntry {
+    public func putFile(path: String, from fileURL: URL, mtime: Date? = nil, btime: Date? = nil) async throws -> FSEntry {
         var request = self.request("PUT", "file", query: [("path", path)])
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         if let mtime {
             request.setValue(Self.seconds(mtime.timeIntervalSince1970), forHTTPHeaderField: "X-Onyx-Mtime")
+        }
+        if let btime {
+            request.setValue(Self.seconds(btime.timeIntervalSince1970), forHTTPHeaderField: "X-Onyx-Btime")
         }
         let body: Data
         let response: HTTPURLResponse

@@ -170,27 +170,38 @@ extension OnyxAPI {
     ///
     /// Not idempotent: a key is recorded once, and asked again (an answer
     /// lost on the way back) the server says 409.
+    ///
+    /// `created` and `modified` are the file's own dates (what Finder showed
+    /// for it here), kept beside when it was added (lib/file-record.js).
     public func recordFile(key: String, publicUrl: String?, name: String, size: Int64, mime: String,
-                           folder: String, filespaceId: String?) async throws -> RecordedFile {
+                           folder: String, filespaceId: String?, created: Date? = nil,
+                           modified: Date? = nil) async throws -> RecordedFile {
         var body: [String: Any] = [
             "storage": "s3", "storageKey": key, "url": publicUrl ?? key, "name": name,
             "size": size, "mime": mime, "folder": folder,
         ]
         if let filespaceId { body["filespace"] = filespaceId }
+        if let created { body["fileCreatedAt"] = Self.millis(created) }
+        if let modified { body["fileModifiedAt"] = Self.millis(modified) }
         return try decode(FileAnswer.self, from: try await coded(config.url("api/files"), json: body)).file
     }
 
     /// The bytes uploaded to `key` (issued by `presignReplacement` or
     /// `startReplacementMultipart` for this file) become its contents: the
     /// same file, new bytes. Asked again after a lost answer, the server
-    /// answers as the first time.
-    public func replaceContent(fileId: String, key: String, mime: String?) async throws -> RecordedFile {
+    /// answers as the first time. `modified`: when these bytes were written
+    /// (the server stamps now without it); the file's created date stays.
+    public func replaceContent(fileId: String, key: String, mime: String?, modified: Date? = nil) async throws -> RecordedFile {
         var body: [String: Any] = ["key": key]
         if let mime { body["mime"] = mime }
+        if let modified { body["fileModifiedAt"] = Self.millis(modified) }
         return try decode(FileAnswer.self, from: try await coded(fileURL(fileId, "content"), json: body)).file
     }
 
     private struct FileAnswer: Decodable { let file: RecordedFile }
+
+    /// Epoch milliseconds, as the API counts time.
+    static func millis(_ date: Date) -> Int64 { Int64((date.timeIntervalSince1970 * 1000).rounded()) }
 
     // MARK: - Changing files and folders
 

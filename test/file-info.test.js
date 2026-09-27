@@ -5,8 +5,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileFacts, selectionFacts, kindLabel } from '../lib/file-info.js';
 import { folderStats } from '../lib/folder-ops.js';
-import { normalizeSchema } from '../lib/dam.js';
+import { normalizeSchema, deriveAuto } from '../lib/dam.js';
 import { initialsFor } from '../lib/account.js';
+import { whenCreated, whenModified } from '../lib/file-dates.js';
 
 const schema = normalizeSchema(null);
 
@@ -36,6 +37,33 @@ test('file facts: what it is, where, when, then what people said about it', () =
   assert.ok(!('meta:author' in byKey));
   assert.ok(!('meta:source' in byKey));
   assert.equal(byKey.stored.value, 'files/Campaigns/2026/launch.mp4');
+});
+
+test('the dates: Created and Modified the file’s own, else the row’s; Added only when it differs', () => {
+  // Recorded without dates of its own, as every file before them was.
+  const plain = Object.fromEntries(fileFacts(video, schema).map((r) => [r.key, r]));
+  assert.deepEqual(plain.added, { key: 'added', label: 'Created', type: 'date', value: 1 });
+  assert.equal(plain.modified.value, 2, 'the row’s time, for a file recorded without its own');
+  assert.ok(!('uploaded' in plain), 'Added would only repeat Created');
+
+  // A photo shot on the 5th, saved an hour later, uploaded on the 26th.
+  const photo = { ...video, fileCreatedAt: 1725530400000, fileModifiedAt: 1725534000000, createdAt: 1727337600000, updatedAt: 1727337700000 };
+  const rows = fileFacts(photo, schema);
+  const at = Object.fromEntries(rows.map((r) => [r.key, r]));
+  assert.deepEqual(at.added, { key: 'added', label: 'Created', type: 'date', value: 1725530400000 });
+  assert.deepEqual(at.uploaded, { key: 'uploaded', label: 'Added', type: 'date', value: 1727337600000 });
+  assert.deepEqual(at.modified, { key: 'modified', label: 'Modified', type: 'date', value: 1725534000000 });
+  assert.deepEqual(rows.map((r) => r.key).filter((k) => ['added', 'added_by', 'uploaded', 'modified'].includes(k)), ['added', 'added_by', 'uploaded', 'modified']);
+
+  // What the list, the cards and the column view show, from the same place.
+  assert.deepEqual([whenCreated(photo), whenModified(photo)], [1725530400000, 1725534000000]);
+  assert.deepEqual([whenCreated(video), whenModified(video)], [1, 2]);
+  assert.deepEqual([whenCreated(null), whenModified({})], [null, null]);
+});
+
+test('the Year facet is the year the file was made, where it is known', () => {
+  assert.equal(deriveAuto({ createdAt: Date.parse('2026-09-26T12:00:00Z') }).year, '2026');
+  assert.equal(deriveAuto({ createdAt: Date.parse('2026-09-26T12:00:00Z'), fileCreatedAt: Date.parse('2019-07-01T12:00:00Z') }).year, '2019');
 });
 
 test('a file at the root is still somewhere', () => {

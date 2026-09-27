@@ -24,7 +24,7 @@ public struct MirrorTree: DriveTree {
         guard let key = MirrorIndex.normalize(path), let entry = await mirror.index.entry(at: key), !entry.isFolder else {
             return nil
         }
-        return entry.modified
+        return entry.changed
     }
 
     public func refresh() async { await refreshing() }
