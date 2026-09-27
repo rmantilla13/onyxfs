@@ -24,6 +24,8 @@ public struct MirrorIndex: Sendable, PinnableIndex {
     /// By a folder's position: its children in listing order, and where its
     /// run in `entries` ends.
     private let slots: [Int: Slot]
+    /// Every folder's position, the root's first, in `entries` order.
+    private let folderPositions: [Int]
 
     private struct Slot: Sendable {
         let children: [Int]
@@ -44,6 +46,9 @@ public struct MirrorIndex: Sendable, PinnableIndex {
     public let fileCount: Int
     /// Folders beneath the root; the drive itself is not counted.
     public let folderCount: Int
+    /// The files' sizes added up: how much the drive holds, for a disk's
+    /// "used" figure. Counted as the index is built, so asking is free.
+    public let byteCount: Int64
     /// Whether a file missing from this index is really gone from the drive.
     /// False while the drive is still being fetched from the start — a first
     /// sync, or one after the access changed — when a missing file may just
@@ -90,6 +95,7 @@ public struct MirrorIndex: Sendable, PinnableIndex {
         var folderChildren: [Int: Int] = [:]
         var newest: [Int: Date] = [:]
         var preorder: [Int] = []
+        var bytes: Int64 = 0
 
         var stack = [Pending(serverPath: "", name: "", path: "", key: "", parent: -1, slot: -1)]
         while let folder = stack.popLast() {
@@ -127,8 +133,12 @@ public struct MirrorIndex: Sendable, PinnableIndex {
                 byID[file.id] = position
                 entries.append(MirrorEntry(kind: .file, name: name, path: Self.join(folder.path, name),
                                            fileId: file.id, size: file.size ?? 0, modified: modified,
-                                           etag: hash ?? "v\(file.version)", mime: file.mime))
+                                           etag: hash ?? "v\(file.version)", mime: file.mime, contentHash: hash))
                 newest[at] = max(newest[at] ?? modified, modified)
+                // Saturating: a size is whatever the server says, and an
+                // overflow would stop the app rather than miscount.
+                let size = max(0, file.size ?? 0)
+                bytes = bytes > .max - size ? .max : bytes + size
             }
             children[at] = kids
             folderChildren[at] = subs.count
@@ -164,8 +174,11 @@ public struct MirrorIndex: Sendable, PinnableIndex {
         self.positions = positions
         self.byID = byID
         self.slots = slots
+        // Laid out in preorder, so this is also `entries` order.
+        self.folderPositions = preorder
         self.fileCount = byID.count
         self.folderCount = slots.count - 1
+        self.byteCount = bytes
         self.isAuthoritative = authoritative
     }
 
@@ -174,8 +187,10 @@ public struct MirrorIndex: Sendable, PinnableIndex {
         positions = other.positions
         byID = other.byID
         slots = other.slots
+        folderPositions = other.folderPositions
         fileCount = other.fileCount
         folderCount = other.folderCount
+        byteCount = other.byteCount
         isAuthoritative = authoritative
     }
 
@@ -219,6 +234,11 @@ public struct MirrorIndex: Sendable, PinnableIndex {
         guard let at = position(of: folderPath), let slot = slots[at] else { return [] }
         return entries[(at + 1)..<slot.end].filter { !$0.isFolder }
     }
+
+    /// Every folder, the drive itself ("") first, then depth-first in
+    /// listing order: for walking the whole tree, as the onyxfs bridge does
+    /// to tell which listings two indexes disagree on.
+    public var allFolders: [MirrorEntry] { folderPositions.map { entries[$0] } }
 
     /// A path as the index keys it: no leading, trailing or doubled slashes.
     /// Nil if any segment is "." or "..".

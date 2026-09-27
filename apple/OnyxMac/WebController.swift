@@ -227,7 +227,7 @@ final class WebController: NSObject, ObservableObject {
         guard let model else { return [:] }
         var states: [String: Any] = [:]
         for scope in [SyncDomain.library] + model.finderDrives.map({ SyncDomain.drive(id: $0.id) }) {
-            switch model.finder.mounts.state(of: scope) {
+            switch model.finder.mountState(of: scope) {
             case .mounting?: states[scope.identifier] = ["state": "mounting"]
             case .mounted?: states[scope.identifier] = ["state": "mounted"]
             case let .failed(message)?: states[scope.identifier] = ["state": "failed", "message": message]

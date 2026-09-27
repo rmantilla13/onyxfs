@@ -103,6 +103,15 @@ public struct Filespace: Codable, Sendable, Identifiable, Equatable, Hashable {
 
     public var isMember: Bool { member ?? true }
 
+    /// Whether this account may add files to the drive, as far as the app
+    /// can tell: an editor or owner (an admin is listed as owner). The
+    /// server caps `role` at what the platform role allows, but does not say
+    /// whether that role may upload at all (`files.upload`), so a custom role
+    /// that may not reads as able to here — and the server refuses its
+    /// writes, as it re-checks every one. Decides what the Mac offers, never
+    /// what is allowed.
+    public var mayAddFiles: Bool { role == "editor" || role == "owner" }
+
     public init(id: String, name: String, bucket: String? = nil, prefix: String? = nil,
                 region: String? = nil, role: String? = nil, member: Bool? = nil) {
         self.id = id; self.name = name; self.bucket = bucket; self.prefix = prefix

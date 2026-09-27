@@ -55,9 +55,24 @@ final class DriveService: ObservableObject {
     @Published private(set) var relocationProblem: String?
 
     let mounts = MountManager()
+    /// Drives as disks of their own (onyxfs): a DiskMounter on macOS 27,
+    /// kept untyped because the type does not exist before it. `disks`
+    /// (DriveService+Disks) is the typed way in.
+    var diskMounter: AnyObject?
+    /// Files copied onto a drive in Finder, on their way to the server —
+    /// this account's, opened at sign-in.
+    var uploads: UploadQueue?
+    /// One per drive with a disk: Finder's changes, made on the server.
+    var writers: [String: DriveWriter] = [:]
+    @Published var uploadSummary = UploadSummary()
+    /// Moves the menu's upload percentage while something is on its way.
+    var uploadTicker: Task<Void, Never>?
     private let server = DAVServer()
     private var mirrors: [String: DriveMirror] = [:]
     private var names: [String: String] = [:]
+    /// Drives the bridge answers the onyxfs extension for (mounted as disks,
+    /// or on their way): their mirrors are kept current like a mounted drive's.
+    private var onyxfsScopes: Set<String> = []
     /// The signed-in account's pin store. The mounts read it from the
     /// bridge's own threads, and it may open after they start — when its
     /// disk was not connected at launch — so they look it up each time.
@@ -83,9 +98,10 @@ final class DriveService: ObservableObject {
     /// Scopes being reconciled; true when another pass is wanted after.
     private var reconciling: [String: Bool] = [:]
     private var timer: Timer?
-    private weak var model: AppModel?
+    weak var model: AppModel?
     private let defaults = UserDefaults.standard
     private var forwarding: AnyCancellable?
+    var diskForwarding: AnyCancellable?
 
     private enum Keys {
         static let root = "cache.root"
@@ -102,12 +118,8 @@ final class DriveService: ObservableObject {
         // A mount finishing or failing changes what this reports too (the
         // menu bar icon, Settings), so its changes are passed on.
         forwarding = mounts.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
-        mounts.onEjected = { [weak self] scope in
-            guard let self else { return }
-            wantMounted.remove(scope.identifier)
-            defaults.set(Array(wantMounted), forKey: Keys.mounted)
-            model?.web.publishOfflineState()
-        }
+        setUpDisks()
+        mounts.onEjected = { [weak self] scope in self?.forgetWanted(scope) }
     }
 
     /// ~/Library/Application Support/Onyx/Offline: not Caches, which macOS
@@ -185,11 +197,14 @@ final class DriveService: ObservableObject {
         openPins()
         await refreshPins()
         guard started == generation else { return }
+        openUploads(account: account, server: model.config.baseURL)
         active = started
         await mountWanted()
         guard started == generation else { return }
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+        // Every 5 s: a mounted drive is to show what the web shows, and a
+        // delta pass with nothing new is one small request.
+        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { await self?.tick() }
         }
         Task { await tick() }
@@ -204,7 +219,11 @@ final class DriveService: ObservableObject {
         timer?.invalidate()
         timer = nil
         mounts.unmountAllNow()
+        stopDisks()
         for key in mirrors.keys { server.setRoute(MountManager.remoteName(SyncDomain(identifier: key)!), nil) }
+        // Nothing more answered for any disk, whatever is still mounted.
+        server.fs.endAll()
+        onyxfsScopes = []
         mirrors.removeAll()
         // The account's downloads stop now, rather than carry on under the
         // next sign-in's token. The store stays open for the run (`stores`):
@@ -222,13 +241,25 @@ final class DriveService: ObservableObject {
 
     func quit() {
         mounts.unmountAllNow()
+        disksUnmountAllNow()
     }
 
     // MARK: - Mounting
 
     func isMounted(_ scope: SyncDomain) -> Bool {
-        if case .mounted = mounts.state(of: scope) { return true }
+        if case .mounted = mountState(of: scope) { return true }
         return false
+    }
+
+    /// How a drive's mount is doing — as a disk or in ~/Onyx, whichever it
+    /// is. What the menus, Settings and the page show.
+    func mountState(of scope: SyncDomain) -> MountManager.State? {
+        diskState(of: scope) ?? mounts.state(of: scope)
+    }
+
+    /// Every drive's, disks and mounts together (the menu bar's count).
+    var allMountStates: [MountManager.State] {
+        Array(mounts.states.values) + diskStates
     }
 
     func setMounted(_ scope: SyncDomain, name: String, _ on: Bool) async {
@@ -238,6 +269,7 @@ final class DriveService: ObservableObject {
         } else {
             wantMounted.remove(scope.identifier)
             await mounts.unmount(scope)
+            await diskUnmount(scope)
         }
         defaults.set(Array(wantMounted), forKey: Keys.mounted)
     }
@@ -252,11 +284,11 @@ final class DriveService: ObservableObject {
         let started = generation
         for drive in model.finderDrives {
             let scope = SyncDomain.drive(id: drive.id)
-            guard wantMounted.contains(scope.identifier), mounts.state(of: scope) == nil else { continue }
+            guard wantMounted.contains(scope.identifier), mountState(of: scope) == nil else { continue }
             await mount(scope, name: drive.name)
             guard started == generation else { return }
         }
-        if wantMounted.contains(SyncDomain.library.identifier), mounts.state(of: .library) == nil {
+        if wantMounted.contains(SyncDomain.library.identifier), mountState(of: .library) == nil {
             await mount(.library, name: MountFolder.library)
         }
     }
@@ -270,6 +302,8 @@ final class DriveService: ObservableObject {
         server.setRoute(segment, DAVResponder(source: MountSource(scope: scope.identifier, mirror: mirror,
                                                                   pins: currentPins),
                                              bearerToken: server.token, hrefPrefix: "/\(segment)"))
+        // As a disk of its own when this Mac can (onyxfs); in ~/Onyx otherwise.
+        if await mountAsDisk(scope, name: name, mirror: mirror) { return }
         guard let bridge = server.baseURL(for: segment) else { return }
         await mounts.mount(scope, name: name, bridge: bridge, token: server.token,
                            cache: streamingCache, cacheLimitGB: cacheLimitGB, logs: Self.logsDirectory)
@@ -284,7 +318,111 @@ final class DriveService: ObservableObject {
             : streamingDirectory
     }
 
-    func reveal(_ scope: SyncDomain) { mounts.reveal(scope) }
+    /// Ejected in Finder, or unmounted by something other than Onyx: the
+    /// drive is no longer wanted there.
+    func forgetWanted(_ scope: SyncDomain) {
+        wantMounted.remove(scope.identifier)
+        defaults.set(Array(wantMounted), forKey: Keys.mounted)
+        model?.web.publishOfflineState()
+    }
+
+    /// The mirror a drive's writes are checked against (opened if it is not).
+    func mirrorForWrites(_ scope: SyncDomain) async -> DriveMirror? {
+        if let open = mirrors[scope.identifier] { return open }
+        return await mirror(for: scope, name: names[scope.identifier] ?? scope.identifier)
+    }
+
+    /// After a change Finder made: the drive's mirror now, not at the next
+    /// tick, so the next listing already shows it.
+    func syncForWrites(_ scope: SyncDomain) async {
+        guard let mirror = mirrors[scope.identifier] else { return }
+        _ = try? await mirror.sync()
+        await writers[scope.identifier]?.mirrorChanged()
+    }
+
+    func reveal(_ scope: SyncDomain) {
+        if diskState(of: scope) != nil { diskReveal(scope) } else { mounts.reveal(scope) }
+    }
+
+    // MARK: - onyxfs: drives as disks
+
+    /// For DiskMounter: what FSKit mounts `scope` from as a disk of its own,
+    /// `onyxfs-drive://127.0.0.1:<port>/<scope>?ticket=<t>&name=<name>&v=1`.
+    ///
+    /// Starts the bridge if need be, and has it answer the onyxfs extension
+    /// for the drive from the same mirror and offline copies the NFS mounts
+    /// read (MirrorFSSource), its mirror kept current by the tick. Then
+    /// issues a ticket for this one mount: one exchange, within two minutes
+    /// (FSSessions), so ask again for every mount — a remount after the app
+    /// restarts included, as sessions end with the app.
+    ///
+    /// Throws while no one is signed in (or the account is not known yet),
+    /// and for a drive this account's drive list does not have.
+    func onyxfsResourceURL(for scope: SyncDomain) async throws -> URL {
+        guard let model, model.phase == .signedIn, active == generation else { throw OnyxfsMountError.notSignedIn }
+        let name: String
+        switch scope {
+        case .library:
+            name = MountFolder.library
+        case let .drive(id):
+            guard let drive = model.finderDrives.first(where: { $0.id == id }) else { throw OnyxfsMountError.noSuchDrive }
+            name = drive.name
+        }
+        let started = generation
+        let port = try await server.start()
+        guard let mirror = await mirror(for: scope, name: name), started == generation else {
+            throw OnyxfsMountError.notSignedIn
+        }
+        let id = scope.identifier
+        // One responder per drive, for as long as its mirror lasts: stop()
+        // and driveGone() end it with the mirror.
+        if server.fs.responder(for: id) == nil {
+            // Finder's changes go through the drive's writer (to the server,
+            // as the web's own), and what it has not sent yet is laid over
+            // the mirror so it shows at once.
+            let writer = await writer(for: scope)
+            let overlay: (@Sendable () async -> (FSOverlay, UInt64))? = writer.map { w in { @Sendable in await w.overlay() } }
+            let source = MirrorFSSource(scope: id, mirror: mirror, pins: { [currentPins] in currentPins.withLock { $0 } },
+                                        volume: { [weak self] in
+                                            await self?.onyxfsVolume(scope)
+                                                ?? FSVolumeInfo(name: name, readOnly: true, cacheLimitBytes: 0)
+                                        },
+                                        overlay: overlay)
+            server.fs.register(FSResponder(scope: id, source: source))
+            server.fs.setWriter(writer, for: id)
+        }
+        onyxfsScopes.insert(id)
+        let ticket = server.fs.sessions.issueTicket(for: id)
+        return FSBridge.resourceURL(port: port, scope: id, ticket: ticket, name: name)
+    }
+
+    /// For DiskMounter, once the disk is unmounted, or its mount failed: the
+    /// drive's sessions end, so its extension — or anything that learned a
+    /// key — reads nothing more, and its unspent tickets go too.
+    func endOnyxfsSessions(for scope: SyncDomain) {
+        server.fs.end(scope: scope.identifier)
+        onyxfsScopes.remove(scope.identifier)
+    }
+
+    /// The disk's name and figures, asked for afresh by `/fs/v1/volume`.
+    ///
+    /// Writable only when this account may add to the drive: an editor or
+    /// owner (Filespace.mayAddFiles). The drive list does not say whether
+    /// the account's role may upload at all (`files.upload`), and nothing
+    /// says so of the library — which the web lets anyone who may upload add
+    /// to — so the library is writable for an admin only. The server checks
+    /// every write again whatever this says.
+    private func onyxfsVolume(_ scope: SyncDomain) -> FSVolumeInfo {
+        let limit = Int64(max(0, cacheLimitGB)) << 30
+        switch scope {
+        case .library:
+            return FSVolumeInfo(name: MountFolder.library, readOnly: !(model?.isAdmin ?? false), cacheLimitBytes: limit)
+        case let .drive(id):
+            let drive = model?.drives.first { $0.id == id }
+            return FSVolumeInfo(name: drive?.name ?? names[scope.identifier] ?? id,
+                                readOnly: !(drive?.mayAddFiles ?? false), cacheLimitBytes: limit)
+        }
+    }
 
     // MARK: - Mirrors
 
@@ -348,12 +486,15 @@ final class DriveService: ObservableObject {
         let id = scope.identifier
         let started = generation
         appLog.info("drive: \(id, privacy: .public) is no longer available to this account; removing it")
-        // Nothing more is answered for it, first.
+        // Nothing more is answered for it, first — to rclone or to a disk.
         server.setRoute(MountManager.remoteName(scope), nil)
+        server.fs.end(scope: id)
+        onyxfsScopes.remove(id)
         mirrors[id] = nil
         names[id] = nil
         if wantMounted.remove(id) != nil { defaults.set(Array(wantMounted), forKey: Keys.mounted) }
         await mounts.unmount(scope)
+        await diskUnmount(scope)
         guard started == generation else { return }
         if let pins { await pins.removeAll(scope: id) }
         guard started == generation else { return }
@@ -401,11 +542,14 @@ final class DriveService: ObservableObject {
         }
         let pinnedScopes = Set(pinRules.map(\.scope))
         var gone: Set<String> = []
-        for (id, mirror) in mirrors where wantMounted.contains(id) || pinnedScopes.contains(id) {
+        for (id, mirror) in mirrors where wantMounted.contains(id) || pinnedScopes.contains(id) || onyxfsScopes.contains(id) {
             guard started == generation else { return }
             syncing.insert(id)
             do {
                 _ = try await mirror.sync()
+                // Files this Mac uploaded that the mirror now shows stop
+                // being pending, and their staged copies go.
+                await writers[id]?.mirrorChanged()
                 if isOffline {
                     isOffline = false
                     // Back: what failed for want of a network is tried now,
@@ -741,6 +885,22 @@ final class DriveService: ObservableObject {
             total += Int64((try? file.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize ?? 0)
         }
         return total
+    }
+}
+
+/// Why a drive cannot be mounted as a disk now (DriveService.onyxfsResourceURL).
+enum OnyxfsMountError: LocalizedError {
+    /// Signed out, or the account not known yet: a drive's mirror and the
+    /// files kept offline are one account's.
+    case notSignedIn
+    /// Not among the drives this account may open.
+    case noSuchDrive
+
+    var errorDescription: String? {
+        switch self {
+        case .notSignedIn: return "Sign in to Onyx to mount drives."
+        case .noSuchDrive: return "This drive is not available to your account."
+        }
     }
 }
 
