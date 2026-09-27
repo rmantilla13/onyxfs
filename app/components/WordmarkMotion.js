@@ -3,7 +3,8 @@
 import { useEffect } from 'react';
 
 /**
- * The wordmark's light (OnyxWordmark) holds still while someone is working —
+ * The wordmark's light (OnyxWordmark) sweeps once, as the page arrives
+ * (globals.css); during that sweep it holds still while someone is working —
  * pointing, pressing, typing, scrolling — and moves again two seconds after
  * they stop.
  * A running animation keeps the compositor producing a frame every vsync,

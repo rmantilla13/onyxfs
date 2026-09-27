@@ -125,6 +125,11 @@ html, body {
 /* The paper is the canvas (html). body stays transparent: its own background
    would paint OVER the aura layer below, which sits at z-index -1. */
 html { background: var(--paper); }
+/* A scrollbar that comes and goes (a mouse attached, or "Always" in System
+   Settings) keeps its room either way, so the page never shifts sideways when
+   a listing grows past the window or shrinks back. Overlay scrollbars take no
+   room, so this changes nothing for them. */
+html { scrollbar-gutter: stable; }
 body { background: transparent; }
 
 h1, h2, h3, h4 {
@@ -497,7 +502,11 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   background: linear-gradient(90deg,
     var(--aura-a) 0%, var(--aura-b) 16.667%, var(--aura-c) 33.333%,
     var(--aura-a) 50%, var(--aura-b) 66.667%, var(--aura-c) 83.333%, var(--aura-a) 100%);
-  animation: onyx-fs-sweep 7s linear infinite;
+  /* Once, as the page arrives — never on its own after that. A running
+     animation has the compositor draw a frame every vsync: left looping, it
+     kept an idle Onyx for Mac waking about 340 times a second (and a browser
+     tab doing the same). */
+  animation: onyx-fs-sweep 7s linear 1;
   will-change: transform;
 }
 @keyframes onyx-fs-sweep {
@@ -780,7 +789,12 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 .files-sidebar {
   position: sticky; top: calc(var(--topnav-h) + var(--s4));
   max-height: calc(100dvh - var(--topnav-h) - var(--s5));
-  overflow-y: auto; overscroll-behavior: contain;
+  /* Down only. overflow-y alone lets it scroll sideways too, and a classic
+     scrollbar's 15px, taken from a 220px column, pushed rows that fitted
+     exactly past its edge: a second, horizontal bar. The gutter keeps that
+     room whether or not the bar shows, so nothing moves when it appears. */
+  overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable;
+  overscroll-behavior: contain;
   padding-top: 10px;
 }
 .side-section { margin-bottom: var(--s5); }
@@ -938,6 +952,11 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 }
 .folder-link.active { background: color-mix(in srgb, var(--ink) 6%, transparent); font-weight: 600; }
 .folder-row { display: flex; align-items: center; padding-left: calc(var(--depth, 0) * var(--s3)); }
+/* Beside its toggle a row's link takes what is left, not 100% of the row, and
+   a long name ends in an ellipsis rather than widening the sidebar. */
+.folder-row > .folder-link { flex: 1 1 auto; width: auto; min-width: 0; }
+.folder-link .folder-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-link .folder-count { flex: none; }
 .folder-toggle {
   flex: 0 0 16px;
   align-self: stretch;
@@ -1258,16 +1277,20 @@ select.input.cell-input { padding-right: 2px; }
 
 
 /* A strip that scrolls sideways on a phone, bleeding to the screen edge so
-   the last chip is cut off rather than the strip looking finished. */
-.edge-scroll {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-  margin: 0 -16px;
-  padding: 0 16px;
+   the last chip is cut off rather than the strip looking finished. Only on a
+   phone: wider, the same lists stand in the sidebar, where the bleed took
+   16px past each of its edges and gave it a sideways scrollbar. */
+@media (max-width: 720px) {
+  .edge-scroll {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    margin: 0 -16px;
+    padding: 0 16px;
+  }
+  .edge-scroll::-webkit-scrollbar { display: none; }
 }
-.edge-scroll::-webkit-scrollbar { display: none; }
 
 /* ── Menus: choices, icons, groups ─────────────────────────────────────────
    A dropdown item may carry an icon, a hint (a shortcut, a drive's name) and,
@@ -1406,7 +1429,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   background: var(--surface);
 }
 .colview.is-pending .col.is-current { opacity: var(--pending-opacity, 0.55); transition: opacity var(--dur-2) var(--ease) 150ms; }
-.col { flex: none; display: flex; flex-direction: column; gap: 1px; height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: var(--s1); border-right: 1px solid var(--line); }
+.col { flex: none; display: flex; flex-direction: column; gap: 1px; height: 100%; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; overscroll-behavior: contain; padding: var(--s1); border-right: 1px solid var(--line); }
 .col > .folder-drop { flex: none; }
 .col-row {
   display: flex; align-items: center; gap: var(--s2); flex: none;
