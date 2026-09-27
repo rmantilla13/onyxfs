@@ -1681,6 +1681,14 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 }
 .drive-icon.is-library { color: var(--ink); background: var(--surface-sunken); }
 .drive-row.is-active .drive-icon { color: var(--on-aura); background: linear-gradient(135deg, var(--aura-a-deep), var(--aura-b-deep)); }
+/* An open drive keeps its own colour, only stronger: the dot beside its name
+   on the page is that colour, and the aura (the library's, the accent) would
+   make the two disagree. The row's wash already says which one is open. */
+.drive-row.is-active .drive-icon:not(.is-library) {
+  color: color-mix(in srgb, var(--drive) 70%, var(--ink));
+  background: color-mix(in srgb, var(--drive) 28%, var(--surface));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--drive) 50%, transparent);
+}
 .drive-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .drive-name { font-size: var(--t-sm); font-weight: 500; }
 .drive-row.is-active .drive-name { font-weight: 600; }
