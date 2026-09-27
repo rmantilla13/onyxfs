@@ -90,8 +90,9 @@ test('folders: rename moves files, rows and grants in one go', { skip }, async (
 
 test('folders: a rename that cannot commit changes nothing', { skip }, async () => {
   const x = await file(`${T}/Keep`, `files/${T}/Keep/x.txt`);
-  // Landing on a row that already exists breaks the primary key, so the one
-  // statement fails and the file stays where it was.
+  // Landing on a row that already exists in the same scope breaks its unique
+  // key (scope, name), so the one statement fails and the file stays where
+  // it was.
   await db.createFolder(`${T}/Keep/Sub`, {});
   await db.createFolder(`${T}/Taken/Sub`, {});
   await assert.rejects(db.renameFolder(`${T}/Keep`, `${T}/Taken`, {

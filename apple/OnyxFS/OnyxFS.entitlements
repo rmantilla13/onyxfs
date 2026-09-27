@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- An FSKit module is an app extension, and runs sandboxed. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- Marks this extension as a file system. Restricted: granted by the
+	     OnyxFS provisioning profile (apple/.signing, apple/README.md). -->
+	<key>com.apple.developer.fskit.fsmodule</key>
+	<true/>
+	<!-- The app's bridge on 127.0.0.1, and storage for the bytes. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>

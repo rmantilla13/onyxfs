@@ -2,8 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getStorageConfig, s3PresignPut, s3PresignSiblingPut, storageMode, cfgForFilespace, buildObjectKey } from '@/lib/storage';
 import { isThumbKey, thumbSiblingKey, thumbSizesFrom, PREVIEW_CACHE_CONTROL } from '@/lib/media';
-import { getFilespaceForWrite, issueUploadKey } from '@/lib/db';
+import { getFilespaceForWrite, issueUploadKey, uploadKeyHeld } from '@/lib/db';
 import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
+import { replacementTarget, replacementKey } from '@/lib/replace-content';
 
 export const runtime = 'nodejs';
 
@@ -11,6 +12,7 @@ const THUMB_CACHE_CONTROL = PREVIEW_CACHE_CONTROL;
 
 /**
  * POST /api/files/presign  Body: { filename, contentType, size, folder, filespaceId?, thumb?, sizes?, poster?, strip? }
+ *                                 or { replaceOf, contentType, size } — new contents for a file
  * Returns { putUrl, publicUrl, key } for a direct browser → custom-bucket PUT,
  * plus `cacheControl` for a preview (thumbnail, player poster or filmstrip),
  * which the PUT must send. A thumbnail with `sizes` (['sm', 'xs']) also gets
@@ -24,9 +26,19 @@ const THUMB_CACHE_CONTROL = PREVIEW_CACHE_CONTROL;
  * again against the size that actually landed. A thumbnail, player poster or
  * filmstrip needs a role that can add or change files, and no size —
  * previews are not counted against anyone.
+ *
+ * `replaceOf: <file id>` asks for a PUT of new contents for that file
+ * (lib/replace-content.js): the key is beside the file's current object, in
+ * its own folder and drive — `filename`, `folder` and `filespaceId` are not
+ * read — and it is issued for that file alone, to be swapped in by POST
+ * /api/files/[id]/content. The quota counts only what the file grows by.
+ * The answer's `name` is then the file's own, which a replacement keeps.
+ *
+ * Takes the browser's session or Onyx for Mac's bearer token
+ * (requirePrincipal(req)).
  */
 export async function POST(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
 
@@ -47,7 +59,19 @@ export async function POST(req) {
   let filename = body.filename;
   let contentType = body.contentType;
   let cacheControl;
-  if (body.strip) {
+  let replacing = null;
+  if (body.replaceOf != null) {
+    if (body.thumb || body.poster || body.strip) {
+      return NextResponse.json({ error: 'New contents are a file, not a preview.' }, { status: 400 });
+    }
+    // files.edit, write access to the file and to its drive, found from the
+    // file's key rather than from anything sent.
+    replacing = await replacementTarget(principal, body.replaceOf);
+    if (replacing.error) return replacing.error;
+    scoped = replacing.cfg;
+    filename = replacing.file.name;
+    folder = undefined;
+  } else if (body.strip) {
     // A hover-scrub sprite sheet. WebP only: the sheet is 40 tiles, and JPEG
     // costs roughly three times the bytes for the same result.
     if (contentType !== 'image/webp') {
@@ -95,13 +119,26 @@ export async function POST(req) {
     if (body.size == null || body.size === '' || !Number.isFinite(size) || size < 0) {
       return NextResponse.json({ error: 'The upload needs its size in bytes.' }, { status: 400 });
     }
-    const d = await uploadCheck(principal, { key: buildObjectKey(scoped, filename, folder), size });
+    // New contents are held to the drive the file is in (theirs land in the
+    // same folder), and count only what they add to the file's size.
+    const d = await uploadCheck(principal, {
+      key: replacing ? replacing.file.storageKey : buildObjectKey(scoped, filename, folder),
+      size,
+      replaces: replacing ? replacing.file.size : null,
+    });
     if (!d.ok) return refusal(d);
+    if (replacing) replacing.key = await replacementKey(scoped, replacing.file, { by: email });
   }
 
   let out;
   try {
-    out = await s3PresignPut(scoped, { filename, contentType, folder, cacheControl });
+    // A file's key also passes over one another upload in flight holds
+    // (lib/db.js uploadKeyHeld): the bucket cannot see a PUT that has not
+    // landed. A preview's is a fresh uuid, and needs nothing.
+    const held = body.thumb || body.poster || body.strip
+      ? null
+      : (k) => uploadKeyHeld(k, { by: email }).catch(() => false);
+    out = await s3PresignPut(scoped, { filename, contentType, folder, cacheControl, key: replacing?.key || null, held });
     // The grid thumbnail's siblings, named from the key just made — never
     // from anything the client sent — and so under _thumbs/ with it.
     const sizes = body.thumb && !body.poster ? thumbSizesFrom(body.sizes) : null;
@@ -118,13 +155,18 @@ export async function POST(req) {
   }
   if (!body.thumb && !body.poster && !body.strip) {
     // The key is this person's to record as a file (POST /api/files takes
-    // only an issued key), and nobody else's. Unrecorded, the upload could
-    // not be added to the library, so fail now rather than after the bytes.
-    try { await issueUploadKey(out.key, email, { bucket: scoped.bucket }); } catch (e) {
+    // only an issued key), and nobody else's — or, for new contents, theirs
+    // to swap into that one file and nothing else. Unrecorded, the upload
+    // could not be added to the library, so fail now rather than after the
+    // bytes.
+    try {
+      await issueUploadKey(out.key, email, { bucket: scoped.bucket, replaceOf: replacing?.file.id || null });
+    } catch (e) {
       console.warn('[presign] could not record the issued key:', e.message);
       return NextResponse.json({ error: 'Could not start the upload. Try again.' }, { status: 503 });
     }
   }
+  if (replacing) out = { ...out, name: replacing.file.name, replaceOf: replacing.file.id };
   // S3 stores whatever Cache-Control the PUT carries, so the browser sends this.
   return NextResponse.json(cacheControl ? { ...out, cacheControl } : out);
 }

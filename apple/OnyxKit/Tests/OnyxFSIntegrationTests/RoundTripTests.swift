@@ -1,0 +1,324 @@
+import Foundation
+import Testing
+@testable import OnyxFSCore
+@testable import OnyxKit
+
+/// A drive mounted end to end, minus FSKit and the socket: the extension's
+/// engine (DriveEngine over ClientBridge, FSBridgeClient, FileReader and a
+/// ChunkStore) talking to the app's bridge (FSBridge, FSResponder), with a
+/// pretend drive and server behind it. Each half has tests of its own
+/// against its reading of ONYXFS.md; these are where the two readings meet.
+@Suite struct RoundTripTests {
+    static let scope = "drive.d1"
+
+    @Test func aMountedDriveListsReadsAndStreams() async throws {
+        let server = Server()
+        let take = Pattern.bytes(3 << 20)
+        try await server.add("/Footage/Take 1.mov", take)
+        let readme = try await server.add("/Readme.md", Data("hello".utf8))
+        let mount = try await Mount(server)
+        defer { mount.remove() }
+        // Kept offline on this Mac: read from its copy there, through the app
+        // (bytes of its own here, so a read from storage would show).
+        try await mount.drive.keep(readme, Data("local".utf8), in: mount.dir)
+
+        let engine = mount.engine
+        let top = try await engine.children(of: DriveEngine.rootID)
+        #expect(Set(top.map(\.name)) == ["Footage", "Readme.md", ".metadata_never_index", "com.apple.timemachine.donotpresent"])
+        let footage = try await engine.lookup("footage", in: DriveEngine.rootID)
+        let file = try await engine.lookup("TAKE 1.MOV", in: footage.id)
+        #expect(file.size == UInt64(take.count))
+
+        // Read as a player does: a megabyte at a time, from storage by link.
+        var read = Data()
+        while read.count < take.count {
+            read.append(try await engine.read(file.id, at: Int64(read.count), count: 1 << 20))
+        }
+        #expect(read == take)
+        let local = try await engine.lookup("Readme.md", in: DriveEngine.rootID)
+        #expect(try await engine.read(local.id, at: 0, count: 100) == Data("local".utf8))
+    }
+
+    @Test func findersChangesReachTheServerAndComeBack() async throws {
+        let server = Server()
+        let readme = try await server.add("/Readme.md", Data("version one".utf8))
+        let mount = try await Mount(server)
+        defer { mount.remove() }
+        let engine = mount.engine
+
+        // Copied in.
+        let cut = try await engine.create("Cut.mov", in: DriveEngine.rootID, isDirectory: false)
+        try await engine.beginWriting(cut.id, truncating: false)
+        _ = try await engine.write(cut.id, at: 0, data: Data("hello ".utf8))
+        _ = try await engine.write(cut.id, at: 6, data: Data("world".utf8))
+        try await engine.finishWriting(cut.id)
+        #expect(await server.calls == ["write /Cut.mov 11"])
+        #expect(try await engine.read(cut.id, at: 0, count: 50) == Data("hello world".utf8))
+
+        // Saved over: the same file on the server, new bytes.
+        let doc = try await engine.lookup("Readme.md", in: DriveEngine.rootID)
+        try await engine.beginWriting(doc.id, truncating: true)
+        _ = try await engine.write(doc.id, at: 0, data: Data("v2".utf8))
+        try await engine.finishWriting(doc.id)
+        #expect(await server.calls.last == "write /Readme.md 2")
+        #expect(await server.file(at: "/Readme.md")?.id == readme)
+        #expect(try await engine.read(doc.id, at: 0, count: 50) == Data("v2".utf8))
+
+        // A folder, a move into it, a delete.
+        let selects = try await engine.create("Selects", in: DriveEngine.rootID, isDirectory: true)
+        _ = try await engine.rename(cut.id, from: DriveEngine.rootID, name: "Cut.mov", to: selects.id,
+                                    newName: "Cut.mov", replacing: nil)
+        try await engine.remove(doc.id, name: "Readme.md", from: DriveEngine.rootID)
+        #expect(await server.calls.suffix(3) == ["mkdir /Selects", "move /Cut.mov -> /Selects/Cut.mov", "remove /Readme.md"])
+        #expect(try await engine.children(of: selects.id).map(\.name) == ["Cut.mov"])
+        #expect(try await engine.read(cut.id, at: 6, count: 50) == Data("world".utf8))
+    }
+
+    /// A viewer's drive: the engine refuses before asking, and the bridge
+    /// refuses whoever asks anyway.
+    @Test func aViewersDriveIsReadOnlyAllTheWay() async throws {
+        let server = Server()
+        try await server.add("/Readme.md", Data("hello".utf8))
+        let mount = try await Mount(server, readOnly: true)
+        defer { mount.remove() }
+        #expect(await mount.engine.readOnly)
+        await #expect(throws: VolumeError.posix(EACCES)) {
+            _ = try await mount.engine.create("x.txt", in: DriveEngine.rootID, isDirectory: false)
+        }
+        await #expect(throws: BridgeFailure.self) { _ = try await mount.bridge.mkdir("/Selects") }
+        #expect(await server.calls.isEmpty)
+    }
+
+    @Test func aChangeOnTheWebReachesTheEngine() async throws {
+        let server = Server()
+        try await server.add("/Footage/a.mov", Data([1]))
+        let mount = try await Mount(server)
+        defer { mount.remove() }
+        let engine = mount.engine
+        let footage = try await engine.lookup("Footage", in: DriveEngine.rootID)
+        #expect(try await engine.children(of: footage.id).map(\.name) == ["a.mov"])
+        let heard = Heard()
+        await engine.observeChanges { ids, all in Task { await heard.add(ids, all) } }
+        try await Task.sleep(for: .milliseconds(50)) // the long poll is waiting
+        try await server.add("/Footage/b.mov", Data([2]))
+        for _ in 0..<400 where await !heard.ids.contains(footage.id) { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(await heard.ids.contains(footage.id))
+        #expect(try await engine.children(of: footage.id).map(\.name) == ["a.mov", "b.mov"])
+        await engine.shutdown()
+    }
+
+    /// Unmounted by the app (or the app quit): the engine's calls fail
+    /// rather than hang, and nothing is shown that was not there.
+    @Test func anUnmountedDriveAnswersNoMore() async throws {
+        let server = Server()
+        try await server.add("/Footage/a.mov", Data([1]))
+        let mount = try await Mount(server)
+        defer { mount.remove() }
+        mount.app.end(scope: Self.scope)
+        await #expect(throws: BridgeFailure.disconnected) { _ = try await mount.bridge.list("/Footage") }
+        await #expect(throws: VolumeError.self) { _ = try await mount.engine.lookup("Footage", in: DriveEngine.rootID) }
+    }
+}
+
+// MARK: - The pieces
+
+/// One drive mounted: the app's bridge serving `server`'s drive, and the
+/// extension's engine connected to it with a real ticket.
+struct Mount {
+    let app: FSBridge
+    let drive: Drive
+    let bridge: ClientBridge
+    let engine: DriveEngine
+    let dir: URL
+    let port: Int
+
+    init(_ server: Server, readOnly: Bool = false) async throws {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("onyxfs-rt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        drive = Drive(readOnly: readOnly)
+        await server.attach(drive)
+        app = FSBridge()
+        app.register(FSResponder(scope: RoundTripTests.scope, source: drive, firstGeneration: 1_000))
+        app.setWriter(server, for: RoundTripTests.scope)
+        port = Loopback.serve(app, spool: dir.appendingPathComponent("spool"))
+
+        let ticket = app.sessions.issueTicket(for: RoundTripTests.scope)
+        let url = URL(string: "onyxfs-drive://127.0.0.1:\(port)/\(RoundTripTests.scope)?ticket=\(ticket)&name=Client%20Deliverables&v=1")!
+        let client = try await FSBridgeClient.connect(to: try FSMountResource(url: url), configuration: Loopback.configuration)
+        let store = try ChunkStore(directory: dir.appendingPathComponent("chunks"), limitBytes: client.session.cacheLimitBytes)
+        bridge = ClientBridge(client: client, store: store)
+        engine = DriveEngine(bridge: bridge, volume: bridge.initialVolume,
+                             staging: try StagingArea(directory: dir.appendingPathComponent("staging")),
+                             local: try LocalStore(directory: dir.appendingPathComponent("local")))
+    }
+
+    func remove() {
+        Loopback.stop(port)
+        try? FileManager.default.removeItem(at: dir)
+    }
+}
+
+/// The drive as the app sees it (the mirror's part): what the server has,
+/// what is kept offline here, and where storage has the bytes.
+actor Drive: OnyxKit.FSSource {
+    private var revision: UInt64 = 1
+    private var index = MirrorIndex(Replica())
+    private var info: OnyxKit.FSVolumeInfo
+    private var kept: [String: URL] = [:]
+
+    init(readOnly: Bool) {
+        info = OnyxKit.FSVolumeInfo(name: "Client Deliverables", readOnly: readOnly, cacheLimitBytes: 0)
+    }
+
+    func show(_ index: MirrorIndex) {
+        self.index = index
+        revision += 1
+    }
+
+    func keep(_ id: String, _ bytes: Data, in dir: URL) throws {
+        let copy = dir.appendingPathComponent("kept-\(id)")
+        try bytes.write(to: copy)
+        kept[id] = copy
+        revision += 1
+    }
+
+    func snapshot() -> FSSnapshot { FSSnapshot(revision: revision, index: index) }
+
+    func waitForChange(after seen: UInt64, timeout: Duration) async {
+        let deadline = ContinuousClock.now + timeout
+        while revision <= seen, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+    }
+
+    func keptOffline(_ entries: [MirrorEntry]) -> Set<String> {
+        Set(entries.compactMap(\.fileId)).intersection(kept.keys)
+    }
+
+    func localCopy(of entry: MirrorEntry) -> URL? { entry.fileId.flatMap { kept[$0] } }
+
+    func remoteLink(for entry: MirrorEntry) throws -> FSRemoteLink {
+        FSRemoteLink(url: URL(string: "https://storage.test\(Server.object(entry.fileId ?? "", entry.etag ?? ""))")!,
+                     expiresAt: Date().addingTimeInterval(3_600))
+    }
+
+    func volumeInfo() -> OnyxKit.FSVolumeInfo { info }
+}
+
+/// The server, as the drive's writer reaches it: every change made at
+/// once and shown in the drive, bytes kept in storage by file and version.
+actor Server: FSWriteTarget {
+    static let t0: Int64 = 1_790_000_000_000
+    private var files: [FileItem] = []
+    private var folders: [String] = []
+    private(set) var calls: [String] = []
+    private var drive: Drive?
+    private var made = 0
+    private var clock = t0
+
+    func attach(_ drive: Drive) async {
+        self.drive = drive
+        await publish()
+    }
+
+    /// On the web: a file added (or replaced) there. Its id.
+    @discardableResult
+    func add(_ path: String, _ bytes: Data) async throws -> String {
+        let id = put(path, bytes)
+        await publish()
+        return id
+    }
+
+    func file(at path: String) -> FileItem? {
+        let (folder, name) = Self.split(path)
+        return files.first { $0.folder == folder && $0.name == name }
+    }
+
+    static func object(_ id: String, _ etag: String) -> String { "/k/\(id)/\(etag)" }
+
+    // MARK: FSWriteTarget
+
+    func write(path: String, from file: URL, modified: Date?) async throws {
+        let bytes = try Data(contentsOf: file)
+        try? FileManager.default.removeItem(at: file)
+        calls.append("write \(path) \(bytes.count)")
+        put(path, bytes)
+        await publish()
+    }
+
+    func makeFolder(path: String) async throws {
+        calls.append("mkdir \(path)")
+        folders.append(String(path.dropFirst()))
+        await publish()
+    }
+
+    func move(from: String, to: String, replace: Bool) async throws {
+        calls.append("move \(from) -> \(to)")
+        guard let moving = file(at: from) else { throw DriveWriter.Failure.posix(ENOENT, nil) }
+        if let over = file(at: to) { files.removeAll { $0.id == over.id } }
+        let bytes = Loopback.stored(Self.object(moving.id, "v\(moving.version)")) ?? Data()
+        let (folder, name) = Self.split(to)
+        clock += 1_000
+        let moved = Self.item(moving.id, name, in: folder, size: moving.size ?? 0, version: moving.version + 2, updated: clock)
+        files.removeAll { $0.id == moving.id }
+        files.append(moved)
+        Loopback.store(Self.object(moved.id, "v\(moved.version)"), bytes)
+        await publish()
+    }
+
+    func remove(path: String) async throws {
+        calls.append("remove \(path)")
+        guard let gone = file(at: path) else { throw DriveWriter.Failure.posix(ENOENT, nil) }
+        files.removeAll { $0.id == gone.id }
+        await publish()
+    }
+
+    // MARK: -
+
+    @discardableResult
+    private func put(_ path: String, _ bytes: Data) -> String {
+        let (folder, name) = Self.split(path)
+        clock += 1_000
+        let item: FileItem
+        if let old = file(at: path) {
+            item = Self.item(old.id, name, in: folder, size: Int64(bytes.count), version: old.version + 1, updated: clock)
+            files.removeAll { $0.id == old.id }
+        } else {
+            made += 1
+            item = Self.item("f\(made)", name, in: folder, size: Int64(bytes.count), version: 1, updated: clock)
+        }
+        files.append(item)
+        Loopback.store(Self.object(item.id, "v\(item.version)"), bytes)
+        return item.id
+    }
+
+    private func publish() async {
+        var replica = Replica()
+        replica.apply(changed: files, deleted: [], folders: folders)
+        await drive?.show(MirrorIndex(replica))
+    }
+
+    static func split(_ path: String) -> (folder: String, name: String) {
+        let parts = path.split(separator: "/").map(String.init)
+        return (parts.dropLast().joined(separator: "/"), parts.last ?? "")
+    }
+
+    static func item(_ id: String, _ name: String, in folder: String, size: Int64, version: Int, updated: Int64) -> FileItem {
+        FileItem(id: id, name: name, folder: folder, kind: "file", mime: nil, size: size, url: nil,
+                 storageKey: nil, thumbnailUrl: nil, tags: [], notes: nil, caption: nil, visibility: nil,
+                 version: version, contentHash: nil, createdBy: nil, createdAt: EpochMillis(updated - 1),
+                 updatedAt: EpochMillis(updated), deletedAt: nil, seq: nil)
+    }
+}
+
+actor Heard {
+    var ids: Set<UInt64> = []
+    func add(_ more: Set<UInt64>, _ all: Bool) { ids.formUnion(more) }
+}
+
+enum Pattern {
+    /// Bytes that say where they are: any byte out of place shows.
+    static func bytes(_ count: Int) -> Data {
+        Data((0..<count).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ $0 >> 8) })
+    }
+}

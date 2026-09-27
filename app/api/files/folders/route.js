@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import {
   getFilespaceForUser, getFilespaceForWrite,
-  createFolder, renameFolder, deleteFolderRows, listFolderSubtreeFiles, folderPathInUse,
-  canModifyFolder, softDeleteFile, deleteFile, listFolderRowsUnder, folderRowTag,
+  createFolder, renameFolder, deleteFolderRows, listFolderSubtreeFiles, folderPathInUse, renameSpreadsGrants,
+  canModifyFolder, softDeleteFile, deleteFile, listFolderRowsUnder,
 } from '@/lib/db';
 import { requirePrincipal, can, refusal } from '@/lib/authz';
 import {
@@ -36,10 +36,12 @@ const bad = (msg, status = 400) => NextResponse.json({ error: msg }, { status })
 /**
  * Where a folder's files live: a filespace's bucket and prefix, or the base
  * storage config for the unscoped library. `tag` is what folders.filespace
- * holds for this scope, and `driveRole` the caller's role in the drive, after
- * their platform role's ceiling — a drive's editors and owners restructure
- * its folders (only its own: folderRoleFor). Null when the filespace is not the caller's — or, with
- * `write`, when they may open it but not change it (a drive's viewer).
+ * holds for this scope — folder names are per scope, so this is also which
+ * "Selects" a request means — and `driveRole` the caller's role in the
+ * drive, after their platform role's ceiling: a drive's editors and owners
+ * restructure its folders (folderRoleFor). Null when the filespace is not
+ * the caller's — or, with `write`, when they may open it but not change it
+ * (a drive's viewer).
  */
 async function scopeFor(principal, filespaceId, { write = false } = {}) {
   const base = await getStorageConfig();
@@ -67,9 +69,13 @@ async function scopeFor(principal, filespaceId, { write = false } = {}) {
  *
  * `summary` is what the delete confirmation states: how many files and
  * folders a delete of that folder would take with it.
+ *
+ * Every method here takes the browser's session or Onyx for Mac's bearer
+ * token (requirePrincipal(req)): a new folder, a rename or move and a delete
+ * in Finder are these same calls.
  */
 export async function GET(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
   const url = new URL(req.url);
@@ -97,14 +103,17 @@ export async function GET(req) {
 }
 
 /**
- * POST /api/files/folders  { name, filespaceId? } → { folder }
+ * POST /api/files/folders  { name, filespaceId?, ensure? } → { folder }
  *
- * Create a folder path and its ancestors, empty. A role that manages
- * folders, and write access to the drive when it is in one — the bar an
- * upload into a new path has, since that creates the same folder implicitly.
+ * Create a folder path and its ancestors, empty, in this scope: another
+ * drive's folder of the same name, or the library's, is another folder. A
+ * role that manages folders, and write access to the drive when it is in one
+ * — the bar an upload into a new path has, since that creates the same
+ * folder implicitly. 201 when made; with `ensure`, 200 when it was already
+ * here; 409 otherwise.
  */
 export async function POST(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal } = g;
   const allowed = can(principal, 'folders.manage');
@@ -116,28 +125,29 @@ export async function POST(req) {
   const name = cleanFolder(body.name);
   const scope = await scopeFor(principal, body.filespaceId, { write: true });
   if (!scope) return forbidden('You can view this drive but not change it.');
-  // folders.name is the whole primary key, so a path another filespace
-  // already has cannot get a row of its own here. Say so rather than answering
-  // 201 for a folder that will not show up.
-  const tag = await folderRowTag(name);
-  if (tag !== null) {
-    const here = !scope.scoped || tag === '' || tag === scope.tag;
-    // `ensure`: the uploader making the empty directories of a dropped tree,
-    // for which "already there" is success.
-    if (here && body.ensure) return NextResponse.json({ folder: { name } });
-    return bad(here
-      ? `A folder named “${name.slice(name.lastIndexOf('/') + 1)}” already exists here.`
-      : `A folder at “${name}” already exists in another filespace, and folder names are not yet per-filespace. Choose another name.`, 409);
-  }
+  let made;
   try {
-    await createFolder(name, { createdBy: principal.email, filespace: scope.tag });
-    // A zero-byte marker so the empty folder also shows on a mounted drive.
-    // Best-effort: the catalog row is what the web shows.
-    if (scope.s3 && scope.prefix) { try { await s3PutFolderMarker(scope.cfg, name); } catch {} }
-    return NextResponse.json({ folder: { name } }, { status: 201 });
+    made = await createFolder(name, { createdBy: principal.email, filespace: scope.tag });
   } catch (e) {
     return bad(e.message || 'Create failed.', 500);
   }
+  if (!made.created) {
+    // `ensure`: the uploader making the empty directories of a dropped tree,
+    // for which "already there" is success.
+    if (made.existed && body.ensure) return NextResponse.json({ folder: { name } });
+    return bad(made.existed
+      ? `A folder named “${name.slice(name.lastIndexOf('/') + 1)}” already exists here.`
+      // Another scope has the name, and the old primary key on folder names
+      // alone still stands: only until the schema guard that drops it has
+      // run (lib/db.js ensureFoldersTable; in production, the maintenance
+      // cron or `npm run doctor`). Say so rather than answer 201 for a
+      // folder that would not show up.
+      : `A folder at “${name}” already exists in another filespace, and folder names are not yet per-filespace. Choose another name.`, 409);
+  }
+  // A zero-byte marker so the empty folder also shows on a mounted drive.
+  // Best-effort: the catalog row is what the web shows.
+  if (scope.s3 && scope.prefix) { try { await s3PutFolderMarker(scope.cfg, name); } catch {} }
+  return NextResponse.json({ folder: { name } }, { status: 201 });
 }
 
 /**
@@ -155,10 +165,12 @@ export async function POST(req) {
  *      key, which nothing points to; it is counted in `leftovers`.
  *
  * Both ends are authorized: taking the subtree out of `from` and putting it
- * at `to`, or a rename becomes a way into a folder you do not control.
+ * at `to`, or a rename becomes a way into a folder you do not control. Both
+ * are this scope's: another drive's folder of either name is not touched,
+ * and neither is the library's.
  */
 export async function PATCH(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal } = g;
   const allowed = can(principal, 'folders.manage');
@@ -177,12 +189,20 @@ export async function PATCH(req) {
   if (!scope) return forbidden('You can view this drive but not change it.');
   if (!(await canModifyFolder(from, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden();
   if (!(await canModifyFolder(to, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden('No access to the destination folder.');
-  if (await folderPathInUse(to)) {
-    return bad(`“${to}” already exists${scope.scoped ? ' (here or in another filespace)' : ''}. Choose another name, or move the files into it instead.`, 409);
+  const inScope = { tag: scope.tag, prefix: scope.scoped ? scope.prefix : null };
+  if (await folderPathInUse(to, inScope)) {
+    return bad(`“${to}” already exists. Choose another name, or move the files into it instead.`, 409);
   }
 
   const files = await listFolderSubtreeFiles(from);
   const plan = planRename({ from, to, prefix: scope.prefix, scoped: scope.scoped, files });
+  // Folder grants are keyed by the path alone, so they cannot follow the
+  // folder to a name another scope uses without reaching that scope's folder
+  // too. Rather than leave behind the access people were given, refuse, and
+  // say why (lib/db.js renameFolder has when grants follow at all).
+  if (await renameSpreadsGrants(from, to, { tag: scope.tag, outside: plan.outside.length })) {
+    return bad(`“${to}” is also a folder in another drive or in the library, and the access given on “${from}” would reach it there as well. Choose another name, or remove that access first.`, 409);
+  }
   if (plan.moves.length > MAX_RENAME_OBJECTS) {
     return bad(`This folder holds ${plan.moves.length} stored files; renaming more than ${MAX_RENAME_OBJECTS} at once is not supported yet. Move its subfolders first.`, 413);
   }
@@ -218,10 +238,14 @@ export async function PATCH(req) {
     });
   } catch (e) {
     await undo();
-    const clashMsg = /duplicate key|unique/i.test(e.message || '')
-      ? `A folder at “${to}” already exists in another filespace, and folder names are not yet per-filespace.`
-      : (e.message || 'Rename failed.');
-    return bad(`${clashMsg} Nothing was renamed.`, 500);
+    // A row landed on: this scope's own, made since the check above, or —
+    // while the old primary key on folder names alone stands — another's.
+    const clash = /duplicate key|unique/i.test(e.message || '');
+    const here = clash && (await folderPathInUse(to, inScope).catch(() => true));
+    const clashMsg = !clash ? (e.message || 'Rename failed.')
+      : here ? `A folder at “${to}” already exists here.`
+      : `A folder at “${to}” already exists in another filespace, and folder names are not yet per-filespace.`;
+    return bad(`${clashMsg} Nothing was renamed.`, clash ? 409 : 500);
   }
 
   const gone = await settleLimit(plan.moves, S3_CONCURRENCY, (m) => s3DeleteObject(scope.cfg, m.fromKey));
@@ -252,7 +276,7 @@ export async function PATCH(req) {
  * call again. The folder rows go once nothing in this scope is left.
  */
 export async function DELETE(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal, email } = g;
   // Deleting a folder trashes every file in it: both capabilities.

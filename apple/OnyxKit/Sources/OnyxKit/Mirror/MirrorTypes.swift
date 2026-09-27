@@ -5,6 +5,8 @@ import Foundation
 //   MirrorIndex / DriveMirror  what a drive holds, as the web shows it, with
 //                              paths a file system can use
 //   DAVResponder               answers rclone's WebDAV requests from that
+//   FSResponder                answers the onyxfs extension (a drive as a
+//                              disk, through FSKit) from the same
 //   PinStore                   the files kept on this Mac for offline use
 //
 // rclone mounts each drive in Finder over macOS's own NFS client and reads it
@@ -38,11 +40,18 @@ public struct MirrorEntry: Sendable, Equatable, Hashable {
     /// has one, else "v<version>". Nil for folders.
     public let etag: String?
     public let mime: String?
+    /// The server's fingerprint of the bytes (the object's ETag in storage),
+    /// when it has one. Unlike `etag`, which falls back to the row's version,
+    /// it stays put when the file is renamed or moved — which re-keys the
+    /// object and bumps the version — so a cache of the bytes keyed on it
+    /// survives a move (onyxfs, FSNode). Nil for folders.
+    public let contentHash: String?
 
     public init(kind: Kind, name: String, path: String, fileId: String?, size: Int64,
-                modified: Date, etag: String?, mime: String?) {
+                modified: Date, etag: String?, mime: String?, contentHash: String? = nil) {
         self.kind = kind; self.name = name; self.path = path; self.fileId = fileId
         self.size = size; self.modified = modified; self.etag = etag; self.mime = mime
+        self.contentHash = contentHash
     }
 
     public var isFolder: Bool { kind == .folder }

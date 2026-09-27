@@ -25,17 +25,29 @@ OUT="${OUT:-build}"
 APP="$OUT/Onyx.app"
 EXT="$APP/Contents/PlugIns/OnyxFileProvider.appex"
 WITH_EXT="${ONYX_FILE_PROVIDER:-0}"
+# The Onyx file system (onyxfs, apple/ONYXFS.md): each drive as a disk of its
+# own, on macOS 27. An ExtensionKit extension, so Contents/Extensions.
+# ONYX_ONYXFS=0 leaves it out.
+FSX="$APP/Contents/Extensions/OnyxFS.appex"
+WITH_FS="${ONYX_ONYXFS:-1}"
 # ONYX_DEV=1: "Onyx Dev" (io.onyxfs.app.dev), which keeps its own sign-in and
 # settings, so testing a build never disturbs the real Onyx on this Mac.
 BUNDLE_ID="io.onyxfs.app"; NAME="Onyx"
 [[ "${ONYX_DEV:-0}" == "1" ]] && { BUNDLE_ID="io.onyxfs.app.dev"; NAME="Onyx Dev"; }
 # `|| true`: with no profile the test fails, and under `set -e` that failed
 # assignment would end the script silently (a fresh clone has no .signing/).
-APP_PROFILE="${ONYX_APP_PROFILE:-$( [[ -f .signing/Onyx.provisionprofile ]] && echo .signing/Onyx.provisionprofile || true )}"
-EXT_PROFILE="${ONYX_EXT_PROFILE:-$( [[ -f .signing/OnyxFileProvider.provisionprofile ]] && echo .signing/OnyxFileProvider.provisionprofile || true )}"
+# A dev build has App IDs of its own (io.onyxfs.app.dev and .dev.fs), so its
+# own profiles: signing it with the real app's would name the wrong App ID,
+# and macOS would refuse to launch it.
+PROFILE_PREFIX="Onyx"; [[ "${ONYX_DEV:-0}" == "1" ]] && PROFILE_PREFIX="OnyxDev"
+profile() { [[ -f ".signing/$1.provisionprofile" ]] && echo ".signing/$1.provisionprofile" || true; }
+APP_PROFILE="${ONYX_APP_PROFILE:-$(profile "$PROFILE_PREFIX")}"
+EXT_PROFILE="${ONYX_EXT_PROFILE:-$(profile OnyxFileProvider)}"
+FS_PROFILE="${ONYX_FS_PROFILE:-$(profile "${PROFILE_PREFIX}FS")}"
 
 products=(OnyxMac)
 [[ "$WITH_EXT" == "1" ]] && products+=(OnyxFileProvider)
+[[ "$WITH_FS" == "1" ]] && products+=(OnyxFS)
 
 # ONYX_UNIVERSAL=1: Apple silicon and Intel in one binary (releases do this).
 if [[ "${ONYX_UNIVERSAL:-0}" == "1" ]]; then
@@ -93,8 +105,36 @@ if [[ "$WITH_EXT" == "1" ]]; then
   set_key "$P" LSMinimumSystemVersion string 14.0
 fi
 
+if [[ "$WITH_FS" == "1" ]]; then
+  mkdir -p "$FSX/Contents/MacOS"
+  cp "$BIN/OnyxFS" "$FSX/Contents/MacOS/OnyxFS"
+  # SwiftPM stamps each binary with the package's minimum macOS as the SDK it
+  # was built with (14.0), whatever SDK that really was. Frameworks read that
+  # stamp to decide which behaviour a program was built for, and this one is
+  # built for FSKit on macOS 27: it is stamped with what it is — this SDK, and
+  # macOS 27, all it runs on. The app keeps SwiftPM's stamp: a newer SDK
+  # would change how it looks.
+  vtool -set-build-version macos 27.0 "$(xcrun --show-sdk-version)" -replace \
+    -output "$FSX/Contents/MacOS/OnyxFS" "$FSX/Contents/MacOS/OnyxFS"
+  cp OnyxFS/Info.plist "$FSX/Contents/Info.plist"
+  P="$FSX/Contents/Info.plist"
+  set_key "$P" CFBundleIdentifier string "$BUNDLE_ID.fs"
+  set_key "$P" CFBundleName string "$NAME"
+  set_key "$P" CFBundleDisplayName string "$NAME"
+  set_key "$P" CFBundleShortVersionString string "$VERSION"
+  set_key "$P" CFBundleVersion string "$BUILD_NUMBER"
+  set_key "$P" LSMinimumSystemVersion string 27.0
+  /usr/libexec/PlistBuddy -c "Delete :CFBundleSupportedPlatforms" "$P" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms array" -c "Add :CFBundleSupportedPlatforms:0 string MacOSX" "$P"
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+
+# Whether a provisioning profile grants an entitlement. A restricted one the
+# profile does not grant stops the app from launching, so the app claims
+# FSKit's mount entitlement only when its profile has it.
+grants() { security cms -D -i "$1" 2>/dev/null | plutil -extract "Entitlements.$2" raw -o - - >/dev/null 2>&1; }
 
 # Entitlements with $(AppIdentifierPrefix) filled in, plus what Xcode adds on
 # its own when signing with a profile: the App ID and team, which must match
@@ -133,6 +173,18 @@ if [[ -n "${ONYX_SIGN_IDENTITY:-}" ]]; then
   SIGN=(codesign --force --options runtime --sign "$ONYX_SIGN_IDENTITY")
   [[ "${ONYX_TIMESTAMP:-0}" == "1" ]] && SIGN+=(--timestamp)
   "${SIGN[@]}" "$APP/Contents/MacOS/rclone"
+  if [[ "$WITH_FS" == "1" ]]; then
+    if [[ -n "$FS_PROFILE" ]]; then
+      render OnyxFS/OnyxFS.entitlements "$WORK/fs.entitlements" "$BUNDLE_ID.fs"
+      cp "$FS_PROFILE" "$FSX/Contents/embedded.provisionprofile"
+      "${SIGN[@]}" --entitlements "$WORK/fs.entitlements" "$FSX"
+    else
+      # No profile: it cannot run as a file system (FSKit needs the
+      # restricted entitlement), and the app mounts drives the NFS way.
+      "${SIGN[@]}" --entitlements "$WORK/ext.min.entitlements" "$FSX"
+      echo "No ${PROFILE_PREFIX}FS provisioning profile: drives mount in ~/Onyx, not as disks."
+    fi
+  fi
   if [[ "$WITH_EXT" == "1" ]]; then
     if [[ -n "$EXT_PROFILE" ]]; then
       render OnyxFileProvider/OnyxFileProvider.entitlements "$WORK/ext.entitlements" io.onyxfs.app.fileprovider
@@ -143,7 +195,16 @@ if [[ -n "${ONYX_SIGN_IDENTITY:-}" ]]; then
     fi
   fi
   if [[ -n "$APP_PROFILE" ]]; then
-    render OnyxMac/OnyxMac.entitlements "$WORK/app.entitlements" io.onyxfs.app
+    # A dev build claims no app group or shared keychain: they are the real
+    # app's (and the dormant File Provider's), and Onyx Dev must not reach them.
+    if [[ "${ONYX_DEV:-0}" == "1" ]]; then
+      render "$WORK/app.min.entitlements" "$WORK/app.entitlements" "$BUNDLE_ID"
+    else
+      render OnyxMac/OnyxMac.entitlements "$WORK/app.entitlements" "$BUNDLE_ID"
+    fi
+    if grants "$APP_PROFILE" "com\\.apple\\.developer\\.fskit\\.mount"; then
+      /usr/libexec/PlistBuddy -c "Add :com.apple.developer.fskit.mount bool true" "$WORK/app.entitlements"
+    fi
     cp "$APP_PROFILE" "$APP/Contents/embedded.provisionprofile"
     "${SIGN[@]}" --entitlements "$WORK/app.entitlements" "$APP"
     echo "Signed for team $ONYX_TEAM_ID, with its provisioning profile."
@@ -154,6 +215,7 @@ if [[ -n "${ONYX_SIGN_IDENTITY:-}" ]]; then
 else
   codesign --force --sign - "$APP/Contents/MacOS/rclone"
   [[ "$WITH_EXT" == "1" ]] && codesign --force --entitlements "$WORK/ext.min.entitlements" --sign - "$EXT"
+  [[ "$WITH_FS" == "1" ]] && codesign --force --entitlements "$WORK/ext.min.entitlements" --sign - "$FSX"
   codesign --force --sign - "$APP"
   echo "Unsigned build: for this Mac."
 fi

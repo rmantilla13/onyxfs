@@ -14,6 +14,7 @@ let package = Package(
     products: [
         .executable(name: "OnyxMac", targets: ["OnyxMac"]),
         .executable(name: "OnyxFileProvider", targets: ["OnyxFileProvider"]),
+        .executable(name: "OnyxFS", targets: ["OnyxFS"]),
     ],
     dependencies: [
         .package(path: "OnyxKit"),
@@ -24,6 +25,18 @@ let package = Package(
             dependencies: ["OnyxKit"],
             path: "OnyxMac",
             exclude: ["Info.plist", "OnyxMac.entitlements"]
+        ),
+        // The Onyx file system (onyxfs, ONYXFS.md): an ExtensionKit
+        // extension, so an ordinary executable whose main hands over to
+        // ExtensionFoundation. Built into Contents/Extensions/OnyxFS.appex
+        // by scripts/build-mac.sh.
+        .executableTarget(
+            name: "OnyxFS",
+            dependencies: [.product(name: "OnyxFSCore", package: "OnyxKit")],
+            path: "OnyxFS",
+            exclude: ["Info.plist", "OnyxFS.entitlements"],
+            swiftSettings: [.unsafeFlags(["-application-extension"])],
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-application_extension"])]
         ),
         // An app extension is an executable whose entry point is the system's
         // NSExtensionMain, which loads the principal class named in its

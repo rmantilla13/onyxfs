@@ -312,7 +312,7 @@ enum MenuBarStatus: Equatable {
     @MainActor
     static func of(_ model: AppModel, _ finder: DriveService) -> MenuBarStatus {
         guard model.phase == .signedIn else { return .signedOut }
-        if let failed = finder.mounts.states.values.compactMap({ state -> String? in
+        if let failed = finder.allMountStates.compactMap({ state -> String? in
             if case let .failed(why) = state { return why }
             return nil
         }).first {
@@ -321,7 +321,7 @@ enum MenuBarStatus: Equatable {
         if let problem = finder.problem ?? finder.offlineProblem { return .attention(problem) }
         if finder.isOffline { return .offline }
         if !finder.syncing.isEmpty || finder.downloading > 0 { return .syncing }
-        let mounted = finder.mounts.states.values.filter { if case .mounted = $0 { return true } else { return false } }.count
+        let mounted = finder.allMountStates.filter { if case .mounted = $0 { return true } else { return false } }.count
         return mounted > 0 ? .mounted(mounted) : .idle
     }
 }
@@ -359,6 +359,7 @@ struct MenuBarContent: View {
             Text(model.email ?? "Signed in")
             Text(status.line)
             TranscriptionMenuLine(transcriber: model.transcriber)
+            UploadsMenuLines(summary: finder.uploadSummary) { id in finder.retryUpload(id) }
             if finder.pinnedBytes > 0 {
                 Text("Kept offline: \(ByteCountFormatter.string(fromByteCount: finder.pinnedBytes, countStyle: .file))")
             }
@@ -482,8 +483,11 @@ struct FinderSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Each drive you turn on appears in Finder, in your Onyx folder and under Locations. It is exactly what the web shows you, and files stream as you open them — nothing downloads until something reads it.")
+            Text(finder.drivesAreDisks
+                 ? "Each drive you turn on is a disk of its own in Finder, under Locations and on the Desktop. It is exactly what the web shows you, files stream as you open them, and what you copy onto it is uploaded to Onyx."
+                 : "Each drive you turn on appears in Finder, in your Onyx folder and under Locations. It is exactly what the web shows you, and files stream as you open them — nothing downloads until something reads it.")
                 .font(.callout).foregroundStyle(.secondary)
+            DiskModeNote(finder: finder)
             List {
                 ForEach(model.finderDrives) { drive in
                     row(.drive(id: drive.id), name: drive.name)
@@ -491,7 +495,9 @@ struct FinderSettings: View {
                 row(.library, name: "Library")
             }
             HStack {
-                Text("Read-only in Finder for now; add and change files in the Onyx window.")
+                Text(finder.drivesAreDisks
+                     ? "Copy, rename, move and delete in Finder as on any disk; the web shows the same. A drive you can only view is read-only."
+                     : "Read-only in Finder for now; add and change files in the Onyx window.")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Sync Now") { Task { await model.syncNow() } }
@@ -513,7 +519,7 @@ struct FinderSettings: View {
             ))
             .disabled(model.busy.contains(scope.identifier) || model.phase != .signedIn)
             Spacer()
-            switch mounts.state(of: scope) {
+            switch finder.mountState(of: scope) {
             case .mounting?:
                 ProgressView().controlSize(.small)
             case let .failed(message)?:
@@ -616,6 +622,60 @@ struct StorageSettings: View {
         switch rule.target {
         case let .file(id): return "\(drive) · file \(id.prefix(8))…"
         case let .folder(path): return path.isEmpty ? "\(drive) · everything" : "\(drive) · \(path)"
+        }
+    }
+}
+
+// MARK: - onyxfs
+
+/// Settings › Finder: whether drives mount as disks of their own, and when
+/// they could but the extension is off, the way to switch it on.
+struct DiskModeNote: View {
+    @ObservedObject var finder: DriveService
+
+    var body: some View {
+        switch finder.diskMode {
+        case .disks:
+            if let failure = finder.diskFailure {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(lucide: "hard-drive").foregroundStyle(.secondary)
+                    Text("A drive could not be a disk of its own, so it is in your Onyx folder instead: \(failure)")
+                        .font(.caption)
+                    Spacer()
+                }
+                .padding(10)
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+            }
+        case .needsEnabling:
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(lucide: "hard-drive").foregroundStyle(.secondary)
+                Text("To have each drive be a disk of its own, turn on Onyx in System Settings › General › Login Items & Extensions › File System Extensions.")
+                    .font(.caption)
+                Spacer()
+                Button("Open System Settings") { finder.openFileSystemSettings() }
+            }
+            .padding(10)
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+        case .folder:
+            EmptyView()
+        }
+    }
+}
+
+/// The menu bar's lines for files on their way to Onyx.
+struct UploadsMenuLines: View {
+    let summary: UploadSummary
+    let retry: (UUID) -> Void
+
+    var body: some View {
+        if summary.waiting > 0 {
+            let percent = Int((summary.fraction * 100).rounded())
+            Text(summary.waiting == 1
+                 ? "Uploading \(summary.current ?? "a file") — \(percent)%"
+                 : "Uploading \(summary.waiting) files — \(percent)%")
+        }
+        ForEach(summary.failed) { job in
+            Button("Retry “\(job.name)”: \(job.lastError ?? "did not upload")") { retry(job.id) }
         }
     }
 }

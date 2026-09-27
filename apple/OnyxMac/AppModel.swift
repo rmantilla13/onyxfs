@@ -268,7 +268,7 @@ final class AppModel: ObservableObject {
         busy.insert(scope.identifier)
         defer { busy.remove(scope.identifier) }
         await finder.setMounted(scope, name: name, on)
-        if on, let reveal = finder.mounts.state(of: scope), case .mounted = reveal { finder.reveal(scope) }
+        if on, let reveal = finder.mountState(of: scope), case .mounted = reveal { finder.reveal(scope) }
     }
 
     func reveal(_ scope: SyncDomain) { finder.reveal(scope) }

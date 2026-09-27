@@ -153,38 +153,42 @@ describeDb('the authorization fixes (database)', () => {
     assert.equal(await db.canAccessFile(file, vp), true);
   });
 
-  // ── Folders: a drive role counts only for the drive's own ─────────────────
+  // ── Folders: a drive role counts for the drive's own, which is all it reaches ──
 
-  test("a drive editor restructures the drive's folders, not the library's of the same name", async () => {
+  test("a drive editor restructures the drive's folders, never the library's of the same name", async () => {
     const editor = await approved('folder-editor');
     await db.upsertPerson(editor, { roleId: 'member' });
     const tag = `mkt-${T}`;
     const board = `Board ${T}`;
     const plans = `Plans ${T}`;
-    const mixed = `Mixed ${T}`;
-    made.folders.push(board, plans, mixed);
+    made.folders.push(board, plans, `Board2 ${T}`);
     const bob = at('bob');
     await db.createFolder(board, { createdBy: ADMIN, filespace: '' });
     await db.grantFolderAccess({ folder: board, subjectType: 'user', subject: bob, role: 'owner', grantedBy: ADMIN });
     await db.createFolder(plans, { createdBy: editor, filespace: tag });
-    await db.createFolder(mixed, { createdBy: editor, filespace: tag });
-    await db.createFolder(`${mixed}/Legal`, { createdBy: ADMIN, filespace: '' });
 
     const p = await authz.getPrincipal(editor);
     const opts = { driveRole: 'editor', tag };
-    assert.equal(await db.folderRoleFor(board, p, opts), null, "the library's folder is not the drive's");
-    assert.equal(await db.canModifyFolder(board, p, opts), false);
-    assert.equal(await db.folderRoleFor(plans, p, opts), 'editor', "the drive's own folder is");
-    assert.equal(await db.folderRoleFor(`Nowhere ${T}/new`, p, opts), 'editor', 'a path nobody holds is the drive’s to use');
-    assert.equal(await db.folderRoleFor(mixed, p, opts), null, 'a library folder beneath it makes it not only the drive’s');
+    // Folder names are per scope: the drive's "Board" is the drive's, and
+    // nothing done to it reaches the library's.
+    assert.equal(await db.folderRoleFor(plans, p, opts), 'editor', "the drive's own folder");
+    assert.equal(await db.folderRoleFor(board, p, opts), 'editor', "the drive's “Board”, not the library's");
+    assert.equal(await db.folderRoleFor(`Nowhere ${T}/new`, p, opts), 'editor', 'a new path in the drive is the drive’s');
     assert.equal(await db.folderRoleFor(plans, p, { driveRole: 'viewer', tag }), null, 'a drive viewer restructures nothing');
     assert.equal(await db.folderRoleFor(plans, p, { driveRole: 'editor' }), null, 'no drive named, no drive role');
+    assert.equal(await db.canModifyFolder(board, p), false, 'the library’s own “Board” takes a grant');
 
-    // A folder grant still counts, as it did before drive roles did.
+    await db.createFolder(board, { createdBy: editor, filespace: tag });
+    await db.renameFolder(board, `Board2 ${T}`, { tag, moveGrants: true, createdBy: editor });
+    await db.deleteFolderRows(`Board2 ${T}`, { tag });
+    const library = await db.sql`SELECT name FROM folders WHERE name = ${board} AND COALESCE(filespace, '') = ''`;
+    assert.equal(library.length, 1, "the library's row is untouched");
+    assert.equal((await db.listFolderGrants(board)).some((g) => g.subject === bob), true, "and Bob's grant on it was never in reach");
+    assert.equal((await db.listFolderGrants(`Board2 ${T}`)).length, 0, 'nor copied to where the drive went');
+
+    // A folder grant still counts in the library, as it did before drive roles did.
     await db.grantFolderAccess({ folder: board, subjectType: 'user', subject: editor, role: 'editor', grantedBy: ADMIN });
-    assert.equal(await db.folderRoleFor(board, p, opts), 'editor');
-    // Bob's grant was never in reach.
-    assert.equal((await db.listFolderGrants(board)).some((g) => g.subject === bob), true);
+    assert.equal(await db.folderRoleFor(board, p), 'editor');
   });
 
   // ── Drives: no link kinds at all ─────────────────────────────────────────
