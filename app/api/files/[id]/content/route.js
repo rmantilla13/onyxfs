@@ -24,12 +24,13 @@ const answer = (status, error, extra = {}) => NextResponse.json({ error, ...extr
  *
  * Checked, in order: the caller (the browser's session or Onyx for Mac's
  * bearer token), files.edit and write access to the file and its drive
- * (replacementTarget); If-Match, when sent; that the key was issued to this
- * caller for this file, taken once (claimUploadKey); that the object is
- * there, measured by the bucket, never by the client; and the largest upload
- * and the quotas, for what the file grows by. Then one conditional UPDATE
- * (replaceFileContent), which refuses a file moved, trashed or replaced again
- * while these bytes were uploading.
+ * (replacementTarget); a key that already is the file's contents, which
+ * answers as the swap did, so a retry is safe; If-Match, when sent; that
+ * the key was issued to this caller for this file, taken once
+ * (claimUploadKey); that the object is there, measured by the bucket, never
+ * by the client; and the largest upload and the quotas, for what the file
+ * grows by. Then one conditional UPDATE (replaceFileContent), which refuses
+ * a file moved, trashed or replaced again while these bytes were uploading.
  *
  * After it commits: the old object is deleted, since Onyx keeps no versions
  * yet — unless another row still names it — and the old previews go with it,
@@ -58,6 +59,13 @@ export async function POST(req, { params }) {
   if (target.error) return target.error;
   const { file, cfg, base } = target;
 
+  // Already the file's contents: a swap that went through and is being asked
+  // for again, its answer lost on the way back. Answered as the first time —
+  // before If-Match, whose version that swap itself moved on.
+  if (key === file.storageKey) {
+    const [signed] = await presignFileUrls([file]);
+    return NextResponse.json({ file: signed || file });
+  }
   // Asked before the key is taken: the caller may resolve the conflict and
   // come back with the same upload.
   const want = ifMatchVersion(req.headers.get('if-match'));
@@ -66,7 +74,6 @@ export async function POST(req, { params }) {
       code: 'version_mismatch', currentVersion: Number(file.version), file,
     });
   }
-  if (key === file.storageKey) return answer(400, 'That is where the file’s current contents are.');
 
   // Issued to this caller, for this file, within the day, and taken once:
   // what makes the object theirs to swap in — and theirs to delete, below.

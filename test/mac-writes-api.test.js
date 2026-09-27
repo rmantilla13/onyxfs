@@ -532,7 +532,16 @@ describe('new contents for a file', () => {
     }
     assert.equal(globalThis.__mw.transcripts.get(f.id).sourceKey, 'team/Cuts/Interview.mov', 'the transcript does not follow: it is stale');
     assert.equal(globalThis.__mw.uploadKeys.size, 0, 'the key was taken');
-    assert.equal((await swap(who, f.id, { key: p.body.key })).status, 400, 'once');
+    // Asked again — the answer lost on the way back — it answers as before,
+    // If-Match on the version it replaced or not, and changes nothing.
+    const seq1 = r.seq;
+    for (const headers of [undefined, { 'if-match': `"${f.version}"` }]) {
+      const again = await swap(who, f.id, { key: p.body.key }, headers);
+      assert.equal(again.status, 200);
+      assert.equal(again.body.file.storageKey, p.body.key);
+    }
+    assert.equal(row(f.id).seq, seq1);
+    assert.equal(row(f.id).version, f.version + 1);
 
     // Again: the name is free now, so the bytes go back under it.
     const again = await presign(who, { replaceOf: f.id, size: 900 });
