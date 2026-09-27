@@ -57,12 +57,13 @@ public struct APIUploadTransport: UploadTransport {
 
     public func record(_ job: UploadJob, key: String, publicUrl: String?) async throws -> OnyxAPI.RecordedFile {
         try await api.recordFile(key: key, publicUrl: publicUrl, name: job.name, size: job.size, mime: job.mime,
-                                 folder: job.folder, filespaceId: job.filespaceId)
+                                 folder: job.folder, filespaceId: job.filespaceId,
+                                 created: job.fileCreatedAt, modified: job.fileModifiedAt)
     }
 
     public func replaceContent(_ job: UploadJob, key: String) async throws -> OnyxAPI.RecordedFile {
         guard let file = job.replaceOf else { throw OnyxError.decoding("not a replacement") }
-        return try await api.replaceContent(fileId: file, key: key, mime: job.mime)
+        return try await api.replaceContent(fileId: file, key: key, mime: job.mime, modified: job.fileModifiedAt)
     }
 
     /// The whole file is streamed from disk; a part (a range of it) is read

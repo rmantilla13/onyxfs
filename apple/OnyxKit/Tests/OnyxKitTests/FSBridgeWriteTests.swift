@@ -22,11 +22,12 @@ extension FSBridgeTests {
             if let refusal { self.refusal = nil; throw refusal }
         }
 
-        func write(path: String, from file: URL, modified: Date?) async throws {
+        func write(path: String, from file: URL, modified: Date?, created: Date?) async throws {
             try check()
             let bytes = try Data(contentsOf: file)
             try FileManager.default.removeItem(at: file) // taken, as the upload queue takes it
-            calls.append("write \(path) \(bytes.count) \(modified.map { Int($0.timeIntervalSince1970) } ?? 0)")
+            calls.append("write \(path) \(bytes.count) \(modified.map { Int($0.timeIntervalSince1970) } ?? 0)"
+                         + (created.map { " born \(Int($0.timeIntervalSince1970))" } ?? ""))
             let rel = String(path.dropFirst())
             nodes.append(FSNode(path: rel, name: (rel as NSString).lastPathComponent, isFolder: false,
                                 fileId: "pending:1", size: Int64(bytes.count), modified: Date(timeIntervalSince1970: 1),
@@ -65,11 +66,12 @@ extension FSBridgeTests {
         return (rig, writer)
     }
 
-    func put(_ rig: Rig, _ path: String, _ bytes: Data, mtime: Int? = nil) async throws -> (DAVResponse, URL) {
+    func put(_ rig: Rig, _ path: String, _ bytes: Data, mtime: Int? = nil, btime: Int? = nil) async throws -> (DAVResponse, URL) {
         let file = rig.dir.appendingPathComponent("spool-\(UUID().uuidString)")
         try bytes.write(to: file)
         var headers = ["authorization": "Bearer \(rig.key)"]
         if let mtime { headers["x-onyx-mtime"] = String(mtime) }
+        if let btime { headers["x-onyx-btime"] = String(btime) }
         let request = DAVRequest(method: "PUT", target: Self.target("file", ["path": path]), headers: headers, bodyFile: file)
         return (await rig.bridge.respond(to: request), file)
     }
@@ -101,6 +103,16 @@ extension FSBridgeTests {
         #expect(entry["size"] as? Int == 42)
         #expect(await writer.calls == ["write /Campaigns/new cut.mov 42 1790000000"])
         #expect(!FileManager.default.fileExists(atPath: body.path))
+    }
+
+    @Test func aCopysBirthTimeGoesToTheWriterWithIt() async throws {
+        let (rig, writer) = try await writeRig()
+        defer { rig.remove() }
+        // Finder's copy of a file made in 2019: both its dates, as the extension sends them.
+        let (r, _) = try await put(rig, "/Campaigns/old cut.mov", Data(repeating: 1, count: 3),
+                                   mtime: 1_551_530_000, btime: 1_551_000_000)
+        #expect(r.status == 200)
+        #expect(await writer.calls == ["write /Campaigns/old cut.mov 3 1551530000 born 1551000000"])
     }
 
     @Test func foldersRenamesAndDeletesGoToTheWriter() async throws {

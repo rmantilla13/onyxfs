@@ -31,11 +31,24 @@ public struct MirrorEntry: Sendable, Equatable, Hashable {
     public let fileId: String?
     /// Bytes; 0 for folders.
     public let size: Int64
-    /// The file's updatedAt, else its createdAt; for a folder, its newest
-    /// file's. Moves with every change to a file, bytes or not: rclone keys
-    /// its cache on size and this time, so it must never stand still while
-    /// the bytes change.
+    /// When the file itself last changed, as Finder shows it: its own date
+    /// (`fileModifiedAt`, what it had where it was made) where the server
+    /// has one, else when its row last changed. For a folder, when anything
+    /// beneath it last changed on the server (`changed`).
+    ///
+    /// rclone keys its cache on size and this time, so it must move when the
+    /// bytes do — and it does: new contents come with their own date, or
+    /// the server stamps the swap with now. A rename, which leaves the bytes
+    /// alone, leaves it too, as on any disk.
     public let modified: Date
+    /// When the file was made, as Finder shows it: its own date where the
+    /// server has one, else when it was added here.
+    public let created: Date
+    /// When anything about it last changed on the server (the row's
+    /// updatedAt): what says the mirror has caught up with a change made
+    /// here, which `modified`, the file's own date, cannot — an upload may
+    /// carry one from years ago.
+    public let changed: Date
     /// Changes exactly when the bytes do: the content hash when the server
     /// has one, else "v<version>". Nil for folders.
     public let etag: String?
@@ -47,11 +60,16 @@ public struct MirrorEntry: Sendable, Equatable, Hashable {
     /// survives a move (onyxfs, FSNode). Nil for folders.
     public let contentHash: String?
 
+    /// `created` and `changed` default to `modified`, which is what an entry
+    /// with no dates of its own (a folder) has for all three.
     public init(kind: Kind, name: String, path: String, fileId: String?, size: Int64,
-                modified: Date, etag: String?, mime: String?, contentHash: String? = nil) {
+                modified: Date, etag: String?, mime: String?, contentHash: String? = nil,
+                created: Date? = nil, changed: Date? = nil) {
         self.kind = kind; self.name = name; self.path = path; self.fileId = fileId
         self.size = size; self.modified = modified; self.etag = etag; self.mime = mime
         self.contentHash = contentHash
+        self.created = created ?? modified
+        self.changed = changed ?? modified
     }
 
     public var isFolder: Bool { kind == .folder }

@@ -238,11 +238,11 @@ actor Server: FSWriteTarget {
 
     // MARK: FSWriteTarget
 
-    func write(path: String, from file: URL, modified: Date?) async throws {
+    func write(path: String, from file: URL, modified: Date?, created: Date?) async throws {
         let bytes = try Data(contentsOf: file)
         try? FileManager.default.removeItem(at: file)
         calls.append("write \(path) \(bytes.count)")
-        put(path, bytes)
+        put(path, bytes, modified: modified, created: created)
         await publish()
     }
 
@@ -275,18 +275,24 @@ actor Server: FSWriteTarget {
 
     // MARK: -
 
+    /// As the server records an upload: the file's own dates beside the
+    /// row's (lib/file-record.js), its created date kept when new bytes
+    /// replace old.
     @discardableResult
-    private func put(_ path: String, _ bytes: Data) -> String {
+    private func put(_ path: String, _ bytes: Data, modified: Date? = nil, created: Date? = nil) -> String {
         let (folder, name) = Self.split(path)
         clock += 1_000
-        let item: FileItem
+        var item: FileItem
         if let old = file(at: path) {
             item = Self.item(old.id, name, in: folder, size: Int64(bytes.count), version: old.version + 1, updated: clock)
+            item.fileCreatedAt = old.fileCreatedAt
             files.removeAll { $0.id == old.id }
         } else {
             made += 1
             item = Self.item("f\(made)", name, in: folder, size: Int64(bytes.count), version: 1, updated: clock)
+            item.fileCreatedAt = created.map { EpochMillis(Int64($0.timeIntervalSince1970 * 1000)) }
         }
+        item.fileModifiedAt = modified.map { EpochMillis(Int64($0.timeIntervalSince1970 * 1000)) }
         files.append(item)
         Loopback.store(Self.object(item.id, "v\(item.version)"), bytes)
         return item.id

@@ -44,8 +44,16 @@ public struct FileItem: Codable, Sendable, Identifiable, Equatable {
     /// re-downloading a 40 GB master.
     public let contentHash: String?
     public let createdBy: String?
+    /// When the row was written, and when anything about it last changed —
+    /// the server's clock.
     public let createdAt: EpochMillis?
     public let updatedAt: EpochMillis?
+    /// When the file itself was made and last changed, as where it came from
+    /// said: a Mac's file system, a browser's lastModified, a photo's capture
+    /// date. Nil when the source said nothing, which is every file recorded
+    /// before these existed (lib/file-dates.js falls back to the row's).
+    public var fileCreatedAt: EpochMillis? = nil
+    public var fileModifiedAt: EpochMillis? = nil
     public let deletedAt: EpochMillis?
     /// Monotonic change sequence. The delta cursor is a `seq`, never a date:
     /// two writes in the same millisecond can straddle a timestamp cursor and

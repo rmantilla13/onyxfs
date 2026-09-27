@@ -20,7 +20,10 @@ public struct FSNode: Sendable, Equatable {
     public let fileId: String?
     /// Bytes; 0 for folders.
     public let size: Int64
+    /// As Finder shows them (MirrorEntry): the file's own dates where the
+    /// server has them.
     public let modified: Date
+    public let created: Date
     /// What a file's `version` is made from: whatever moves with its bytes,
     /// and nothing that moves without them (FSNode.contentTag). Unused for
     /// folders, whose version is their path's.
@@ -35,17 +38,19 @@ public struct FSNode: Sendable, Equatable {
     public let mirrorEntry: MirrorEntry?
 
     public init(path: String, name: String, isFolder: Bool, fileId: String?, size: Int64, modified: Date,
-                content: String, pending: Bool = false, staged: URL? = nil, mirrorEntry: MirrorEntry? = nil) {
+                content: String, pending: Bool = false, staged: URL? = nil, mirrorEntry: MirrorEntry? = nil,
+                created: Date? = nil) {
         self.path = path; self.name = name; self.isFolder = isFolder; self.fileId = fileId
         self.size = size; self.modified = modified; self.content = content; self.pending = pending
         self.staged = staged; self.mirrorEntry = mirrorEntry
+        self.created = created ?? modified
     }
 
     /// A mirror entry as the bridge shows it.
     public init(_ entry: MirrorEntry) {
         self.init(path: entry.path, name: entry.name, isFolder: entry.isFolder, fileId: entry.fileId,
                   size: entry.isFolder ? 0 : max(0, entry.size), modified: entry.modified,
-                  content: entry.isFolder ? "" : Self.contentTag(entry), mirrorEntry: entry)
+                  content: entry.isFolder ? "" : Self.contentTag(entry), mirrorEntry: entry, created: entry.created)
     }
 
     /// What in a mirror file moves with its bytes. The server's content
@@ -53,12 +58,12 @@ public struct FSNode: Sendable, Equatable {
     /// move re-keys the object and bumps every other marker, but not that,
     /// so the extension's cached chunks survive it. A file without one — a
     /// row older than the hash, not yet filled in — goes by its version and
-    /// modified time, which move with every write to it, a rename included:
-    /// its cache is thrown away more often than it need be, never kept when
-    /// the bytes may be new.
+    /// when its row changed, which move with every write to it, a rename
+    /// included: its cache is thrown away more often than it need be, never
+    /// kept when the bytes may be new.
     static func contentTag(_ entry: MirrorEntry) -> String {
         if let hash = entry.contentHash, !hash.isEmpty { return "hash:" + hash }
-        let millis = Int64((entry.modified.timeIntervalSince1970 * 1000).rounded())
+        let millis = Int64((entry.changed.timeIntervalSince1970 * 1000).rounded())
         return "write:\(entry.etag ?? ""):\(millis)"
     }
 

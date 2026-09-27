@@ -59,6 +59,8 @@ public actor DriveWriter {
         public let size: Int64
         public let staged: String
         public let modified: Date
+        /// Its birth time where it was written, if the writer said.
+        public var created: Date? = nil
         public var failed: String?
         /// The server's file whose contents these become, if any.
         public var replaceOf: String? = nil
@@ -106,7 +108,7 @@ public actor DriveWriter {
             FSNode(path: Self.relative(file.path), name: (file.path as NSString).lastPathComponent, isFolder: false,
                    fileId: Self.pendingID(file.job), size: file.size, modified: file.modified,
                    content: "pending:\(file.job.uuidString):\(file.size)", pending: true,
-                   staged: URL(fileURLWithPath: file.staged))
+                   staged: URL(fileURLWithPath: file.staged), created: file.created)
         }
         return (FSOverlay(nodes: nodes), revision)
     }
@@ -121,7 +123,9 @@ public actor DriveWriter {
     /// A file written in Finder, whole: its bytes at `file` (taken by the
     /// upload queue). An existing file at `path` is replaced.
     @discardableResult
-    public func putFile(path: String, from file: URL, modified: Date? = nil) async throws -> Pending {
+    /// `modified` and `created` are the dates the file had where it was
+    /// written — Finder's copy keeps a file's — and go to the server with it.
+    public func putFile(path: String, from file: URL, modified: Date? = nil, created: Date? = nil) async throws -> Pending {
         let (folder, name) = try Self.split(path)
         let existing = await tree.item(at: path)
         if existing == .folder { throw Failure.posix(EISDIR, nil) }
@@ -143,12 +147,12 @@ public actor DriveWriter {
         let job: UploadJob
         do {
             job = try await uploads.enqueue(from: file, scope: scope, filespaceId: filespaceId, folder: folder, name: name,
-                                            mime: mime, replaceOf: replaceOf)
+                                            mime: mime, replaceOf: replaceOf, created: created, modified: modified)
         } catch {
             throw Failure.posix(EIO, error.localizedDescription)
         }
         let entry = Pending(job: job.id, path: path, size: job.size, staged: job.staged,
-                            modified: modified ?? Date(), failed: nil, replaceOf: replaceOf)
+                            modified: modified ?? Date(), created: created, failed: nil, replaceOf: replaceOf)
         pending[path] = entry
         return entry
     }
@@ -352,8 +356,8 @@ public actor DriveWriter {
 
 // The bridge's write routes land here (FSBridge.writer(for:)).
 extension DriveWriter: FSWriteTarget {
-    public func write(path: String, from file: URL, modified: Date?) async throws {
-        _ = try await putFile(path: path, from: file, modified: modified)
+    public func write(path: String, from file: URL, modified: Date?, created: Date?) async throws {
+        _ = try await putFile(path: path, from: file, modified: modified, created: created)
     }
 
     public func makeFolder(path: String) async throws { try await mkdir(path: path) }
