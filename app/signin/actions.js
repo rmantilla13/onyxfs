@@ -2,14 +2,16 @@
 
 import { signIn } from '@/auth';
 import { isEmailGrantedAccess } from '@/lib/auth-allowlist';
-import { createOrGetInviteRequest, hasConnectionString } from '@/lib/db';
-import { readGlobalFlags } from '@/lib/authz';
-import { notifyAccessRequest } from '@/lib/notify';
+import { hasConnectionString } from '@/lib/db';
 import { printsSignInLinks } from '@/lib/signin-email';
 import { safeReturnPath } from '@/lib/return-path';
 
 /**
  * Send a magic link — but only to an address that is already approved.
+ *
+ * There is no sign-up. An address gets in because an admin added it (Admin →
+ * Access requests) or because it is in ADMIN_EMAILS; nothing on this page
+ * can add one.
  *
  * Pre-validating here rather than letting Auth.js's signIn callback reject at
  * the end means an unapproved address never receives an email at all. The
@@ -66,27 +68,5 @@ export async function requestMagicLink(_prev, formData) {
   } catch (e) {
     console.error('[signin] magic link failed:', e.message);
     return { error: 'Could not send the sign-in email. Try again in a moment.' };
-  }
-}
-
-/**
- * Ask an admin for access. Idempotent per address. Refused when the
- * `inviteRequests` flag is off — read here, not taken from the page, which
- * only hides the form.
- */
-export async function requestAccess(_prev, formData) {
-  const flags = await readGlobalFlags();
-  if (!flags?.inviteRequests) return { error: 'Requests are not being taken. Ask an admin to add you.' };
-  const email = String(formData.get('email') || '').trim().toLowerCase();
-  const name = String(formData.get('name') || '').trim();
-  const reason = String(formData.get('reason') || '').trim();
-  if (!email.includes('@')) return { error: 'Enter a valid email address.' };
-  try {
-    await createOrGetInviteRequest({ email, name: name || null, reason: reason || null });
-    await notifyAccessRequest({ email, name, reason });
-    return { requested: true };
-  } catch (e) {
-    console.error('[signin] access request failed:', e.message);
-    return { error: 'Could not submit the request. Try again in a moment.' };
   }
 }
