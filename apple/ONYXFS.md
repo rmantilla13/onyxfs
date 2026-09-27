@@ -206,9 +206,12 @@ logic is testable with `swift test`.
 ### Who may write
 The volume is read-write when the account may add to the drive (the same test
 the web's upload uses: drive role editor/owner via getFilespaceForWrite, and
-the role's `files.upload` capability), otherwise read-only (mounted `rdonly`,
-modes 0555/0444, writes → EACCES). The bridge reports it as
-`volume.readOnly`. Each operation's own capability (files.edit for rename/move,
+the role's `files.upload` capability), otherwise read-only: the bridge reports
+it as `volume.readOnly`, the extension refuses changes with EACCES before
+asking, and the bridge answers 403 to whoever asks anyway. The mount itself is
+never `rdonly` — the role is checked as it is now, so a viewer made an editor
+needs no remount, and Finder can still keep its own window files (local-only
+names, below) on a drive it may only view. Each operation's own capability (files.edit for rename/move,
 files.delete for delete, folders.manage for folders) is enforced by the server
 route; a refusal comes back to Finder as EACCES with the server's sentence in
 the log.
@@ -229,8 +232,11 @@ read-only or the server refuses.
    file is in the way; an existing folder is fine).
 10. `POST /fs/v1/rename` — `{ "from": "/a/x", "to": "/b/y", "replace": false }`
     → `{ "entry": Entry }`. Files and folders; moving across folders; 409 when
-    `to` exists and `replace` is false; with `replace: true` a file at `to`
-    goes to the trash first (how apps "save as" over a file).
+    `to` exists and `replace` is false. With `replace: true` a file at `to`
+    gives way: a file still on its way up from this Mac (an app's save — a
+    temporary copy, then moved over the document) becomes the document's new
+    contents, so it keeps its id; a file already on the server sends the one
+    at `to` to the trash, then is renamed.
 11. `DELETE /fs/v1/item?path=/a/x` → `{ "ok": true }`. A file → the web's trash
     (the server's trash flag decides, as on the web). A folder → deleted with
     its contents the way the web's folder delete does.
@@ -250,8 +256,24 @@ extension's cached chunks.
   individually, resumable after a restart), then `POST /api/files` to
   create the file row; `PATCH /api/files/[id]` to rename/move a file;
   `DELETE /api/files/[id]` to trash it; `/api/files/folders` POST/PATCH/DELETE
-  for folders; a content-replacement call for save-over (new on the server:
-  same id, new bytes; previews dropped so they regenerate; `seq` bumped).
+  for folders (a folder's delete repeated while the server says `more`).
+- **Save-over keeps the file.** Bytes written over a file (or moved over it)
+  go up under a key issued for that file (`replaceOf` on presign or multipart
+  create), then `POST /api/files/[id]/content { key }` swaps them in: the
+  same id, tags, comments and links; new size, hash, version and `seq`;
+  previews dropped so a browser makes new ones. A key issued for a new file
+  cannot be swapped into another, nor the reverse, so the kind is settled
+  before anything is sent: a new job waits 2 s first (UploadQueue.settle),
+  long enough for an app's rename-over-the-document to arrive, and an upload
+  already under way as the other kind starts again.
+- **Nothing is sent twice.** Once the bytes are in storage their key is kept
+  with the job, so a retry only records or swaps. `POST /api/files` is not
+  idempotent: asked again after a lost answer it says 409, which the queue
+  takes as done (the mirror then has the id). A key that is no good any more
+  (403 `not_issued`: over a day old or used; 409 `moved`, `conflict`,
+  `changed`) is traded for a new one and the bytes sent again; new contents
+  for a file deleted on the web meanwhile (404) become a file of their own
+  where Finder has them.
 - The mirror is updated at once from each response (the delta confirms it
   later), so Finder, the menus and the web page inside the app agree
   immediately.
@@ -272,13 +294,32 @@ extension's cached chunks.
   container; they are never uploaded and never listed by the bridge.
 - **Extended attributes** are kept locally per item (so macOS does not
   write `._` AppleDouble files); never uploaded.
-- **Finder's Trash**: moving an item into `/.Trashes/<uid>/` trashes it on the
-  web; the extension keeps a local tombstone so Finder's Trash shows it; Put
-  Back restores it (web restore), Empty Trash only forgets the tombstone (the
-  web's trash purges on its own schedule).
+- **Finder's Trash**: the volume has none — making `/.Trashes` is refused
+  (EPERM), so Finder offers "Delete Immediately", and the delete goes to the
+  web's trash (the server's `trash` flag decides, as for the web's Delete).
+  It is restored from the web; a Trash on the disk would have been a second
+  copy of the web's, kept in step with nothing.
 
 ### Keeping them the same
 The app syncs a mounted drive's mirror every 5 s (not 15) while it is
 mounted, and the bridge's `changes` long-poll carries that to the extension,
 which invalidates listings and the kernel's cache for changed files
 (`KernelCacheCoherencyAction.revoke` / `.invalidate`).
+
+A file written here is listed as pending (served from this Mac) until the
+mirror shows that change itself — its id, and an entry at least as new as
+the server's `updatedAt` for the change — not merely a file by that name;
+otherwise a save could briefly read back its old bytes.
+
+### Where it lives
+- App: `OnyxKit/FS/` (FSBridge, FSResponder, MirrorFSSource),
+  `OnyxKit/Uploads/` (UploadQueue, DriveWriter, APIUploadTransport),
+  `OnyxKit/API/Writes.swift`, `OnyxMac/Bridge/` (DAVServer spools a PUT's
+  body to disk; DriveService wires a drive's bridge, writer and mount).
+- Extension: `OnyxFS/` (the FSKit glue; EngineFactory connects a resource
+  URL), over `OnyxKit/Sources/OnyxFSCore/` — DriveEngine and EngineVolume (the
+  tree, writes, local-only names), ClientBridge (DriveEngine's bridge over
+  FSBridgeClient), FileReader and ChunkStore (streaming and its cache).
+- Tests: OnyxKitTests (bridge, writer, queue), OnyxFSCoreTests (engine,
+  client, cache, reader), and OnyxFSIntegrationTests — the engine against the
+  app's real bridge over the wire protocol, in process.
