@@ -27,10 +27,14 @@ public struct DAVRequest: Sendable {
     /// Keys lowercased.
     public var headers: [String: String]
     public var body: Data
+    /// A body too large to hold, written to disk as it arrived (an onyxfs
+    /// upload): the file, which whoever answers takes or removes.
+    public var bodyFile: URL?
 
-    public init(method: String, target: String, headers: [String: String] = [:], body: Data = Data()) {
+    public init(method: String, target: String, headers: [String: String] = [:], body: Data = Data(), bodyFile: URL? = nil) {
         self.method = method
         self.target = target
+        self.bodyFile = bodyFile
         // Lowercased here too: a caller that forgot would otherwise turn a
         // present Authorization header into a missing one.
         self.headers = Dictionary(headers.map { ($0.key.lowercased(), $0.value) },

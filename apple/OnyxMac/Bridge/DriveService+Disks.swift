@@ -130,12 +130,12 @@ extension DriveService {
             let queue = try UploadQueue(directory: Self.uploadsDirectory(server: server, account: account),
                                         transport: APIUploadTransport(api: model.api))
             uploads = queue
-            Task {
+            Task { [weak self] in
                 await queue.observe { [weak self] job in
                     Task { @MainActor in await self?.uploadChanged(job) }
                 }
                 await queue.resume()
-                await self.refreshUploadSummary()
+                await self?.refreshUploadSummary()
             }
         } catch {
             appLog.error("uploads: could not open the queue: \(error.localizedDescription, privacy: .public)")

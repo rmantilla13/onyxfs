@@ -70,6 +70,10 @@ final class DAVServer: @unchecked Sendable {
     /// Start listening; returns the port. Idempotent.
     func start() async throws -> UInt16 {
         if port != 0 { return port }
+        // Upload bodies a crash left half-written: nothing will finish them.
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: Session.spoolDirectory.path)) ?? [] {
+            try? FileManager.default.removeItem(at: Session.spoolDirectory.appendingPathComponent(name))
+        }
         let params = NWParameters.tcp
         params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: params)
@@ -151,6 +155,9 @@ final class DAVServer: @unchecked Sendable {
         let token: String
         let fs: FSBridge
         var buffer = Data()
+        /// An upload's body on its way to disk (FSBridge.Admission.acceptFile):
+        /// never held in memory, however large the file.
+        var spool: Spool?
         /// Moved on by every deadline set or cleared, so only the latest one
         /// set can close the connection.
         var deadline = 0
@@ -159,6 +166,28 @@ final class DAVServer: @unchecked Sendable {
 
         static let maxHeader = 64 * 1024
         static let maxBody = 1024 * 1024
+        /// An upload may take as long as it takes, but not stall: this long
+        /// with no bytes and the connection closes.
+        static let uploadIdle: TimeInterval = 120
+
+        struct Spool {
+            let url: URL
+            let handle: FileHandle
+            var remaining: Int64
+            let method: String
+            let target: String
+            let headers: [String: String]
+            let keepAlive: Bool
+        }
+
+        /// Where upload bodies are written while they arrive: the user's own
+        /// temporary folder, so the upload queue (in Application Support, on
+        /// the same disk) takes a finished one by renaming it.
+        static let spoolDirectory: URL = {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("OnyxUploadSpool", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }()
 
         init(connection: NWConnection, server: DAVServer, queue: DispatchQueue) {
             self.connection = connection
@@ -169,6 +198,7 @@ final class DAVServer: @unchecked Sendable {
         }
 
         func readNext() {
+            if spool != nil { receiveSpooled(); return }
             switch parse() {
             case let .request(request, keepAlive):
                 // Answering takes as long as it takes; no deadline meanwhile.
@@ -241,6 +271,10 @@ final class DAVServer: @unchecked Sendable {
                     fail(FSBridge.unauthorized); return .failed
                 case let .accept(maxBody):
                     bodyLimit = maxBody
+                case let .acceptFile(maxBytes):
+                    return startSpool(method: String(parts[0]), target: target, headers: headers,
+                                      bodyStart: end.upperBound, maxBytes: maxBytes,
+                                      keepAlive: headers["connection"]?.lowercased() != "close" && parts[2] == "HTTP/1.1")
                 }
             } else {
                 guard DAVResponder.authorizes(headers["authorization"], token: token) else {
@@ -263,6 +297,83 @@ final class DAVServer: @unchecked Sendable {
             let request = DAVRequest(method: String(parts[0]), target: target,
                                      headers: headers, body: Data(body))
             return .request(request, keepAlive: keepAlive)
+        }
+
+        // MARK: Uploads to disk
+
+        /// A file's bytes, written to a spool file as they arrive: a length
+        /// is required (no chunked bodies), and whatever of the body came with
+        /// the headers is written first.
+        private func startSpool(method: String, target: String, headers: [String: String],
+                                bodyStart: Data.Index, maxBytes: Int64, keepAlive: Bool) -> Parsed {
+            if headers["transfer-encoding"] != nil { fail(411); return .failed }
+            guard let length = Int64(headers["content-length"] ?? ""), length >= 0 else { fail(411); return .failed }
+            guard length <= maxBytes else { fail(413); return .failed }
+            let url = Self.spoolDirectory.appendingPathComponent(UUID().uuidString)
+            guard FileManager.default.createFile(atPath: url.path, contents: nil),
+                  let handle = try? FileHandle(forWritingTo: url) else { fail(500); return .failed }
+            let here = Int64(buffer.endIndex - bodyStart)
+            let take = Int(min(here, length))
+            do {
+                try handle.write(contentsOf: buffer[bodyStart..<(bodyStart + take)])
+            } catch {
+                try? handle.close()
+                try? FileManager.default.removeItem(at: url)
+                fail(500); return .failed
+            }
+            buffer = Data(buffer[(bodyStart + take)...])
+            spool = Spool(url: url, handle: handle, remaining: length - Int64(take), method: method,
+                          target: target, headers: headers, keepAlive: keepAlive)
+            return finishSpoolIfDone() ?? .needMore
+        }
+
+        /// The request, once the whole body is on disk.
+        private func finishSpoolIfDone() -> Parsed? {
+            guard let done = spool, done.remaining == 0 else { return nil }
+            spool = nil
+            try? done.handle.close()
+            let request = DAVRequest(method: done.method, target: done.target, headers: done.headers, bodyFile: done.url)
+            return .request(request, keepAlive: done.keepAlive)
+        }
+
+        /// More of an upload's body: to the file, the rest (a pipelined next
+        /// request) to the buffer. Each piece buys another `uploadIdle`.
+        private func receiveSpooled() {
+            setDeadline(Self.uploadIdle)
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 1024 * 1024) { [self] data, _, complete, error in
+                guard var current = spool else { return }
+                if let data, !data.isEmpty {
+                    let take = Int(min(Int64(data.count), current.remaining))
+                    do {
+                        try current.handle.write(contentsOf: data.prefix(take))
+                    } catch {
+                        abandonSpool()
+                        fail(507); return
+                    }
+                    current.remaining -= Int64(take)
+                    spool = current
+                    if take < data.count { buffer.append(data.dropFirst(take)) }
+                }
+                if let parsed = finishSpoolIfDone(), case let .request(request, keepAlive) = parsed {
+                    clearDeadline()
+                    requestStarted = false
+                    handle((request, keepAlive))
+                    return
+                }
+                if error != nil || (complete && (data?.isEmpty ?? true)) {
+                    abandonSpool()
+                    connection.cancel(); return
+                }
+                receiveSpooled()
+            }
+        }
+
+        /// The connection went before the body was whole: nothing keeps it.
+        private func abandonSpool() {
+            guard let gone = spool else { return }
+            spool = nil
+            try? gone.handle.close()
+            try? FileManager.default.removeItem(at: gone.url)
         }
 
         private func handle(_ parsed: (DAVRequest, keepAlive: Bool)) {
@@ -405,10 +516,12 @@ final class DAVServer: @unchecked Sendable {
             case 404: return "Not Found"
             case 405: return "Method Not Allowed"
             case 409: return "Conflict"
+            case 411: return "Length Required"
             case 413: return "Payload Too Large"
             case 416: return "Range Not Satisfiable"
             case 500: return "Internal Server Error"
             case 503: return "Service Unavailable"
+            case 507: return "Insufficient Storage"
             default: return "Status"
             }
         }

@@ -62,13 +62,18 @@ public actor DriveWriter {
     let api: any DriveWriteAPI
     let tree: any DriveTree
     let uploads: UploadQueue
-    private var pending: [String: Pending] = [:]
+    private var pending: [String: Pending] = [:] {
+        didSet { revision &+= 1 }
+    }
     /// Uploads recorded, not yet in the mirror: path → file id.
     private var arrived: [String: String] = [:]
     /// A file saved over an existing one: once the new copy is recorded,
     /// the old one goes. (Until the server can replace a file's bytes in
     /// place, keeping its id — then this becomes that call.)
     private var replacing: [UUID: String] = [:]
+    /// Moves whenever the pending files change, so the bridge's view of the
+    /// drive (mirror + overlay) moves with it.
+    public private(set) var revision: UInt64 = 0
 
     public init(scope: String, filespaceId: String?, api: any DriveWriteAPI, tree: any DriveTree, uploads: UploadQueue) {
         self.scope = scope
@@ -82,6 +87,22 @@ public actor DriveWriter {
 
     /// Files copied in and not yet on the server, for the bridge to list.
     public func pendingFiles() -> [Pending] { Array(pending.values) }
+
+    /// The pending files as the bridge lays them over the mirror: listed
+    /// at their paths, read from their staged copies, under an id of their
+    /// own until the server gives them theirs.
+    public func overlay() -> (FSOverlay, UInt64) {
+        let nodes = pending.values.map { file in
+            FSNode(path: Self.relative(file.path), name: (file.path as NSString).lastPathComponent, isFolder: false,
+                   fileId: Self.pendingID(file.job), size: file.size, modified: file.modified,
+                   content: "pending:\(file.job.uuidString):\(file.size)", pending: true,
+                   staged: URL(fileURLWithPath: file.staged))
+        }
+        return (FSOverlay(nodes: nodes), revision)
+    }
+
+    /// The id a pending file answers to at the bridge ("pending:<job>").
+    public static func pendingID(_ job: UUID) -> String { "pending:\(job.uuidString)" }
 
     public func pending(at path: String) -> Pending? { pending[path] }
 
@@ -136,6 +157,7 @@ public actor DriveWriter {
             arrived[from] = nil
             try await renameFile(id, from: from, to: to, over: target)
             await tree.refresh()
+            await uploads.release(moving.job)
             return
         }
         if let moving = pending[from] {
@@ -186,6 +208,7 @@ public actor DriveWriter {
                 // Uploaded a moment ago: delete the file it became.
                 try await server { try await self.api.deleteFile(id: id) }
                 await tree.refresh()
+                await uploads.release(waiting.job)
             } else {
                 await uploads.cancel(waiting.job)
             }
@@ -229,7 +252,9 @@ public actor DriveWriter {
         for (path, id) in arrived {
             if case let .file(found)? = await tree.item(at: path), found == id {
                 arrived[path] = nil
-                pending[path] = nil
+                // The mirror shows the server's copy now: Finder reads that,
+                // and the staged one can go.
+                if let job = pending.removeValue(forKey: path)?.job { await uploads.release(job) }
             }
         }
     }
@@ -267,4 +292,19 @@ public actor DriveWriter {
     static func relative(_ path: String) -> String {
         path.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
     }
+}
+
+// The bridge's write routes land here (FSBridge.writer(for:)).
+extension DriveWriter: FSWriteTarget {
+    public func write(path: String, from file: URL, modified: Date?) async throws {
+        _ = try await putFile(path: path, from: file, modified: modified)
+    }
+
+    public func makeFolder(path: String) async throws { try await mkdir(path: path) }
+
+    public func move(from: String, to: String, replace: Bool) async throws {
+        try await rename(from: from, to: to, replace: replace)
+    }
+
+    public func remove(path: String) async throws { try await delete(path: path) }
 }

@@ -65,6 +65,10 @@ public actor UploadQueue {
     /// rather than waiting to be told, so a rename or delete that comes
     /// right as an upload finishes is applied to the file, not lost.
     private var recorded: [UUID: String] = [:]
+    /// Finished jobs whose bytes are still read from here: a file the server
+    /// has now, but the mirror does not show yet, is still read by Finder
+    /// from this copy. Removed when the writer lets go of it (`release`).
+    private var retained: [UUID: String] = [:]
     private var onChange: (@Sendable (UploadJob) -> Void)?
     private var sleep: @Sendable (Double) async -> Void
 
@@ -73,7 +77,8 @@ public actor UploadQueue {
         self.directory = directory
         self.transport = transport
         self.sleep = sleep
-        try FileManager.default.createDirectory(at: directory.appendingPathComponent("files"), withIntermediateDirectories: true)
+        let files = directory.appendingPathComponent("files")
+        try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
         if let data = try? Data(contentsOf: directory.appendingPathComponent("jobs.json")),
            let saved = try? JSONDecoder().decode([UploadJob].self, from: data) {
             for var job in saved where job.state != .done {
@@ -81,6 +86,11 @@ public actor UploadQueue {
                 if job.state == .uploading { job.state = .queued }
                 jobs[job.id] = job
             }
+        }
+        // Copies kept for reading by the last run: nothing reads them now.
+        let wanted = Set(jobs.values.map { URL(fileURLWithPath: $0.staged).lastPathComponent })
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: files.path)) ?? [] where !wanted.contains(name) {
+            try? FileManager.default.removeItem(at: files.appendingPathComponent(name))
         }
     }
 
@@ -120,6 +130,12 @@ public actor UploadQueue {
 
     /// The file a finished job became, if it has.
     public func fileId(for id: UUID) -> String? { recorded[id] }
+
+    /// A finished job's copy is no longer read: it goes.
+    public func release(_ id: UUID) {
+        guard let staged = retained.removeValue(forKey: id) else { return }
+        try? FileManager.default.removeItem(atPath: staged)
+    }
 
     /// Bytes sent so far, for progress.
     public func sent(_ id: UUID) -> Int64 { progress[id] ?? 0 }
@@ -187,7 +203,7 @@ public actor UploadQueue {
                 done.fileId = file.id
                 done.lastError = nil
                 recorded[id] = file.id
-                try? FileManager.default.removeItem(atPath: done.staged)
+                retained[id] = done.staged
                 jobs[id] = nil
                 save()
                 onChange?(done)

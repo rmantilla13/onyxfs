@@ -11,12 +11,16 @@ public struct MirrorFSSource: FSSource {
     let pins: @Sendable () -> PinStore?
     let presign: @Sendable (MirrorEntry) async throws -> FSRemoteLink
     let volume: @Sendable () async -> FSVolumeInfo
+    /// What this Mac has written that the mirror does not show yet (the
+    /// drive's DriveWriter), and its revision.
+    let overlay: (@Sendable () async -> (FSOverlay, UInt64))?
 
     /// `presign` signs a link to a file's bytes; by default the mirror's own
     /// (DriveMirror.contentLink), which reuses one while it has time left.
     public init(scope: String, mirror: DriveMirror, pins: @escaping @Sendable () -> PinStore?,
                 presign: (@Sendable (MirrorEntry) async throws -> FSRemoteLink)? = nil,
-                volume: @escaping @Sendable () async -> FSVolumeInfo) {
+                volume: @escaping @Sendable () async -> FSVolumeInfo,
+                overlay: (@Sendable () async -> (FSOverlay, UInt64))? = nil) {
         self.scope = scope
         self.mirror = mirror
         self.pins = pins
@@ -26,17 +30,26 @@ public struct MirrorFSSource: FSSource {
             return FSRemoteLink(url: link.url, expiresAt: link.expiresAt)
         }
         self.volume = volume
+        self.overlay = overlay
     }
 
-    /// The mirror has no overlay of its own yet: writes from Finder will
-    /// bring one, and a revision that moves with it too.
+    /// The mirror, with this Mac's writes laid over it. Both revisions only
+    /// ever go up, so their sum does too — and moves with either.
     public func snapshot() async -> FSSnapshot {
         let now = await mirror.snapshot
-        return FSSnapshot(revision: now.revision, index: now.index)
+        guard let overlay else { return FSSnapshot(revision: now.revision, index: now.index) }
+        let (written, revision) = await overlay()
+        return FSSnapshot(revision: now.revision &+ revision, index: now.index, overlay: written)
     }
 
+    /// `revision` is snapshot()'s, mirror and overlay summed: the mirror is
+    /// waited on past its own share. Had the overlay moved meanwhile, that
+    /// share is smaller than it was and this returns at once — which is
+    /// right, as there is something new to see.
     public func waitForChange(after revision: UInt64, timeout: Duration) async {
-        await mirror.waitForChange(after: revision, timeout: timeout)
+        guard let overlay else { return await mirror.waitForChange(after: revision, timeout: timeout) }
+        let (_, written) = await overlay()
+        await mirror.waitForChange(after: revision >= written ? revision - written : 0, timeout: timeout)
     }
 
     public func keptOffline(_ entries: [MirrorEntry]) async -> Set<String> {

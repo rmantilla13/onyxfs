@@ -377,12 +377,19 @@ final class DriveService: ObservableObject {
         // One responder per drive, for as long as its mirror lasts: stop()
         // and driveGone() end it with the mirror.
         if server.fs.responder(for: id) == nil {
+            // Finder's changes go through the drive's writer (to the server,
+            // as the web's own), and what it has not sent yet is laid over
+            // the mirror so it shows at once.
+            let writer = await writer(for: scope)
+            let overlay: (@Sendable () async -> (FSOverlay, UInt64))? = writer.map { w in { @Sendable in await w.overlay() } }
             let source = MirrorFSSource(scope: id, mirror: mirror, pins: { [currentPins] in currentPins.withLock { $0 } },
                                         volume: { [weak self] in
                                             await self?.onyxfsVolume(scope)
                                                 ?? FSVolumeInfo(name: name, readOnly: true, cacheLimitBytes: 0)
-                                        })
+                                        },
+                                        overlay: overlay)
             server.fs.register(FSResponder(scope: id, source: source))
+            server.fs.setWriter(writer, for: id)
         }
         onyxfsScopes.insert(id)
         let ticket = server.fs.sessions.issueTicket(for: id)
@@ -540,6 +547,9 @@ final class DriveService: ObservableObject {
             syncing.insert(id)
             do {
                 _ = try await mirror.sync()
+                // Files this Mac uploaded that the mirror now shows stop
+                // being pending, and their staged copies go.
+                await writers[id]?.mirrorChanged()
                 if isOffline {
                     isOffline = false
                     // Back: what failed for want of a network is tried now,

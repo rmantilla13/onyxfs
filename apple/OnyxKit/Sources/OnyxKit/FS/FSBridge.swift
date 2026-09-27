@@ -13,6 +13,9 @@ public final class FSBridge: @unchecked Sendable {
     public let sessions: FSSessions
     private let lock = NSLock()
     private var responders: [String: FSResponder] = [:]
+    /// Where each drive's writes go (the app's DriveWriter), for drives this
+    /// account may change.
+    private var writers: [String: any FSWriteTarget] = [:]
     /// `changes` long-polls under way, by session, and in all.
     private var polls: [String: Int] = [:]
     private var pollCount = 0
@@ -25,9 +28,12 @@ public final class FSBridge: @unchecked Sendable {
     /// The ticket's body: a ticket is 43 characters; nothing more is waited
     /// for from a caller that has no session yet.
     public static let maxExchangeBody = 4 * 1024
-    /// Anything else's body. The read side has none; this is room for the
-    /// small JSON bodies of what comes next, not for a file's bytes.
+    /// Anything else's body: the small JSON of a mkdir or a rename. A
+    /// file's bytes (`PUT /fs/v1/file`) are not held but written to disk as
+    /// they arrive (Admission.acceptFile).
     public static let maxRequestBody = 64 * 1024
+    /// The largest file a drive takes: storage's own limit for one object.
+    public static let maxFileBody: Int64 = 5 << 40
     /// Long-polls hold a connection each while they wait, and the listener
     /// has a fixed number (DAVServer.maxConnections) shared with rclone. An
     /// extension keeps one going per disk; these leave most of the room to
@@ -51,17 +57,32 @@ public final class FSBridge: @unchecked Sendable {
         lock.withLock { responders[scope] }
     }
 
+    /// Where `scope`'s writes go from now on (nil: nowhere — read-only).
+    public func setWriter(_ writer: (any FSWriteTarget)?, for scope: String) {
+        lock.withLock { writers[scope] = writer }
+    }
+
+    func writer(for scope: String) -> (any FSWriteTarget)? {
+        lock.withLock { writers[scope] }
+    }
+
     /// The drive is unmounted, or gone: its sessions and tickets end, and
     /// nothing more is answered for it.
     public func end(scope: String) {
         sessions.end(scope: scope)
-        lock.withLock { _ = responders.removeValue(forKey: scope) }
+        lock.withLock {
+            _ = responders.removeValue(forKey: scope)
+            _ = writers.removeValue(forKey: scope)
+        }
     }
 
     /// Signed out.
     public func endAll() {
         sessions.endAll()
-        lock.withLock { responders = [:] }
+        lock.withLock {
+            responders = [:]
+            writers = [:]
+        }
     }
 
     /// Where FSKit mounts a drive from:
@@ -93,6 +114,9 @@ public final class FSBridge: @unchecked Sendable {
     public enum Admission: Equatable {
         /// Take the body, up to this many bytes, and answer (`respond`).
         case accept(maxBody: Int)
+        /// A file's bytes: written to a file as they arrive, never held, up
+        /// to this many; the request then carries it as `bodyFile`.
+        case acceptFile(maxBytes: Int64)
         /// No session: answer `unauthorized` and close, waiting for no body.
         case refuse
     }
@@ -102,7 +126,9 @@ public final class FSBridge: @unchecked Sendable {
     /// again, as for any caller.
     public func admit(method: String, target: String, authorization: String?) -> Admission {
         if method == "POST", Self.route(target) == "session" { return .accept(maxBody: Self.maxExchangeBody) }
-        return sessions.session(for: authorization) == nil ? .refuse : .accept(maxBody: Self.maxRequestBody)
+        guard sessions.session(for: authorization) != nil else { return .refuse }
+        if method == "PUT", Self.route(target) == "file" { return .acceptFile(maxBytes: Self.maxFileBody) }
+        return .accept(maxBody: Self.maxRequestBody)
     }
 
     public static var unauthorized: DAVResponse {
@@ -115,7 +141,10 @@ public final class FSBridge: @unchecked Sendable {
 
     /// The answer to one request under `/fs/v1/`, Content-Length set.
     public func respond(to request: DAVRequest) async -> DAVResponse {
-        Self.finished(await answer(request), method: request.method)
+        let response = await answer(request)
+        // An upload's body the writer did not take (refused, failed): gone.
+        if let file = request.bodyFile { try? FileManager.default.removeItem(at: file) }
+        return Self.finished(response, method: request.method)
     }
 
     /// Content-Length from the body a GET would carry, set once here, and
@@ -133,10 +162,11 @@ public final class FSBridge: @unchecked Sendable {
         if route == "session", request.method == "POST" { return await exchange(request.body) }
 
         guard let session = sessions.session(for: request.headers["authorization"]) else { return Self.unauthorized }
-        guard let route, Self.readRoutes.contains(route) || route == "session" else {
+        guard let route, Self.readRoutes.contains(route) || Self.writeRoutes.contains(route) || route == "session" else {
             return FSResponder.error(404, "There is no such endpoint.")
         }
         if route == "session" { return Self.notAllowed("POST") }
+        if Self.writeRoutes.contains(route) { return await write(route, request, session: session) }
         guard request.method == "GET" || request.method == "HEAD" else { return Self.notAllowed("GET, HEAD") }
         guard let query = Self.query(request.target) else { return FSResponder.error(400, "The query is not valid.") }
         // Registered before its first ticket was issued, and forgotten only
@@ -163,6 +193,71 @@ public final class FSBridge: @unchecked Sendable {
     }
 
     static let readRoutes: Set<String> = ["list", "stat", "source", "data", "changes", "volume"]
+    static let writeRoutes: Set<String> = ["file", "mkdir", "rename", "item"]
+
+    /// The write side (ONYXFS.md, "Writes"): Finder's changes, made on the
+    /// server by the drive's writer, then answered with the entry as a
+    /// listing would show it now.
+    ///
+    ///     PUT    /fs/v1/file?path=     the body is the whole file (new, or
+    ///                                  new bytes for the one there)
+    ///     POST   /fs/v1/mkdir          { "path": "/a/new" }
+    ///     POST   /fs/v1/rename         { "from": …, "to": …, "replace": false }
+    ///     DELETE /fs/v1/item?path=     to the web's trash (its flag decides)
+    ///
+    /// A drive this account may only view answers 403 before anything is
+    /// tried; the server checks each change again whatever the app thinks.
+    private func write(_ route: String, _ request: DAVRequest, session: FSSessions.Session) async -> DAVResponse {
+        guard let responder = responder(for: session.scope) else { return FSResponder.unavailable }
+        let allowed: String = switch route {
+        case "file": "PUT"
+        case "item": "DELETE"
+        default: "POST"
+        }
+        guard request.method == allowed else { return Self.notAllowed(allowed) }
+        guard let writer = writer(for: session.scope), await !responder.source.volumeInfo().readOnly else {
+            return FSResponder.error(403, "You can view this drive but not change it. Ask one of its owners for editor access.")
+        }
+        guard let query = Self.query(request.target) else { return FSResponder.error(400, "The query is not valid.") }
+        let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] ?? [:]
+        do {
+            switch route {
+            case "file":
+                guard let path = query["path"], let file = request.bodyFile else {
+                    return FSResponder.error(400, "PUT /fs/v1/file needs ?path= and the file as its body.")
+                }
+                let modified = request.headers["x-onyx-mtime"].flatMap(Double.init).map { Date(timeIntervalSince1970: $0) }
+                try await writer.write(path: path, from: file, modified: modified)
+                return await responder.stat(path: path)
+            case "mkdir":
+                guard let path = body["path"] as? String else { return FSResponder.error(400, #"The body must be {"path": "…"}."#) }
+                try await writer.makeFolder(path: path)
+                return await responder.stat(path: path)
+            case "rename":
+                guard let from = body["from"] as? String, let to = body["to"] as? String else {
+                    return FSResponder.error(400, #"The body must be {"from": "…", "to": "…"}."#)
+                }
+                try await writer.move(from: from, to: to, replace: body["replace"] as? Bool ?? false)
+                return await responder.stat(path: to)
+            default: // "item"
+                guard let path = query["path"] else { return FSResponder.error(400, "DELETE /fs/v1/item needs ?path=.") }
+                try await writer.remove(path: path)
+                return FSResponder.json(200, ["ok": true])
+            }
+        } catch let DriveWriter.Failure.posix(code, message) {
+            let (status, fallback): (Int, String) = switch code {
+            case EACCES, EPERM: (403, "Onyx did not allow this change.")
+            case ENOENT: (404, "There is no such file or folder.")
+            case EEXIST: (409, "Something by that name is already there.")
+            case EDQUOT: (413, "There is no room for this in the drive.")
+            case EISDIR, EINVAL: (400, "That is not a name a file can have here.")
+            default: (500, "The change could not be made.")
+            }
+            return FSResponder.error(status, message ?? fallback)
+        } catch {
+            return FSResponder.error(500, error.localizedDescription)
+        }
+    }
 
     /// `POST /fs/v1/session`: `{ "ticket": "…" }` for a session on the
     /// ticket's drive.
@@ -248,4 +343,15 @@ public final class FSBridge: @unchecked Sendable {
         }
         return out
     }
+}
+
+/// Where a drive's writes go: the app's DriveWriter, which makes each change
+/// on the server with the device token (and so under the web's own rules).
+/// Paths are the drive's ("/Footage/Take 1.mov"). Throws DriveWriter.Failure.
+public protocol FSWriteTarget: Sendable {
+    /// `file` is taken (moved away) by the writer when it succeeds.
+    func write(path: String, from file: URL, modified: Date?) async throws
+    func makeFolder(path: String) async throws
+    func move(from: String, to: String, replace: Bool) async throws
+    func remove(path: String) async throws
 }

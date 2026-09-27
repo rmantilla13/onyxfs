@@ -103,8 +103,13 @@ func settle(_ queue: UploadQueue) async {
         try await Task.sleep(nanoseconds: 20_000_000)
         #expect(await seen.last?.state == .done)
         #expect(await seen.last?.fileId == "file-Take 1.mov")
-        // The staged copy is gone once the server has the file.
-        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("files").path).isEmpty)
+        // The staged copy stays while Finder may still read it (until the
+        // mirror shows the server's), and goes when released.
+        let files = dir.appendingPathComponent("files").path
+        #expect(try FileManager.default.contentsOfDirectory(atPath: files).count == 1)
+        let id = try #require(await seen.last?.id)
+        await queue.release(id)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: files).isEmpty)
     }
 
     /// Over the threshold: in parts. Part 5 fails once; the retry asks the
@@ -235,4 +240,18 @@ actor Gate {
 
 extension FakeServer {
     func setPartSize(_ size: Int64) { partSize = size }
+}
+
+@Suite struct UploadQueueCleanupTests {
+    /// A copy kept for reading by an earlier run is not read by anything now.
+    @Test func copiesKeptByAnEarlierRunAreClearedAtStart() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        let first = try UploadQueue(directory: dir, transport: server, sleep: { _ in })
+        try await first.enqueue(from: try source(Data([1])), scope: "library", filespaceId: nil, folder: "", name: "a.txt", mime: "text/plain")
+        await settle(first)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("files").path).count == 1)
+        _ = try UploadQueue(directory: dir, transport: server, sleep: { _ in })
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("files").path).isEmpty)
+    }
 }
