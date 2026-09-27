@@ -16,10 +16,11 @@ import { api } from '../_ui/api';
 const INVITES = '/api/admin/invites';
 
 /**
- * The queue and its decisions. Approving lets the person sign in with their
- * email; they are not told yet (the "You're in" email is Phase 1), so the
- * toast says so. Revoking removes their sign-in and ends their sessions;
- * their files stay.
+ * Who may sign in: the people admins added, and any requests made before
+ * the sign-in page stopped taking them. Approving lets the person sign in
+ * with their email; they are not told yet (the "You're in" email is Phase
+ * 1), so the toast says so. Revoking removes their sign-in and ends their
+ * sessions; their files stay.
  */
 export default function RequestsClient({ status, rows, counts }) {
   const router = useRouter();
@@ -70,7 +71,7 @@ export default function RequestsClient({ status, rows, counts }) {
     // devices and the links they made all go; their files stay.
     const ok = await confirm({
       title: `Remove ${r.email}?`,
-      body: 'They can no longer sign in, and lose their drive access, devices and the links they made. Any open browser session ends on its next request, and the desktop app stops on its next request. Files they uploaded stay. They can ask again from the sign-in page.',
+      body: 'They can no longer sign in, and lose their drive access, devices and the links they made. Any open browser session ends on its next request, and the desktop app stops on its next request. Files they uploaded stay. You can add them again later.',
       confirmLabel: 'Remove',
     });
     if (ok) act(`revoke:${r.id}`, () => api(`${INVITES}?email=${encodeURIComponent(r.email)}`, { method: 'DELETE' }), `Removed ${r.email}.`);
@@ -79,7 +80,7 @@ export default function RequestsClient({ status, rows, counts }) {
   return (
     <AdminPage
       title="Access requests"
-      description="People who asked to sign in, and your answer. Approving lets them in with their email address."
+      description="Who can sign in. Nobody can ask from the sign-in page: add someone here, and they sign in with their email address."
       actions={<button type="button" className="btn" onClick={() => setAdding(true)}>Add someone…</button>}
       toolbar={(
         <nav className="admin-seg" aria-label="Requests">
@@ -101,7 +102,7 @@ export default function RequestsClient({ status, rows, counts }) {
         <AdminState
           kind="empty"
           title={filter.empty}
-          message={status === 'pending' ? 'Requests from the sign-in page appear here, and in Slack when it is connected.' : undefined}
+          message={status === 'pending' ? 'The sign-in page no longer takes requests. Add someone to let them in.' : undefined}
         />
       ) : (
         <ul className="requests" aria-label={`${filter.label} requests`}>
@@ -252,7 +253,7 @@ function AddDialog({ open, onClose, onAdded }) {
       )}
     >
       <form id={id} className="admin-form" onSubmit={submit} noValidate>
-        <p className="small muted admin-note">They can sign in with this address straight away, without asking first. Give them access to drives from each drive’s members.</p>
+        <p className="small muted admin-note">They can sign in with this address straight away. Give them access to drives from each drive’s members.</p>
         <label className="admin-field">
           <span className="admin-field-label">Email</span>
           <input ref={ref} className="input" type="email" value={email} onChange={(e) => { setEmail(e.target.value); setError(null); }} placeholder="someone@example.com" autoComplete="off" />

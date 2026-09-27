@@ -1,6 +1,5 @@
 import { redirect } from 'next/navigation';
 import { getSessionUser } from '@/lib/session';
-import { readGlobalFlags } from '@/lib/authz';
 import { loadBrand } from '@/lib/brand-config';
 import { printsSignInLinks } from '@/lib/signin-email';
 import { safeReturnPath } from '@/lib/return-path';
@@ -30,8 +29,7 @@ export default async function SignInPage({ searchParams }) {
     if (await getSessionUser()) redirect(returnTo || '/files');
   }
 
-  // Unread flags hide the offer; the action refuses on the same terms.
-  const [brand, flags] = await Promise.all([loadBrand(), readGlobalFlags()]);
+  const brand = await loadBrand();
   return (
     <SignInClient
       brandName={brand.name}
@@ -41,7 +39,6 @@ export default async function SignInPage({ searchParams }) {
       linksPrinted={printsSignInLinks()}
       returnTo={returnTo}
       error={code ? ERRORS[code] || 'Sign-in failed. Try again.' : null}
-      requestsEnabled={!!flags?.inviteRequests}
     />
   );
 }
