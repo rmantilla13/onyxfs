@@ -5,8 +5,8 @@ import Testing
 @testable import OnyxKit
 
 /// A drive's disk icon: an .icns macOS can read, every size in it drawn at
-/// its own size; the slash in the drive's colour on the mark's tile, and the
-/// drive's initial after it.
+/// its own size; the drive's initial in its colour on the logo's tile, and
+/// the app's own icon for the library.
 struct DriveIconTests {
     /// The .icns's entries, by type.
     func entries(_ icns: Data) throws -> [String: Data] {
@@ -56,8 +56,8 @@ struct DriveIconTests {
     }
 
     /// The 1024-pixel image of an icon.
-    func largest(_ color: String?, _ name: String?) throws -> Pixels {
-        let icns = try #require(DriveIcon.icns(color: color, name: name))
+    func largest(_ color: String?, _ name: String?, mark: CGImage? = nil) throws -> Pixels {
+        let icns = try #require(DriveIcon.icns(color: color, name: name, mark: mark))
         let png = try #require(try entries(icns)["ic10"])
         return Pixels(try image(png))
     }
@@ -78,29 +78,41 @@ struct DriveIconTests {
         #expect(CGImageSourceGetCount(source) >= 7)
     }
 
-    @Test func theLibrarysDiskIsTheMarkAsItIs() throws {
-        let mark = try largest(nil, nil)
-        // The tile is 824 of 1024, centred; the slash leans through its middle.
-        #expect(mark[512, 512] == RGB(0x99, 0xE3, 0x14))
-        #expect(mark[300, 512] == DriveIcon.tile)
-        #expect(mark[2, 2] == nil, "clear around the tile")
+    /// An image of one colour, edge to edge, as the app's icon comes.
+    func solid(_ color: RGB) -> CGImage {
+        let ctx = CGContext(data: nil, width: 64, height: 64, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.setFillColor(color.cgColor)
+        ctx.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+        return ctx.makeImage()!
     }
 
-    @Test func aDrivesSlashIsItsColourAndItsInitialFollows() throws {
-        let photos = try largest("#E040FB", "Photos")
-        // Across the middle: the tile, the slash, the tile, the letter.
-        let row = (100..<924).compactMap { photos[$0, 512] }
-        let slash = try #require(row.firstIndex(of: RGB(0xE0, 0x40, 0xFB)))
-        let letter = try #require(row.firstIndex(of: Self.white))
-        #expect(slash < letter)
-        #expect(row.lastIndex(of: RGB(0xE0, 0x40, 0xFB))! < letter, "the slash first, then the letter")
-        #expect(row[..<slash].contains(DriveIcon.tile), "on the tile")
+    @Test func theLibrarysDiskIsTheAppsOwnIcon() throws {
+        let red = RGB(0xD0, 0x10, 0x20)
+        let library = try largest(nil, nil, mark: solid(red))
+        // On macOS's grid: 824 of 1024, centred, and clear around it.
+        #expect(library[512, 512] == red && library[110, 512] == red && library[914, 512] == red)
+        #expect(library[60, 512] == nil && library[2, 2] == nil)
+        // With no icon to hand (a test, a build without one): the bare tile.
+        #expect(try largest(nil, nil)[512, 512] == DriveIcon.tile)
+    }
 
-        // No colour from the server: the mark's own slash, the letter still.
+    @Test func aDrivesInitialIsInItsColourOnTheTile() throws {
+        // An I is a stem through the middle.
+        let icon = try largest("#E040FB", "Inbox")
+        #expect(icon[512, 512] == RGB(0xE0, 0x40, 0xFB))
+        let row = (100..<924).compactMap { icon[$0, 512] }
+        #expect(row.contains(DriveIcon.tile) && !row.contains(Self.white))
+        // The small sizes are drawn too, heavier: the 16-pixel one has the colour in it.
+        let icns = try #require(DriveIcon.icns(color: "#E040FB", name: "Inbox"))
+        let small = Pixels(try image(try #require(try entries(icns)["icp4"])))
+        let colours = (0..<16).flatMap { y in (0..<16).compactMap { small[$0, y] } }
+        #expect(colours.contains { $0.r > $0.g + 40 && $0.b > $0.g + 40 }, "magenta at 16 pixels")
+
+        // No colour from the server: the logo's cyan.
         for color in [nil, "", "blue", "#12345", "#GG0000"] as [String?] {
-            let icon = try largest(color, "Photos")
-            let row = (100..<924).compactMap { icon[$0, 512] }
-            #expect(row.contains(RGB(0x99, 0xE3, 0x14)) && row.contains(Self.white), "\(color ?? "nil")")
+            #expect(try largest(color, "Inbox")[512, 512] == DriveIcon.cyan, "\(color ?? "nil")")
         }
     }
 
@@ -116,7 +128,8 @@ struct DriveIconTests {
         let cases: [(String?, String?)] = [
             ("Videos", "V"), ("memories", "M"), ("2024 Shoots", "2"), ("🎬 Film", "F"),
             ("[Archive]", "A"), ("ßeta", "S"), ("éclair", "É"), ("映像", "映"),
-            ("  ", nil), ("🎬", nil), ("", nil), (nil, nil),
+            // A name with no letter or digit: its first sign, an emoji say.
+            ("🎬", "🎬"), ("  🎞 ", "🎞"), ("!!!", nil), ("  ", nil), ("", nil), (nil, nil),
         ]
         for (name, initial) in cases {
             #expect(DriveIcon.initial(of: name) == initial, "\(name ?? "nil")")
@@ -125,29 +138,34 @@ struct DriveIconTests {
 
     @Test func aWideLetterIsMadeToFit() throws {
         // Letters far wider than a W (Ǆ is one letter; so is the Arabic
-        // ligature ﷲ): nothing white strays past the tile's inner margin.
-        for name in ["Ǆ", "ﷲ", "Ｗ", "W"] {
-            #expect(DriveIcon.initial(of: name) != nil, "\(name) is a letter")
+        // ligature ﷲ), and an emoji: nothing strays past the tile's margin.
+        for name in ["Ǆ", "ﷲ", "Ｗ", "W", "🎬"] {
+            #expect(DriveIcon.initial(of: name) != nil, "\(name) has an initial")
             let icon = try largest("#22D3EE", name)
-            var letter = 0
-            for y in stride(from: 150, to: 874, by: 2) {
+            var drawn = 0
+            for y in stride(from: 110, to: 914, by: 2) {
                 for x in [120, 150, 170, 854, 874, 904] {
-                    #expect(icon[x, y] != Self.white, "\(name) at \(x),\(y)")
+                    let p = icon[x, y]
+                    #expect(p == nil || p == DriveIcon.tile || RGB.contrast(p!, DriveIcon.tile) < 1.5,
+                            "\(name) at \(x),\(y)")
                 }
-                letter += (170..<854).filter { icon[$0, y] == Self.white }.count
+                drawn += (170..<854).filter { icon[$0, y].map { RGB.contrast($0, DriveIcon.tile) > 2 } ?? false }.count
             }
-            #expect(letter > 0, "\(name) is drawn")
+            #expect(drawn > 0, "\(name) is drawn")
         }
     }
 
     @Test func aColourTooDarkForTheTileIsLiftedJustEnough() {
         let navy = RGB(hex: "#1A237E")!
         let lifted = DriveIcon.legible(navy)
-        #expect(RGB.contrast(lifted, DriveIcon.tile) >= 3)
-        #expect(RGB.contrast(DriveIcon.legible(lifted), DriveIcon.tile) >= 3)
+        #expect(RGB.contrast(lifted, DriveIcon.tile) >= 4.5)
+        #expect(DriveIcon.legible(lifted) == lifted, "lifted once, enough")
         #expect(lifted.b > lifted.r, "still blue")
         // Bright enough already: as it was.
         #expect(DriveIcon.legible(RGB(hex: "#22D3EE")!) == RGB(hex: "#22D3EE")!)
-        #expect(DriveIcon.legible(RGB(hex: "#C2410C")!) == RGB(hex: "#C2410C")!)
+        #expect(DriveIcon.legible(RGB(hex: "#81A628")!) == RGB(hex: "#81A628")!)
+        // The warning's orange is dark for thin letters: lifted, still orange.
+        let orange = DriveIcon.legible(RGB(hex: "#C2410C")!)
+        #expect(RGB.contrast(orange, DriveIcon.tile) >= 4.5 && orange.r > orange.g && orange.g > orange.b)
     }
 }

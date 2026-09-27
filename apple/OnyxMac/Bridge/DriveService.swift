@@ -414,7 +414,8 @@ final class DriveService: ObservableObject {
                                             // drive's colour and name are all
                                             // it needs from here.
                                             let drive = await self?.onyxfsIconDrive(scope)
-                                            return DriveIcon.icns(color: drive?.color, name: drive?.name)
+                                            return DriveIcon.icns(color: drive?.color, name: drive?.name,
+                                                                  mark: DriveService.appIcon)
                                         })
             server.fs.register(FSResponder(scope: id, source: source))
             server.fs.setWriter(writer, for: id)
@@ -454,12 +455,25 @@ final class DriveService: ObservableObject {
 
     /// What a drive's disk icon is drawn from (DriveIcon): its colour, as
     /// the server gives it, and its name's initial. None for the library,
-    /// whose disk is the mark as it is.
+    /// whose disk wears the app's own icon.
     private func onyxfsIconDrive(_ scope: SyncDomain) -> (color: String?, name: String)? {
         guard case let .drive(id) = scope else { return nil }
         guard let drive = model?.drives.first(where: { $0.id == id }) else { return (nil, names[scope.identifier] ?? "") }
         return (drive.color, drive.name)
     }
+
+    /// The app's own icon, the ONYX FS mark, at its largest: the library's
+    /// disk icon. Read once, the first time a library disk mounts.
+    nonisolated static let appIcon: CGImage? = {
+        guard let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let widths = (0..<CGImageSourceGetCount(source)).map { index in
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+            return (index, properties?[kCGImagePropertyPixelWidth] as? Int ?? 0)
+        }
+        guard let largest = widths.max(by: { $0.1 < $1.1 }) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, largest.0, nil)
+    }()
 
     // MARK: - Mirrors
 

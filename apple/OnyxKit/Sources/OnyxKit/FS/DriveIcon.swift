@@ -3,13 +3,13 @@ import CoreText
 import Foundation
 import ImageIO
 
-/// A drive's disk icon: the Onyx mark — the slash, the root of a file
-/// system, on its near-black tile (public/onyx-mark.svg) — with the slash in
-/// the drive's own colour, the dot beside its name on the web, and after it
-/// the drive's initial, as a path is written: "/V" for Videos. Colour alone
-/// would not do: the web has seven, so drives share them, and two disks of
-/// one colour would look the same on the Desktop. The library, all files, is
-/// the mark as it is.
+/// A drive's disk icon, in the logo's style. It is the near-black tile of the
+/// ONYX FS icon (public/onyx-mark.svg) with the drive's initial on it. The
+/// initial is set the way the logo sets its letters, thin and wide, in the
+/// drive's own colour: the dot beside its name on the web, as the logo's "FS"
+/// is in its cyan. Colour alone would not do: the web has seven, so drives
+/// share them, and two disks of one colour would look the same on the
+/// Desktop. The library, all files, is the app's own icon.
 ///
 /// The app hands it to the file system extension (`GET /fs/v1/icon`), which
 /// puts it where macOS looks for a disk's own icon (LocalStore.placeVolumeIcon
@@ -17,33 +17,52 @@ import ImageIO
 /// own size, on the tile macOS gives every icon (824 of 1024, centred), so it
 /// sits among other disks at their size.
 public enum DriveIcon {
-    /// The mark's own colours.
+    /// The icon's tile, and the logo's cyan: the letter's colour for a drive
+    /// the server gave none.
     static let tile = RGB(0x09, 0x0B, 0x0E)
-    static let slash = RGB(0x99, 0xE3, 0x14)
+    static let cyan = RGB(0x94, 0xE0, 0xF7)
 
-    /// The icon for a drive: `name`'s initial after a slash in `color`
-    /// ("#RRGGBB"). The mark's own slash for no colour (a server too old to
-    /// say), and the mark as it is for no name — the library's disk. Nil only
-    /// if the images could not be encoded. Made once per colour and initial.
-    public static func icns(color: String?, name: String?) -> Data? {
-        let rgb = color.flatMap(RGB.init(hex:)) ?? slash
-        let letter = initial(of: name)
-        let key = "\(rgb.hex)/\(letter ?? "")"
+    /// The icon for a drive: `name`'s initial in `color` ("#RRGGBB"), or in
+    /// the logo's cyan for none (a server too old to say). No name is the
+    /// library's disk: `mark`, the app's own icon, drawn on the same grid, or
+    /// the bare tile without one. Nil only if the images could not be
+    /// encoded. Each colour and initial is drawn once.
+    public static func icns(color: String?, name: String?, mark: CGImage? = nil) -> Data? {
+        let key: String
+        let face: Face
+        if let name {
+            let rgb = legible(color.flatMap(RGB.init(hex:)) ?? cyan)
+            let letter = initial(of: name)
+            key = "\(rgb.hex)/\(letter ?? "")"
+            face = .letter(letter, rgb)
+        } else {
+            key = mark == nil ? "tile" : "mark"
+            face = .mark(mark)
+        }
         if let made = lock.withLock({ cache[key] }) { return made }
-        guard let data = make(slash: legible(rgb), letter: letter) else { return nil }
+        guard let data = make(face) else { return nil }
         lock.withLock { cache[key] = data }
         return data
+    }
+
+    enum Face {
+        case letter(String?, RGB)
+        case mark(CGImage?)
     }
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var cache: [String: Data] = [:]
 
-    /// What follows the slash: the name's first letter or digit, in
-    /// capitals; nil for a name with neither (an emoji is too wide to sit
-    /// beside it), and the slash stands alone.
+    /// What goes on the tile: the name's first letter or digit, in capitals.
+    /// A name with neither has its first character that is not a space or a
+    /// mark of punctuation instead (an emoji), and a name with none of those
+    /// a bare tile.
     static func initial(of name: String?) -> String? {
-        guard let first = name?.first(where: { $0.isLetter || $0.isNumber }) else { return nil }
-        return first.uppercased().first.map(String.init)
+        guard let name else { return nil }
+        if let first = name.first(where: { $0.isLetter || $0.isNumber }) {
+            return first.uppercased().first.map(String.init)
+        }
+        return name.first { !$0.isWhitespace && !$0.isPunctuation }.map(String.init)
     }
 
     /// Each size an .icns holds (iconutil's set), by its type: 16-point to
@@ -53,10 +72,10 @@ public enum DriveIcon {
         ("ic13", 256), ("ic08", 256), ("ic14", 512), ("ic09", 512), ("ic10", 1024),
     ]
 
-    static func make(slash color: RGB, letter: String?) -> Data? {
+    static func make(_ face: Face) -> Data? {
         var pngs: [Int: Data] = [:]
         for pixels in Set(entries.map(\.pixels)) {
-            guard let image = draw(pixels: pixels, slash: color, letter: letter), let png = png(image) else { return nil }
+            guard let image = draw(face, pixels: pixels), let png = png(image) else { return nil }
             pngs[pixels] = png
         }
         return pack(entries.map { ($0.type, pngs[$0.pixels]!) })
@@ -64,22 +83,24 @@ public enum DriveIcon {
 
     // MARK: - Drawing
 
-    /// The mark's slash, 300 points tall in its 512-point box (y down): a
-    /// parallelogram leaning right, `x` from its lowest point's left.
-    static func slash(height: CGFloat, left x: CGFloat, top y: CGFloat) -> [CGPoint] {
-        let k = height / 300
-        return [CGPoint(x: x + 80.75 * k, y: y), CGPoint(x: x + 138.01 * k, y: y),
-                CGPoint(x: x + 57.26 * k, y: y + height), CGPoint(x: x, y: y + height)]
+    /// The letter's capitals are this tall on the 512-point tile, and it
+    /// stays this far from the tile's edges however wide it is.
+    static let capHeight: CGFloat = 250
+    static let margin: CGFloat = 48
+
+    /// The logo's letters are thin. A thin stroke drawn a few pixels tall
+    /// is lost, so smaller sizes are drawn heavier: light at 256 pixels and
+    /// up, semibold at 32 and below. (Weights are CoreText's, -1 to 1.)
+    static func weight(pixels: Int) -> CGFloat {
+        switch pixels {
+        case ...32: return 0.3
+        case ...64: return 0
+        case ...128: return -0.2
+        default: return -0.4
+        }
     }
 
-    /// How wide the slash is, for its height.
-    static func slashWidth(height: CGFloat) -> CGFloat { 138.01 * height / 300 }
-
-    /// The slash beside a letter is 210 points tall, and so are the letter's
-    /// capitals; alone it keeps the mark's 300.
-    static let pairedHeight: CGFloat = 210
-
-    static func draw(pixels: Int, slash color: RGB, letter: String?) -> CGImage? {
+    static func draw(_ face: Face, pixels: Int) -> CGImage? {
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(data: nil, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
@@ -88,22 +109,23 @@ public enum DriveIcon {
         ctx.interpolationQuality = .high
         ctx.setAllowsAntialiasing(true)
 
-        // macOS's icon grid (y down from here on): the tile is 824 of 1024,
-        // with a soft shadow under it. Shadows are in pixels, whatever the
-        // transform, and point down in the bitmap's own y-up space.
-        ctx.translateBy(x: 0, y: CGFloat(pixels))
-        ctx.scaleBy(x: unit, y: -unit)
-        ctx.translateBy(x: 100, y: 100)
-        ctx.scaleBy(x: 824 / 512, y: 824 / 512)
+        // macOS's icon grid: the tile is 824 of 1024, centred, in a 512-point
+        // box of its own (y up), with a soft shadow under it. Shadows are in
+        // pixels, whatever the transform.
+        ctx.translateBy(x: 100 * unit, y: 100 * unit)
+        ctx.scaleBy(x: 824 / 512 * unit, y: 824 / 512 * unit)
         let box = CGRect(x: 0, y: 0, width: 512, height: 512)
-        let tilePath = CGPath(roundedRect: box, cornerWidth: 112, cornerHeight: 112, transform: nil)
 
         ctx.saveGState()
         ctx.setShadow(offset: CGSize(width: 0, height: -10 * unit), blur: 20 * unit,
                       color: CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.3))
-        ctx.addPath(tilePath)
-        ctx.setFillColor(tile.cgColor)
-        ctx.fillPath()
+        if case let .mark(image?) = face {
+            ctx.draw(image, in: box)
+        } else {
+            ctx.addPath(CGPath(roundedRect: box, cornerWidth: 112, cornerHeight: 112, transform: nil))
+            ctx.setFillColor(tile.cgColor)
+            ctx.fillPath()
+        }
         ctx.restoreGState()
 
         // A hairline just inside the edge: the tile's outline on a dark
@@ -113,58 +135,45 @@ public enum DriveIcon {
         ctx.setLineWidth(4)
         ctx.strokePath()
 
-        // The slash and the letter, centred together, the letter in white
-        // (the drive's colour is the slash's: in it, a darker drive's letter
-        // would go muddy). The letter sits a small gap after the slash's top,
-        // as a font sets "/V"; one too wide to fit is made smaller.
-        let height = letter == nil ? 300 : pairedHeight
-        let line = letter.flatMap { Self.line($0, capHeight: height) }
-        let gap = 0.06 * height
-        var glyphs = line.map { CTLineGetBoundsWithOptions($0, .useGlyphPathBounds) } ?? .zero
-        var scale: CGFloat = 1
-        let room = 512 - 2 * 48 - slashWidth(height: height) - gap
-        if glyphs.width > room {
-            scale = room / glyphs.width
-            glyphs = glyphs.applying(CGAffineTransform(scaleX: scale, y: scale))
-        }
-        let width = slashWidth(height: height) + (line == nil ? 0 : gap + glyphs.width)
-        let left = (512 - width) / 2, top = (512 - height) / 2
-        ctx.addLines(between: slash(height: height, left: left, top: top))
-        ctx.closePath()
-        ctx.setFillColor(color.cgColor)
-        ctx.fillPath()
-        if let line {
-            // Text is drawn y up: flipped back at its baseline, the slash's foot.
-            ctx.saveGState()
-            ctx.translateBy(x: left + slashWidth(height: height) + gap - glyphs.minX, y: top + height)
-            ctx.scaleBy(x: scale, y: -scale)
+        // The letter, centred by its own outline, and made smaller should it
+        // be too wide (or tall) for the tile.
+        if case let .letter(letter?, color) = face, let line = line(letter, color: color, weight: weight(pixels: pixels)) {
+            let glyphs = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+            let room = 512 - 2 * margin
+            let scale = min(1, room / max(glyphs.width, 1), room / max(glyphs.height, 1))
+            ctx.translateBy(x: 256 - glyphs.midX * scale, y: 256 - glyphs.midY * scale)
+            ctx.scaleBy(x: scale, y: scale)
             ctx.textPosition = .zero
             CTLineDraw(line, ctx)
-            ctx.restoreGState()
         }
         return ctx.makeImage()
     }
 
-    /// `letter` in the system's bold face, sized so its capitals are
-    /// `capHeight` tall, in white.
-    static func line(_ letter: String, capHeight: CGFloat) -> CTLine? {
-        let probe = CTFontCreateUIFontForLanguage(.emphasizedSystem, 100, nil)
-        guard let probe, CTFontGetCapHeight(probe) > 0 else { return nil }
-        guard let font = CTFontCreateUIFontForLanguage(.emphasizedSystem, capHeight * 100 / CTFontGetCapHeight(probe), nil)
-        else { return nil }
-        let attributes: [CFString: Any] = [kCTFontAttributeName: font,
-                                           kCTForegroundColorAttributeName: RGB(255, 255, 255).cgColor]
+    /// `letter` in the system face, wide (as the logo's letters are), at
+    /// `weight`, sized so its capitals are `capHeight` tall.
+    static func line(_ letter: String, color: RGB, weight: CGFloat) -> CTLine? {
+        func face(_ size: CGFloat) -> CTFont? {
+            guard let system = CTFontCreateUIFontForLanguage(.system, size, nil) else { return nil }
+            let traits: [CFString: Any] = [kCTFontWeightTrait: weight, kCTFontWidthTrait: 0.2]
+            let wide = CTFontDescriptorCreateCopyWithAttributes(CTFontCopyFontDescriptor(system),
+                                                                [kCTFontTraitsAttribute: traits] as CFDictionary)
+            return CTFontCreateWithFontDescriptor(wide, size, nil)
+        }
+        guard let probe = face(100), CTFontGetCapHeight(probe) > 0,
+              let font = face(capHeight * 100 / CTFontGetCapHeight(probe)) else { return nil }
+        let attributes: [CFString: Any] = [kCTFontAttributeName: font, kCTForegroundColorAttributeName: color.cgColor]
         guard let text = CFAttributedStringCreate(nil, letter as CFString, attributes as CFDictionary) else { return nil }
         return CTLineCreateWithAttributedString(text)
     }
 
-    /// The colour, lightened just enough to stand out on the near-black
-    /// tile (3:1, as a graphic must): a brand's darker colours are its own
-    /// to choose, and on this tile they would all but vanish.
+    /// The colour, lightened just enough to read on the near-black tile
+    /// (4.5:1, as text must, and as the web's dark scheme lifts the same
+    /// colours). A brand's darker colours are its own to choose, but on this
+    /// tile they would all but vanish.
     static func legible(_ color: RGB) -> RGB {
         var c = color
         var step = 0
-        while RGB.contrast(c, tile) < 3, step < 20 {
+        while RGB.contrast(c, tile) < 4.5, step < 20 {
             step += 1
             c = color.mixed(with: RGB(255, 255, 255), by: Double(step) / 20)
         }
