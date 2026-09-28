@@ -1,16 +1,17 @@
 import { NextResponse } from 'next/server';
 import {
   updateFile, softDeleteFile, deleteFile, getFileById, getFileMetadataSchema,
-  canModifyFile, canAccessFile, setFileStorageKey, getFilespaceForWrite, storageKeyInUse,
+  canModifyFile, canAccessFile, setFileStorageKey, getFilespaceForWrite, storageKeyInUse, canonicalFolder,
 } from '@/lib/db';
 import { requirePrincipal, can, refusal } from '@/lib/authz';
 import {
   getStorageConfig, storageMode, s3MoveObject, s3DeleteObject, presignFileUrls,
-  cfgForFilespace, folderToKeyPath, s3UniqueKey, s3ObjectExists, safeObjectName,
+  cfgForFilespace, folderToKeyPath, s3UniqueKey, s3ObjectExists, safeObjectName, storageForKey,
 } from '@/lib/storage';
 import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
+import { driveHoldingKey } from '@/lib/drive-storage';
 import { normalizeSchema, validateMetadataPatch } from '@/lib/dam';
-import { keyFor, fileNameProblem } from '@/lib/folder-ops';
+import { keyFor, fileNameProblem, nfc } from '@/lib/folder-ops';
 import { ifMatchVersion } from '@/lib/file-record';
 
 export const runtime = 'nodejs';
@@ -118,6 +119,15 @@ export async function PATCH(req, { params }) {
     body.metadata = validateMetadataPatch(body.metadata, schema);
   }
 
+  // New names composed (NFC), and a destination folder spelled as the one
+  // already there in the file's drive (canonicalFolder): a Mac names both
+  // composed, whatever the stored spelling.
+  if (typeof body.name === 'string') body.name = nfc(body.name);
+  if (body.folder !== undefined && body.folder !== null) {
+    const home = await driveHoldingKey(existing.storageKey);
+    body.folder = await canonicalFolder(String(body.folder), home ? { tag: home.prefix, prefix: home.prefix } : {});
+  }
+
   // The object key encodes the folder, so changing `files.folder` alone leaves
   // the bucket where it was: the web and a mounted drive disagree, and the next
   // folder rename — which re-keys by folder prefix — re-keys the wrong set.
@@ -151,8 +161,10 @@ export async function PATCH(req, { params }) {
     const base = await getStorageConfig();
     if (storageMode(base) === 's3') {
       const filespaceId = body.filespaceId || new URL(req.url).searchParams.get('filespace') || null;
-      // Writing under a drive's prefix takes an editor of it.
-      const fs = filespaceId ? await getFilespaceForWrite(email, filespaceId, principal) : null;
+      // Writing under a drive's prefix takes an editor of it. Naming no
+      // drive, the file's own drive: the write was allowed on the file
+      // (canModifyFile, above), and the object is renamed where it is.
+      const fs = filespaceId ? await getFilespaceForWrite(email, filespaceId, principal) : await driveHoldingKey(existing.storageKey);
       if (filespaceId && !fs) return NextResponse.json({ error: 'You can view this drive but not change it.' }, { status: 403 });
       const cfg = fs ? cfgForFilespace(base, fs) : base;
       const root = (fs ? String(fs.prefix || '') : String(base.prefix || 'files')).replace(/^\/+|\/+$/g, '');
@@ -195,13 +207,15 @@ export async function PATCH(req, { params }) {
       // the same thing ?filespace=, so accept either rather than silently
       // downgrading a scoped move to a catalog-only one.
       const filespaceId = body.filespaceId || new URL(req.url).searchParams.get('filespace') || null;
-      // Writing under a drive's prefix takes an editor of it.
-      const fs = filespaceId ? await getFilespaceForWrite(email, filespaceId, principal) : null;
+      // Writing under a drive's prefix takes an editor of it. Naming no
+      // drive, a file in one moves within it: the move was allowed on the
+      // file (canModifyFile, above), and the drive it sits in is known from
+      // its key. Moved in the catalog alone it used to be, leaving the object
+      // (and so a mounted drive, and the next folder rename) in the old folder.
+      const fs = filespaceId ? await getFilespaceForWrite(email, filespaceId, principal) : await driveHoldingKey(existing.storageKey);
       if (filespaceId && !fs) return NextResponse.json({ error: 'You can view this drive but not change it.' }, { status: 403 });
       // Unscoped, the file is movable when its key sits where an unscoped
-      // upload would have put it (`<base prefix>/<folder>/<name>`); a key in
-      // some filespace's prefix is not, since which bucket and prefix to
-      // re-key it under is unknown from here.
+      // upload would have put it (`<base prefix>/<folder>/<name>`).
       const name0 = existing.storageKey.slice(existing.storageKey.lastIndexOf('/') + 1);
       const unscopedOk = !fs && existing.storageKey === keyFor(base.prefix || 'files', existing.folder, name0);
       if (storageMode(base) === 's3') {
@@ -300,12 +314,16 @@ export async function DELETE(req, { params }) {
     // Global, and read here: see the note above. A degraded read (flags
     // unreadable) keeps the trash, the reversible choice.
     const flags = principal.flags;
-    const cfg = await getStorageConfig();
+    const base = await getStorageConfig();
+    // The object is moved or removed where it is: a drive in a bucket of its
+    // own keeps it there (storageForKey), and asking the base bucket for it
+    // failed every delete in such a drive.
+    const cfg = file.storageKey ? await storageForKey(base, file.storageKey) : base;
     // A row sharing its object with another file (recorded before POST
     // /api/files refused a key in use) goes without it: the bytes are the
     // other file's too, and trashing or deleting them would break it. The
     // trash purge leaves such an object alone as well (purgeTarget).
-    const onS3 = file.storage === 's3' && file.storageKey && storageMode(cfg) === 's3'
+    const onS3 = file.storage === 's3' && file.storageKey && storageMode(base) === 's3'
       && !(await storageKeyInUse(file.storageKey, { exceptId: id }));
 
     if (flags.trash === false) {
@@ -318,7 +336,7 @@ export async function DELETE(req, { params }) {
       }
       await deleteFile(id);
       // Its previews go with it, once no other row points at them.
-      await dropUnusedPreviews(previewKeysOf(file), { cfg });
+      await dropUnusedPreviews(previewKeysOf(file), { cfg: base });
       return NextResponse.json({ ok: true, trashed: false });
     }
 

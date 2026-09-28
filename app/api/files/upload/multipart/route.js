@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   createUpload, getUpload, deleteUpload, touchUpload, listUploads, getFilespaceForUser, getFilespaceForWrite,
-  issueUploadKey, uploadKeyHeld,
+  issueUploadKey, uploadKeyHeld, canonicalFolder,
 } from '@/lib/db';
 import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 import { replacementTarget, replacementKey } from '@/lib/replace-content';
@@ -116,7 +116,10 @@ export async function POST(req) {
         const fs = await getFilespaceForWrite(email, body.filespaceId, principal);
         if (!fs) return noWrite();
         scoped = cfgForFilespace(cfg, fs);
+        body.folder = await canonicalFolder(body.folder, { tag: fs.prefix, prefix: fs.prefix });
       }
+      // Composed, and spelled as the folder already there is (canonicalFolder).
+      if (!replacing && !body.filespaceId) body.folder = await canonicalFolder(body.folder);
 
       // choosePartSize throws above the provider's single-object ceiling —
       // 5 TiB on S3, 10 TB on B2. Surfacing that here, before a single byte
