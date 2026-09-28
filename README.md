@@ -29,7 +29,8 @@ scoped to and its own expiry.
 
 - Next.js 14 (App Router) on Vercel
 - Postgres (Supabase) via postgres.js, addressed with tagged-template SQL
-- Auth.js v5 — Resend magic links, optional Okta SSO
+- Auth.js v5 — Resend magic links, optional Okta SSO, and a password for
+  the few accounts an admin gives one (App Review's; never an admin's)
 - S3, or anything S3-compatible (R2, Spaces, B2, Wasabi, MinIO)
 - Tauri 2 + React 19 for the desktop client
 
