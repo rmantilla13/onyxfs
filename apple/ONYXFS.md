@@ -53,6 +53,22 @@ Finder / Premiere / Resolve
   the Mac). While developing, `killall -9 fskit_agent` does the same (it
   ignores SIGTERM, and SIP refuses `launchctl kickstart`); it also takes
   down every other FSKit volume, Xcode's DeviceFS included.
+- Or it can hold on to an earlier *record* of the app. The updater swaps the
+  new bundle in by rename, and LaunchServices went on describing the copy
+  it replaced: listed and switched on, the extension still stopped as it
+  started — `Fatal error: Invalid bundle record for current process`
+  (ExtensionFoundation, after "Finding containing app and retrying load of
+  record for appex"), SIGTRAP — which FSKit reports to the app as
+  NSCocoaErrorDomain 4099, "Couldn't communicate with a helper
+  application". Every drive went to `~/Onyx`, read-only, after the updates
+  to 0.5.5 and 0.5.6. Since 0.5.7 the updater unregisters the old copy and
+  registers the new one (`lsregister -u`, `-f -R -trusted`) before opening
+  it; the app registers itself (`LSRegisterURL`) before its first disk
+  mounts, for a copy an older updater installed; and a mount that fails
+  that way is tried once more after registering again, then Settings ›
+  Finder says to restart the Mac. By hand:
+  `lsregister -f -R -trusted /Applications/Onyx.app; killall -9 fskit_agent`
+  (lsregister is in LaunchServices.framework/Support).
 - Each drive mounts at `/Volumes/<Drive name>` through
   `FSClient.shared.mountSingleVolume(resource:bundleID:options:)` (macOS 27,
   entitlement `com.apple.developer.fskit.mount` on the app). The volume is

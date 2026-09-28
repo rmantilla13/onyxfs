@@ -1,4 +1,5 @@
 import AppKit
+import CoreServices
 import DiskArbitration
 import FSKit
 import OnyxKit
@@ -47,6 +48,10 @@ final class DiskMounter: ObservableObject {
     /// Why the last disk that failed to mount did (that drive went to
     /// ~/Onyx instead), for Settings; nil once a disk mounts.
     @Published private(set) var lastFailure: String?
+    /// Whether that failure was the extension not starting at all
+    /// (didNotStart): DriveService registers this copy again and tries once
+    /// more before settling for ~/Onyx.
+    private(set) var extensionDidNotStart = false
     /// Ejected from Finder (or unmounted by anything but Onyx): the drive is
     /// no longer wanted there, as with an NFS mount.
     var onEjected: ((SyncDomain) -> Void)?
@@ -175,7 +180,9 @@ final class DiskMounter: ObservableObject {
         default: break
         }
         states[id] = .mounting
-        // A disk the last run left under this drive's name goes first.
+        // macOS's record of this copy is made again first (registerCopy), and
+        // a disk the last run left under this drive's name goes.
+        await registered?.value
         await staleCleared?.value
         do {
             let path = try await FSClient.shared.mountSingleVolume(
@@ -189,11 +196,13 @@ final class DiskMounter: ObservableObject {
             }
             states[id] = .mounted(path)
             lastFailure = nil
+            extensionDidNotStart = false
             appLog.info("onyxfs: \(id, privacy: .public) is a disk at \(path.path, privacy: .public)")
             return true
         } catch {
             states[id] = nil
             lastFailure = Self.describe(error)
+            extensionDidNotStart = Self.didNotStart(error)
             appLog.error("onyxfs: mounting \(id, privacy: .public) failed, so it mounts in ~/Onyx: \(error.localizedDescription, privacy: .public)")
             return false
         }
@@ -243,6 +252,40 @@ final class DiskMounter: ObservableObject {
 
     /// clearStale's work, until it is done.
     private var staleCleared: Task<Void, Never>?
+
+    /// macOS's record of this copy of Onyx, made again before this run
+    /// mounts its first disk (register): `mount` waits for this.
+    func registerCopy() {
+        registered = Task.detached(priority: .userInitiated) { Self.register() }
+    }
+
+    /// registerCopy's work, until it is done.
+    private var registered: Task<Void, Never>?
+
+    /// For a second try after the extension did not start: the record made
+    /// again, now.
+    func reregister() async {
+        await Task.detached(priority: .userInitiated) { Self.register() }.value
+    }
+
+    /// LaunchServices' record of this copy of Onyx and of the extension
+    /// inside it, brought up to date, as `lsregister -f` would.
+    ///
+    /// The extension looks itself up as it starts. An update swaps the new
+    /// bundle in by rename, and until something tells LaunchServices, its
+    /// record can still describe the copy that was replaced: the extension
+    /// finds no record for the bundle it runs from and stops at once
+    /// ("Invalid bundle record for current process"), which FSKit reports
+    /// as NSCocoaErrorDomain 4099 — didNotStart. After the updates to 0.5.5
+    /// and 0.5.6 every drive stayed in ~/Onyx, read-only, until the record
+    /// was made again by hand. The updater now does it as it swaps; this is
+    /// for a copy an older updater installed, or moved since.
+    nonisolated static func register() {
+        let status = LSRegisterURL(Bundle.main.bundleURL as CFURL, true)
+        if status != 0 {
+            appLog.error("onyxfs: registering this copy with LaunchServices failed (\(status, privacy: .public))")
+        }
+    }
 
     // MARK: -
 
@@ -299,10 +342,25 @@ final class DiskMounter: ObservableObject {
         }
     }
 
+    /// FSKit could not reach the extension at all: it did not start, or
+    /// stopped as it did — NSCocoaErrorDomain 4099 (or 4097), "Couldn't
+    /// communicate with a helper application". What a stale LaunchServices
+    /// record looks like (register).
+    nonisolated static func didNotStart(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == NSCocoaErrorDomain
+            && [CocoaError.Code.xpcConnectionInvalid.rawValue, CocoaError.Code.xpcConnectionInterrupted.rawValue].contains(ns.code)
+    }
+
     private static func describe(_ error: Error) -> String {
         let ns = error as NSError
         if ns.domain == NSPOSIXErrorDomain, ns.code == Int(EPERM) || ns.code == Int(EACCES) {
             return "macOS did not allow Onyx to mount this drive as a disk. Check that Onyx is on in System Settings › General › Login Items & Extensions › File System Extensions."
+        }
+        if didNotStart(error) {
+            // Registering this copy again did not help (DriveService tried):
+            // macOS still holds the old record, which a restart lets go of.
+            return "macOS could not start the Onyx file system, as can happen right after Onyx updates. Restart your Mac to make each drive a disk of its own again."
         }
         return "The drive could not be mounted as a disk: \(error.localizedDescription)"
     }

@@ -23,6 +23,10 @@ extension DriveService {
         diskMounter = mounter
         // A disk mounting, failing or ejected shows in the menus and Settings.
         diskForwarding = mounter.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        // macOS's record of this copy, made again before the first disk
+        // mounts: an update swapped in by rename can leave it describing the
+        // copy it replaced, and the extension will not start (DiskMounter.register).
+        mounter.registerCopy()
         // Volumes an earlier run left can no longer reach this run's bridge.
         mounter.clearStale()
         Task { await mounter.refreshAvailability() }
@@ -49,17 +53,26 @@ extension DriveService {
             appLog.info("onyxfs: \(scope.identifier, privacy: .public) mounts in ~/Onyx, as the file system is \(String(describing: disks.availability), privacy: .public)")
             return false
         }
-        do {
-            let resource = try await onyxfsResourceURL(for: scope)
-            if await disks.mount(scope, name: name, resource: resource) { return true }
+        // Twice at most. When the extension did not start at all — most often
+        // a stale record of this copy after an update (DiskMounter.register)
+        // — the record is made again and the disk tried once more, on a new
+        // ticket: the first one's session ended with its failure.
+        for attempt in 1...2 {
+            do {
+                let resource = try await onyxfsResourceURL(for: scope)
+                if await disks.mount(scope, name: name, resource: resource) { return true }
+            } catch {
+                appLog.error("onyxfs: no resource for \(scope.identifier, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                return false
+            }
             // Its bridge session and writer are for a disk that is not there.
             writers[scope.identifier] = nil
             endOnyxfsSessions(for: scope)
-            return false
-        } catch {
-            appLog.error("onyxfs: no resource for \(scope.identifier, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            return false
+            guard attempt == 1, disks.extensionDidNotStart else { return false }
+            appLog.info("onyxfs: the file system did not start for \(scope.identifier, privacy: .public); registering this copy with macOS and trying again")
+            await disks.reregister()
         }
+        return false
     }
 
     func diskUnmount(_ scope: SyncDomain) async {
