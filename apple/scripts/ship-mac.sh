@@ -74,6 +74,12 @@ newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail 
 
 bold "Shipping Onyx for Mac"
 
+# It asks before publishing, which needs a terminal: know that now, not
+# after ten minutes of building.
+if [ "$DRY" = 0 ] && [ "$PUBLISH" = 1 ] && [ "$YES" = 0 ] && [ ! -t 0 ]; then
+  die "There is no terminal here to ask \"Publish?\" in. Run it in Terminal, or add --yes (publish without asking) or --no-publish (build only)."
+fi
+
 # ── 1. What a release needs ─────────────────────────────────────────────────
 problems=()
 command -v gh >/dev/null 2>&1 || problems+=("gh, the GitHub CLI, is not installed: brew install gh")
