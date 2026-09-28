@@ -23,12 +23,14 @@ public enum FileDownload {
     /// writes none of that body. On any throw the caller removes what is at
     /// `destination`. Cancelling the calling task stops the transfer.
     /// `progress`, when given, hears the bytes written so far after each
-    /// chunk, on the session's queue.
+    /// chunk, on the session's queue; `received`, each chunk's size as it
+    /// arrives (for the Activity window, TransferLog).
     public static func fetch(_ url: URL, to destination: URL, session: URLSession = session,
-                             progress: (@Sendable (Int64) -> Void)? = nil) async throws {
+                             progress: (@Sendable (Int64) -> Void)? = nil,
+                             received: (@Sendable (Int64) -> Void)? = nil) async throws {
         FileManager.default.createFile(atPath: destination.path, contents: nil)
         let handle = try FileHandle(forWritingTo: destination)
-        let writer = Writer(handle: handle, progress: progress)
+        let writer = Writer(handle: handle, progress: progress, received: received)
         let task = session.dataTask(with: url)
         task.delegate = writer
         try await withTaskCancellationHandler {
@@ -47,13 +49,15 @@ private final class Writer: NSObject, URLSessionDataDelegate, @unchecked Sendabl
     // session's delegate queue, one callback at a time.
     private let handle: FileHandle
     private let progress: (@Sendable (Int64) -> Void)?
+    private let received: (@Sendable (Int64) -> Void)?
     private var written: Int64 = 0
     private var continuation: CheckedContinuation<Void, Error>?
     private var failure: Error?
 
-    init(handle: FileHandle, progress: (@Sendable (Int64) -> Void)?) {
+    init(handle: FileHandle, progress: (@Sendable (Int64) -> Void)?, received: (@Sendable (Int64) -> Void)?) {
         self.handle = handle
         self.progress = progress
+        self.received = received
     }
 
     func start(_ task: URLSessionDataTask, then continuation: CheckedContinuation<Void, Error>) {
@@ -75,6 +79,7 @@ private final class Writer: NSObject, URLSessionDataDelegate, @unchecked Sendabl
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         guard failure == nil else { return }
+        received?(Int64(data.count))
         do {
             try handle.write(contentsOf: data)
             written += Int64(data.count)

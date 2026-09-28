@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import CommentThread from './CommentThread';
 import Composer from './Composer';
 import DecisionBar from './DecisionBar';
+import { authorKey } from './format';
 import { anchorLabel, commentFrame } from '@/lib/review';
 import './review.css';
 
@@ -26,10 +27,17 @@ const FILTERS = [
  *
  * `feed` is useReviewFeed's; selecting a thread is the page's business (it
  * seeks the player and shows the drawing), so it only reports the choice.
+ *
+ * The share page renders the same panel for a review link's guests
+ * (`guest`): `me` is their 'guest:<id>' and `reviewer` the same key, and
+ * `canComment` and `canDecide` say what the link lets them do — neither
+ * before they have given a name, when `footer` is where they give it.
+ * `footer` sits between the threads and the composer.
  */
 export default function ReviewPanel({
   file, kind, feed, me, canModify, model, knownRate, frame, range, draftApi,
   selectedId, onSelect, composerRef, onComposerFocus, onAnchor, srcSize, onError,
+  guest = false, reviewer = null, canComment = true, canDecide = true, footer = null,
 }) {
   const [filter, setFilter] = useState('all');
   const list = useRef(null);
@@ -56,8 +64,8 @@ export default function ReviewPanel({
       if ((fa == null) !== (fb == null)) return fa == null ? 1 : -1;
       return byCreated(a, b);
     });
-    const mine = (c) => c.author?.email === me || (c.mentions || []).includes(me)
-      || (repliesOf.get(c.id) || []).some((r) => r.author?.email === me);
+    const by = (c) => !!me && authorKey(c) === me;
+    const mine = (c) => by(c) || (c.mentions || []).includes(me) || (repliesOf.get(c.id) || []).some(by);
     return {
       threads: tops,
       replies: repliesOf,
@@ -81,7 +89,7 @@ export default function ReviewPanel({
 
   const readSeq = feed.readSeq;
   const unreadIds = useMemo(() => {
-    const isNew = (c) => readSeq != null && !c.pending && (c.seq || 0) > readSeq && c.author?.email !== me && !c.deletedAt;
+    const isNew = (c) => readSeq != null && !c.pending && (c.seq || 0) > readSeq && authorKey(c) !== me && !c.deletedAt;
     return new Set([...feed.comments.values()].filter(isNew).map((c) => c.id));
   }, [feed.comments, readSeq, me]);
 
@@ -94,15 +102,22 @@ export default function ReviewPanel({
   }, [selectedId]);
 
   const empty = {
-    all: kind === 'video' ? 'No comments yet. Press C on the player to comment on a frame.' : 'No comments yet.',
+    all: kind === 'video' && canComment ? 'No comments yet. Press C on the player to comment on a frame.' : 'No comments yet.',
     open: 'Nothing open.',
     resolved: 'Nothing resolved yet.',
-    mine: 'Nothing of yours, or mentioning you.',
+    mine: guest ? 'Nothing of yours yet.' : 'Nothing of yours, or mentioning you.',
   }[filter];
 
   return (
     <div className="review-panel">
-      <DecisionBar decisions={[...feed.decisions.values()]} me={me} onDecide={feed.decide} onError={onError} />
+      <DecisionBar
+        decisions={[...feed.decisions.values()]}
+        me={me}
+        reviewer={reviewer}
+        canDecide={canDecide}
+        onDecide={feed.decide}
+        onError={onError}
+      />
 
       <div className="review-filters" role="group" aria-label="Show comments">
         {FILTERS.map((f) => (
@@ -142,25 +157,32 @@ export default function ReviewPanel({
               onUpdate={feed.update}
               onRemove={feed.remove}
               onError={onError}
+              guest={guest}
+              canComment={canComment}
             />
           </div>
         ))}
       </div>
 
-      <Composer
-        fileId={file.id}
-        kind={kind}
-        model={model}
-        knownRate={knownRate}
-        frame={frame}
-        range={range}
-        draftApi={draftApi}
-        onPost={feed.post}
-        onFocus={onComposerFocus}
-        onAnchor={onAnchor}
-        textareaRef={composerRef}
-        srcSize={srcSize}
-      />
+      {footer}
+
+      {canComment && (
+        <Composer
+          fileId={file.id}
+          kind={kind}
+          model={model}
+          knownRate={knownRate}
+          frame={frame}
+          range={range}
+          draftApi={draftApi}
+          onPost={feed.post}
+          onFocus={onComposerFocus}
+          onAnchor={onAnchor}
+          textareaRef={composerRef}
+          srcSize={srcSize}
+          guest={guest}
+        />
+      )}
     </div>
   );
 }

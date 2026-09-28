@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  effectiveKind, drawableKind, isThumbKey, mediaFacts, uploadFields, fmtDuration,
+  effectiveKind, drawableKind, isThumbKey, mediaFacts, uploadFields, fmtDuration, sharedFile, MEDIA_KEYS,
 } from '../lib/media.js';
 
 const KEY = '_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.webp';
@@ -281,4 +281,32 @@ test('HEIC and TIFF are drawable only where the browser was seen to decode them'
   assert.equal(drawableKind(tiff, { probe: { tiff: true } }), 'image');
   assert.equal(drawableKind(tiff, { probe: { heic: true } }), null);
   assert.equal(drawableKind({ mime: '', name: 'a.heif' }, { probe: { heic: true } }), 'image');
+});
+
+test('a share page carries what its viewer reads, and nothing else of the row', () => {
+  const row = {
+    id: 'f1', name: 'cut.mp4', mime: 'video/mp4', kind: 'video', size: 1000, storage: 's3',
+    url: 'https://s3.test/b/cut.mp4?X-Amz-Signature=1', thumbnailUrl: 'https://s3.test/t?sig', posterUrl: 'https://s3.test/p?sig',
+    filmstripUrl: 'https://s3.test/f?sig', proxyUrl: null, proxyStatus: 'ready', thumbSizes: ['sm'], smUrl: 'https://s3.test/sm?sig',
+    storageKey: 'clients/acme/cut.mp4', thumbnailKey: '_thumbs/x.webp', folder: 'Clients/Acme', tags: ['secret-project'],
+    createdBy: 'olive@studio.test', createdAt: 1, reviewStatus: 'changes_requested', openComments: 3, deletedAt: null,
+    metadata: {
+      width: 1920, height: 1080, fps: { num: 24000, den: 1001 }, frames: 2400, duration: 100.1, tcStart: 86400, dropFrame: false,
+      filmstrip: { tileWidth: 160, tileHeight: 90, frames: 60, columns: 10 },
+      project: ['Acme rebrand'], license: 'Internal only', web_expiration: '2026-12-31',
+    },
+  };
+  const shared = sharedFile(row);
+  assert.deepEqual(Object.keys(shared).sort(), [
+    'filmstripUrl', 'id', 'kind', 'metadata', 'mime', 'name', 'posterUrl', 'proxyStatus', 'proxyUrl', 'size', 'smUrl',
+    'thumbSizes', 'thumbnailUrl', 'url',
+  ]);
+  assert.deepEqual(Object.keys(shared.metadata).sort(), ['dropFrame', 'duration', 'filmstrip', 'fps', 'frames', 'height', 'tcStart', 'width']);
+  const text = JSON.stringify(shared);
+  for (const leak of ['olive@', 'clients/acme', 'Clients/Acme', 'secret-project', 'Acme rebrand', 'Internal only', '2026-12-31', '_thumbs/', 'changes_requested']) {
+    assert.ok(!text.includes(leak), leak);
+  }
+  assert.ok(Object.keys(shared.metadata).every((k) => MEDIA_KEYS.includes(k)));
+  assert.deepEqual(sharedFile({ name: 'a.jpg' }), { name: 'a.jpg', metadata: {} });
+  assert.equal(sharedFile(null), null);
 });

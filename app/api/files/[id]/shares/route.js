@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
-import { getFileById, canModifyFile, createShare, listSharesForFile } from '@/lib/db';
+import { getFileById, canModifyFile, createShare, listSharesForFile, refreshReviewStatus } from '@/lib/db';
 import { requirePrincipal, can, refusal, shareCapFor, shareKindsForKey } from '@/lib/authz';
-import { parseShareRequest, shareKind } from '@/lib/share-kinds';
+import { parseShareRequest } from '@/lib/share-kinds';
+import { presentShare, reviewLinkRefusal } from '@/lib/share-guard';
 import { audit } from '@/lib/audit';
 
 export const runtime = 'nodejs';
@@ -29,31 +30,24 @@ async function gate(id) {
   return { ...g, file, canModify };
 }
 
-// What the dialog shows for a link. Never the password or its hash.
-const present = (s) => ({
-  token: s.token,
-  kind: shareKind(s),
-  expiresAt: s.expiresAt,
-  viewCount: s.viewCount,
-  createdAt: s.createdAt,
-  createdBy: s.createdBy,
-});
-
 /** GET /api/files/[id]/shares → { shares } — the file's links, newest first. */
 export async function GET(_req, { params }) {
   const g = await gate(params.id);
   if (g.error) return g.error;
-  return NextResponse.json({ shares: (await listSharesForFile(g.file.id)).map(present) });
+  return NextResponse.json({ shares: (await listSharesForFile(g.file.id)).map(presentShare) });
 }
 
 /**
  * POST /api/files/[id]/shares { kind: 'public'|'password'|'private',
- * password?, expires: 'never'|'1'|'7'|'30' } → { share }.
+ * password?, expires: 'never'|'1'|'7'|'30', review?: 'view'|'comment'|'approve' }
+ * → { share }.
  *
  * Each kind is its own capability — a private link stays inside the
  * workspace, a public or password one does not — and each is held to the
  * `shares` flag (read here, never taken from the client), the link kinds the
- * file's drive allows, and the longest expiry the role allows.
+ * file's drive allows, and the longest expiry the role allows. A link that
+ * takes comments is a review link, and is held to all of that again as one
+ * (reviewLinkRefusal).
  */
 export async function POST(req, { params }) {
   const g = await gate(params.id);
@@ -71,6 +65,10 @@ export async function POST(req, { params }) {
     expiresInDays: parsed.expiresInDays,
   });
   if (!allowed.ok) return refusal(allowed);
+  if (parsed.review) {
+    const no = await reviewLinkRefusal(g, g.file, { kind, expiresInDays: parsed.expiresInDays });
+    if (no) return no;
+  }
 
   const { token, reused } = await createShare({
     fileId: g.file.id,
@@ -78,10 +76,15 @@ export async function POST(req, { params }) {
     mode: parsed.mode,
     password: parsed.password,
     expiresInDays: parsed.expiresInDays,
+    review: parsed.review,
   });
   if (!reused) {
-    await audit(g.email, 'share.create', { type: 'file', id: g.file.id, label: g.file.name }, { kind, expiresInDays: parsed.expiresInDays });
+    await audit(g.email, 'share.create', { type: 'file', id: g.file.id, label: g.file.name }, {
+      kind, expiresInDays: parsed.expiresInDays, ...(parsed.review ? { review: parsed.review } : {}),
+    });
+    // A link that takes comments puts the file in review.
+    if (parsed.review) await refreshReviewStatus(g.file.id).catch(() => {});
   }
   const share = (await listSharesForFile(g.file.id)).find((s) => s.token === token);
-  return NextResponse.json({ share: present(share) });
+  return NextResponse.json({ share: presentShare(share) });
 }

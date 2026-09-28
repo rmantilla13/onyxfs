@@ -71,6 +71,10 @@ final class DriveService: ObservableObject {
     @Published var uploadSummary = UploadSummary()
     /// Moves the menu's upload percentage while something is on its way.
     var uploadTicker: Task<Void, Never>?
+    /// What the drives moved, second by second, for the Activity window: the
+    /// disks' own reports, uploads and offline copies. Kept by adding; read
+    /// only while the window is open.
+    let transfers = TransferLog()
     private let server = DAVServer()
     private var mirrors: [String: DriveMirror] = [:]
     private var names: [String: String] = [:]
@@ -124,6 +128,14 @@ final class DriveService: ObservableObject {
         forwarding = mounts.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         setUpDisks()
         mounts.onEjected = { [weak self] scope in self?.forgetWanted(scope) }
+        // What each disk read, fetched and was given, as its extension
+        // reports it about once a second (POST /fs/v1/activity).
+        let transfers = self.transfers
+        server.fs.onActivity { _, moved in
+            transfers.add(.read, moved.read)
+            transfers.add(.download, moved.download)
+            transfers.add(.write, moved.write)
+        }
     }
 
     /// ~/Library/Application Support/Onyx/Offline: not Caches, which macOS
@@ -435,17 +447,18 @@ final class DriveService: ObservableObject {
 
     /// The disk's name and figures, asked for afresh by `/fs/v1/volume`.
     ///
-    /// Writable only when this account may add to the drive: an editor or
-    /// owner (Filespace.mayAddFiles). The drive list does not say whether
-    /// the account's role may upload at all (`files.upload`), and nothing
-    /// says so of the library — which the web lets anyone who may upload add
-    /// to — so the library is writable for an admin only. The server checks
-    /// every write again whatever this says.
+    /// Writable only when this account may change something there, as the
+    /// server says (`can` in the drive list): a drive's editor or owner
+    /// whose platform role allows it (Filespace.mayAddFiles), and for the
+    /// library anyone whose role may upload, as on the web
+    /// (AppModel.libraryWritable). From an older server, which does not say,
+    /// a drive's editors and owners, and the library for an admin only. The
+    /// server checks every write again whatever this says.
     private func onyxfsVolume(_ scope: SyncDomain) -> FSVolumeInfo {
         let limit = Int64(max(0, cacheLimitGB)) << 30
         switch scope {
         case .library:
-            return FSVolumeInfo(name: MountFolder.library, readOnly: !(model?.isAdmin ?? false), cacheLimitBytes: limit)
+            return FSVolumeInfo(name: MountFolder.library, readOnly: !(model?.libraryWritable ?? false), cacheLimitBytes: limit)
         case let .drive(id):
             let drive = model?.drives.first { $0.id == id }
             return FSVolumeInfo(name: drive?.name ?? names[scope.identifier] ?? id,
@@ -740,12 +753,13 @@ final class DriveService: ObservableObject {
         defer { downloading -= 1 }
         let index = await mirror.index
         guard started == generation else { return }
+        let transfers = self.transfers
         let report = await pins.reconcile(scope: scope, index: index) { entry, destination in
             guard let id = entry.fileId else { throw OnyxError.decoding("not a file") }
             let url = try await mirror.contentURL(fileId: id)
             // Straight into the store's folder, on the cache's own disk.
             do {
-                try await FileDownload.fetch(url, to: destination)
+                try await FileDownload.fetch(url, to: destination, received: { transfers.add(.download, $0) })
             } catch let OnyxError.http(status, message) {
                 // Storage refused the link: the next try fetches a new one.
                 await mirror.forgetContentURL(fileId: id)

@@ -13,6 +13,9 @@ One Swift codebase. On the Mac it is **Onyx.app**:
   window, and it is kept on this Mac to open with no connection. The cache
   can live in any folder, including an external disk (Settings → Storage).
 - **A menu bar item** that keeps Finder in sync while the window is closed.
+- **Activity** (Window menu, or the menu bar item): what the drives are
+  moving right now, download, upload, read and write, each a figure and a
+  minute's graph. It costs nothing while it is shut (ONYXFS.md, "Activity").
 
 On iPhone and iPad it is **Onyx** (`OnyxIOS/`), native SwiftUI:
 
@@ -92,17 +95,37 @@ there within ten minutes (`lib/mac-release.js`).
    launch an app that claims an app group without a profile granting it, so
    the script leaves the group off rather than ship an app that won't open.
 
-**Each release:**
+Keep the profiles in `apple/.signing/` of the main checkout (`Onyx`,
+`OnyxFS`, and `OnyxDev`/`OnyxDevFS` for dev builds, each
+`.provisionprofile`); it is gitignored.
+
+**Each release** is one command, from any checkout:
 
 ```sh
-echo 0.3.0 > VERSION                                     # bump: copies update only to a newer version
-ONYX_NOTES="What changed, for the update window." \
-ONYX_APP_PROFILE=~/Downloads/Onyx_Developer_ID.provisionprofile \
-ONYX_EXT_PROFILE=~/Downloads/OnyxFileProvider_Developer_ID.provisionprofile \
-scripts/release-mac.sh --publish
+apple/scripts/ship-mac.sh --dry-run    # what would ship: the version, the commit, the notes
+apple/scripts/ship-mac.sh              # the next version, from origin/main
+apple/scripts/ship-mac.sh --from <branch or commit>
 ```
 
-Without `--publish` it stops at `build/release/`, for a look first.
+`npm run ship:mac -- …` is the same. It:
+
+1. checks what a release needs before the long part: gh, the certificate,
+   the profiles (and when they expire), the notary profile, an unlocked
+   screen;
+2. takes the next version after the last one published, unless given one;
+3. refuses a commit that does not contain the last release, so nothing
+   shipped is lost. The version the branch says (`apple/VERSION`) must not
+   be older than the last release either;
+4. drafts the notes from the commits since the last release and opens them
+   in `$EDITOR`, or takes `--notes`;
+5. builds, signs and notarizes that commit from GitHub, in a throwaway
+   worktree (about ten minutes), and leaves the result in
+   `apple/build/ship/<version>/`;
+6. stops to ask before publishing, so the dmg can be installed and tried
+   first; then publishes `mac-v<version>`, tagged at the commit it built.
+
+`scripts/release-mac.sh` is the build it runs, and still works on its own
+(`--publish` refuses a checkout with uncommitted changes).
 
 ### In Xcode
 
@@ -160,6 +183,33 @@ last. Bump `MARKETING_VERSION` in `project.yml` for a new version. Add yourself
 to a group under **TestFlight → Internal Testing**, and builds reach you
 through the TestFlight app. Testers outside the team need Beta App Review,
 which needs an account for the reviewer to sign in with.
+
+#### App Review's account
+
+Apple asks for a user name and password, and nobody at Apple can open an
+emailed link. So the reviewer signs in with a password, from the same
+sign-in sheet as everyone else, and the app needs nothing special for it.
+On the server (production, since that is where the app points):
+
+1. **Admin → Access requests → Add someone…**: an address on a domain you
+   own, such as `appreview@onyxfs.io`. Nobody need read its mail.
+2. **Admin → Drives**: a drive with content that shows what the app does
+   (photos, a video, some audio, a PDF, a few folders), with the reviewer's
+   address as a member. Nothing of anyone else's: Apple sees all of it.
+3. Back in **Access requests** (the Approved tab), **Password… → Make a
+   password**. It is shown once; copy it.
+4. In App Store Connect, **TestFlight → Test Information → Beta App Review
+   Information**: tick *Sign-in required*, enter the address and the
+   password, and in *Review Notes* say how:
+
+   > Tap Sign In, then Continue. On the sign-in page, tap "Sign in with a
+   > password", enter the user name and password above, then tap Authorize.
+   > The account's drive has sample photos, video, audio and documents.
+
+Passwords are only ever for an account like this one (lib/password-signin.js):
+an admin can't have one, ten wrong tries lock it for fifteen minutes, and
+**Password… → Remove password** (or removing the person) takes it away.
+Make a new one after review if it went anywhere but App Store Connect.
 
 `OnyxIOS/PrivacyInfo.xcprivacy` gives the reasons for the APIs Apple asks
 about (user defaults, file dates, disk space). A new use of one needs its

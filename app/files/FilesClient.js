@@ -27,7 +27,8 @@ import {
   parseLocalViews, withLocalView, legacyView, viewsForDrive, listingParams, isRecursive, normalizeDisplay,
 } from '@/lib/views';
 import { driveColor } from '@/lib/drive-color';
-import { coverChangeable } from '@/lib/media';
+import { coverChangeable, effectiveKind } from '@/lib/media';
+import { isReviewableKind } from '@/lib/review';
 import UploadPanel from '@/app/components/ui/UploadPanel';
 import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
@@ -195,7 +196,7 @@ async function fetchListing({ filespaceId, folder, query, kinds, sort, flat = fa
  * `initialQuery` a search from the URL (?q=).
  */
 export default function FilesClient({
-  flags, canWrite, schema: initialSchema, filespaceId, isAdmin = false,
+  flags, canWrite, reviewLinks = false, schema: initialSchema, filespaceId, isAdmin = false,
   drives = [], initial = null, initialFiltersOpen = false, initialSidebarOpen = true,
   view: initialViewDef = null, views: initialViews = [], initialLocal = {}, initialLegacy = null, initialQuery = '',
 }) {
@@ -2407,7 +2408,12 @@ export default function FilesClient({
       {isAdmin && flags.metadata && addingField && (
         <NewFieldDialog open onClose={() => setAddingField(false)} onCreate={createField} />
       )}
-      <ShareDialog file={sharing} open={!!sharing} onClose={() => setSharing(null)} />
+      <ShareDialog
+        file={sharing}
+        open={!!sharing}
+        onClose={() => setSharing(null)}
+        canReview={reviewLinks && !!sharing && isReviewableKind(effectiveKind(sharing))}
+      />
       {covering && (
         <CoverDialog
           file={covering}

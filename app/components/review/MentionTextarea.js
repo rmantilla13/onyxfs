@@ -13,10 +13,15 @@ import { handleOf, personLabel } from './format';
  *
  * Enter sends and Shift+Enter is a new line, as in every chat box — except
  * while the suggestions are open, when Enter picks one.
+ *
+ * `mentions={false}` is a plain textarea with the same keys: a guest on a
+ * review link names nobody (a mention is a notification sent to a member),
+ * and has no list of members to ask.
  */
 export default function MentionTextarea({
   fileId, value, onChange, people, onPeopleChange, onSubmit, onEscape, onFocus,
   textareaRef, placeholder = 'Add a comment…', rows = 3, disabled = false, label = 'Comment', autoFocus = false,
+  mentions = true,
 }) {
   const own = useRef(null);
   const ref = textareaRef || own;
@@ -27,6 +32,7 @@ export default function MentionTextarea({
 
   // The "@token" just before the caret, if there is one.
   const detect = (el) => {
+    if (!mentions) return;
     const upto = el.value.slice(0, el.selectionStart ?? el.value.length);
     const m = /(^|\s)@([^\s@]{0,40})$/.exec(upto);
     setQuery(m ? { text: m[2], start: upto.length - m[2].length - 1 } : null);
@@ -99,10 +105,10 @@ export default function MentionTextarea({
         disabled={disabled}
         // A reply or an edit opens because someone asked to type: straight in.
         autoFocus={autoFocus}
-        role="combobox"
-        aria-expanded={open}
+        role={mentions ? 'combobox' : undefined}
+        aria-expanded={mentions ? open : undefined}
         aria-controls={open ? listId : undefined}
-        aria-autocomplete="list"
+        aria-autocomplete={mentions ? 'list' : undefined}
         onChange={(e) => { onChange(e.target.value); detect(e.target); }}
         onKeyDown={onKeyDown}
         onKeyUp={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') detect(e.currentTarget); }}

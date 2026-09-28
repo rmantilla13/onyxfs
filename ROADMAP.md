@@ -154,8 +154,27 @@ head of a faststart MP4 to pull a frame — range-read instead of downloading.
 The same fix is what makes frame sampling for embeddings viable.
 
 **2.8 — video proxies.** Scrubbing a multi-GB master through a presigned URL is
-unusable. Generate an HLS or 1080p proxy at ingest, play that, keep the original
-for download. Same worker as 2.7, so build them together.
+unusable. Generate a 1080p proxy at ingest, play that, keep the original for
+download.
+
+The server half is built: a `proxies` job table with the same queue idiom as
+transcripts (atomic claim, ten-minute renewable lease), `GET
+/api/proxies/queue` to find work, `POST /api/files/[id]/proxy/claim` to take it,
+`PATCH`/`PUT` on `/api/files/[id]/proxy` to report and finish. The rendition is
+1080p H.264 High @ CRF 23 with a 6 Mbps ceiling and stereo AAC
+(`lib/proxies.js`, which also builds the ffmpeg argv), the key is server-named
+as `_thumbs/<uuid>.proxy.mp4`, and the player prefers it and falls back to the
+master. A heavy upload (video, S3, ≥ 200 MB) is queued automatically.
+
+Not HLS: one progressive mp4 with a faststart moov seeks well enough over a
+signed URL, and HLS means a manifest, segment keys and a playlist signer — a
+lot of surface for a library one person scrubs. Worth revisiting if the proxy
+itself turns out to seek badly.
+
+What is left is the worker: `desktop/src-tauri` claiming a job, running ffmpeg
+and PUTting the result. A rendition over 5 GB (about 1h50m at the ceiling) needs
+a multipart upload, which the claim does not hand out yet — the worker reports a
+failure instead of writing a truncated file.
 
 ### Phase 3 — Interface and scale
 

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createFile, getFilespaceForUser, storageKeyInUse, claimUploadKey, issueUploadKey, previewKeysInUse, canonicalFolder } from '@/lib/db';
+import { createFile, getFilespaceForUser, storageKeyInUse, claimUploadKey, issueUploadKey, previewKeysInUse, requestProxy, canonicalFolder } from '@/lib/db';
 import { nfc } from '@/lib/folder-ops';
 import { requirePrincipal, uploadCheck, refusal } from '@/lib/authz';
 import { listFilesPage, listFolderTree, storagePrefixFor } from '@/lib/file-listing';
@@ -8,6 +8,8 @@ import { decodeCursor } from '@/lib/file-query';
 import { uploadFields } from '@/lib/media';
 import { parseFileRecord } from '@/lib/file-record';
 import { withoutTakenPreviews } from '@/lib/preview-gc';
+import { isFeatureEnabled } from '@/lib/features';
+import { shouldProxy } from '@/lib/proxies';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -169,6 +171,15 @@ export async function POST(req) {
       contentHash: s3 ? facts?.etag || null : null,
       createdBy: email,
     });
+    // A heavy video gets a proxy asked for now, so a Mac can start on it
+    // before anyone opens the file. Best effort and after the row exists: the
+    // upload succeeded, and a queue that could not be written is not a reason
+    // to tell someone their file did not save. The flag is this person's own,
+    // and the queue and claim read it again for themselves.
+    if (isFeatureEnabled(principal.flags, 'proxies') && shouldProxy(file)) {
+      await requestProxy(file.id, { requestedBy: email })
+        .catch((e) => console.warn('[files] could not queue a proxy:', e.message));
+    }
     // Presign so the just-uploaded file previews immediately on a private bucket.
     const [signed] = await presignFileUrls([file]);
     return NextResponse.json({ file: signed || file });

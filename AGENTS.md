@@ -59,6 +59,12 @@ is env-gated (`ADMIN_EMAILS`) on purpose — keep it independent of roles.
 **Secrets never reach the client.** `listConfigKeys()` returns presence and
 source only. `sanitizeStorageConfig()` strips the secret key. Keep it that way.
 
+**A password is the exception, never an admin's.** Everyone signs in with an
+emailed link (or Okta). An account an admin gives a password — App Review's —
+may sign in with it (`lib/password-signin.js`), past the same `signIn` gate.
+Onyx makes each one; nobody picks it. The hash lives in `sign_in_passwords`
+and is read only to check one: keep it off `people` and out of every response.
+
 ## Checks
 
 ```bash

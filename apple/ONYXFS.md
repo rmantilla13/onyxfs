@@ -53,6 +53,22 @@ Finder / Premiere / Resolve
   the Mac). While developing, `killall -9 fskit_agent` does the same (it
   ignores SIGTERM, and SIP refuses `launchctl kickstart`); it also takes
   down every other FSKit volume, Xcode's DeviceFS included.
+- Or it can hold on to an earlier *record* of the app. The updater swaps the
+  new bundle in by rename, and LaunchServices went on describing the copy
+  it replaced: listed and switched on, the extension still stopped as it
+  started — `Fatal error: Invalid bundle record for current process`
+  (ExtensionFoundation, after "Finding containing app and retrying load of
+  record for appex"), SIGTRAP — which FSKit reports to the app as
+  NSCocoaErrorDomain 4099, "Couldn't communicate with a helper
+  application". Every drive went to `~/Onyx`, read-only, after the updates
+  to 0.5.5 and 0.5.6. Since 0.5.7 the updater unregisters the old copy and
+  registers the new one (`lsregister -u`, `-f -R -trusted`) before opening
+  it; the app registers itself (`LSRegisterURL`) before its first disk
+  mounts, for a copy an older updater installed; and a mount that fails
+  that way is tried once more after registering again, then Settings ›
+  Finder says to restart the Mac. By hand:
+  `lsregister -f -R -trusted /Applications/Onyx.app; killall -9 fskit_agent`
+  (lsregister is in LaunchServices.framework/Support).
 - Each drive mounts at `/Volumes/<Drive name>` through
   `FSClient.shared.mountSingleVolume(resource:bundleID:options:)` (macOS 27,
   entitlement `com.apple.developer.fskit.mount` on the app). The volume is
@@ -145,7 +161,8 @@ Endpoints:
    listing changed. `all: true` = drop everything (e.g. the mirror was rebuilt).
 7. `GET /fs/v1/volume` → the `volume` object from (1), fresh.
 
-(And 12, `GET /fs/v1/icon`, under "The drive's icon" at the end.)
+(And 12, `GET /fs/v1/icon`, under "The drive's icon" at the end; and 13,
+`POST /fs/v1/activity`, under "Activity" after it.)
 
 `generation` is a per-scope counter that moves every time that drive's mirror
 changes.
@@ -240,9 +257,12 @@ logic is testable with `swift test`.
 ## Writes (the owner asked for read-write; this is part of this build)
 
 ### Who may write
-The volume is read-write when the account may add to the drive (the same test
-the web's upload uses: drive role editor/owner via getFilespaceForWrite, and
-the role's `files.upload` capability), otherwise read-only: the bridge reports
+The volume is read-write when the account may change something there, as
+`/api/space/filespaces` says: each drive's `can` (`upload`, `edit`, `delete`,
+`folders`: drive role editor/owner and the platform role's capability
+together) and `library.can` for the library (the role's own, as the web's
+upload). A server too old to say leaves a drive's editors and owners, and the
+library for an admin only. Otherwise read-only: the bridge reports
 it as `volume.readOnly`, the extension refuses changes with EACCES before
 asking, and the bridge answers 403 to whoever asks anyway. The mount itself is
 never `rdonly` — the role is checked as it is now, so a viewer made an editor
@@ -251,6 +271,17 @@ names, below) on a drive it may only view. Each operation's own capability (file
 files.delete for delete, folders.manage for folders) is enforced by the server
 route; a refusal comes back to Finder as EACCES with the server's sentence in
 the log.
+
+### Names Finder sees, names the server has
+The index shows some folders under names of their own: " (2)" for one that
+differs from another only in case, ":" for a "/". Each folder entry keeps the
+server's path (`MirrorEntry.serverPath`), and the writer sends that, not the
+shown name, to every folder route and as an upload's or move's folder
+(`DriveWriter.serverFolder`). Names Finder makes are NFC; the server stores
+new names NFC and reaches a folder stored decomposed by its composed name.
+A folder delete the server refuses because it holds files this account cannot
+see (409 `hidden_files`, nothing deleted) is ENOTEMPTY in Finder; a folder
+that is not there is a 404, ENOENT.
 
 ### Bridge protocol v1 — write endpoints (app side)
 All require the session bearer; all 403 with `{error}` when the volume is
@@ -420,3 +451,40 @@ letter in the logo's cyan.
   `~/Onyx`, keep macOS's generic network-volume icon. macOS reads no Finder
   info over NFSv3: a root's `._.` and a file's `._name` are both ignored (tried
   with rclone's NFS server). Only a disk of its own can carry an icon.
+
+## Activity
+
+The owner asked for a live view of what the drives are moving, like a
+network monitor's: download, read and write, each a figure and a graph.
+Onyx ▸ Activity (the Window menu, and the menu bar item) shows four:
+**Download** (from storage to this Mac), **Upload** (back), **Read** (what
+apps read from the disks) and **Write** (what apps wrote to them), in
+megabits a second, each over the last minute.
+
+- **The extension counts** what only it sees (`TransferMeter`, OnyxFSCore):
+  bytes the engine hands the kernel for a read, bytes a write gives it, and
+  every byte storage sends (`FSBridgeClient.storageGET`, a range asked again
+  included: what the network carried). macOS's own files (`.DS_Store` and
+  the rest) never leave this Mac and are not counted. Reads the kernel
+  answers from its own cache never reach the extension, so neither are they.
+- **It tells the app** about once a second while anything moves:
+  13. `POST /fs/v1/activity` — `{ "read": n, "download": n, "write": n }`,
+      bytes since the last report; a field left out is 0. 200
+      `{ "ok": true }`; 400 for anything that is not that (a negative, or
+      past a tebibyte). Any session reports, a read-only disk's included.
+  Counting is a lock and an add on the read path. The first bytes after a
+  quiet spell start one report loop, which ends by itself once a second has
+  passed with nothing new, so an idle disk sends nothing. A report the app
+  does not answer (an older app: 404) is dropped, not retried.
+- **The app adds its own**: what an upload sends (`APIUploadTransport`,
+  each `didSendBodyData`) and what fetching an offline copy receives
+  (`FileDownload`), into `TransferLog` (OnyxKit): a ring of one-second
+  buckets, five minutes long. Adding is a lock and an add; nothing runs to
+  keep it.
+- **The window reads it** once a second while it is open (a `TimelineView`),
+  and only then. Each graph is its last 60 whole seconds, each averaged with
+  its neighbours, since a disk's once-a-second reports can land two in one
+  second and none in the next. The figure is the average of the last three.
+- **Not seen:** the rclone NFS mounts in `~/Onyx` (macOS 26 and older, or a
+  disk not yet allowed) read storage themselves; the window shows nothing of
+  them.

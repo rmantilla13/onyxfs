@@ -19,6 +19,13 @@ public protocol EngineBridge: Sendable {
     /// Something to read the file's bytes from — FileReader, which streams
     /// and caches.
     func reader(for entry: BridgeEntry) async throws -> any ByteSource
+    /// Bytes apps read from the disk or wrote to it, for the app's Activity
+    /// window (TransferMeter): counted, never waited on.
+    func count(_ kind: TransferMeter.Kind, bytes: Int)
+}
+
+extension EngineBridge {
+    public func count(_ kind: TransferMeter.Kind, bytes: Int) {}
 }
 
 public protocol ByteSource: Sendable {

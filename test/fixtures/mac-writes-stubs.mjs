@@ -141,6 +141,32 @@ export async function updateFile(id, fields = {}) {
   touch(row);
   return copy(row);
 }
+// The proxy queue, as far as POST /api/files needs it: asking for one is a row
+// keyed by file id, so the test can see WHETHER a heavy upload queued one. The
+// lease and the atomic claim are lib/db.js's, against a real database
+// (test/proxies.test.js pins their SQL).
+export async function requestProxy(fileId, { requestedBy = null } = {}) {
+  const row = { fileId, status: 'queued', requestedBy, requestedAt: now(), proxyKey: null, sourceKey: null };
+  (s().proxies ||= new Map()).set(String(fileId), row);
+  return copy(row);
+}
+export async function getProxy(fileId) { return copy(s().proxies?.get(String(fileId)) || null); }
+export async function getProxies(ids = []) {
+  const m = new Map();
+  for (const id of ids) { const r = s().proxies?.get(String(id)); if (r) m.set(String(id), copy(r)); }
+  return m;
+}
+export async function attachProxies(files = []) { return files; }
+export async function proxyKeysFor(ids = []) {
+  const list = Array.isArray(ids) ? ids : [ids];
+  return list.map((id) => s().proxies?.get(String(id))?.proxyKey).filter(Boolean);
+}
+export async function proxyKeysInUse(keys = []) {
+  const held = new Set([...(s().proxies?.values() || [])].map((r) => r.proxyKey).filter(Boolean));
+  return new Set(keys.filter((k) => held.has(k)));
+}
+function deleteProxyRow(id) { s().proxies?.delete(String(id)); }
+
 function followTranscripts(id, toKey) {
   const t = s().transcripts.get(id);
   const row = s().files.get(id);
@@ -183,6 +209,8 @@ export async function restoreFile(id, { storageKey = null } = {}) {
 export async function deleteFile(id) {
   s().tombstones.push({ id, seq: nextSeq() });
   s().files.delete(id);
+  // As the real one: a purge takes the file's dependents with it.
+  deleteProxyRow(id);
   return { ok: true };
 }
 export async function getTrashedFiles(ids = []) { return ids.map((id) => s().files.get(id)).filter((f) => f?.deletedAt).map(copy); }

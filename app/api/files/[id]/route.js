@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   updateFile, softDeleteFile, deleteFile, getFileById, getFileMetadataSchema,
-  canModifyFile, canAccessFile, setFileStorageKey, getFilespaceForWrite, storageKeyInUse, canonicalFolder,
+  canModifyFile, canAccessFile, setFileStorageKey, getFilespaceForWrite, storageKeyInUse, proxyKeysFor, canonicalFolder,
 } from '@/lib/db';
 import { requirePrincipal, can, refusal } from '@/lib/authz';
 import {
@@ -334,9 +334,12 @@ export async function DELETE(req, { params }) {
           return NextResponse.json({ error: `Could not delete the stored object: ${e.message}` }, { status: 500 });
         }
       }
+      // Read before the row goes: a proxy's key lives on its job row, which
+      // deleteFile removes with the file.
+      const proxyKeys = await proxyKeysFor([id]);
       await deleteFile(id);
       // Its previews go with it, once no other row points at them.
-      await dropUnusedPreviews(previewKeysOf(file), { cfg: base });
+      await dropUnusedPreviews({ ...previewKeysOf(file), proxyKeys }, { cfg: base });
       return NextResponse.json({ ok: true, trashed: false });
     }
 

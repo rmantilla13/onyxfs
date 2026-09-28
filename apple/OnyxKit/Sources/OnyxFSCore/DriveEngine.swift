@@ -122,14 +122,20 @@ public actor DriveEngine {
         guard !node.isDirectory else { throw VolumeError.posix(EISDIR) }
         guard offset < Int64(node.size), count > 0 else { return Data() }
         if await staging.contains(id) {
-            return try await wrap { try await self.staging.read(id, at: offset, count: count) }
+            let data = try await wrap { try await self.staging.read(id, at: offset, count: count) }
+            bridge.count(.read, bytes: data.count)
+            return data
         }
+        // Finder's own files (.DS_Store and the rest) never leave this Mac,
+        // and are not the drive's: not counted.
         if node.localOnly {
             if Self.isRootMarker(node) { return Data() }
             return try await wrap { try await self.local.read(node.path, at: offset, count: count) }
         }
         let source = try await reader(for: node)
-        return try await wrap { try await source.read(offset: offset, length: count) }
+        let data = try await wrap { try await source.read(offset: offset, length: count) }
+        bridge.count(.read, bytes: data.count)
+        return data
     }
 
     // MARK: - Writing
@@ -187,6 +193,7 @@ public actor DriveEngine {
         guard !readOnly else { throw VolumeError.posix(EACCES) }
         try await stage(id)
         let n = try await wrap { try await self.staging.write(id, at: offset, data) }
+        bridge.count(.write, bytes: n)
         node.size = max(node.size, UInt64(offset) + UInt64(data.count))
         node.modified = now()
         nodes[id] = node

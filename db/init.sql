@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 133
+-- Statements: 139
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -376,6 +376,8 @@ ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS pw_locked_until BIGINT;
 
 CREATE INDEX IF NOT EXISTS file_shares_created_by_idx ON file_shares (created_by);
 
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS review TEXT;
+
 CREATE SEQUENCE IF NOT EXISTS review_change_seq;
 
 CREATE TABLE IF NOT EXISTS review_comments (
@@ -413,6 +415,8 @@ CREATE INDEX IF NOT EXISTS review_comments_parent_idx ON review_comments (parent
 
 CREATE INDEX IF NOT EXISTS review_comments_stack_idx ON review_comments (stack_id) WHERE stack_id IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS review_comments_share_idx ON review_comments (share_token, created_at) WHERE share_token IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS review_decisions (
   file_id     TEXT NOT NULL,
   reviewer    TEXT NOT NULL,
@@ -423,6 +427,8 @@ CREATE TABLE IF NOT EXISTS review_decisions (
   seq         BIGINT NOT NULL DEFAULT nextval('review_change_seq'),
   PRIMARY KEY (file_id, reviewer)
 );
+
+ALTER TABLE review_decisions ADD COLUMN IF NOT EXISTS reviewer_name TEXT;
 
 CREATE TABLE IF NOT EXISTS review_watchers (
   file_id         TEXT NOT NULL,
@@ -539,6 +545,37 @@ ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS quota_bytes BIGINT;
 ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS ai_allowed BOOLEAN NOT NULL DEFAULT false;
 
 ALTER TABLE filespaces ADD COLUMN IF NOT EXISTS share_kinds TEXT;
+
+CREATE TABLE IF NOT EXISTS proxies (
+  file_id         TEXT PRIMARY KEY,
+  status          TEXT NOT NULL DEFAULT 'queued',
+  proxy_key       TEXT,
+  source_key      TEXT,
+  width           INT,
+  height          INT,
+  size            BIGINT,
+  duration        REAL,
+  progress        REAL,
+  error           TEXT,
+  requested_by    TEXT,
+  requested_at    TIMESTAMPTZ,
+  claimed_by      TEXT,
+  claimed_device  TEXT,
+  lease_until     TIMESTAMPTZ,
+  finished_at     TIMESTAMPTZ,
+  updated_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS proxies_queue_idx ON proxies (requested_at) WHERE status IN ('queued', 'working');
+
+CREATE TABLE IF NOT EXISTS sign_in_passwords (
+  email         TEXT PRIMARY KEY,
+  password_hash TEXT NOT NULL,
+  set_at        BIGINT NOT NULL,
+  set_by        TEXT,
+  failures      INT NOT NULL DEFAULT 0,
+  locked_until  BIGINT
+);
 
 CREATE TABLE IF NOT EXISTS desktop_auth_codes (
   code TEXT PRIMARY KEY,

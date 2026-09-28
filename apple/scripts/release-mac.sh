@@ -47,6 +47,14 @@ if [[ "$PUBLISH" == "1" ]] && gh release view "$TAG" --repo "$REPO" >/dev/null 2
   echo "$TAG already exists on $REPO. Bump apple/VERSION first." >&2
   exit 1
 fi
+# What was built, for the tag and the feed. A release is tagged at the
+# commit it was built from, so nothing uncommitted may be in it.
+COMMIT="$(git rev-parse HEAD)"
+if [[ "$PUBLISH" == "1" && -n "$(git status --porcelain)" ]]; then
+  echo "This checkout has changes that are not committed, and a release is tagged at a commit." >&2
+  echo "Commit them, or ship with scripts/ship-mac.sh, which builds what is on GitHub." >&2
+  exit 1
+fi
 
 export ONYX_VERSION="$VERSION" ONYX_BUILD="$BUILD_NUMBER" ONYX_SIGN_IDENTITY ONYX_TEAM_ID
 ONYX_UNIVERSAL=1 ONYX_TIMESTAMP=1 scripts/build-mac.sh
@@ -85,6 +93,7 @@ cat > "$OUT/onyx-mac.json" <<JSON
 {
   "version": "$VERSION",
   "build": "$BUILD_NUMBER",
+  "commit": "$COMMIT",
   "minimumSystemVersion": "14.0",
   "publishedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "notes": $(printf '%s' "$NOTES" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'),
@@ -97,7 +106,9 @@ spctl --assess --type execute --verbose "$APP"
 echo "Built and notarized: $OUT/Onyx.dmg, $OUT/Onyx.zip, $OUT/onyx-mac.json"
 
 if [[ "$PUBLISH" == "1" ]]; then
-  gh release create "$TAG" --repo "$REPO" --title "Onyx for Mac $VERSION" --notes "$NOTES" \
+  # --target: the commit built. Without it the tag lands on whatever the
+  # default branch is now — which is how mac-v0.5.7 came to point at main.
+  gh release create "$TAG" --repo "$REPO" --target "$COMMIT" --title "Onyx for Mac $VERSION" --notes "$NOTES" \
     "$OUT/Onyx.dmg" "$OUT/Onyx.zip" "$OUT/onyx-mac.json"
   echo "Published $TAG. The download button and installed copies pick it up within ten minutes."
 fi

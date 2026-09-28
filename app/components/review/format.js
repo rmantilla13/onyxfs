@@ -30,3 +30,19 @@ export function ago(ms, now = Date.now()) {
 
 /** The handle a mention is written as in a comment: the address before the @. */
 export const handleOf = (email) => String(email || '').split('@')[0];
+
+/**
+ * Who wrote a comment, as the panel's `me` is written: a member's address,
+ * or 'guest:<id>' for a guest on a review link (guestReviewer in
+ * lib/review.js). Null for someone a guest's feed does not name — a member,
+ * seen from a share page.
+ */
+export function authorKey(c) {
+  const a = c?.author;
+  if (!a) return null;
+  if (a.guestId) return `guest:${a.guestId}`;
+  return a.email || null;
+}
+
+/** Whether `me` wrote comment `c`. */
+export const isAuthoredBy = (c, me) => !!me && authorKey(c) === me;

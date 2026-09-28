@@ -21,6 +21,29 @@ struct FileDownloadTests {
         #expect(try String(contentsOf: destination, encoding: .utf8) == "first second third")
     }
 
+    /// `progress` hears the running total, `received` each chunk's size: the
+    /// transcriber shows the one, the Activity window counts the other.
+    @Test func progressHearsTheTotalAndReceivedEachChunk() async throws {
+        final class Heard: @unchecked Sendable {
+            private let lock = NSLock()
+            private var totalsSoFar: [Int64] = []
+            private var chunksSoFar: [Int64] = []
+            func total(_ n: Int64) { lock.withLock { totalsSoFar.append(n) } }
+            func chunk(_ n: Int64) { lock.withLock { chunksSoFar.append(n) } }
+            var totals: [Int64] { lock.withLock { totalsSoFar } }
+            var chunks: [Int64] { lock.withLock { chunksSoFar } }
+        }
+        let stub = DownloadStub.serve(status: 200, chunks: ["first ", "second ", "third"])
+        let destination = try tempFolder().appendingPathComponent("file")
+        let heard = Heard()
+        try await FileDownload.fetch(stub.url, to: destination, session: DownloadStub.session,
+                                     progress: { heard.total($0) }, received: { heard.chunk($0) })
+        #expect(heard.totals.last == 18)
+        #expect(heard.totals == heard.totals.sorted())
+        #expect(heard.chunks.reduce(0, +) == 18)
+        #expect(heard.chunks.count == heard.totals.count)
+    }
+
     @Test func anErrorPageIsNotTheFile() async throws {
         let stub = DownloadStub.serve(status: 403, chunks: ["<Error>AccessDenied</Error>"])
         let destination = try tempFolder().appendingPathComponent("file")

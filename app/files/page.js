@@ -77,6 +77,11 @@ export default async function FilesPage({ searchParams }) {
   const filespaceId = searchParams?.filespace || '';
   const activeDrive = filespaces.find((f) => f.id === filespaceId) || null;
   const canWrite = can(principal, 'files.upload').ok && (!activeDrive || canWriteDrive(activeDrive.role, admin));
+  // Whether their role may make a link that takes comments — a public or
+  // password link that is also a review link. The Share dialog offers it for
+  // photos and videos; the route checks it, the file and its drive again.
+  const reviewLinks = ['shares.public', 'review.links']
+    .every((cap) => can(principal, cap, { canModify: true, expiresInDays: principal.limits.shareMaxExpiryDays }).ok);
 
   // The view in the URL (?view=): a built-in, or one of their own. A view
   // kept for one drive opens in that drive, so a link to it lands there; an
@@ -135,6 +140,7 @@ export default async function FilesPage({ searchParams }) {
       <FilesClient
         flags={flags}
         canWrite={canWrite}
+        reviewLinks={reviewLinks}
         schema={normalizeSchema(rawSchema)}
         filespaceId={activeDrive ? filespaceId : ''}
         isAdmin={admin}

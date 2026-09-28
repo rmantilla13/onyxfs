@@ -165,13 +165,29 @@ final class Updater: ObservableObject {
 
     /// Swap the bundles once this process has exited, then open the new one.
     /// A detached shell does it: an app cannot replace itself while running.
+    ///
+    /// The swap is a rename, and nothing tells LaunchServices: its record of
+    /// the app, and of the file system extension inside it, can go on
+    /// describing the copy that was replaced. The extension looks itself up
+    /// as it starts, and with such a record stops at once ("Invalid bundle
+    /// record for current process"), which FSKit reports as "Couldn't
+    /// communicate with a helper application" — every drive stayed in
+    /// ~/Onyx, read-only, after the updates to 0.5.5 and 0.5.6. So the copy
+    /// going away is unregistered and the new one registered, with what is
+    /// inside it, before it opens. (DiskMounter.register does the same from
+    /// the new copy, for an update an older updater installed.)
     private func relaunch(replacing current: URL, with fresh: URL) throws {
         let script = """
         pid="$1"; current="$2"; fresh="$3"
+        lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
         while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
         old="$(dirname "$fresh")/previous.app"
-        mv "$current" "$old" && mv "$fresh" "$current" && rm -rf "$old"
+        if mv "$current" "$old" && mv "$fresh" "$current"; then
+          "$lsregister" -u "$old" >/dev/null 2>&1
+          rm -rf "$old"
+        fi
         [ -d "$current" ] || mv "$old" "$current"
+        "$lsregister" -f -R -trusted "$current" >/dev/null 2>&1
         open "$current"
         """
         let p = Process()
