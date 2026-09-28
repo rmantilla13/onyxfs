@@ -9,7 +9,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDeltaQuery, buildFileQuery, accessClauses } from '../lib/file-query.js';
+import { buildDeltaQuery, buildFileQuery, accessClauses, settleFeedCursor } from '../lib/file-query.js';
 import { drivePatterns } from '../lib/drive-access.js';
 import { accessFingerprint, syncScope } from '../lib/sync-scope.js';
 import { safeNext, sessionCookieName, authUsesHttps, handoffSecret, HANDOFF_TTL_MS } from '../lib/web-handoff.js';
@@ -145,5 +145,28 @@ describe('names are not patterns', () => {
     assert.ok(params.includes('Q1\\_2024/%'), 'folder prefix escaped');
     assert.ok(params.includes('100\\%\\_brand/%'), 'drive prefix escaped');
     assert.ok(!params.includes('Q1_2024/%') && !params.includes('100%_brand/%'));
+  });
+});
+
+describe('the settled cursor', () => {
+  test('never passes the horizon, and ends the pass when held short of the page', () => {
+    assert.deepEqual(settleFeedCursor({ from: 10, next: 20, full: false, horizon: 15 }), { cursor: 15, done: true });
+    // A full page held short is still the last for now: asking again at once
+    // would get the same rows back.
+    assert.deepEqual(settleFeedCursor({ from: 10, next: 20, full: true, horizon: 15 }), { cursor: 15, done: true });
+  });
+
+  test('with the horizon at or past the page, the page decides', () => {
+    assert.deepEqual(settleFeedCursor({ from: 10, next: 20, full: true, horizon: 20 }), { cursor: 20, done: false });
+    assert.deepEqual(settleFeedCursor({ from: 10, next: 20, full: false, horizon: 99 }), { cursor: 20, done: true });
+  });
+
+  test('never goes back, and nothing settled yet holds it where it is', () => {
+    assert.deepEqual(settleFeedCursor({ from: 30, next: 40, full: false, horizon: 5 }), { cursor: 30, done: true });
+    assert.deepEqual(settleFeedCursor({ from: 30, next: 40, full: false, horizon: 0 }), { cursor: 30, done: true });
+  });
+
+  test('an unknown horizon (marks unreadable) leaves the page its own cursor', () => {
+    assert.deepEqual(settleFeedCursor({ from: 10, next: 20, full: true, horizon: undefined }), { cursor: 20, done: false });
   });
 });

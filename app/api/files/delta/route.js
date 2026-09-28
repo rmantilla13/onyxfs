@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import {
-  listFileChanges, currentChangeCursor, getFilespaceForUser, listFilespaces, listSyncFolders,
+  listFileChanges, currentChangeCursor, changeHorizon, getFilespaceForUser, listFilespaces, listSyncFolders,
 } from '@/lib/db';
 import { resolveActor } from '@/lib/desktop-guard';
 import { presignFileUrls } from '@/lib/storage';
@@ -73,8 +73,12 @@ export async function GET(req) {
   // `?cursor=now` hands back the current high-water mark without any payload,
   // for a client that wants to start watching from this moment rather than
   // replay history it does not want.
+  // Settled, like every cursor the feed hands out: "now" is as far as every
+  // change has finished, so one still being written is not skipped.
   if (url.searchParams.get('cursor') === 'now') {
-    return NextResponse.json({ changed: [], deleted: [], cursor: await currentChangeCursor(), done: true, scope: tag });
+    const horizon = await changeHorizon();
+    const cursor = horizon === undefined ? await currentChangeCursor() : horizon;
+    return NextResponse.json({ changed: [], deleted: [], cursor, done: true, scope: tag });
   }
 
   let page;
