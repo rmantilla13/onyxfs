@@ -325,5 +325,10 @@ final class AppModel: ObservableObject {
         // Where to look for updates, instead of the server — for trying the
         // updater against a local feed. What it installs is verified the same.
         updater.start(feed: value("--update-feed").flatMap(URL.init(string:)))
+        #if DEBUG
+        // `--demo-activity`: pretend traffic in the Activity window, for
+        // looking at it without disks (a debug build has none unsigned).
+        if args.contains("--demo-activity") { ActivityDemo.start(finder.transfers) }
+        #endif
     }
 }

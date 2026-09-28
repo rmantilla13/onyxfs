@@ -95,6 +95,17 @@ private actor FakeBridge: EngineBridge {
         return Bytes(data: file.bytes)
     }
 
+    /// What the engine counted for the Activity window, in order.
+    nonisolated let counted = Counted()
+    nonisolated func count(_ kind: TransferMeter.Kind, bytes: Int) { counted.add("\(kind) \(bytes)") }
+
+    final class Counted: @unchecked Sendable {
+        private let lock = NSLock()
+        private var items: [String] = []
+        func add(_ item: String) { lock.withLock { items.append(item) } }
+        var all: [String] { lock.withLock { items } }
+    }
+
     struct Bytes: ByteSource {
         let data: Data
         func read(offset: Int64, length: Int) async throws -> Data {
@@ -130,6 +141,25 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
         #expect(try await engine.lookup("Take 1.mov", in: footage.id).id == take.id)
         #expect(String(decoding: try await engine.read(take.id, at: 2, count: 100), as: UTF8.self) == "ames")
         await #expect(throws: VolumeError.posix(ENOENT)) { try await engine.lookup("nope", in: footage.id) }
+    }
+
+    /// For the app's Activity window: what apps read from the drive and
+    /// wrote to it — a file being written, read back, included — and none of
+    /// macOS's own files, which never leave this Mac.
+    @Test func readsAndWritesAreCountedButMacOSOwnFilesAreNot() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFile("/Take 1.mov", Data("frames".utf8))
+        let engine = try await makeEngine(bridge)
+        let take = try await engine.lookup("Take 1.mov", in: DriveEngine.rootID)
+        _ = try await engine.read(take.id, at: 0, count: 100)
+        let cut = try await engine.create("Cut.mov", in: DriveEngine.rootID, isDirectory: false)
+        try await engine.beginWriting(cut.id, truncating: false)
+        _ = try await engine.write(cut.id, at: 0, data: Data("hello".utf8))
+        _ = try await engine.read(cut.id, at: 0, count: 10)
+        let store = try await engine.create(".DS_Store", in: DriveEngine.rootID, isDirectory: false)
+        _ = try await engine.write(store.id, at: 0, data: Data("view".utf8))
+        _ = try await engine.read(store.id, at: 0, count: 10)
+        #expect(bridge.counted.all == ["read 6", "write 5", "read 5"])
     }
 
     @Test func aCopiedFileIsListedAtOnceAndUploadedOnClose() async throws {

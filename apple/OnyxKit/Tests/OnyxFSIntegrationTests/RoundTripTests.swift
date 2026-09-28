@@ -39,6 +39,38 @@ import Testing
         #expect(try await engine.read(local.id, at: 0, count: 100) == Data("local".utf8))
     }
 
+    /// The Activity window's figures end to end: what the engine read and
+    /// wrote, and what its client fetched from storage, reach the app for
+    /// this drive about a second later (TransferMeter → POST /fs/v1/activity).
+    @Test func whatADiskMovesReachesTheApp() async throws {
+        let server = Server()
+        let take = Pattern.bytes(3 << 20)
+        try await server.add("/Take 1.mov", take)
+        let mount = try await Mount(server)
+        defer { mount.remove() }
+        let heard = Tally()
+        mount.app.onActivity { scope, moved in heard.add(scope, moved) }
+
+        let engine = mount.engine
+        let file = try await engine.lookup("Take 1.mov", in: DriveEngine.rootID)
+        var read = 0
+        while read < take.count {
+            read += try await engine.read(file.id, at: Int64(read), count: 1 << 20).count
+        }
+        let notes = try await engine.create("Notes.txt", in: DriveEngine.rootID, isDirectory: false)
+        try await engine.beginWriting(notes.id, truncating: false)
+        _ = try await engine.write(notes.id, at: 0, data: Data("hello world".utf8))
+        try await engine.finishWriting(notes.id)
+
+        let expected = FSActivity(read: Int64(take.count), download: Int64(take.count), write: 11)
+        let deadline = ContinuousClock.now + .seconds(5)
+        while heard.total != expected, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(heard.total == expected)
+        #expect(heard.scopes == [Self.scope])
+    }
+
     @Test func theDrivesIconIsOnTheDisk() async throws {
         let server = Server()
         try await server.add("/Readme.md", Data("hello".utf8))
@@ -146,6 +178,25 @@ import Testing
 }
 
 // MARK: - The pieces
+
+/// What the app heard from its disks: the sum, and for which drives.
+final class Tally: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sum = FSActivity()
+    private var heardFrom: Set<String> = []
+
+    func add(_ scope: String, _ moved: FSActivity) {
+        lock.withLock {
+            sum.read += moved.read
+            sum.download += moved.download
+            sum.write += moved.write
+            heardFrom.insert(scope)
+        }
+    }
+
+    var total: FSActivity { lock.withLock { sum } }
+    var scopes: Set<String> { lock.withLock { heardFrom } }
+}
 
 /// One drive mounted: the app's bridge serving `server`'s drive, and the
 /// extension's engine connected to it with a real ticket.

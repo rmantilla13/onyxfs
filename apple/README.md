@@ -13,6 +13,9 @@ One Swift codebase. On the Mac it is **Onyx.app**:
   window, and it is kept on this Mac to open with no connection. The cache
   can live in any folder, including an external disk (Settings → Storage).
 - **A menu bar item** that keeps Finder in sync while the window is closed.
+- **Activity** (Window menu, or the menu bar item): what the drives are
+  moving right now, download, upload, read and write, each a figure and a
+  minute's graph. It costs nothing while it is shut (ONYXFS.md, "Activity").
 
 On iPhone and iPad it is **Onyx** (`OnyxIOS/`), native SwiftUI:
 

@@ -365,6 +365,7 @@ struct MenuBarContent: View {
             }
             Divider()
             Button("Open Onyx") { open() }.keyboardShortcut("o")
+            Button("Activity") { open("activity") }
             FinderItems()
         } else {
             Text("Not signed in")
@@ -388,9 +389,9 @@ struct MenuBarContent: View {
         Button("Quit Onyx") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 
-    private func open() {
+    private func open(_ window: String = "main") {
         Background.shared.comeForward()
-        openWindow(id: "main")
+        openWindow(id: window)
     }
 }
 

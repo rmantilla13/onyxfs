@@ -71,6 +71,10 @@ final class DriveService: ObservableObject {
     @Published var uploadSummary = UploadSummary()
     /// Moves the menu's upload percentage while something is on its way.
     var uploadTicker: Task<Void, Never>?
+    /// What the drives moved, second by second, for the Activity window: the
+    /// disks' own reports, uploads and offline copies. Kept by adding; read
+    /// only while the window is open.
+    let transfers = TransferLog()
     private let server = DAVServer()
     private var mirrors: [String: DriveMirror] = [:]
     private var names: [String: String] = [:]
@@ -124,6 +128,14 @@ final class DriveService: ObservableObject {
         forwarding = mounts.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         setUpDisks()
         mounts.onEjected = { [weak self] scope in self?.forgetWanted(scope) }
+        // What each disk read, fetched and was given, as its extension
+        // reports it about once a second (POST /fs/v1/activity).
+        let transfers = self.transfers
+        server.fs.onActivity { _, moved in
+            transfers.add(.read, moved.read)
+            transfers.add(.download, moved.download)
+            transfers.add(.write, moved.write)
+        }
     }
 
     /// ~/Library/Application Support/Onyx/Offline: not Caches, which macOS
@@ -741,12 +753,13 @@ final class DriveService: ObservableObject {
         defer { downloading -= 1 }
         let index = await mirror.index
         guard started == generation else { return }
+        let transfers = self.transfers
         let report = await pins.reconcile(scope: scope, index: index) { entry, destination in
             guard let id = entry.fileId else { throw OnyxError.decoding("not a file") }
             let url = try await mirror.contentURL(fileId: id)
             // Straight into the store's folder, on the cache's own disk.
             do {
-                try await FileDownload.fetch(url, to: destination)
+                try await FileDownload.fetch(url, to: destination, received: { transfers.add(.download, $0) })
             } catch let OnyxError.http(status, message) {
                 // Storage refused the link: the next try fetches a new one.
                 await mirror.forgetContentURL(fileId: id)

@@ -145,7 +145,8 @@ Endpoints:
    listing changed. `all: true` = drop everything (e.g. the mirror was rebuilt).
 7. `GET /fs/v1/volume` → the `volume` object from (1), fresh.
 
-(And 12, `GET /fs/v1/icon`, under "The drive's icon" at the end.)
+(And 12, `GET /fs/v1/icon`, under "The drive's icon" at the end; and 13,
+`POST /fs/v1/activity`, under "Activity" after it.)
 
 `generation` is a per-scope counter that moves every time that drive's mirror
 changes.
@@ -434,3 +435,40 @@ letter in the logo's cyan.
   `~/Onyx`, keep macOS's generic network-volume icon. macOS reads no Finder
   info over NFSv3: a root's `._.` and a file's `._name` are both ignored (tried
   with rclone's NFS server). Only a disk of its own can carry an icon.
+
+## Activity
+
+The owner asked for a live view of what the drives are moving, like a
+network monitor's: download, read and write, each a figure and a graph.
+Onyx ▸ Activity (the Window menu, and the menu bar item) shows four:
+**Download** (from storage to this Mac), **Upload** (back), **Read** (what
+apps read from the disks) and **Write** (what apps wrote to them), in
+megabits a second, each over the last minute.
+
+- **The extension counts** what only it sees (`TransferMeter`, OnyxFSCore):
+  bytes the engine hands the kernel for a read, bytes a write gives it, and
+  every byte storage sends (`FSBridgeClient.storageGET`, a range asked again
+  included: what the network carried). macOS's own files (`.DS_Store` and
+  the rest) never leave this Mac and are not counted. Reads the kernel
+  answers from its own cache never reach the extension, so neither are they.
+- **It tells the app** about once a second while anything moves:
+  13. `POST /fs/v1/activity` — `{ "read": n, "download": n, "write": n }`,
+      bytes since the last report; a field left out is 0. 200
+      `{ "ok": true }`; 400 for anything that is not that (a negative, or
+      past a tebibyte). Any session reports, a read-only disk's included.
+  Counting is a lock and an add on the read path. The first bytes after a
+  quiet spell start one report loop, which ends by itself once a second has
+  passed with nothing new, so an idle disk sends nothing. A report the app
+  does not answer (an older app: 404) is dropped, not retried.
+- **The app adds its own**: what an upload sends (`APIUploadTransport`,
+  each `didSendBodyData`) and what fetching an offline copy receives
+  (`FileDownload`), into `TransferLog` (OnyxKit): a ring of one-second
+  buckets, five minutes long. Adding is a lock and an add; nothing runs to
+  keep it.
+- **The window reads it** once a second while it is open (a `TimelineView`),
+  and only then. Each graph is its last 60 whole seconds, each averaged with
+  its neighbours, since a disk's once-a-second reports can land two in one
+  second and none in the next. The figure is the average of the last three.
+- **Not seen:** the rclone NFS mounts in `~/Onyx` (macOS 26 and older, or a
+  disk not yet allowed) read storage themselves; the window shows nothing of
+  them.

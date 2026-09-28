@@ -19,6 +19,8 @@ public final class FSBridge: @unchecked Sendable {
     /// `changes` long-polls under way, by session, and in all.
     private var polls: [String: Int] = [:]
     private var pollCount = 0
+    /// Told what each disk moved, as its extension reports it.
+    private var activityHandler: (@Sendable (_ scope: String, _ moved: FSActivity) -> Void)?
 
     /// The resource URL's scheme. Not `onyxfs:`, which is the app's own
     /// sign-in hand-off scheme (CFBundleURLSchemes): a URL of that scheme
@@ -64,6 +66,12 @@ public final class FSBridge: @unchecked Sendable {
 
     func writer(for scope: String) -> (any FSWriteTarget)? {
         lock.withLock { writers[scope] }
+    }
+
+    /// Hear what each disk moved (`POST /fs/v1/activity`): the drive's
+    /// scope, and the bytes its extension counted since its last report.
+    public func onActivity(_ handler: @escaping @Sendable (_ scope: String, _ moved: FSActivity) -> Void) {
+        lock.withLock { activityHandler = handler }
     }
 
     /// The drive is unmounted, or gone: its sessions and tickets end, and
@@ -162,10 +170,12 @@ public final class FSBridge: @unchecked Sendable {
         if route == "session", request.method == "POST" { return await exchange(request.body) }
 
         guard let session = sessions.session(for: request.headers["authorization"]) else { return Self.unauthorized }
-        guard let route, Self.readRoutes.contains(route) || Self.writeRoutes.contains(route) || route == "session" else {
+        guard let route, Self.readRoutes.contains(route) || Self.writeRoutes.contains(route)
+                || route == "session" || route == "activity" else {
             return FSResponder.error(404, "There is no such endpoint.")
         }
         if route == "session" { return Self.notAllowed("POST") }
+        if route == "activity" { return activity(request, session: session) }
         if Self.writeRoutes.contains(route) { return await write(route, request, session: session) }
         guard request.method == "GET" || request.method == "HEAD" else { return Self.notAllowed("GET, HEAD") }
         guard let query = Self.query(request.target) else { return FSResponder.error(400, "The query is not valid.") }
@@ -259,6 +269,20 @@ public final class FSBridge: @unchecked Sendable {
         } catch {
             return FSResponder.error(500, error.localizedDescription)
         }
+    }
+
+    /// `POST /fs/v1/activity`: `{ "read": n, "download": n, "write": n }`,
+    /// the bytes the session's disk moved since its last report, for the
+    /// Activity window. A read-only disk reports too: reading is most of it.
+    /// Tells the handler and nothing else; the answer carries nothing.
+    private func activity(_ request: DAVRequest, session: FSSessions.Session) -> DAVResponse {
+        guard request.method == "POST" else { return Self.notAllowed("POST") }
+        guard let moved = try? JSONDecoder().decode(FSActivity.self, from: request.body), moved.isPlausible else {
+            return FSResponder.error(400, #"The body must be {"read": n, "download": n, "write": n}, in bytes."#)
+        }
+        let handler = lock.withLock { activityHandler }
+        handler?(session.scope, moved)
+        return FSResponder.json(200, ["ok": true])
     }
 
     /// `POST /fs/v1/session`: `{ "ticket": "…" }` for a session on the
@@ -365,4 +389,32 @@ public protocol FSWriteTarget: Sendable {
     func makeFolder(path: String) async throws
     func move(from: String, to: String, replace: Bool) async throws
     func remove(path: String) async throws
+}
+
+/// What one disk moved since its last report (`POST /fs/v1/activity`), in
+/// bytes: read by apps, fetched from storage, written by apps. A field left
+/// out is 0.
+public struct FSActivity: Decodable, Sendable, Equatable {
+    public var read: Int64
+    public var download: Int64
+    public var write: Int64
+
+    public init(read: Int64 = 0, download: Int64 = 0, write: Int64 = 0) {
+        self.read = read; self.download = download; self.write = write
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        read = try c.decodeIfPresent(Int64.self, forKey: .read) ?? 0
+        download = try c.decodeIfPresent(Int64.self, forKey: .download) ?? 0
+        write = try c.decodeIfPresent(Int64.self, forKey: .write) ?? 0
+    }
+
+    private enum CodingKeys: String, CodingKey { case read, download, write }
+
+    /// None below zero, and none past a tebibyte: a second's worth, from a
+    /// disk on this Mac.
+    var isPlausible: Bool {
+        [read, download, write].allSatisfy { (0...(1 << 40)).contains($0) }
+    }
 }
