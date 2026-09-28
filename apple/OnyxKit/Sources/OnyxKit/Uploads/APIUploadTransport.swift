@@ -6,6 +6,9 @@ import Foundation
 public struct APIUploadTransport: UploadTransport {
     let api: OnyxAPI
     let session: URLSession
+    /// Told each time bytes go out to storage, how many: for the Activity
+    /// window (TransferLog).
+    let sent: (@Sendable (Int64) -> Void)?
 
     /// No cache, no cookies; long timeouts, because a part of a large file on
     /// a slow line is minutes of sending.
@@ -18,9 +21,11 @@ public struct APIUploadTransport: UploadTransport {
         return URLSession(configuration: configuration)
     }()
 
-    public init(api: OnyxAPI, session: URLSession = APIUploadTransport.session) {
+    public init(api: OnyxAPI, session: URLSession = APIUploadTransport.session,
+                sent: (@Sendable (Int64) -> Void)? = nil) {
         self.api = api
         self.session = session
+        self.sent = sent
     }
 
     public func presign(_ job: UploadJob) async throws -> OnyxAPI.PresignedPut {
@@ -75,7 +80,7 @@ public struct APIUploadTransport: UploadTransport {
         request.httpMethod = "PUT"
         if let contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
         request.setValue(String(length), forHTTPHeaderField: "Content-Length")
-        let delegate = Progress(progress)
+        let delegate = Progress(progress, sent: sent)
         let response: URLResponse
         let body: Data
         let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? NSNumber)?.int64Value ?? -1
@@ -104,10 +109,15 @@ public struct APIUploadTransport: UploadTransport {
 
     private final class Progress: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         let report: @Sendable (Int64) -> Void
-        init(_ report: @escaping @Sendable (Int64) -> Void) { self.report = report }
+        let sent: (@Sendable (Int64) -> Void)?
+        init(_ report: @escaping @Sendable (Int64) -> Void, sent: (@Sendable (Int64) -> Void)?) {
+            self.report = report
+            self.sent = sent
+        }
         func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
                         totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
             report(totalBytesSent)
+            sent?(bytesSent)
         }
     }
 }

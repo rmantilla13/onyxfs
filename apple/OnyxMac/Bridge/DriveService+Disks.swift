@@ -175,8 +175,10 @@ extension DriveService {
     func openUploads(account: String, server: URL) {
         guard let model else { return }
         do {
+            let transfers = self.transfers
             let queue = try UploadQueue(directory: Self.uploadsDirectory(server: server, account: account),
-                                        transport: APIUploadTransport(api: model.api))
+                                        transport: APIUploadTransport(api: model.api,
+                                                                      sent: { transfers.add(.upload, $0) }))
             uploads = queue
             Task { [weak self] in
                 await queue.observe { [weak self] job in

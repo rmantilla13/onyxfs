@@ -6,14 +6,19 @@ import Testing
 private actor FakeTree: DriveTree {
     var items: [String: DriveItem] = [:]
     var dates: [String: Date] = [:]
+    /// Folders shown under a name of their own: shown path (no leading
+    /// slash, as the writer asks) → the server's.
+    var serverNames: [String: String] = [:]
     var refreshes = 0
     func item(at path: String) async -> DriveItem? { items[path] }
     func changed(at path: String) async -> Date? { dates[path] }
     func refresh() async { refreshes += 1 }
+    func serverPath(at path: String) async -> String? { serverNames[path] }
     func set(_ path: String, _ item: DriveItem?, changed: Date? = nil) {
         items[path] = item
         dates[path] = changed
     }
+    func show(_ path: String, as server: String) { serverNames[path] = server }
 }
 
 /// The server's write routes, pretend: what was called, and a refusal on command.
@@ -214,6 +219,36 @@ private func writer(_ tree: FakeTree, _ routes: FakeRoutes, _ server: FakeServer
         #expect(await routes.calls == ["mkdir Footage/Day 1", "rmdir Footage/Day 1"])
         await tree.set("/a.txt", .file(id: "x"))
         await #expect(throws: DriveWriter.Failure.posix(EEXIST, nil)) { try await drive.mkdir(path: "/a.txt") }
+    }
+
+    /// A folder the mirror shows under a name of its own — "photos (2)"
+    /// beside "Photos", which the server keeps apart — is changed by the
+    /// server's name for it, and so is what is made or moved into it.
+    @Test func aFolderShownUnderANameOfItsOwnIsChangedByTheServersName() async throws {
+        let tree = FakeTree(), routes = FakeRoutes(), server = FakeServer()
+        await tree.set("/photos (2)", .folder)
+        await tree.show("photos (2)", as: "photos")
+        await tree.set("/x.jpg", .file(id: "x"))
+        let (drive, _) = try writer(tree, routes, server)
+        try await drive.mkdir(path: "/photos (2)/New")
+        try await drive.rename(from: "/x.jpg", to: "/photos (2)/x.jpg", replace: false)
+        try await drive.rename(from: "/photos (2)", to: "/Old", replace: false)
+        try await drive.delete(path: "/photos (2)")
+        #expect(await routes.calls == [
+            "mkdir photos/New", "update x name=- folder=photos", "mvdir photos -> Old", "rmdir photos",
+        ])
+    }
+
+    /// The server refuses to delete a folder holding files this account
+    /// cannot see, and deletes nothing: Finder is told it is not empty.
+    @Test func aFolderWithFilesNotShownHereIsNotEmpty() async throws {
+        let tree = FakeTree(), routes = FakeRoutes(), server = FakeServer()
+        await tree.set("/Shared", .folder)
+        await routes.setRefusal("rmdir Shared", OnyxError.http(status: 409, message: "“Shared” holds 1 file you cannot see."))
+        let (drive, _) = try writer(tree, routes, server)
+        await #expect(throws: DriveWriter.Failure.posix(ENOTEMPTY, "“Shared” holds 1 file you cannot see.")) {
+            try await drive.delete(path: "/Shared")
+        }
     }
 
     @Test func pathsAreCheckedBeforeAnythingHappens() throws {

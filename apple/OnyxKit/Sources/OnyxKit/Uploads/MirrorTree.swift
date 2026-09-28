@@ -27,5 +27,12 @@ public struct MirrorTree: DriveTree {
         return entry.changed
     }
 
+    public func serverPath(at path: String) async -> String? {
+        guard let key = MirrorIndex.normalize(path) else { return nil }
+        if key.isEmpty { return "" }
+        guard let entry = await mirror.index.entry(at: key), entry.isFolder else { return nil }
+        return entry.apiPath
+    }
+
     public func refresh() async { await refreshing() }
 }

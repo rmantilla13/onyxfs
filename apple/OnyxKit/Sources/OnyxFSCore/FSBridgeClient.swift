@@ -28,6 +28,10 @@ public final class FSBridgeClient: Sendable {
     private let bridge: URLSession
     private let longPoll: URLSession
     let storage: URLSession
+    /// What this disk moved, told to the app as it goes (`activity`). The
+    /// client counts what it fetches from storage; the engine counts what
+    /// apps read and write.
+    public let meter: TransferMeter
 
     /// Exchanges the resource's ticket for a session (POST /fs/v1/session).
     /// A ticket works once and for two minutes; a spent or unknown one is
@@ -56,6 +60,14 @@ public final class FSBridgeClient: Sendable {
         bridge = sessions.bridge
         longPoll = sessions.longPoll
         storage = sessions.storage
+        // The meter reports through this client, and must not keep it.
+        let reporter = Reporter()
+        meter = TransferMeter { counts in try? await reporter.client?.activity(counts) }
+        reporter.client = self
+    }
+
+    private final class Reporter: @unchecked Sendable {
+        weak var client: FSBridgeClient?
     }
 
     deinit {
@@ -222,8 +234,22 @@ public final class FSBridgeClient: Sendable {
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         request.httpShouldHandleCookies = false
         let (data, response) = try await storage.data(for: request)
+        // Every byte storage sent, a range asked for again included: what
+        // the network carried.
+        meter.add(.download, data.count)
         guard let http = response as? HTTPURLResponse else { return (0, data, nil) }
         return (http.statusCode, data, http.value(forHTTPHeaderField: "Content-Range"))
+    }
+
+    /// POST /fs/v1/activity: what this disk moved since the last report
+    /// (TransferMeter), for the app's Activity window. An app that does not
+    /// know the route answers 404, and the report is dropped.
+    public func activity(_ counts: TransferMeter.Counts) async throws {
+        var request = self.request("POST", "activity", query: [])
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(counts)
+        let (body, response) = try await Self.send(request, on: bridge)
+        try Self.check(response, body)
     }
 
     // MARK: - Plumbing

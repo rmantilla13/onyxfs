@@ -106,7 +106,7 @@ public struct MirrorIndex: Sendable, PinnableIndex {
             positions[folder.key] = at
             if folder.parent >= 0 { children[folder.parent]![folder.slot] = at }
             entries.append(MirrorEntry(kind: .folder, name: folder.name, path: folder.path, fileId: nil, size: 0,
-                                       modified: emptyFolderDate, etag: nil, mime: nil))
+                                       modified: emptyFolderDate, etag: nil, mime: nil, serverPath: folder.serverPath))
 
             let subs = subfolders[folder.serverPath] ?? []
             let files = filesIn[folder.serverPath] ?? []
@@ -172,7 +172,7 @@ public struct MirrorIndex: Sendable, PinnableIndex {
                 newest[at] = latest
                 let e = entries[at]
                 entries[at] = MirrorEntry(kind: .folder, name: e.name, path: e.path, fileId: nil, size: 0,
-                                          modified: latest, etag: nil, mime: nil)
+                                          modified: latest, etag: nil, mime: nil, serverPath: e.apiPath)
             }
             slots[at] = Slot(children: kids, end: end)
         }
@@ -183,7 +183,7 @@ public struct MirrorIndex: Sendable, PinnableIndex {
             guard let parent = parentOf[at], parent >= 0 else { continue }
             let e = entries[at], date = entries[parent].modified
             entries[at] = MirrorEntry(kind: .folder, name: e.name, path: e.path, fileId: nil, size: 0,
-                                      modified: date, etag: nil, mime: nil)
+                                      modified: date, etag: nil, mime: nil, serverPath: e.apiPath)
         }
 
         self.entries = entries

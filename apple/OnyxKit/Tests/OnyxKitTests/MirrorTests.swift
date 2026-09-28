@@ -114,6 +114,20 @@ struct MirrorIndexTests {
         #expect(index.folderCount == 4)
     }
 
+    /// A folder shown under a name of its own keeps the server's, which its
+    /// write routes take (DriveWriter.serverFolder); one shown as the server
+    /// names it has nothing extra.
+    @Test func aNumberedFolderKeepsTheServersPath() {
+        let index = MirrorIndex(replica([
+            item("a", "a.png", in: "Brand/Logos"),
+            item("b", "b.png", in: "brand/logos"),
+        ]))
+        #expect(index.entry(at: "brand (2)")?.apiPath == "brand")
+        #expect(index.entry(at: "brand (2)/logos")?.apiPath == "brand/logos")
+        #expect(index.entry(at: "Brand")?.serverPath == nil)
+        #expect(index.entry(at: "Brand/Logos")?.apiPath == "Brand/Logos")
+    }
+
     @Test func aNewFolderNeverTakesTheNameOfOneThatWasThere() {
         // "PHOTOS" sorts before "Photos" byte for byte, and its file is
         // older (moved in from elsewhere). Neither matters: Photos was here

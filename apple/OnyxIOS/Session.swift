@@ -202,7 +202,7 @@ final class Session {
         loadingPlaces = true
         defer { loadingPlaces = false }
         do {
-            let (list, admin, address) = try await api.drives()
+            let (list, admin, address, _) = try await api.drives()
             drives = list.filter(\.isMember)
                 .map { Place(scope: .drive(id: $0.id), name: $0.name, role: $0.role) }
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }

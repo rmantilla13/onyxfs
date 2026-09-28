@@ -671,6 +671,16 @@ struct FSBridgeTests {
         #expect(!drive("viewer").mayAddFiles && !drive(nil).mayAddFiles && !drive("Owner").mayAddFiles)
     }
 
+    /// When the server says what the account may do (`can`), that decides:
+    /// an editor whose role may change nothing gets a read-only disk.
+    @Test func aDriveIsWritableOnlyWhereTheServerSaysSomethingMayChange() {
+        let none = WriteCaps(upload: false, edit: false, delete: false, folders: false)
+        #expect(!Filespace(id: "d", name: "D", role: "editor", can: none).mayAddFiles)
+        #expect(Filespace(id: "d", name: "D", role: "editor", can: WriteCaps(upload: false, delete: true)).mayAddFiles)
+        #expect(!WriteCaps().anyWrite)
+        #expect(WriteCaps(upload: true).anyWrite)
+    }
+
     // MARK: - The resource URL
 
     @Test func theResourceURLCarriesATicketAndTheNameOnly() throws {
