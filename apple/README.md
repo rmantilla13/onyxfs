@@ -95,17 +95,37 @@ there within ten minutes (`lib/mac-release.js`).
    launch an app that claims an app group without a profile granting it, so
    the script leaves the group off rather than ship an app that won't open.
 
-**Each release:**
+Keep the profiles in `apple/.signing/` of the main checkout (`Onyx`,
+`OnyxFS`, and `OnyxDev`/`OnyxDevFS` for dev builds, each
+`.provisionprofile`); it is gitignored.
+
+**Each release** is one command, from any checkout:
 
 ```sh
-echo 0.3.0 > VERSION                                     # bump: copies update only to a newer version
-ONYX_NOTES="What changed, for the update window." \
-ONYX_APP_PROFILE=~/Downloads/Onyx_Developer_ID.provisionprofile \
-ONYX_EXT_PROFILE=~/Downloads/OnyxFileProvider_Developer_ID.provisionprofile \
-scripts/release-mac.sh --publish
+apple/scripts/ship-mac.sh --dry-run    # what would ship: the version, the commit, the notes
+apple/scripts/ship-mac.sh              # the next version, from origin/main
+apple/scripts/ship-mac.sh --from <branch or commit>
 ```
 
-Without `--publish` it stops at `build/release/`, for a look first.
+`npm run ship:mac -- …` is the same. It:
+
+1. checks what a release needs before the long part: gh, the certificate,
+   the profiles (and when they expire), the notary profile, an unlocked
+   screen;
+2. takes the next version after the last one published, unless given one;
+3. refuses a commit that does not contain the last release, so nothing
+   shipped is lost. The version the branch says (`apple/VERSION`) must not
+   be older than the last release either;
+4. drafts the notes from the commits since the last release and opens them
+   in `$EDITOR`, or takes `--notes`;
+5. builds, signs and notarizes that commit from GitHub, in a throwaway
+   worktree (about ten minutes), and leaves the result in
+   `apple/build/ship/<version>/`;
+6. stops to ask before publishing, so the dmg can be installed and tried
+   first; then publishes `mac-v<version>`, tagged at the commit it built.
+
+`scripts/release-mac.sh` is the build it runs, and still works on its own
+(`--publish` refuses a checkout with uncommitted changes).
 
 ### In Xcode
 
