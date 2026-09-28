@@ -1029,3 +1029,79 @@ describe('the session path, unchanged', () => {
     assert.deepEqual([out.status, out.body], [401, { error: 'Not authenticated' }]);
   });
 });
+
+describe('what a mounted disk relies on the server for', () => {
+  const NFD = 'Cafe\u0301';
+  const NFC = 'Caf\u00e9';
+
+  test('a folder stored decomposed is the one a Mac names composed: uploads join it, a rename moves it all', async () => {
+    const first = await upload(web(ED), { name: 'a.txt', folder: `${NFD}/Sub`, mime: 'text/plain' });
+    assert.equal(row(first.id).folder, `${NFC}/Sub`, 'a new folder is stored composed');
+    // One made before names were composed: its folder and its key decomposed.
+    const objects = globalThis.__mw.s3.objects;
+    objects.set(`onyx/team/${NFD}/Sub/a.txt`, objects.get(`onyx/team/${NFC}/Sub/a.txt`));
+    objects.delete(`onyx/team/${NFC}/Sub/a.txt`);
+    Object.assign(row(first.id), { folder: `${NFD}/Sub`, storageKey: `team/${NFD}/Sub/a.txt` });
+    const second = await upload(mac(ED), { name: 'b.txt', folder: `${NFC}/Sub`, mime: 'text/plain' });
+    assert.equal(row(second.id).folder, `${NFD}/Sub`, 'the Mac’s composed name reaches the folder already there');
+    assert.equal(row(second.id).storageKey, `team/${NFD}/Sub/b.txt`, 'and so does its key, from the presign');
+    const moved = await folders.move(mac(ED), { from: NFC, to: 'Coffee', filespaceId: 'd1' });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.deepEqual([row(first.id).folder, row(second.id).folder], ['Coffee/Sub', 'Coffee/Sub'], 'both, not only the composed one');
+  });
+
+  test('a new name is stored composed, file or folder', async () => {
+    // (An upload's name is the object's, which is ASCII; a rename keeps the name given.)
+    const f = await upload(mac(ED), { name: 'plain.txt', folder: 'Notes', mime: 'text/plain' });
+    const r = await patchFile(mac(ED), f.id, { name: `Re${NFD}.txt`, filespaceId: 'd1' });
+    assert.equal(r.status, 200);
+    assert.equal(row(f.id).name, `Re${NFC}.txt`);
+    const made = await folders.create(mac(ED), { name: `New ${NFD}`, filespaceId: 'd1', ensure: true });
+    assert.equal(made.status, 201);
+    assert.equal(made.body.folder.name, `New ${NFC}`);
+  });
+
+  test('a folder that is not there: deleting or renaming it is a 404, not a quiet success', async () => {
+    await upload(mac(ED), { name: 'p.txt', folder: 'Photos', mime: 'text/plain' });
+    const gone = await folders.remove(mac(ED), 'photos (2)');
+    assert.equal(gone.status, 404, JSON.stringify(gone.body));
+    const moved = await folders.move(mac(ED), { from: 'photos (2)', to: 'Old', filespaceId: 'd1' });
+    assert.equal(moved.status, 404);
+    assert.equal((await folders.list(mac(ED))).body.folders.some((f) => f.folder === 'Old'), false, 'and nothing was made');
+  });
+
+  test('a folder holding a file its deleter cannot see is refused whole, saying why', async () => {
+    const theirs = await upload(web(ED2), { name: 'private.txt', folder: 'Shared', mime: 'text/plain' });
+    row(theirs.id).visibility = 'owner';
+    const mine = await upload(mac(ED), { name: 'mine.txt', folder: 'Shared', mime: 'text/plain' });
+    const r = await folders.remove(mac(ED), 'Shared');
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.equal(r.body.code, 'hidden_files');
+    assert.equal(r.body.hidden, 1);
+    assert.ok(!row(theirs.id).deletedAt && !row(mine.id).deletedAt, 'nothing was deleted');
+    // Its owner, who sees both, deletes it.
+    assert.equal((await folders.remove(web(ED2), 'Shared')).status, 200);
+    assert.ok(row(theirs.id).deletedAt && row(mine.id).deletedAt);
+  });
+
+  test('a file whose key does not spell its folder still goes with the folder', async () => {
+    const f = await upload(mac(ED), { name: 'stray.txt', folder: 'Old', mime: 'text/plain' });
+    row(f.id).folder = 'Elsewhere';
+    const r = await folders.remove(mac(ED), 'Elsewhere');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.deleted, 1);
+    assert.ok(row(f.id).deletedAt, 'deleted, where it used to be left behind and bring the folder back');
+  });
+
+  test('moving or renaming a drive’s file without naming the drive moves its object too', async () => {
+    const f = await upload(mac(ED), { name: 'mv.txt', folder: 'From', mime: 'text/plain' });
+    const moved = await patchFile(web(ED), f.id, { folder: 'To' });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.equal(moved.body.objectMoved, true);
+    assert.equal(row(f.id).storageKey, 'team/To/mv.txt');
+    assert.ok(stored('team/To/mv.txt') && !stored('team/From/mv.txt'));
+    const renamed = await patchFile(web(ED), f.id, { name: 'renamed.txt' });
+    assert.equal(renamed.body.objectMoved, true);
+    assert.equal(row(f.id).storageKey, 'team/To/renamed.txt');
+  });
+});

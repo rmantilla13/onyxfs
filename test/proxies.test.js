@@ -389,15 +389,18 @@ describe('the bearer paths are outside the cookie gate', () => {
 
 describe('a rendition is never left in the bucket by accident', () => {
   test('both purge paths read the key before the row goes', async () => {
-    for (const [p, before] of [
-      ['lib/maintenance.js', 'await deleteFile(row.id)'],
-      ['app/api/files/[id]/route.js', 'await deleteFile(id)'],
+    // Renditions are the app's own, like previews: in the base bucket, whatever
+    // drive the file is in. The route's `cfg` is the file's own drive
+    // (storageForKey), so it hands the GC `base`; maintenance's `cfg` is the base.
+    for (const [p, before, gc] of [
+      ['lib/maintenance.js', 'await deleteFile(row.id)', /proxyKeys \}, \{ cfg \}\)/],
+      ['app/api/files/[id]/route.js', 'await deleteFile(id)', /proxyKeys \}, \{ cfg: base \}\)/],
     ]) {
       const code = await src(p);
       const read = code.indexOf('proxyKeysFor(');
       assert.ok(read > 0, `${p} never asks for the proxy key`);
       assert.ok(read < code.indexOf(before), `${p} asks after the row is gone, when the key no longer exists`);
-      assert.match(code, /proxyKeys \}, \{ cfg \}\)/, `${p} does not hand them to the GC`);
+      assert.match(code, gc, `${p} does not hand them to the GC, in the base bucket`);
     }
   });
 

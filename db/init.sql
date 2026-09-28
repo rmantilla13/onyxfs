@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 136
+-- Statements: 138
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -314,6 +314,14 @@ CREATE TABLE IF NOT EXISTS file_tombstones (
 );
 
 CREATE INDEX IF NOT EXISTS file_tombstones_seq_idx ON file_tombstones (seq);
+
+CREATE TABLE IF NOT EXISTS change_marks (
+  at   TIMESTAMPTZ NOT NULL,
+  seq  BIGINT NOT NULL,
+  next_xid BIGINT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS change_marks_at_idx ON change_marks (at);
 
 CREATE TABLE IF NOT EXISTS folders (name TEXT PRIMARY KEY, created_at BIGINT NOT NULL);
 

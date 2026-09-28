@@ -104,8 +104,9 @@ export default async function FilesPage({ searchParams }) {
   // it. The same code and the same checks as GET /api/files
   // (lib/file-listing.js), and the same listing the client would ask for
   // (lib/views.js listingOpts); the list of drives above is the viewer's
-  // own, so a drive not in it is not theirs and the scope falls back to the
-  // library, as the API's does. The client takes this as the answer to its
+  // own, so a drive not in it is not theirs and the page falls back to the
+  // library (the API refuses such a drive outright; the client is handed
+  // no drive, so it never asks for one). The client takes this as the answer to its
   // first request (listingKey) and asks for nothing until something changes.
   // Drive usage is not here: it is a sum over whole drives, asked for after
   // the page is on screen (/api/filespaces/usage).
@@ -141,7 +142,7 @@ export default async function FilesPage({ searchParams }) {
         canWrite={canWrite}
         reviewLinks={reviewLinks}
         schema={normalizeSchema(rawSchema)}
-        filespaceId={filespaceId}
+        filespaceId={activeDrive ? filespaceId : ''}
         isAdmin={admin}
         drives={filespaces}
         initial={initial}
