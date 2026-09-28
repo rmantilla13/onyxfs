@@ -41,6 +41,7 @@ describe('every admin route checks first', () => {
       'people/[id]/reactivate/route.js', 'people/[id]/signout-everywhere/route.js', 'people/[id]/devices/[tokenId]/route.js',
       'roles/route.js', 'policy/route.js', 'links/route.js', 'trash/route.js', 'trash/restore/route.js',
       'trash/purge/route.js', 'maintenance/route.js', 'maintenance/run/route.js', 'invites/route.js',
+      'passwords/route.js',
     ]) assert.ok(rel.includes(r), r);
   });
 

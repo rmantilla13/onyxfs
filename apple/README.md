@@ -161,6 +161,33 @@ to a group under **TestFlight → Internal Testing**, and builds reach you
 through the TestFlight app. Testers outside the team need Beta App Review,
 which needs an account for the reviewer to sign in with.
 
+#### App Review's account
+
+Apple asks for a user name and password, and nobody at Apple can open an
+emailed link. So the reviewer signs in with a password, from the same
+sign-in sheet as everyone else, and the app needs nothing special for it.
+On the server (production, since that is where the app points):
+
+1. **Admin → Access requests → Add someone…**: an address on a domain you
+   own, such as `appreview@onyxfs.io`. Nobody need read its mail.
+2. **Admin → Drives**: a drive with content that shows what the app does
+   (photos, a video, some audio, a PDF, a few folders), with the reviewer's
+   address as a member. Nothing of anyone else's: Apple sees all of it.
+3. Back in **Access requests** (the Approved tab), **Password… → Make a
+   password**. It is shown once; copy it.
+4. In App Store Connect, **TestFlight → Test Information → Beta App Review
+   Information**: tick *Sign-in required*, enter the address and the
+   password, and in *Review Notes* say how:
+
+   > Tap Sign In, then Continue. On the sign-in page, tap "Sign in with a
+   > password", enter the user name and password above, then tap Authorize.
+   > The account's drive has sample photos, video, audio and documents.
+
+Passwords are only ever for an account like this one (lib/password-signin.js):
+an admin can't have one, ten wrong tries lock it for fifteen minutes, and
+**Password… → Remove password** (or removing the person) takes it away.
+Make a new one after review if it went anywhere but App Store Connect.
+
 `OnyxIOS/PrivacyInfo.xcprivacy` gives the reasons for the APIs Apple asks
 about (user defaults, file dates, disk space). A new use of one needs its
 reason there, or the upload is refused. The Files extension

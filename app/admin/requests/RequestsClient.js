@@ -10,10 +10,12 @@ import { REQUEST_FILTERS, askedLabel, revokeBlockedReason } from '@/lib/admin-re
 import AdminPage from '../_ui/AdminPage';
 import AdminState from '../_ui/AdminState';
 import RelativeTime from '../_ui/RelativeTime';
+import CopyButton from '../_ui/CopyButton';
 import { useDestructiveConfirm } from '../_ui/DestructiveConfirm';
 import { api } from '../_ui/api';
 
 const INVITES = '/api/admin/invites';
+const PASSWORDS = '/api/admin/passwords';
 
 /**
  * Who may sign in: the people admins added, and any requests made before
@@ -30,6 +32,7 @@ export default function RequestsClient({ status, rows, counts }) {
   const [busy, setBusy] = useState(null);
   const [denying, setDenying] = useState(null);
   const [adding, setAdding] = useState(false);
+  const [passwordFor, setPasswordFor] = useState(null);
   const filter = REQUEST_FILTERS.find((f) => f.key === status) || REQUEST_FILTERS[0];
 
   const act = async (key, fn, done) => {
@@ -122,6 +125,7 @@ export default function RequestsClient({ status, rows, counts }) {
                   )}
                   {askedLabel(r) && <span className="tag tag-warning">{askedLabel(r)}</span>}
                   {r.envAdmin && <span className="tag tag-accent">Admin</span>}
+                  {r.password && <span className="tag" title="Signs in with a password an admin gave them">Password</span>}
                 </span>
               </div>
               <div className="request-actions">
@@ -137,6 +141,13 @@ export default function RequestsClient({ status, rows, counts }) {
                 {r.status === 'denied' && (
                   <button type="button" className="btn btn-sm" disabled={!!busy} onClick={() => approveDenied(r)}>
                     {busy === `approve:${r.id}` ? 'Approving…' : 'Approve instead…'}
+                  </button>
+                )}
+                {/* For an account nobody reads the mail of, such as App Review's.
+                    Admins sign in with the link only, so they are never offered one. */}
+                {r.status === 'approved' && !r.envAdmin && (
+                  <button type="button" className="btn btn-ghost btn-sm" disabled={!!busy} onClick={() => setPasswordFor(r)}>
+                    Password…
                   </button>
                 )}
                 {/* A column of red buttons reads as alarm: the danger is in the confirm. */}
@@ -174,6 +185,16 @@ export default function RequestsClient({ status, rows, counts }) {
         onAdded={(email) => {
           setAdding(false);
           toast.success(`${email} can sign in now. They are not emailed about it yet — let them know.`);
+          router.refresh();
+        }}
+      />
+      <PasswordDialog
+        request={passwordFor}
+        onClose={() => setPasswordFor(null)}
+        onChanged={() => router.refresh()}
+        onRemoved={(email) => {
+          setPasswordFor(null);
+          toast.success(`${email} has no password now, and signs in with an emailed link.`);
           router.refresh();
         }}
       />
@@ -264,6 +285,99 @@ function AddDialog({ open, onClose, onAdded }) {
         </label>
         {error && <p className="small admin-inline-error" role="alert">{error}</p>}
       </form>
+    </Dialog>
+  );
+}
+
+/**
+ * A password to sign in with instead of an emailed link, for an account
+ * nobody reads the mail of — App Review's (POST/DELETE /api/admin/passwords).
+ * The server makes it and it is shown here once, so the dialog does not close
+ * on a stray click while it is on screen.
+ */
+function PasswordDialog({ request, onClose, onChanged, onRemoved }) {
+  const [made, setMade] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    if (!request) return;
+    setMade(null); setBusy(null); setError(null);
+  }, [request]);
+
+  const make = async () => {
+    setBusy('make'); setError(null);
+    try {
+      const body = await api(PASSWORDS, { method: 'POST', json: { email: request.email } });
+      setMade(body.password);
+      onChanged();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const remove = async () => {
+    setBusy('remove'); setError(null);
+    try {
+      await api(PASSWORDS, { method: 'DELETE', json: { email: request.email } });
+      onRemoved(request.email);
+    } catch (err) {
+      setError(err.message);
+      setBusy(null);
+    }
+  };
+
+  const has = !!request?.password;
+  return (
+    <Dialog
+      open={!!request}
+      onClose={onClose}
+      dismissable={!made}
+      title={request ? `A password for ${request.email}` : 'Password'}
+      footer={made ? (
+        <button type="button" className="btn btn-primary" onClick={onClose}>Done</button>
+      ) : (
+        <>
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          {has && (
+            <button type="button" className="btn btn-danger" disabled={!!busy} onClick={remove}>
+              {busy === 'remove' ? 'Removing…' : 'Remove password'}
+            </button>
+          )}
+          <button type="button" className="btn btn-primary" disabled={!!busy} onClick={make}>
+            {busy === 'make' ? 'Making…' : has ? 'Make a new one' : 'Make a password'}
+          </button>
+        </>
+      )}
+    >
+      <div className="admin-form">
+        {made ? (
+          <>
+            <p className="small admin-note">Copy it now: it is not shown again, and only a new one can replace it.</p>
+            <div style={{ display: 'flex', gap: 'var(--s2)', alignItems: 'center' }}>
+              <input className="input mono" readOnly value={made} aria-label="Password" onFocus={(e) => e.target.select()} />
+              <CopyButton text={made} />
+            </div>
+            <p className="small muted admin-note">
+              They sign in from the sign-in page with “Sign in with a password”. For App Review, enter this address and
+              password in App Store Connect under TestFlight → Test Information → Beta App Review Information.
+            </p>
+          </>
+        ) : has ? (
+          <p className="small muted admin-note">
+            They have a password{request.password.setBy ? `, made by ${request.password.setBy}` : ''}
+            {request.password.setAt ? <> <RelativeTime ms={request.password.setAt} /></> : null}. A new one stops the old
+            one working at once. Removing it leaves them the emailed link; a device they already signed in stays signed in.
+          </p>
+        ) : (
+          <p className="small muted admin-note">
+            For an account that can’t use an emailed link, such as an App Store reviewer’s. The password is made for
+            them and shown to you once. They can still sign in with a link too.
+          </p>
+        )}
+        {error && <p className="small admin-inline-error" role="alert">{error}</p>}
+      </div>
     </Dialog>
   );
 }
