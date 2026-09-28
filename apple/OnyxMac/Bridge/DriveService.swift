@@ -435,17 +435,18 @@ final class DriveService: ObservableObject {
 
     /// The disk's name and figures, asked for afresh by `/fs/v1/volume`.
     ///
-    /// Writable only when this account may add to the drive: an editor or
-    /// owner (Filespace.mayAddFiles). The drive list does not say whether
-    /// the account's role may upload at all (`files.upload`), and nothing
-    /// says so of the library — which the web lets anyone who may upload add
-    /// to — so the library is writable for an admin only. The server checks
-    /// every write again whatever this says.
+    /// Writable only when this account may change something there, as the
+    /// server says (`can` in the drive list): a drive's editor or owner
+    /// whose platform role allows it (Filespace.mayAddFiles), and for the
+    /// library anyone whose role may upload, as on the web
+    /// (AppModel.libraryWritable). From an older server, which does not say,
+    /// a drive's editors and owners, and the library for an admin only. The
+    /// server checks every write again whatever this says.
     private func onyxfsVolume(_ scope: SyncDomain) -> FSVolumeInfo {
         let limit = Int64(max(0, cacheLimitGB)) << 30
         switch scope {
         case .library:
-            return FSVolumeInfo(name: MountFolder.library, readOnly: !(model?.isAdmin ?? false), cacheLimitBytes: limit)
+            return FSVolumeInfo(name: MountFolder.library, readOnly: !(model?.libraryWritable ?? false), cacheLimitBytes: limit)
         case let .drive(id):
             let drive = model?.drives.first { $0.id == id }
             return FSVolumeInfo(name: drive?.name ?? names[scope.identifier] ?? id,

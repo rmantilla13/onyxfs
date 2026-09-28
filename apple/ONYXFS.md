@@ -240,9 +240,12 @@ logic is testable with `swift test`.
 ## Writes (the owner asked for read-write; this is part of this build)
 
 ### Who may write
-The volume is read-write when the account may add to the drive (the same test
-the web's upload uses: drive role editor/owner via getFilespaceForWrite, and
-the role's `files.upload` capability), otherwise read-only: the bridge reports
+The volume is read-write when the account may change something there, as
+`/api/space/filespaces` says: each drive's `can` (`upload`, `edit`, `delete`,
+`folders`: drive role editor/owner and the platform role's capability
+together) and `library.can` for the library (the role's own, as the web's
+upload). A server too old to say leaves a drive's editors and owners, and the
+library for an admin only. Otherwise read-only: the bridge reports
 it as `volume.readOnly`, the extension refuses changes with EACCES before
 asking, and the bridge answers 403 to whoever asks anyway. The mount itself is
 never `rdonly` — the role is checked as it is now, so a viewer made an editor
@@ -251,6 +254,17 @@ names, below) on a drive it may only view. Each operation's own capability (file
 files.delete for delete, folders.manage for folders) is enforced by the server
 route; a refusal comes back to Finder as EACCES with the server's sentence in
 the log.
+
+### Names Finder sees, names the server has
+The index shows some folders under names of their own: " (2)" for one that
+differs from another only in case, ":" for a "/". Each folder entry keeps the
+server's path (`MirrorEntry.serverPath`), and the writer sends that, not the
+shown name, to every folder route and as an upload's or move's folder
+(`DriveWriter.serverFolder`). Names Finder makes are NFC; the server stores
+new names NFC and reaches a folder stored decomposed by its composed name.
+A folder delete the server refuses because it holds files this account cannot
+see (409 `hidden_files`, nothing deleted) is ENOTEMPTY in Finder; a folder
+that is not there is a 404, ENOENT.
 
 ### Bridge protocol v1 — write endpoints (app side)
 All require the session bearer; all 403 with `{error}` when the volume is

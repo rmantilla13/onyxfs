@@ -59,20 +59,30 @@ public struct MirrorEntry: Sendable, Equatable, Hashable {
     /// object and bumps the version — so a cache of the bytes keyed on it
     /// survives a move (onyxfs, FSNode). Nil for folders.
     public let contentHash: String?
+    /// For a folder, its path as the server names it — what its write
+    /// routes take — where the index shows it under a name of its own: " (2)"
+    /// for one that differs from another only in case, ":" for a "/", or a
+    /// spelling of its own. Nil when `path` is the server's too, and for
+    /// files, which the server knows by id.
+    public let serverPath: String?
 
     /// `created` and `changed` default to `modified`, which is what an entry
     /// with no dates of its own (a folder) has for all three.
     public init(kind: Kind, name: String, path: String, fileId: String?, size: Int64,
                 modified: Date, etag: String?, mime: String?, contentHash: String? = nil,
-                created: Date? = nil, changed: Date? = nil) {
+                created: Date? = nil, changed: Date? = nil, serverPath: String? = nil) {
         self.kind = kind; self.name = name; self.path = path; self.fileId = fileId
         self.size = size; self.modified = modified; self.etag = etag; self.mime = mime
         self.contentHash = contentHash
         self.created = created ?? modified
         self.changed = changed ?? modified
+        self.serverPath = serverPath == path ? nil : serverPath
     }
 
     public var isFolder: Bool { kind == .folder }
+
+    /// A folder's path as the server names it (`serverPath`, else `path`).
+    public var apiPath: String { serverPath ?? path }
 }
 
 /// What the pin store needs from a drive's index (MirrorIndex conforms).

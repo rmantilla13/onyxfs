@@ -21,6 +21,9 @@ final class AppModel: ObservableObject {
     /// Whether the server treats this account as an admin; only decides
     /// which menu items are offered — the server enforces it either way.
     @Published private(set) var isAdmin = false
+    /// What this account may do in the library, as the server says (nil
+    /// from an older server): whether its disk is writable.
+    @Published private(set) var libraryCan: WriteCaps?
     /// Drives being mounted or unmounted right now.
     @Published private(set) var busy: Set<String> = []
     /// The last thing that went wrong, for the window to say.
@@ -156,6 +159,7 @@ final class AppModel: ObservableObject {
         drives = []
         drivesLoaded = false
         isAdmin = false
+        libraryCan = nil
         phase = .signedOut
         transcriber.stop()
         finder.stop()
@@ -223,6 +227,12 @@ final class AppModel: ObservableObject {
 
     // MARK: - Drives and Finder
 
+    /// Whether the library's disk is offered writable: when the server says
+    /// what this account may do there, whether it may do anything; an older
+    /// server does not, and then only an admin's is (as before). The server
+    /// checks every write whatever this says.
+    var libraryWritable: Bool { libraryCan?.anyWrite ?? isAdmin }
+
     func refresh() async {
         guard phase == .signedIn else { return }
         let account = email
@@ -232,6 +242,7 @@ final class AppModel: ObservableObject {
             guard phase == .signedIn, email == account else { return }
             drives = listing.drives.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             isAdmin = listing.isAdmin
+            libraryCan = listing.library
             if adoptAccount(listing.email), finderWaitingForAccount {
                 finderWaitingForAccount = false
                 await finder.start(model: self)
