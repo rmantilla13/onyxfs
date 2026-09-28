@@ -12,6 +12,7 @@
     "lint": "next lint",
     "test": "node --import ./test/alias-hook.mjs --test \"test/*.test.js\"",
     "doctor": "node scripts/doctor.mjs",
+    "ship:mac": "apple/scripts/ship-mac.sh",
     "schema:sql": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/gen-init-sql.mjs",
     "icons": "node scripts/gen-icons.mjs"
   },
