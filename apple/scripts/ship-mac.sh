@@ -9,6 +9,7 @@
 #                                             commits and opened in $EDITOR
 #   apple/scripts/ship-mac.sh --no-publish    stop once the notarized build is ready
 #   apple/scripts/ship-mac.sh --yes           publish without stopping to ask
+#   apple/scripts/ship-mac.sh --rebuild       build again, even over a notarized build of this commit
 #
 # (Or npm run ship:mac -- <the same>.)
 #
@@ -43,6 +44,7 @@ NOTES=""
 DRY=0
 PUBLISH=1
 YES=0
+REBUILD=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --from) FROM="${2:?--from needs a branch, tag or commit}"; shift 2 ;;
@@ -50,7 +52,8 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1; shift ;;
     --no-publish) PUBLISH=0; shift ;;
     -y|--yes) YES=1; shift ;;
-    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --rebuild) REBUILD=1; shift ;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
     *) VERSION="$1"; shift ;;
   esac
@@ -191,6 +194,45 @@ echo
 if [ "$DRY" = 1 ]; then echo "  (dry run: nothing built)"; exit 0; fi
 
 # ── 3. Build, sign, notarize ────────────────────────────────────────────────
+OUT="$ROOT/apple/build/ship/$VERSION"
+
+# A notarized build of this very version and commit, made before (say the
+# answer to "Publish?" was no), is published as it is rather than built
+# again for ten minutes — when its files are still the ones its feed
+# describes. --rebuild builds anyway.
+reusable() {
+  [ -f "$OUT/onyx-mac.json" ] && [ -f "$OUT/Onyx.zip" ] && [ -f "$OUT/Onyx.dmg" ] || return 1
+  python3 - "$OUT" "$VERSION" "$COMMIT" <<'PY'
+import hashlib, json, os, sys
+out, version, commit = sys.argv[1:4]
+feed = json.load(open(os.path.join(out, "onyx-mac.json")))
+ok = feed.get("version") == version and feed.get("commit") == commit
+for name, key in (("Onyx.zip", "zip"), ("Onyx.dmg", "dmg")):
+    path = os.path.join(out, name)
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            digest.update(block)
+    ok = ok and digest.hexdigest() == feed[key]["sha256"] and os.path.getsize(path) == feed[key]["size"]
+sys.exit(0 if ok else 1)
+PY
+}
+
+if [ "$REBUILD" = 0 ] && reusable; then
+  ok "using the notarized build of $VERSION from ${COMMIT:0:7} already in $OUT"
+  # The update window reads its notes from the feed: this run's, if they
+  # are new.
+  python3 - "$OUT/onyx-mac.json" "$NOTES" <<'PY'
+import json, sys
+path, notes = sys.argv[1], sys.argv[2]
+feed = json.load(open(path))
+if feed.get("notes") != notes:
+    feed["notes"] = notes
+    with open(path, "w") as f:
+        json.dump(feed, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+PY
+else
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/onyx-ship.XXXXXX")"
 cleanup() {
   # The link first, on its own: nothing that removes the worktree may reach
@@ -213,11 +255,11 @@ fi
 echo "Building in $WORK/src (about ten minutes: two architectures, then Apple's notary, twice)…"
 ( cd "$WORK/src/apple" && ONYX_VERSION="$VERSION" ONYX_NOTES="$NOTES" ONYX_SIGN_IDENTITY="$IDENTITY" scripts/release-mac.sh )
 
-OUT="$ROOT/apple/build/ship/$VERSION"
 rm -rf "$OUT" && mkdir -p "$OUT"
 cp -R "$WORK/src/apple/build/release/." "$OUT/"
 echo
 ok "built and notarized: $OUT/Onyx.dmg"
+fi
 
 # ── 4. Publish ──────────────────────────────────────────────────────────────
 if [ "$PUBLISH" = 0 ]; then
@@ -229,9 +271,23 @@ fi
 if [ "$YES" = 0 ]; then
   [ -t 0 ] || die "No terminal to ask in: pass --yes to publish, or --no-publish."
   echo
-  printf 'Publish Onyx %s to everyone? Install %s first to try it, if you like. [y/N] ' "$VERSION" "$OUT/Onyx.dmg"
-  read -r answer
-  case "$answer" in [yY]*) ;; *) echo "Not published. The build stays in $OUT."; exit 0 ;; esac
+  echo "Install $OUT/Onyx.dmg first to try it, if you like."
+  # Only what is typed after the question answers it: keys pressed during
+  # the build (an arrow while scrolling back through its output) are thrown
+  # away first. And only y or n is an answer; anything else is asked again,
+  # not taken for no.
+  python3 -c 'import sys, termios; termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)' 2>/dev/null || true
+  while :; do
+    printf 'Publish Onyx %s to everyone? [y/N] ' "$VERSION"
+    read -r answer || answer=n
+    case "$answer" in
+      [yY]|[yY][eE][sS]) break ;;
+      ""|[nN]|[nN][oO])
+        echo "Not published. The build stays in $OUT: running this again publishes it without building."
+        exit 0 ;;
+      *) echo "  Type y to publish, or n (or just Return) not to." ;;
+    esac
+  done
 fi
 gh release create "$TAG" --repo "$REPO" --target "$COMMIT" --title "Onyx for Mac $VERSION" --notes "$NOTES" \
   "$OUT/Onyx.dmg" "$OUT/Onyx.zip" "$OUT/onyx-mac.json" >/dev/null
