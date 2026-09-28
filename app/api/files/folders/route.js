@@ -98,6 +98,7 @@ export async function GET(req) {
   }
 
   const storagePrefix = await storagePrefixFor(email, filespaceId, principal);
+  if (storagePrefix === null) return forbidden('No access to that filespace.');
   const folders = await listFolderTree({ principal, storagePrefix });
   return NextResponse.json({ folders });
 }

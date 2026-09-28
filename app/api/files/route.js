@@ -40,6 +40,7 @@ export async function GET(req) {
 
   // Filespace scope (Space is filespace-aware): restrict to this filespace's prefix.
   const storagePrefix = await storagePrefixFor(email, url.searchParams.get('filespace'), principal);
+  if (storagePrefix === null) return NextResponse.json({ error: 'No access to that drive.' }, { status: 403 });
 
   const opts = {
     folder: folderParam === null ? undefined : folderParam,
