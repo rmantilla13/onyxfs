@@ -455,11 +455,12 @@ letter in the logo's cyan.
 ## Activity
 
 The owner asked for a live view of what the drives are moving, like a
-network monitor's: download, read and write, each a figure and a graph.
-Onyx ▸ Activity (the Window menu, and the menu bar item) shows four:
-**Download** (from storage to this Mac), **Upload** (back), **Read** (what
-apps read from the disks) and **Write** (what apps wrote to them), in
-megabits a second, each over the last minute.
+network monitor's: download, read and write, each a figure and a graph —
+and then for it to be always in sight. It is a bar along the foot of the
+Onyx window (`ActivityBar`) with four: **Download** (from storage to this
+Mac), **Upload** (back), **Read** (what apps read from the disks) and
+**Write** (what apps wrote to them), in megabits a second, each over the
+last minute; and, at its end, the window's downloads.
 
 - **The extension counts** what only it sees (`TransferMeter`, OnyxFSCore):
   bytes the engine hands the kernel for a read, bytes a write gives it, and
@@ -477,14 +478,29 @@ megabits a second, each over the last minute.
   passed with nothing new, so an idle disk sends nothing. A report the app
   does not answer (an older app: 404) is dropped, not retried.
 - **The app adds its own**: what an upload sends (`APIUploadTransport`,
-  each `didSendBodyData`) and what fetching an offline copy receives
-  (`FileDownload`), into `TransferLog` (OnyxKit): a ring of one-second
-  buckets, five minutes long. Adding is a lock and an add; nothing runs to
-  keep it.
-- **The window reads it** once a second while it is open (a `TimelineView`),
-  and only then. Each graph is its last 60 whole seconds, each averaged with
-  its neighbours, since a disk's once-a-second reports can land two in one
+  each `didSendBodyData`), what fetching an offline copy receives
+  (`FileDownload`) and what the window's downloads receive (`WebDownloads`,
+  looked at once a second while one runs), into `TransferLog` (OnyxKit): a
+  ring of one-second buckets, five minutes long. Adding is a lock and an
+  add; nothing runs to keep it.
+- **The bar reads it** once a second from when bytes start to move until its
+  graphs are flat again, and not at all in between: the first bytes after a
+  quiet second wake it (`TransferLog.onWake`, called outside the lock), and
+  it stops itself once the log has been quiet for as long as a graph shows
+  (`ActivityClock`). Always on screen, it costs nothing while nothing moves.
+  Each graph is its last 60 whole seconds, each averaged with its
+  neighbours, since a disk's once-a-second reports can land two in one
   second and none in the next. The figure is the average of the last three.
+- **Downloads.** The web's Download buttons are links the web view saves
+  into Downloads (`WebController`, then `WebDownloads`, their delegate).
+  They used to run unseen — the owner clicked a 232 MB video three times and
+  got three copies. Now each shows at the bar's end the moment it is clicked
+  (the newest under way, the rest behind "+2"): its name, how far it has got
+  and how long is left, then Show in Finder once it is done. A click on one
+  already under way shows that one instead of saving it twice. What a
+  download that did not finish wrote is deleted — stopped, failed, or cut
+  short by quitting — since WebKit leaves it under the file's own name,
+  where it would pass for the file; Try Again asks for it afresh.
 - **Not seen:** the rclone NFS mounts in `~/Onyx` (macOS 26 and older, or a
-  disk not yet allowed) read storage themselves; the window shows nothing of
+  disk not yet allowed) read storage themselves; the bar shows nothing of
   them.

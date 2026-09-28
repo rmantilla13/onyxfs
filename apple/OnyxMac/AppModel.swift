@@ -53,12 +53,14 @@ final class AppModel: ObservableObject {
         web.model = self
         updater.model = self
         if phase == .signedIn { startup = Task { await afterSignIn() } }
-        // Quitting unmounts every drive, so none is left for the system to reap.
+        // Quitting unmounts every drive, so none is left for the system to
+        // reap, and takes away downloads cut short.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
-                                               object: nil, queue: .main) { [finder, transcriber] _ in
+                                               object: nil, queue: .main) { [finder, transcriber, web] _ in
             MainActor.assumeIsolated {
                 transcriber.stop()
                 finder.quit()
+                web.downloads.discardUnfinished()
             }
         }
     }
@@ -326,9 +328,13 @@ final class AppModel: ObservableObject {
         // updater against a local feed. What it installs is verified the same.
         updater.start(feed: value("--update-feed").flatMap(URL.init(string:)))
         #if DEBUG
-        // `--demo-activity`: pretend traffic in the Activity window, for
-        // looking at it without disks (a debug build has none unsigned).
-        if args.contains("--demo-activity") { ActivityDemo.start(finder.transfers) }
+        // `--demo-activity`: pretend traffic and downloads in the Activity
+        // bar, for looking at it without disks (a debug build has none
+        // unsigned).
+        if args.contains("--demo-activity") {
+            ActivityDemo.start(finder.transfers)
+            web.downloads.demo()
+        }
         #endif
     }
 }
