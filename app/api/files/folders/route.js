@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import {
   getFilespaceForUser, getFilespaceForWrite,
   createFolder, renameFolder, deleteFolderRows, listFolderSubtreeFiles, folderPathInUse, renameSpreadsGrants,
-  canModifyFolder, softDeleteFile, deleteFile, listFolderRowsUnder,
+  canModifyFolder, softDeleteFile, deleteFile, listFolderRowsUnder, listFilespaces, visibleFileIds, canonicalFolder,
 } from '@/lib/db';
 import { requirePrincipal, can, refusal } from '@/lib/authz';
 import {
@@ -10,7 +10,7 @@ import {
   s3ObjectExists, s3PutFolderMarker, s3ListFolderMarkers,
 } from '@/lib/storage';
 import {
-  cleanFolder, folderPathProblem, isWithin, planRename, rebase, mapLimit, settleLimit,
+  cleanFolder, folderPathProblem, isWithin, planRename, planFolderDelete, rebase, mapLimit, settleLimit,
 } from '@/lib/folder-ops';
 import { listFolderTree, storagePrefixFor } from '@/lib/file-listing';
 import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
@@ -58,6 +58,11 @@ async function scopeFor(principal, filespaceId, { write = false } = {}) {
   return { scoped: false, tag: '', prefix: cleanFolder(base.prefix || 'files'), cfg: s3 ? base : null, s3, driveRole: null };
 }
 
+/** A folder path as `scope` stores it: composed, in the spelling already there (lib/db.js canonicalFolder). */
+function canonicalIn(scope, path) {
+  return canonicalFolder(path, { tag: scope.tag, prefix: scope.scoped ? scope.prefix : null });
+}
+
 /**
  * GET /api/files/folders?filespace= → { folders }
  * GET /api/files/folders?summary=<folder>&filespace= → { files, folders, outside }
@@ -83,14 +88,16 @@ export async function GET(req) {
 
   const summary = url.searchParams.get('summary');
   if (summary != null) {
-    const name = cleanFolder(summary);
-    if (!name) return bad('Folder required.');
     const scope = await scopeFor(principal, filespaceId);
     if (!scope) return forbidden('No access to that filespace.');
+    const name = await canonicalIn(scope, summary);
+    if (!name) return bad('Folder required.');
     if (!(await canModifyFolder(name, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden();
     const files = await listFolderSubtreeFiles(name);
-    const plan = planRename({ from: name, to: name, prefix: scope.prefix, scoped: scope.scoped, files });
-    const inScope = new Set([...plan.moves, ...plan.catalog].map((m) => m.id));
+    // What a delete would take (planFolderDelete, as DELETE runs it).
+    const drivePrefixes = scope.scoped ? [] : (await listFilespaces()).map((f) => f.prefix);
+    const plan = planFolderDelete({ name, files, prefix: scope.prefix, scoped: scope.scoped, drivePrefixes });
+    const inScope = new Set(plan.work.map((m) => m.id));
     const dirs = new Set();
     for (const f of files) if (inScope.has(f.id) && f.folder !== name) dirs.add(f.folder);
     for (const r of await listFolderRowsUnder(name, { tag: scope.tag })) dirs.add(r);
@@ -123,9 +130,9 @@ export async function POST(req) {
   try { body = await req.json(); } catch { return bad('Bad request'); }
   const problem = folderPathProblem(body.name);
   if (problem) return bad(problem);
-  const name = cleanFolder(body.name);
   const scope = await scopeFor(principal, body.filespaceId, { write: true });
   if (!scope) return forbidden('You can view this drive but not change it.');
+  const name = await canonicalIn(scope, body.name);
   let made;
   try {
     made = await createFolder(name, { createdBy: principal.email, filespace: scope.tag });
@@ -178,19 +185,23 @@ export async function PATCH(req) {
   if (!allowed.ok) return refusal(allowed);
   let body = {};
   try { body = await req.json(); } catch { return bad('Bad request'); }
-  const from = cleanFolder(body.from);
-  const to = cleanFolder(body.to);
-  if (!from) return bad('Choose a folder to rename.');
-  const problem = folderPathProblem(to);
+  if (!cleanFolder(body.from)) return bad('Choose a folder to rename.');
+  const problem = folderPathProblem(body.to);
   if (problem) return bad(problem);
-  if (from === to) return NextResponse.json({ ok: true, from, to, files: 0, folders: 0 });
-  if (isWithin(to, from)) return bad('A folder cannot be moved into itself.');
 
   const scope = await scopeFor(principal, body.filespaceId, { write: true });
   if (!scope) return forbidden('You can view this drive but not change it.');
+  // Both ends as this scope spells them (canonicalIn): the folder a Mac
+  // names composed is the one stored decomposed, and a new name is composed.
+  const from = await canonicalIn(scope, body.from);
+  const to = await canonicalIn(scope, body.to);
+  if (from === to) return NextResponse.json({ ok: true, from, to, files: 0, folders: 0 });
+  if (isWithin(to, from)) return bad('A folder cannot be moved into itself.');
   if (!(await canModifyFolder(from, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden();
   if (!(await canModifyFolder(to, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden('No access to the destination folder.');
   const inScope = { tag: scope.tag, prefix: scope.scoped ? scope.prefix : null };
+  // Nothing by that name here: a 404, not a 200 that makes an empty `to`.
+  if (!(await folderPathInUse(from, inScope))) return bad(`There is no folder “${from}” here.`, 404);
   if (await folderPathInUse(to, inScope)) {
     return bad(`“${to}” already exists. Choose another name, or move the files into it instead.`, 409);
   }
@@ -286,20 +297,38 @@ export async function DELETE(req) {
     if (!allowed.ok) return refusal(allowed);
   }
   const url = new URL(req.url);
-  const name = cleanFolder(url.searchParams.get('name'));
-  if (!name) return bad('Folder required.');
+  if (!cleanFolder(url.searchParams.get('name'))) return bad('Folder required.');
   const scope = await scopeFor(principal, url.searchParams.get('filespace'), { write: true });
   if (!scope) return forbidden('You can view this drive but not change it.');
+  const name = await canonicalIn(scope, url.searchParams.get('name'));
   if (!(await canModifyFolder(name, principal, { driveRole: scope.driveRole, tag: scope.tag }))) return forbidden();
 
   // Global, read here and never from the request.
   const flags = principal.flags;
   const files = await listFolderSubtreeFiles(name);
-  const plan = planRename({ from: name, to: name, prefix: scope.prefix, scoped: scope.scoped, files });
-  const work = [
-    ...plan.moves.map((m) => ({ id: m.id, key: m.fromKey })),
-    ...plan.catalog.map((c) => ({ id: c.id, key: null })),
-  ];
+  const drivePrefixes = scope.scoped ? [] : (await listFilespaces()).map((f) => f.prefix);
+  const plan = planFolderDelete({ name, files, prefix: scope.prefix, scoped: scope.scoped, drivePrefixes });
+  const { work } = plan;
+  // Nothing by that name here: say so, rather than answer "deleted 0" to a
+  // client that asked for a folder it only thinks is here (a name Finder
+  // made up to tell two folders apart, say) and takes that for done.
+  if (!work.length && !(await folderPathInUse(name, { tag: scope.tag, prefix: scope.scoped ? scope.prefix : null }))) {
+    return bad(`There is no folder “${name}” here.`, 404);
+  }
+  // Files in it the caller was never shown — a drive member's private file,
+  // to another member of the drive — are not theirs to delete unseen. The
+  // whole delete is refused, with how many and why, before anything goes.
+  if (!principal.isAdmin && work.length) {
+    const seen = await visibleFileIds(work.map((w) => w.id), principal);
+    const hidden = work.filter((w) => !seen.has(w.id)).length;
+    if (hidden) {
+      return NextResponse.json({
+        error: `“${name}” holds ${hidden} file${hidden === 1 ? '' : 's'} you cannot see, so it was not deleted. Ask whoever shared ${hidden === 1 ? 'it' : 'them'}, or an admin, to remove ${hidden === 1 ? 'it' : 'them'} first.`,
+        code: 'hidden_files',
+        hidden,
+      }, { status: 409 });
+    }
+  }
   const batch = work.slice(0, DELETE_BATCH);
 
   const results = await settleLimit(batch, S3_CONCURRENCY, async ({ id, key }) => {

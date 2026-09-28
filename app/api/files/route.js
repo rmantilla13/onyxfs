@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createFile, getFilespaceForUser, storageKeyInUse, claimUploadKey, issueUploadKey, previewKeysInUse } from '@/lib/db';
+import { createFile, getFilespaceForUser, storageKeyInUse, claimUploadKey, issueUploadKey, previewKeysInUse, canonicalFolder } from '@/lib/db';
+import { nfc } from '@/lib/folder-ops';
 import { requirePrincipal, uploadCheck, refusal } from '@/lib/authz';
 import { listFilesPage, listFolderTree, storagePrefixFor } from '@/lib/file-listing';
 import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject, s3DeleteObject } from '@/lib/storage';
@@ -98,6 +99,14 @@ export async function POST(req) {
   const parsed = parseFileRecord(body);
   if (parsed.error) return NextResponse.json({ error: parsed.error }, { status: 400 });
   const { record } = parsed;
+  // Names composed (NFC), and the folder spelled as the one already there
+  // in the drive it lands in (canonicalFolder) — the spelling its presign
+  // gave the object's key.
+  if (record.name) record.name = nfc(record.name);
+  {
+    const fs = record.filespace ? await getFilespaceForUser(email, String(record.filespace), principal) : null;
+    record.folder = await canonicalFolder(record.folder, fs ? { tag: fs.prefix, prefix: fs.prefix } : {});
+  }
 
   // Recording a file makes its creator able to open it, so where it points is
   // checked like an upload: a role that may add files, not into our own
