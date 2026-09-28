@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getStorageConfig, s3PresignPut, s3PresignSiblingPut, storageMode, cfgForFilespace, buildObjectKey } from '@/lib/storage';
 import { isThumbKey, thumbSiblingKey, thumbSizesFrom, PREVIEW_CACHE_CONTROL } from '@/lib/media';
-import { getFilespaceForWrite, issueUploadKey, uploadKeyHeld } from '@/lib/db';
+import { getFilespaceForWrite, issueUploadKey, uploadKeyHeld, canonicalFolder } from '@/lib/db';
 import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 import { replacementTarget, replacementKey } from '@/lib/replace-content';
 
@@ -104,6 +104,9 @@ export async function POST(req) {
       return NextResponse.json({ error: 'You can view this drive but not add to it. Ask one of its owners for editor access.' }, { status: 403 });
     }
     scoped = cfgForFilespace(cfg, fs);
+    folder = await canonicalFolder(folder, { tag: fs.prefix, prefix: fs.prefix });
+  } else {
+    folder = await canonicalFolder(folder);
   }
 
   if (body.thumb || body.poster || body.strip) {

@@ -366,3 +366,36 @@ export async function deleteFolderRows(name, { tag = '' } = {}) {
   for (const r of rowsOf()) if (r.tag === tag && under(r.name, name)) s().folders.delete(fkey(tag, r.name));
   return { ok: true, remaining: live().filter((f) => under(f.folder, name)).length };
 }
+
+// ── what the storage layer and the write routes read besides ──
+// Every drive, as the storage layer reads them (listDriveStorage: with
+// their secrets; these have none, so every one is the base bucket's).
+export async function listDriveStorage() { return s().drives.map((d) => copy(d)); }
+export async function listFilespaces() { return s().drives.map((d) => copy(d)); }
+// The stored spellings (non-ASCII paths) of a scope, and the canonical path:
+// the same composition as lib/db.js, over the store.
+export async function folderSpellings({ tag = '', prefix = null } = {}) {
+  const within = prefix ? `${clean(prefix)}/` : null;
+  const nonAscii = (p) => /[^\x00-\x7f]/.test(p);
+  return [...new Set([
+    ...live().filter((f) => nonAscii(f.folder || '') && (!within || String(f.storageKey || '').startsWith(within))).map((f) => f.folder),
+    ...rowsOf().filter((r) => r.tag === clean(tag) && nonAscii(r.name)).map((r) => r.name),
+  ])];
+}
+export async function canonicalFolder(path, { tag = '', prefix = null } = {}) {
+  const { cleanFolder, nfc, isAscii, respellPath } = await import('../../lib/folder-ops.js');
+  const c = nfc(cleanFolder(path));
+  if (!c || isAscii(c)) return c;
+  return respellPath(c, await folderSpellings({ tag, prefix }));
+}
+// Who sees which files: the listing's rule, as far as this store keeps it —
+// an admin every one; anyone else a file they made, or one visible to all.
+export async function visibleFileIds(ids, principal = {}) {
+  const list = (ids || []).map(String);
+  if (principal.isAdmin) return new Set(list);
+  const me = norm(principal.email);
+  return new Set(list.filter((id) => {
+    const f = s().files.get(id);
+    return f && ((f.visibility ?? 'org') === 'org' || norm(f.createdBy) === me);
+  }));
+}

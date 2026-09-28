@@ -397,7 +397,12 @@ describe('a rendition is never left in the bucket by accident', () => {
       const read = code.indexOf('proxyKeysFor(');
       assert.ok(read > 0, `${p} never asks for the proxy key`);
       assert.ok(read < code.indexOf(before), `${p} asks after the row is gone, when the key no longer exists`);
-      assert.match(code, /proxyKeys \}, \{ cfg \}\)/, `${p} does not hand them to the GC`);
+      // That the keys reach the GC — not which cfg goes with them. The second
+      // argument is the bucket to delete from, and it moves: a drive in a bucket
+      // of its own made it `{ cfg: base }` on one of these paths. Pinning the
+      // literal made this test fail on a correct merge, which is the opposite of
+      // its job.
+      assert.match(code, /dropUnusedPreviews\(\{ \.\.\.previewKeysOf\((?:file|row)\), proxyKeys \}/, `${p} does not hand them to the GC`);
     }
   });
 

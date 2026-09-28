@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getFileById, canAccessFile } from '@/lib/db';
 import { requirePrincipal } from '@/lib/authz';
-import { getStorageConfig, storageMode, s3PresignGet } from '@/lib/storage';
+import { getStorageConfig, storageMode, s3PresignGet, storageForKey } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 
@@ -23,7 +23,8 @@ export async function GET(_req, { params }) {
     try {
       const cfg = await getStorageConfig();
       if (storageMode(cfg) === 's3') {
-        const url = await s3PresignGet(cfg, file.storageKey, { download: true, filename: file.name, expiresIn: 600 });
+        // Signed where the object is: a drive in a bucket of its own keeps it there.
+        const url = await s3PresignGet(await storageForKey(cfg, file.storageKey), file.storageKey, { download: true, filename: file.name, expiresIn: 600 });
         return NextResponse.redirect(url);
       }
     } catch (e) {
