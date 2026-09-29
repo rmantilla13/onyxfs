@@ -22,6 +22,7 @@
 import { fileWriteDecision, folderRoleAllows, strongestFolderRole } from '../../lib/db.js';
 import { driveAccess, canWriteDrive, DRIVE_WRITE_ROLES } from '../../lib/drive-access.js';
 import { MEDIA_KEYS } from '../../lib/media.js';
+import { fileInLink } from '../../lib/folder-links.js';
 
 export const UPLOAD_KEY_TTL_MS = 24 * 60 * 60 * 1000;
 const s = () => globalThis.__mw;
@@ -486,6 +487,39 @@ export async function canonicalFolder(path, { tag = '', prefix = null } = {}) {
   if (!c || isAscii(c)) return c;
   return respellPath(c, await folderSpellings({ tag, prefix }));
 }
+// ── folder links ──
+// What lib/folder-links.js's queries answer, from its own pure rule
+// (fileInLink) over the store: a page of a folder's files by name then id,
+// its subfolders with what they hold, one file. The SQL is
+// test/folder-shares-api.test.js's, against a real database.
+const linked = (scope) => live().filter((f) => fileInLink(f, scope));
+const byNameThenId = (a, b) => (a.name === b.name ? (a.id < b.id ? -1 : 1) : (a.name < b.name ? -1 : 1));
+export async function listFolderLinkFiles(scope, { at, cursor = null, limit = 100 } = {}) {
+  const after = (f) => !cursor || f.name > cursor.value || (f.name === cursor.value && f.id > cursor.id);
+  const page = linked(scope).filter((f) => f.folder === at).sort(byNameThenId).filter(after).slice(0, limit);
+  const last = page.length === limit ? page[page.length - 1] : null;
+  return { files: page.map(copy), cursor: last ? { value: last.name, id: last.id } : null };
+}
+export async function countFolderLinkFiles(scope, { at } = {}) {
+  return linked(scope).filter((f) => f.folder === at).length;
+}
+export async function listFolderLinkFolders(scope, { at } = {}) {
+  const counts = new Map();
+  for (const f of linked(scope)) {
+    if (!f.folder.startsWith(`${at}/`)) continue;
+    const name = f.folder.slice(at.length + 1).split('/')[0];
+    if (name) counts.set(name, (counts.get(name) || 0) + 1);
+  }
+  return [...counts].sort(([a], [b]) => (a < b ? -1 : 1)).map(([name, count]) => ({ name, count }));
+}
+export async function getFolderLinkFile(scope, id) {
+  const f = s().files.get(String(id));
+  return f && fileInLink(f, scope) ? copy(f) : null;
+}
+export async function folderLinkRootExists(scope) {
+  return linked(scope).length > 0 || s().folders.has(fkey(scope.tag, scope.root));
+}
+
 // Who sees which files: the listing's rule, as far as this store keeps it —
 // an admin every one; anyone else a file they made, or one visible to all.
 export async function visibleFileIds(ids, principal = {}) {

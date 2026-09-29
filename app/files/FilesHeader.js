@@ -17,12 +17,14 @@ import { crumbsFor } from '@/lib/folder-ops';
  * that folder.
  *
  * Right: Upload (files, a folder, a new folder — for someone who may add
- * here), Activity (what changed most recently), and the sidebar's toggle.
+ * here), Share (a link to the open folder, when there is one and this person
+ * may make its links: `onShare`), Activity (what changed most recently), and
+ * the sidebar's toggle.
  */
 /* icons: upload folder-open folder-plus */
 export default function FilesHeader({
   folder, rootName, color, canWrite, onOpen, onDrop, onUploadFiles, onUploadFolder, onNewFolder,
-  filespaceId, onOpenFile, onShowRecent, sidebarOpen, onToggleSidebar,
+  filespaceId, onOpenFile, onShowRecent, onShare = null, sidebarOpen, onToggleSidebar,
 }) {
   const crumbs = crumbsFor(folder, rootName);
   const here = crumbs[crumbs.length - 1];
@@ -73,6 +75,17 @@ export default function FilesHeader({
             <MenuSeparator />
             <MenuItem icon="folder-plus" onClick={onNewFolder}>New folder…</MenuItem>
           </Menu>
+        )}
+        {onShare && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon hdr-btn"
+            onClick={onShare}
+            aria-label={`Share “${here.name}”`}
+            title="Share this folder"
+          >
+            <Icon name="link" size={18} />
+          </button>
         )}
         <ActivityPopover filespaceId={filespaceId} folder={folder} rootName={rootName} onOpen={onOpenFile} onShowAll={onShowRecent} />
         <button

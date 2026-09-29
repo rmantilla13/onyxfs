@@ -84,6 +84,10 @@ export default async function FilesPage({ searchParams }) {
   // photos and videos; the route checks it, the file and its drive again.
   const reviewLinks = ['shares.public', 'review.links']
     .every((cap) => can(principal, cap, { canModify: true, expiresInDays: principal.limits.shareMaxExpiryDays }).ok);
+  // Whether their role may make a folder's links, which are public or
+  // password links (shares.public). The folder's Share dialog lists and
+  // revokes either way; the route checks this, the folder and its drive again.
+  const folderLinks = can(principal, 'shares.public', { canModify: true, expiresInDays: principal.limits.shareMaxExpiryDays }).ok;
 
   // The view in the URL (?view=): a built-in, or one of their own. A view
   // kept for one drive opens in that drive, so a link to it lands there; an
@@ -147,6 +151,7 @@ export default async function FilesPage({ searchParams }) {
         flags={flags}
         canWrite={canWrite}
         reviewLinks={reviewLinks}
+        folderLinks={folderLinks}
         schema={normalizeSchema(rawSchema)}
         filespaceId={activeDrive ? filespaceId : ''}
         isAdmin={admin}

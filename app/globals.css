@@ -713,6 +713,35 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .share-level { flex: none; width: auto; padding: 4px var(--s2); font-size: var(--t-sm); }
 .share-level.is-review { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--accent-deep); }
 .share-revoke { color: var(--danger); }
+/* A folder's link is public or password: two kinds side by side. */
+@media (min-width: 721px) { .share-kinds.is-two { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.share-folder-note { margin: 0; }
+
+/* A folder link's page: a folder as the Files view shows one — its path from
+   the shared folder down, its subfolders as tiles, its files as cards — for
+   someone with no account, so every item is a link and nothing selects. */
+.share-folder-head .crumbs { gap: var(--s2); }
+.share-folder-summary { margin: var(--s2) 0 var(--s5); }
+.share-folder .folder-tile { text-decoration: none; }
+/* No selection bar here for the grid to clear on a phone. */
+.share-folder .files-grid { padding-bottom: 0; }
+/* A file's download sits over its card's corner: beside the card's link
+   rather than inside it (a link cannot hold another), shown on hover and
+   focus, and always where there is no hover. */
+.share-tile { position: relative; min-width: 0; }
+.share-tile-download {
+  position: absolute; top: 8px; right: 8px;
+  width: 34px; height: 34px; padding: 0; justify-content: center;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease);
+}
+.share-tile:hover .share-tile-download,
+.share-tile:focus-within .share-tile-download { opacity: 1; }
+@media (hover: none) { .share-tile-download { opacity: 1; } }
+.share-more { display: flex; justify-content: center; padding-top: var(--s5); }
+.share-more-error { margin: var(--s3) 0 0; text-align: center; color: var(--danger); }
+.share-back { color: var(--accent-deep); text-decoration: underline; text-underline-offset: 2px; }
+.share-file-crumbs { margin-bottom: var(--s3); }
 
 /* ── Get info ───────────────────────────────────────────────────────────── */
 .info-head { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s4); min-width: 0; }
