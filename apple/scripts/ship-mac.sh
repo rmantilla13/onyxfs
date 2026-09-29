@@ -21,9 +21,11 @@
 #     uncommitted goes out, and no checkout's build/Onyx.app — a copy someone
 #     may be running, whose drives FSKit then drops — is replaced.
 #   - Nothing already shipped is lost. The commit must contain the last
-#     release's, and its apple/VERSION must not be older than it: 0.5.7 was
-#     built from a branch main did not have, and a 0.5.8 from main would
-#     quietly have undone it.
+#     release's: 0.5.7 was built from a branch main did not have, and a
+#     0.5.8 from main would quietly have undone it. The last release's tag
+#     is the commit it was built from (below), so that is what is checked;
+#     apple/VERSION, which a release made here does not bump in git, only
+#     when there is no tag to go by.
 #   - The tag is the commit that was built. `gh release create` without a
 #     target tags whatever the default branch is at that moment, which is
 #     how mac-v0.5.6 and mac-v0.5.7 came to point at main.
@@ -147,15 +149,20 @@ fi
 TAG="mac-v$VERSION"
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then die "$TAG exists already."; fi
 
-# Nothing shipped is lost.
+# Nothing shipped is lost: the last release's commit is in this one. Its
+# tag says which commit that was; apple/VERSION stands in only without one
+# (it is not bumped in git by a release made here, so after 0.5.9 main still
+# said 0.5.8, and this refused a main that had 0.5.9 in it).
 if [ -n "$LAST" ]; then
-  SOURCE_VERSION="$(git -C "$ROOT" cat-file -p "$COMMIT:apple/VERSION" 2>/dev/null | tr -d '[:space:]')"
-  if [ -n "$SOURCE_VERSION" ] && newer "$LAST" "$SOURCE_VERSION"; then
-    die "$REF says it is $SOURCE_VERSION (apple/VERSION), but $LAST is out already: $LAST's changes are not in it. Merge the branch $LAST was built from, or ship from one that has it (--from)."
-  fi
   LAST_COMMIT="$(git -C "$ROOT" rev-list -n1 "mac-v$LAST" 2>/dev/null || true)"
-  if [ -n "$LAST_COMMIT" ] && ! git -C "$ROOT" merge-base --is-ancestor "$LAST_COMMIT" "$COMMIT"; then
-    die "$REF does not contain $LAST (tagged ${LAST_COMMIT:0:7}). Merge it in first, or ship from a branch that has it (--from)."
+  if [ -n "$LAST_COMMIT" ]; then
+    git -C "$ROOT" merge-base --is-ancestor "$LAST_COMMIT" "$COMMIT" \
+      || die "$REF does not contain $LAST (tagged ${LAST_COMMIT:0:7}). Merge it in first, or ship from a branch that has it (--from)."
+  else
+    SOURCE_VERSION="$(git -C "$ROOT" cat-file -p "$COMMIT:apple/VERSION" 2>/dev/null | tr -d '[:space:]')"
+    if [ -n "$SOURCE_VERSION" ] && newer "$LAST" "$SOURCE_VERSION"; then
+      die "$REF says it is $SOURCE_VERSION (apple/VERSION), but $LAST is out already: $LAST's changes are not in it. Merge the branch $LAST was built from, or ship from one that has it (--from)."
+    fi
   fi
 fi
 
