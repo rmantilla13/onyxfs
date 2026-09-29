@@ -230,9 +230,11 @@ export async function PATCH(req) {
 
   const copied = [];
   const undo = () => settleLimit(copied, S3_CONCURRENCY, (k) => s3DeleteObject(scope.cfg, k));
+  // A long video past 5 GiB is copied in parts (lib/storage.js copyObjectWithin).
+  const sizes = new Map(files.map((f) => [f.id, f.size]));
   try {
     await mapLimit(plan.moves, S3_CONCURRENCY, async (m) => {
-      await s3CopyObject(scope.cfg, m.fromKey, m.toKey);
+      await s3CopyObject(scope.cfg, m.fromKey, m.toKey, { size: sizes.get(m.id) });
       copied.push(m.toKey);
     });
   } catch (e) {

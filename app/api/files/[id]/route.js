@@ -181,7 +181,7 @@ export async function PATCH(req, { params }) {
             return NextResponse.json({ error: `A file called “${renamingTo}” is already stored in this folder.` }, { status: 409 });
           }
           try {
-            await s3MoveObject(cfg, existing.storageKey, newKey);
+            await s3MoveObject(cfg, existing.storageKey, newKey, { size: existing.size });
           } catch (e) {
             return NextResponse.json({ error: `Could not rename the stored object: ${e.message}` }, { status: 500 });
           }
@@ -244,7 +244,7 @@ export async function PATCH(req, { params }) {
           objectMoved = true;
           if (newKey !== existing.storageKey) {
             try {
-              await s3MoveObject(cfg, existing.storageKey, newKey);
+              await s3MoveObject(cfg, existing.storageKey, newKey, { size: existing.size });
             } catch (e) {
               // Bytes first, and if the bytes do not move, nothing moves. The
               // folders route tolerates a partly-done bulk rename because the
