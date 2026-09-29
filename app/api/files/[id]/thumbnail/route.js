@@ -17,9 +17,14 @@ export const runtime = 'nodejs';
  * file in it; learning that from the PUT came after all of that work, and
  * left the uploads behind with nothing pointing at them. The same checks as
  * the PUT: the files.edit capability, then canModifyFile.
+ *
+ * Both methods take the browser's session or Onyx for Mac's bearer token
+ * (requirePrincipal(req)): the Mac makes the thumbnails a browser has not,
+ * for the files of the drives it syncs and the files it uploads, and asks
+ * and records exactly as a browser does.
  */
-export async function GET(_req, { params }) {
-  const g = await requirePrincipal();
+export async function GET(req, { params }) {
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal } = g;
   const allowed = can(principal, 'files.edit');
@@ -50,7 +55,7 @@ export async function GET(_req, { params }) {
  * browser keeps the thumbnail it has.
  */
 export async function PUT(req, { params }) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const { principal } = g;
   const allowed = can(principal, 'files.edit');

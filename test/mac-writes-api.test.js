@@ -114,6 +114,7 @@ const presignRoute = await import('../app/api/files/presign/route.js');
 const multipartRoute = await import('../app/api/files/upload/multipart/route.js');
 const fileRoute = await import('../app/api/files/[id]/route.js');
 const contentRoute = await import('../app/api/files/[id]/content/route.js');
+const thumbnailRoute = await import('../app/api/files/[id]/thumbnail/route.js');
 const foldersRoute = await import('../app/api/files/folders/route.js');
 const restoreRoute = await import('../app/api/admin/trash/restore/route.js');
 
@@ -205,6 +206,7 @@ describe('the sign-in gate (middleware.js)', () => {
   const PATHS = [
     '/api/files', '/api/files/presign', '/api/files/upload/multipart', '/api/files/folders',
     '/api/files/3f0c7e1a-1111-4222-8333-944455556666', '/api/files/3f0c7e1a-1111-4222-8333-944455556666/content',
+    '/api/files/3f0c7e1a-1111-4222-8333-944455556666/thumbnail',
     '/api/admin/trash/restore',
   ];
 
@@ -215,7 +217,7 @@ describe('the sign-in gate (middleware.js)', () => {
   test('a bearer token takes those paths, and only those, past the gate', async () => {
     for (const p of PATHS) assert.ok(passed(await run(p, { authorization: 'Bearer dt_live_x' })), p);
     for (const p of [
-      '/api/files/abc/comments', '/api/files/abc/thumbnail', '/api/files/abc/download', '/api/files/upload',
+      '/api/files/abc/comments', '/api/files/abc/thumbnail/sizes', '/api/files/abc/download', '/api/files/upload',
       '/api/files/config', '/api/admin/people', '/api/admin/trash', '/api/filespaces', '/files/abc', '/admin',
     ]) {
       assert.ok(redirected(await run(p, { authorization: 'Bearer dt_live_x' })), p);
@@ -1103,5 +1105,74 @@ describe('what a mounted disk relies on the server for', () => {
     const renamed = await patchFile(web(ED), f.id, { name: 'renamed.txt' });
     assert.equal(renamed.body.objectMoved, true);
     assert.equal(row(f.id).storageKey, 'team/To/renamed.txt');
+  });
+});
+
+describe('a thumbnail made on the Mac', () => {
+  const mayRecord = (who, id) => call(thumbnailRoute.GET, `/api/files/${id}/thumbnail`, { params: { id }, ...who });
+  const recordThumb = (who, id, body) => call(thumbnailRoute.PUT, `/api/files/${id}/thumbnail`, { method: 'PUT', body, params: { id }, ...who });
+
+  test('the Mac asks whether it may, puts the pictures where the server names, and records them as a browser does', async () => {
+    const who = mac(ED);
+    const f = await upload(who, { name: 'GX010042.MP4', mime: 'video/mp4' });
+    const before = structuredClone(row(f.id));
+    assert.equal((await mayRecord(who, f.id)).status, 204);
+
+    const grid = await presign(who, { thumb: true, sizes: ['sm', 'xs'], contentType: 'image/jpeg' });
+    assert.equal(grid.status, 200, JSON.stringify(grid.body));
+    assert.match(grid.body.key, /^_thumbs\/[0-9a-f-]{36}\.jpg$/);
+    assert.equal(grid.body.cacheControl, 'private, max-age=31536000, immutable');
+    assert.deepEqual(Object.keys(grid.body.siblings).sort(), ['sm', 'xs']);
+    assert.equal(grid.body.siblings.sm.key, grid.body.key.replace(/\.jpg$/, '.sm.jpg'));
+    const poster = await presign(who, { poster: true, contentType: 'image/jpeg' });
+    assert.match(poster.body.key, /^_thumbs\/[0-9a-f-]{36}\.poster\.jpg$/);
+    for (const url of [grid.body.putUrl, grid.body.siblings.sm.putUrl, grid.body.siblings.xs.putUrl, poster.body.putUrl]) {
+      put(url, Buffer.alloc(100, 5));
+    }
+    assert.ok(stored(grid.body.siblings.xs.key), 'the siblings land under the thumbnail’s own name');
+
+    const out = await recordThumb(who, f.id, {
+      thumbnailKey: grid.body.key, posterKey: poster.body.key, thumbSizes: ['sm', 'xs'],
+      media: { width: 3840, height: 2160, duration: 42.52 },
+    });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    const r = row(f.id);
+    assert.deepEqual([r.thumbnailKey, r.posterKey, r.thumbSizes], [grid.body.key, poster.body.key, ['sm', 'xs']]);
+    assert.deepEqual([r.metadata.width, r.metadata.height, r.metadata.duration], [3840, 2160, 42.5]);
+    assert.ok(r.seq > before.seq, 'seq moves: every device picks the thumbnail up');
+    assert.equal(r.version, before.version, 'a picture is not an edit');
+    assert.match(out.body.file.thumbnailUrl, /^http:\/\/s3\.test\/onyx\/_thumbs\/.*X-Amz-/, 'signed for the answer');
+  });
+
+  test('a viewer’s Mac is told no before it draws anything, and cannot record one either', async () => {
+    const f = await upload(mac(ED), { name: 'Take 2.mov' });
+    const viewer = mac(DV);
+    assert.equal((await mayRecord(viewer, f.id)).status, 403);
+    const uuid = randomUUID();
+    const out = await recordThumb(viewer, f.id, { thumbnailKey: `_thumbs/${uuid}.jpg`, thumbSizes: ['sm'] });
+    assert.equal(out.status, 403);
+    assert.equal(row(f.id).thumbnailKey, null);
+    // Capped to the Viewer role by the platform, whatever the drive says.
+    assert.equal((await mayRecord(mac(VR), f.id)).status, 403);
+    assert.equal((await mayRecord(mac(ED2), f.id)).status, 204, 'another editor of the drive may');
+  });
+
+  test('a token that does not count is refused, and a role without the desktop app too', async () => {
+    const f = await upload(mac(ED));
+    const revoked = tokenFor(ED);
+    globalThis.__mw.tokens.delete(revoked);
+    for (const out of [await mayRecord({ token: revoked }, f.id), await recordThumb({ token: revoked }, f.id, {})]) {
+      assert.equal(out.status, 401);
+    }
+    const noDesktop = await mayRecord(mac(ND), f.id);
+    assert.equal(noDesktop.status, 403);
+    assert.equal(noDesktop.body.error, 'Your role cannot use the desktop app.');
+    assert.equal((await mayRecord({}, f.id)).status, 401, 'nor with nothing at all');
+  });
+
+  test('the browser’s session still works as it did', async () => {
+    const f = await upload(web(ED));
+    assert.equal((await mayRecord(web(ED), f.id)).status, 204);
+    assert.equal((await mayRecord(web(DV), f.id)).status, 403);
   });
 });

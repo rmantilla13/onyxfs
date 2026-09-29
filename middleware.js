@@ -20,10 +20,10 @@ const { auth } = NextAuth(authConfig);
  * section itself, and returns there.
  *
  * And one way past it: Onyx for Mac's writes (upload, rename, move, trash,
- * folders, new contents, restore) carry its device token, not a session.
- * Such a request, to exactly those paths, goes on to a handler that checks
- * the token itself and answers in JSON (lib/bearer-gate.js). The same path
- * without `Authorization: Bearer …` meets the gate as before.
+ * folders, new contents, restore, thumbnails) carry its device token, not a
+ * session. Such a request, to exactly those paths, goes on to a handler that
+ * checks the token itself and answers in JSON (lib/bearer-gate.js). The same
+ * path without `Authorization: Bearer …` meets the gate as before.
  */
 export function middleware(req, ev) {
   const legacy = legacyAdminUrl(req.nextUrl.pathname, req.nextUrl.search);

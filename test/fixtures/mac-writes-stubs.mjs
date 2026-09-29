@@ -141,6 +141,25 @@ export async function updateFile(id, fields = {}) {
   touch(row);
   return copy(row);
 }
+// A thumbnail recorded after the fact, as lib/db.js's setFileThumbnail
+// records it: the siblings and the poster that came with it or none, the
+// media facts merged in, and seq moved — not version, nor updatedAt.
+export async function setFileThumbnail(id, thumbnailKey, media = {}, posterKey = null, thumbSizes = null) {
+  const row = s().files.get(String(id));
+  if (!row) return null;
+  Object.assign(row, {
+    thumbnailKey, thumbnailUrl: null, posterKey: posterKey || null, thumbSizes: thumbSizes || [],
+    metadata: { ...row.metadata, ...media }, seq: nextSeq(),
+  });
+  return copy(row);
+}
+export async function setFilePoster(id, posterKey, media = {}) {
+  const row = s().files.get(String(id));
+  if (!row) return null;
+  row.posterKey = posterKey;
+  row.metadata = { ...media, ...row.metadata };
+  return copy(row);
+}
 // The proxy queue, as far as POST /api/files needs it: asking for one is a row
 // keyed by file id, so the test can see WHETHER a heavy upload queued one. The
 // lease and the atomic claim are lib/db.js's, against a real database
