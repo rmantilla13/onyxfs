@@ -11,7 +11,8 @@ import OnyxKit
 ///   Finder       each drive you choose as a location of its own, through the
 ///                File Provider extension: on-demand download, eviction, and
 ///                the same access rules as the web (/api/files/delta)
-///   menu bar     sync status, the drive list, and "open Onyx"
+///   menu bar     a panel: sync status, what is moving, each drive and
+///                whether it is in Finder, and "open Onyx"
 ///
 /// Everything here goes through the server, which is the difference from the
 /// Tauri app's rclone mount (desktop/): that one talks to the bucket directly,
@@ -40,12 +41,14 @@ struct OnyxMacApp: App {
         .defaultSize(width: 1280, height: 820)
         .commands { OnyxCommands(model: model) }
 
+        // A panel, not a menu: it shows the activity graphs and each drive
+        // with its icon (MenuPanel).
         MenuBarExtra {
-            MenuBarContent().environmentObject(model).environmentObject(model.updater).environmentObject(model.finder)
+            MenuPanel().environmentObject(model).environmentObject(model.updater).environmentObject(model.finder)
         } label: {
             MenuBarIcon().environmentObject(model).environmentObject(model.finder).environmentObject(model.updater)
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
 
         Settings {
             SettingsView().environmentObject(model).environmentObject(model.updater).environmentObject(model.finder)
@@ -121,8 +124,13 @@ enum Launch {
 
 struct OnyxCommands: Commands {
     @ObservedObject var model: AppModel
+    @AppStorage(ActivityBar.setting) private var showsActivity = true
 
     var body: some Commands {
+        // The same switch as Settings › General's.
+        CommandGroup(after: .toolbar) {
+            Toggle("Show Activity", isOn: $showsActivity)
+        }
         CommandGroup(after: .appInfo) {
             Button("Check for Updates…") {
                 Task { await model.updater.check(userInitiated: true) }

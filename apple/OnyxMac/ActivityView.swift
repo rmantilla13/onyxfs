@@ -11,19 +11,22 @@ import OnyxKit
 ///
 /// It is always there, so it must cost nothing while nothing moves: the
 /// graphs are redrawn once a second from when bytes start to move until they
-/// have scrolled off (ActivityClock), and not at all in between.
+/// have scrolled off (ActivityClock), and not at all in between. Settings ›
+/// General can hide it (`setting`).
 struct ActivityBar: View {
-    let transfers: TransferLog
+    @ObservedObject var clock: ActivityClock
     @ObservedObject var downloads: WebDownloads
-    @StateObject private var clock = ActivityClock()
 
     static let height: CGFloat = 44
     /// How far back the graphs go.
     static let seconds = 60
+    /// Whether the window shows it, in UserDefaults: on unless turned off.
+    static let setting = "showsActivityBar"
 
     var body: some View {
         // Read, so each tick redraws the graphs.
         let _ = clock.tick
+        let transfers = clock.transfers
         HStack(spacing: 0) {
             ForEach(Meter.all) { meter in
                 if meter != Meter.all.first { Divider().padding(.vertical, 10) }
@@ -43,37 +46,48 @@ struct ActivityBar: View {
         .frame(height: Self.height)
         .background(Color(nsColor: .windowBackgroundColor))
         .overlay(alignment: .top) { Divider() }
-        .onAppear { clock.follow(transfers) }
-        .onDisappear { clock.stop() }
+        .onAppear { clock.attach() }
+        .onDisappear { clock.detach() }
     }
 }
 
-/// Redraws the bar once a second from when bytes start to move until the
-/// graphs are flat again, and not at all in between: the log wakes it
-/// (TransferLog.onWake), and it stops itself once the log has been quiet for
-/// as long as a graph shows.
+/// Redraws what shows activity — the window's bar, the menu bar's panel —
+/// once a second from when bytes start to move until the graphs are flat
+/// again, and never while nothing that shows them is on screen: the log
+/// wakes it (TransferLog.onWake), it stops itself once the log has been
+/// quiet for as long as a graph shows, and it stops when the last view
+/// showing it goes. One for the app (AppModel.activity): the log has one
+/// hook, and one tick redraws every view at once.
 @MainActor
 final class ActivityClock: ObservableObject {
     @Published private(set) var tick = 0
+    let transfers: TransferLog
+    private var viewers = 0
     private var loop: Task<Void, Never>?
-    private weak var transfers: TransferLog?
 
-    func follow(_ transfers: TransferLog) {
+    init(transfers: TransferLog) {
         self.transfers = transfers
         transfers.onWake = { [weak self] in
             Task { @MainActor in self?.run() }
         }
+    }
+
+    /// A view that shows activity came on screen…
+    func attach() {
+        viewers += 1
         run()
     }
 
-    func stop() {
-        transfers?.onWake = nil
+    /// …or went.
+    func detach() {
+        viewers = max(0, viewers - 1)
+        guard viewers == 0 else { return }
         loop?.cancel()
         loop = nil
     }
 
     private func run() {
-        guard loop == nil else { return }
+        guard viewers > 0, loop == nil else { return }
         loop = Task { [weak self] in
             while !Task.isCancelled {
                 // Just past each whole second, so each redraw moves the
@@ -82,10 +96,61 @@ final class ActivityClock: ObservableObject {
                 try? await Task.sleep(nanoseconds: UInt64((now.rounded(.down) + 1.02 - now) * 1e9))
                 guard let self, !Task.isCancelled else { return }
                 self.tick &+= 1
-                if self.transfers?.quiet(for: ActivityBar.seconds) ?? true { break }
+                if self.transfers.quiet(for: ActivityBar.seconds) { break }
             }
             self?.loop = nil
         }
+    }
+}
+
+/// The four as tiles, two by two, for the menu bar's panel: the same
+/// figures and graphs as the window's bar, where there is more room above
+/// than beside.
+struct ActivityTiles: View {
+    @ObservedObject var clock: ActivityClock
+
+    var body: some View {
+        let _ = clock.tick
+        VStack(spacing: 8) {
+            HStack(spacing: 8) { tile(Meter.all[0]); tile(Meter.all[1]) }
+            HStack(spacing: 8) { tile(Meter.all[2]); tile(Meter.all[3]) }
+        }
+        .onAppear { clock.attach() }
+        .onDisappear { clock.detach() }
+    }
+
+    private func tile(_ meter: Meter) -> some View {
+        MeterTile(meter: meter,
+                  samples: Sparkline.smoothed(clock.transfers.history(meter.kind, seconds: ActivityBar.seconds)),
+                  rate: clock.transfers.rate(meter.kind))
+    }
+}
+
+private struct MeterTile: View {
+    let meter: Meter
+    let samples: [Double]
+    let rate: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                Circle().fill(meter.color).frame(width: 6, height: 6)
+                Text(meter.title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+            }
+            Text(ActivityFormat.bitrate(rate))
+                .font(.system(size: 14, weight: .semibold).monospacedDigit())
+                .lineLimit(1)
+            Sparkline(samples: samples, color: meter.color)
+                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.25)],
+                                     startPoint: .leading, endPoint: .trailing))
+                .frame(height: 24)
+                .padding(.top, 3)
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(meter.title)
+        .accessibilityValue(ActivityFormat.spoken(rate))
     }
 }
 
@@ -305,9 +370,9 @@ struct DownloadRow: View {
     }
 }
 
-/// How far a download has got, as a hairline: full width and faint while
-/// the server has not said how big it is.
-private struct ProgressLine: View {
+/// How far a download or upload has got, as a hairline: full width and
+/// faint while the server has not said how big it is.
+struct ProgressLine: View {
     let fraction: Double?
 
     var body: some View {

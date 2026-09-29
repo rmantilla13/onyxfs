@@ -483,7 +483,11 @@ and then for it to be always in sight. It is a bar along the foot of the
 Onyx window (`ActivityBar`) with four: **Download** (from storage to this
 Mac), **Upload** (back), **Read** (what apps read from the disks) and
 **Write** (what apps wrote to them), in megabits a second, each over the
-last minute; and, at its end, the window's downloads.
+last minute; and, at its end, the window's downloads. Settings › General
+and View › Show Activity hide it (`showsActivityBar` in UserDefaults). The
+menu bar item's panel (`MenuPanel`) shows the same four, as tiles two by
+two, above what is on its way and the drives — each with its disk's icon,
+drawn by the same `DriveIcon` the extension puts on the disk.
 
 - **The extension counts** what only it sees (`TransferMeter`, OnyxFSCore):
   bytes the engine hands the kernel for a read, bytes a write gives it, and
@@ -506,11 +510,13 @@ last minute; and, at its end, the window's downloads.
   looked at once a second while one runs), into `TransferLog` (OnyxKit): a
   ring of one-second buckets, five minutes long. Adding is a lock and an
   add; nothing runs to keep it.
-- **The bar reads it** once a second from when bytes start to move until its
-  graphs are flat again, and not at all in between: the first bytes after a
-  quiet second wake it (`TransferLog.onWake`, called outside the lock), and
-  it stops itself once the log has been quiet for as long as a graph shows
-  (`ActivityClock`). Always on screen, it costs nothing while nothing moves.
+- **The bar and the panel read it** once a second from when bytes start to
+  move until the graphs are flat again, and not at all in between: the first
+  bytes after a quiet second wake the one clock they share
+  (`TransferLog.onWake`, called outside the lock; `AppModel.activity`), which
+  stops itself once the log has been quiet for as long as a graph shows, and
+  when the last view showing the graphs goes (`attach`/`detach`). Always on
+  screen, the bar costs nothing while nothing moves.
   Each graph is its last 60 whole seconds, each averaged with its
   neighbours, since a disk's once-a-second reports can land two in one
   second and none in the next. The figure is the average of the last three.

@@ -39,6 +39,8 @@ final class AppModel: ObservableObject {
     let finder = DriveService()
     /// Transcripts requested on the web, made on this Mac.
     let transcriber = TranscriptionService()
+    /// What redraws the activity graphs, wherever they show (ActivityClock).
+    lazy var activity = ActivityClock(transfers: finder.transfers)
     private let settings = SharedSettings()
     /// Signed in as the app opened: bringing the drives back, in the
     /// background. Launch arguments that need the drives wait for it.
