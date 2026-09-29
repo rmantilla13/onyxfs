@@ -36,6 +36,9 @@ export const ADMIN_NAV = [
     items: [
       { href: '/admin/usage', label: 'Usage' },
       { href: '/admin/usage/duplicates', label: 'Duplicates' },
+      // What storage costs us where it is not the list price; the Usage
+      // estimate reads it. Admins, like Usage: it moves an estimate, no file.
+      { href: '/admin/usage/prices', label: 'Prices' },
       // The bucket every file lives in: super-admins only (SUPER_ADMIN_EMAILS,
       // or every admin when that is unset). Its page and routes refuse the rest.
       { href: '/admin/storage', label: 'Backend', superOnly: true },

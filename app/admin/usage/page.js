@@ -1,14 +1,14 @@
 import Link from 'next/link';
 import {
   storageReport, listDrivesWithUsage, duplicateSummary, getFeatureFlags, storageByPerson, frameModelSummary,
-  billableStorage, listDriveStorage,
+  billableStorage, listDriveStorage, listStoragePrices,
 } from '@/lib/db';
 import { presignFileUrls, getStorageConfig, storageMode, cfgForDrive } from '@/lib/storage';
 import { fmtSize } from '@/lib/media';
 import { crumbsFor } from '@/lib/folder-ops';
 import { driveForKey } from '@/lib/admin-drives';
 import { kindLabel, formatLabel, TRASH_RETENTION_DAYS } from '@/lib/storage-report';
-import { estimateStorageCost, storageParts, storageLocation } from '@/lib/storage-pricing';
+import { estimateStorageCost, storageParts, storageLocation, pricesByAccount } from '@/lib/storage-pricing';
 import { Thumb } from '@/app/components/ui/FileCard';
 import { requireAdminPage } from '../_lib/guard';
 import AdminPage from '../_ui/AdminPage';
@@ -33,12 +33,13 @@ const extOf = (name) => (/\.([A-Za-z0-9]{1,8})$/.exec(String(name || '')) || [])
  * files are priced where its objects are read from (lib/storage.js
  * cfgForDrive): its own bucket when it has one, else the Storage bucket.
  * `own` are the drives with their keys, which go no further than cfgForDrive;
- * the estimate names only provider, bucket and region.
+ * the estimate names only provider, bucket and region. `prices` are the
+ * prices of our own (Admin → Storage → Prices), which win over the list.
  */
-function costEstimate(cfg, drives, stored, own) {
+function costEstimate(cfg, drives, stored, own, prices) {
   const byId = new Map(own.map((d) => [d.id, d]));
   const locate = (drive) => storageLocation(cfgForDrive(cfg, drive ? byId.get(drive.id) : null));
-  return estimateStorageCost(storageParts({ stored, drives, locate }));
+  return estimateStorageCost(storageParts({ stored, drives, locate }), { overrides: pricesByAccount(prices) });
 }
 
 /**
@@ -60,8 +61,10 @@ export default async function UsagePage() {
     // Videos still without an exact frame rate, for "Probe all videos".
     frameModelSummary().catch(() => ({ videos: 0 })),
     getStorageConfig(),
-    // The estimate is one card: a failed read leaves it out, not the page.
-    Promise.all([billableStorage(), listDriveStorage()]).catch(() => null),
+    // The estimate is one card: a failed read leaves it out, not the page —
+    // and prices of our own that could not be read would be list prices
+    // passed off as ours, so they are part of it.
+    Promise.all([billableStorage(), listDriveStorage(), listStoragePrices()]).catch(() => null),
   ]);
 
   if (!report) {
@@ -100,8 +103,8 @@ export default async function UsagePage() {
   // Vercel Blob has no bucket to price, and the card says so; a bucket whose
   // figures could not be read leaves the card out.
   const inBucket = storageMode(cfg) === 's3';
-  const [stored, own] = billable || [];
-  const cost = inBucket && stored ? costEstimate(cfg, drives, stored, own) : null;
+  const [stored, own, prices] = billable || [];
+  const cost = inBucket && stored ? costEstimate(cfg, drives, stored, own, prices) : null;
 
   return (
     <AdminPage

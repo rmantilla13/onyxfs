@@ -232,7 +232,7 @@ describe('the estimate', () => {
     const owed = estimateStorageCost([{ location: at(WASABI), bytes: 0 }, { location: at(SPACES), bytes: 0 }]);
     assert.equal(owed.lines.length, 2);
     assert.equal(cents(owed.usd), 12.99);
-    assert.deepEqual(estimateStorageCost([]), { lines: [], usd: null, bytes: 0, unpricedBytes: 0, checked: null });
+    assert.deepEqual(estimateStorageCost([]), { lines: [], usd: null, bytes: 0, unpricedBytes: 0, checked: null, own: false });
   });
 });
 
@@ -368,8 +368,8 @@ describe('saying it', () => {
 
   test('and where there is no price, why not', () => {
     const line = (location, bytes) => estimateStorageCost([{ location, bytes }]).lines[0];
-    assert.equal(lineNote(line(at('https://minio.internal:9000'), 50 * GiB)), '50 GB, on a service with no list price');
-    assert.equal(lineNote(line(at('', 'b', 'mars-north-1'), 50 * GiB)), '50 GB, in a region with no list price here');
+    assert.equal(lineNote(line(at('https://minio.internal:9000'), 50 * GiB)), '50 GB: no list price for this service, until we set one');
+    assert.equal(lineNote(line(at('', 'b', 'mars-north-1'), 50 * GiB)), '50 GB: no list price for this region, until we set one');
     assert.equal(lineNote(line(BLOB_LOCATION, 1.2 * GiB)), '1.2 GB, uploaded before a bucket was set up');
   });
 
