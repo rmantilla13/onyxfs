@@ -6,6 +6,7 @@ import FolderGlyph from '@/app/components/ui/FolderGlyph';
 import { Thumb } from '@/app/components/ui/FileCard';
 import { FieldLine, When, fieldValue } from '@/app/components/ui/FieldValue';
 import Icon from '@/app/components/ui/Icon';
+import OfflineMark from '@/app/components/ui/OfflineMark';
 import { fileKey, folderKey } from '@/lib/selection';
 import { overlaps } from '@/lib/marquee';
 import { baseName } from '@/lib/folder-ops';
@@ -49,6 +50,7 @@ function RowIcon({ file, labelFor }) {
 /** A column that is a way there, not the open folder: plain buttons. */
 const PathColumn = memo(function PathColumn({
   path, rootName, folders, files, more, openChild, onNavigate, onOpenFolder, onOpenFile, canWrite, onDrop, labelFor, width,
+  keptFolder, keptFile,
 }) {
   const title = path ? baseName(path) : rootName;
   return (
@@ -68,6 +70,7 @@ const PathColumn = memo(function PathColumn({
             >
               <RowIcon />
               <span className="col-name truncate">{f.name}</span>
+              {keptFolder?.(f.folder) && <OfflineMark size={12} />}
               <Icon name="chevron-right" size={14} className="col-chevron" />
             </button>
           </FolderDrop>
@@ -86,6 +89,7 @@ const PathColumn = memo(function PathColumn({
           >
             <RowIcon file={f} labelFor={labelFor} />
             <span className="col-name truncate">{f.name}</span>
+            {keptFile?.(f) && <OfflineMark size={12} />}
           </button>
         );
       })}
@@ -139,6 +143,7 @@ function ColumnView({
   loadColumn, columnKey, matches,
   onNavigate, onOpenFolder, onGoUp, onOpenFile,
   canWrite, onDrop, labelFor, badgesFor, onMissingThumb, fields, cardSize = 'm', emptyText = 'Nothing here',
+  keptFolder, keptFile,
 }) {
   const width = COL_W[cardSize] || COL_W.m;
   const box = useRef(null);
@@ -329,6 +334,8 @@ function ColumnView({
             onDrop={onDrop}
             labelFor={labelFor}
             width={width}
+            keptFolder={keptFolder}
+            keptFile={keptFile}
           />
         );
       })}
@@ -362,6 +369,7 @@ function ColumnView({
               >
                 <RowIcon />
                 <span className="col-name truncate">{f.name}</span>
+                {keptFolder?.(f.folder) && <OfflineMark size={12} />}
                 <Icon name="chevron-right" size={14} className="col-chevron" />
               </div>
             </FolderDrop>
@@ -412,6 +420,8 @@ function ColumnView({
             onDrop={onDrop}
             labelFor={labelFor}
             width={width}
+            keptFolder={keptFolder}
+            keptFile={keptFile}
           />
         );
       })()}

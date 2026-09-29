@@ -944,7 +944,13 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
    height, so every card must be the same. */
 .filecard-text > .filecard-meta.small { margin-top: 4px; min-height: 1.4em; line-height: 1.4; }
 .filecard-meta > .filecard-name { flex: 1; }
-.filecard-badges { display: inline-flex; gap: 4px; flex: none; margin-left: auto; }
+.filecard-badges { display: inline-flex; align-items: center; gap: 4px; flex: none; margin-left: auto; }
+/* Kept offline by Onyx for Mac (OfflineMark): the accent, so it reads as a
+   state the file is in rather than a warning about it. After a name it never
+   shrinks; the name gives way first. */
+.offline-mark { display: inline-flex; flex: none; align-items: center; color: var(--accent); line-height: 0; }
+.folder-tile-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.folder-tile-title > .folder-tile-name { min-width: 0; }
 .field-line { min-width: 0; font-variant-numeric: tabular-nums; }
 .filecard-meta > .field-line { flex: 1; }
 .field-sep { opacity: 0.6; }

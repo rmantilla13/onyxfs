@@ -5,6 +5,7 @@ import FilespaceMembers from '@/app/components/FilespaceMembers';
 import { fmtSize } from '@/lib/media';
 import { driveColor } from '@/lib/drive-color';
 import Icon from '@/app/components/ui/Icon';
+import OfflineMark from '@/app/components/ui/OfflineMark';
 
 /**
  * Drives: the filespaces, shown the way a computer shows its disks. Each is
@@ -16,8 +17,10 @@ import Icon from '@/app/components/ui/Icon';
  * see it. Usage is counted on the server (countFilesUnderPrefix); the library
  * total is only shown to admins. Each drive's icon is in its own colour
  * (lib/drive-color.js), the colour of the dot beside its name on its page.
+ * In the Mac app, a drive kept offline whole is marked (`keptDrive`, by id;
+ * '' for the files in no drive).
  */
-export function DriveList({ drives = [], usage = {}, library = null, activeId = '', pendingId = null, canCreate = false, onOpen, onNew }) {
+export function DriveList({ drives = [], usage = {}, library = null, activeId = '', pendingId = null, canCreate = false, onOpen, onNew, keptDrive }) {
   const sorted = [...drives].sort((a, b) => String(a.name).localeCompare(String(b.name)));
   return (
     <nav className="drives" aria-label="Drives">
@@ -34,6 +37,7 @@ export function DriveList({ drives = [], usage = {}, library = null, activeId = 
           active={!activeId}
           pending={pendingId === ''}
           onClick={() => onOpen?.('')}
+          kept={!!keptDrive?.('')}
           library
         />
         {sorted.map((d) => (
@@ -48,6 +52,7 @@ export function DriveList({ drives = [], usage = {}, library = null, activeId = 
             active={activeId === d.id}
             pending={pendingId === d.id}
             onClick={() => onOpen?.(d.id)}
+            kept={!!keptDrive?.(d.id)}
           />
         ))}
       </ul>
@@ -63,7 +68,7 @@ const usageLine = (u) => `${fmtSize(u.bytes) || '0 B'} · ${Number(u.files).toLo
 
 // A drive opens with a server render, which takes a moment: the row it is
 // going to says so (`pending`) until the page has changed.
-function DriveRow({ id, name, detail, role, active, pending = false, onClick, library = false }) {
+function DriveRow({ id, name, detail, role, active, pending = false, onClick, library = false, kept = false }) {
   return (
     <li>
       <button
@@ -83,6 +88,7 @@ function DriveRow({ id, name, detail, role, active, pending = false, onClick, li
           <span className="drive-name truncate">{name}</span>
           {detail && <span className="drive-detail truncate">{detail}</span>}
         </span>
+        {kept && <OfflineMark title="Whole drive kept offline on this Mac" />}
       </button>
     </li>
   );
