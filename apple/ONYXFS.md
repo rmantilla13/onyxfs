@@ -192,6 +192,11 @@ logic is testable with `swift test`.
   Range GET on the presigned URL (refresh + retry once on 403/400 from
   storage, 3 attempts with backoff on network errors), local files via
   `/fs/v1/data`; short final chunk handled; reads past EOF return what exists.
+  A chunk goes to the reads waiting on it as it arrives, and into the cache
+  after: they do not wait on its digest and write (a scrub's first read at a
+  new place, 5.8 → 3.1 ms on loopback), and a read of it meanwhile is handed
+  the same bytes. At most 6 chunks are held in memory, those on their way and
+  those not yet written together, so a slow disk holds fetching back.
 - All of it under `apple/OnyxKit/Sources/OnyxFSCore/`, tests under
   `apple/OnyxKit/Tests/OnyxFSCoreTests/` with a stub bridge (URLProtocol or a
   tiny local HTTP server).

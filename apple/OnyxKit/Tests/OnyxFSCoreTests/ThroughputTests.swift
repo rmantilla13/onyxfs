@@ -83,7 +83,7 @@ struct ThroughputTests {
                 _ = try await scrubber.read(offset: offset + Int64(Self.MiB), length: Self.MiB)
                 follows.append(seconds(clock.now - start))
             }
-            print(String(format: "  scrub, cold: first read at a new place p50 %.0f ms, p95 %.0f ms; the next read p50 %.1f ms",
+            print(String(format: "  scrub, cold: first read at a new place p50 %.1f ms, p95 %.1f ms; the next read p50 %.1f ms",
                          percentile(firsts, 0.5) * 1000, percentile(firsts, 0.95) * 1000, percentile(follows, 0.5) * 1000))
             var hot: [Double] = []
             let rescrubber = FileReader(fileId: "master", version: "v1", size: size, client: client, store: scrubStore,

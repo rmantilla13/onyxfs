@@ -26,12 +26,15 @@ struct FileReaderTests {
         }
     }
 
-    func setUp(cacheLimit: Int64 = 1 << 30) async throws -> Setup {
+    /// `disk`: a gate every write to the cache passes first.
+    func setUp(cacheLimit: Int64 = 1 << 30, disk: WriteGate? = nil) async throws -> Setup {
         let stub = Stub()
         let client = try await stub.connect()
         // Each test removes it when it ends (`defer { removeFolder(s.folder) }`).
         let folder = try temporaryFolder()
-        let store = try ChunkStore(directory: folder, limitBytes: cacheLimit)
+        let store = try ChunkStore(directory: folder, limitBytes: cacheLimit,
+                                   freeSpace: { ChunkStore.availableCapacity($0) },
+                                   beforeWrite: disk.map { gate in { await gate.pass($0) } })
         return Setup(stub: stub, client: client, store: store, folder: folder)
     }
 
@@ -73,7 +76,9 @@ struct FileReaderTests {
         #expect(stats.peakInFlight <= 4)
         #expect(stats.bytesRead == size)
 
-        // Opened again: all of it from the cache, and no link asked for.
+        // Opened again, once the last chunks are written: all of it from the
+        // cache, and no link asked for.
+        try await eventually { await reader.stats().writing == 0 }
         let again = s.reader(file)
         offset = 0
         while offset < size {
@@ -296,10 +301,132 @@ struct FileReaderTests {
             #expect(data == Pattern.bytes(offset..<(offset + Int64(data.count)), seed: 11))
             offset += Int64(data.count)
         }
+        try await eventually { await reader.stats().writing == 0 }
         let stats = await s.store.stats()
         #expect(stats.bytes <= stats.limitBytes && stats.evictions >= 2)
         #expect(await reader.stats().peakWindow == 1)
         #expect(s.stub.storageRequests.count == 5, "no chunk fetched twice")
+    }
+
+    // MARK: - The reads first, the cache after
+
+    @Test(.timeLimit(.minutes(1)))
+    func aReadHasItsChunkBeforeTheCacheDoes() async throws {
+        // A disk slower than the network: each write to the cache waits.
+        let disk = WriteGate()
+        let s = try await setUp(disk: disk)
+        defer { removeFolder(s.folder) }
+        let size = 30 * Self.MiB
+        let file = s.stub.addFile("/Slow disk.mov", size: size)
+        let reader = s.reader(file)
+        let key = ChunkStore.Key(fileId: file.id!, version: file.version)
+
+        // The read has its bytes while chunk 0 still waits for the disk.
+        #expect(try await reader.read(offset: 0, length: 4096) == Pattern.bytes(0..<4096, seed: 7))
+        try await eventually { await disk.held.contains(0) }
+        #expect(await !s.store.contains(key, index: 0))
+        #expect(await reader.stats().writing == 1)
+
+        // A read of it meanwhile is handed the same bytes: not fetched
+        // again, and not looked for in a cache that does not have it yet.
+        let later = 3 * Self.MiB
+        #expect(try await reader.read(offset: later, length: 4096) == Pattern.bytes(later..<(later + 4096), seed: 7))
+        #expect(s.stub.storageRequests.filter { $0.range == s.chunkRange(0, size: size) }.count == 1)
+        #expect(await s.store.stats().misses == 1, "the first read's look, and no other")
+        #expect(await reader.stats().cacheHits == 0)
+
+        // Closed before the disk catches up: what arrived still goes in.
+        await reader.close()
+        await disk.open()
+        try await eventually { await reader.stats().writing == 0 }
+        #expect(await s.store.contains(key, index: 0))
+        let again = s.reader(file)
+        let there = 5 * Self.MiB
+        #expect(try await again.read(offset: there, length: 4096) == Pattern.bytes(there..<(there + 4096), seed: 7))
+        #expect(await again.stats().cacheHits == 1)
+        #expect(s.stub.storageRequests.filter { $0.range == s.chunkRange(0, size: size) }.count == 1)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func whatWaitsForTheDiskIsBounded() async throws {
+        // The network outruns the disk: a chunk that has arrived gives its
+        // slot to the next fetch, but is held in memory until it is written,
+        // so how many may wait is what bounds that memory.
+        let disk = WriteGate()
+        let s = try await setUp(disk: disk)
+        defer { removeFolder(s.folder) }
+        let size = 100 * Self.MiB
+        let file = s.stub.addFile("/Fast line, slow disk.mov", size: size)
+        let reader = s.reader(file)
+
+        // Sequential through chunks 0 and 1: the window grows to four, and
+        // read-ahead goes on while nothing is written, until six chunks wait.
+        var offset: Int64 = 0
+        while offset < 2 * Self.chunk {
+            #expect(try await reader.read(offset: offset, length: Int(Self.MiB))
+                    == Pattern.bytes(offset..<(offset + Self.MiB), seed: 7))
+            offset += Self.MiB
+        }
+        try await eventually { await disk.held.count == 6 }
+        #expect(await disk.held.sorted() == [0, 1, 2, 3, 4, 5])
+        #expect(await reader.stats().writing == 6)
+
+        // Read on into chunk 2: the window wants chunks up to 10, but six
+        // wait for the disk, so nothing more is fetched.
+        #expect(try await reader.read(offset: offset, length: Int(Self.MiB))
+                == Pattern.bytes(offset..<(offset + Self.MiB), seed: 7))
+        #expect(await reader.stats().fetches == 6)
+
+        // Nor for a read somewhere else: it waits its turn, and a chunk that
+        // has arrived is not dropped to make room for it.
+        let far = 60 * Self.MiB
+        let seek = Task { try await reader.read(offset: far, length: 4096) }
+        try await eventually { await reader.stats().queued == 1 }
+        #expect(await reader.stats().fetches == 6)
+        #expect(await reader.stats().droppedFetches == 0)
+        #expect(s.stub.storageRequests.count == 6)
+
+        // The disk catches up: there is room again, and the read has its chunk.
+        await disk.open()
+        #expect(try await seek.value == Pattern.bytes(far..<(far + 4096), seed: 7))
+        try await eventually { await reader.stats().writing == 0 }
+        let stats = await reader.stats()
+        #expect(stats.peakInFlight <= 4 && stats.fetches == 7 && stats.droppedFetches == 0)
+        for index in 0..<6 {
+            #expect(await s.store.contains(ChunkStore.Key(fileId: file.id!, version: file.version), index: index))
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aChunkOfTheOldVersionStillBeingCachedIsNotHandedOut() async throws {
+        // The web replaced the file before a byte of it was read: the reader
+        // follows it, and a chunk of the old version that arrived and waits
+        // for the disk is not part of the answer.
+        let disk = WriteGate()
+        let s = try await setUp(disk: disk)
+        defer { removeFolder(s.folder) }
+        let size = 30 * Self.MiB
+        let file = s.stub.addFile("/Replaced as it opened.mov", size: size, seed: 7)
+        let reader = s.reader(file)
+        s.stub.hold(0..<1)    // chunk 0 waits at storage
+
+        // Across chunks 0 and 1: chunk 1 arrives, and waits for the disk.
+        let start = Self.chunk - 1000
+        let read = Task { try await reader.read(offset: start, length: 5000) }
+        try await eventually { await disk.held.contains(1) }
+        try await eventually { s.stub.heldCount == 1 }
+
+        // Replaced meanwhile: the old object is gone, and the link with it.
+        s.stub.setVersion(of: file.id!, to: "v2", seed: 99)
+        s.stub.refuseSignatures(through: 1)
+        s.stub.release()
+        #expect(try await read.value == Pattern.bytes(start..<(start + 5000), seed: 99))
+
+        await disk.open()
+        try await eventually { await reader.stats().writing == 0 }
+        let v2 = ChunkStore.Key(fileId: file.id!, version: "v2")
+        #expect(await s.store.contains(v2, index: 0))
+        #expect(await s.store.contains(v2, index: 1))
     }
 
     // MARK: - Where the bytes are
@@ -338,7 +465,8 @@ struct FileReaderTests {
         file.version = "v1"    // the entry was listed before the web replaced the file
         let reader = s.reader(file)
         #expect(try await reader.read(offset: 0, length: 4096) == Pattern.bytes(0..<4096, seed: 8))
-        #expect(await s.store.contains(ChunkStore.Key(fileId: file.id!, version: "v2"), index: 0))
+        // Cached under the version it was: the write follows the read.
+        try await eventually { await s.store.contains(ChunkStore.Key(fileId: file.id!, version: "v2"), index: 0) }
     }
 
     @Test func aNewVersionAfterBytesWereReadIsStale() async throws {
@@ -378,6 +506,26 @@ extension FileReader.Tuning {
         var tuning = FileReader.Tuning()
         tuning.retryDelays = [0.01]
         return tuning
+    }
+}
+
+/// A disk that writes nothing until it is let: each write to the cache waits
+/// here until `open`, and `held` says which chunks came.
+actor WriteGate {
+    private var isOpen = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private(set) var held: [Int] = []
+
+    func pass(_ index: Int) async {
+        if isOpen { return }
+        held.append(index)
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiting.forEach { $0.resume() }
+        waiting = []
     }
 }
 

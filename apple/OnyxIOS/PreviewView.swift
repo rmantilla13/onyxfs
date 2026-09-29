@@ -83,6 +83,8 @@ struct PreviewView: View {
         .preferredColorScheme(.dark)
         .sheet(item: $inspecting) { FileInfoView(file: $0, place: nil) }
         .task(id: current) { await lookUpStreamable() }
+        // The pages beside this one: their links fetched now, so a swipe plays at once.
+        .task(id: current) { await PreviewLinks.prefetch(around: current, in: files, api: session.api) }
     }
 
     private var chrome: some View {
@@ -295,15 +297,16 @@ private final class ZoomView: UIScrollView, UIScrollViewDelegate {
 
 // MARK: - Video and sound
 
-/// Streams from storage through a link signed as the page comes on screen
-/// — the listing's may be an hour old — and plays at once. Paged away, the
-/// player goes, and with it its buffers.
+/// Streams from storage, and starts at once from a link that is here
+/// already (PreviewLinks): one kept from before, or fetched while the page
+/// beside it was on screen, or — for a file with no streamable copy to
+/// prefer — the listing's own, which is good for six hours, not one. The
+/// server is asked only when none of those will do. A link storage refuses
+/// gives way to a fresh one, and play goes on from where it was. Paged away,
+/// the player goes, and with it its buffers.
 private struct MediaPage: View {
     let file: FileItem
     let active: Bool
-    /// The server's line for a video worth a streamable copy
-    /// (lib/proxies.js PROXY_MIN_BYTES): under it, the original streams fine.
-    static let proxyWorthy: Int64 = 200 * 1024 * 1024
     @Environment(Session.self) private var session
     @State private var player: AVPlayer?
     @State private var problem: String?
@@ -335,26 +338,47 @@ private struct MediaPage: View {
                 player = nil
                 return
             }
-            do {
-                let link = try await session.api.contentLink(fileId: file.id)
-                // The streamable copy when there is one: an action camera's
-                // 4K master runs at 60–120 Mbps, more than a phone's
-                // connection carries, and stalls; its 1080p copy does not.
-                let item = AVPlayerItem(url: link.proxyUrl ?? link.url)
-                // None yet, of a video this large: ask for one, so the next
-                // time it plays, it plays smoothly. Uploads since proxies
-                // came ask for their own; this catches the ones before.
-                if link.proxyUrl == nil, (file.size ?? 0) >= Self.proxyWorthy {
-                    let api = session.api, id = file.id
-                    Task.detached(priority: .utility) { try? await api.requestProxy(fileId: id) }
+            await play()
+        }
+    }
+
+    /// Plays until the page goes. A link that storage refuses — it expired,
+    /// paused past its hours, or the file moved — gives way to a fresh one;
+    /// a fresh one refused at once is the player's to show.
+    private func play() async {
+        var link = await PreviewLinks.ready(for: file)
+        var fetched: Date?
+        while !Task.isCancelled {
+            if link == nil {
+                do {
+                    link = try await PreviewLinks.link(for: file, api: session.api)
+                    fetched = Date()
+                } catch {
+                    if !Session.isCancel(error) { problem = session.explain(error) }
+                    return
                 }
+            }
+            guard let current = link, !Task.isCancelled else { return }
+            // The streamable copy when there is one: an action camera's 4K
+            // master runs at 60–120 Mbps, more than a phone's connection
+            // carries, and stalls; its 1080p copy does not.
+            let item = AVPlayerItem(url: current.playable)
+            if let player {
+                let at = player.currentTime()
+                player.replaceCurrentItem(with: item)
+                if at.seconds > 0, await PreviewLinks.readyToPlay(item) { await player.seek(to: at) }
+                player.play()
+            } else {
                 let next = AVPlayer(playerItem: item)
                 next.allowsExternalPlayback = true
                 player = next
                 next.play()
-            } catch {
-                if !Session.isCancel(error) { problem = session.explain(error) }
             }
+            if current.proxyUrl == nil { PreviewLinks.askForCopy(of: file, api: session.api) }
+            guard await PreviewLinks.failure(of: item) != nil, !Task.isCancelled else { return }
+            if let fetched, Date().timeIntervalSince(fetched) < 60 { return }
+            await PreviewLinks.refused(file)
+            link = nil
         }
     }
 }

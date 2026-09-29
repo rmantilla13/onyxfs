@@ -54,6 +54,12 @@ public struct ProxyClaim: Codable, Sendable, Equatable {
     public let name: String
     public let mime: String?
     public let size: Int64?
+    /// The object the master is (the file's storage key as the claim found
+    /// it): a copy of the bytes this Mac uploaded to that key is the master.
+    public let sourceKey: String?
+    /// The file's content hash (`content_hash`), should the server send it:
+    /// it changes exactly when the bytes do, and not on a rename.
+    public let contentHash: String?
     public let spec: ProxySpec
     /// The most one upload may carry; past it the job fails rather than
     /// storing a copy cut short.
@@ -68,12 +74,50 @@ public struct ProxyClaim: Codable, Sendable, Equatable {
         name = try c.decode(String.self, forKey: .name)
         mime = try c.decodeIfPresent(String.self, forKey: .mime)
         size = try c.decodeLenientInt64(forKey: .size)
+        sourceKey = Self.text(c, .sourceKey)
+        contentHash = Self.text(c, .contentHash)
         spec = try c.decodeIfPresent(ProxySpec.self, forKey: .spec) ?? ProxySpec(height: 1080, maxrateKbps: 6000, audioKbps: 128)
         maxBytes = try c.decodeLenientInt64(forKey: .maxBytes)
         downloadUrl = try c.decode(URL.self, forKey: .downloadUrl)
         uploadUrl = try c.decode(URL.self, forKey: .uploadUrl)
         leaseSeconds = (try c.decodeLenientInt64(forKey: .leaseSeconds)).map { Int($0) }
     }
+
+    /// A string that is there and not empty. Anything else is nil rather
+    /// than a failed claim: these only say whether a copy on this Mac is the
+    /// master, and without them the master is downloaded, as it always was.
+    private static func text<Key: CodingKey>(_ c: KeyedDecodingContainer<Key>, _ key: Key) -> String? {
+        guard let value = try? c.decodeIfPresent(String.self, forKey: key), !value.isEmpty else { return nil }
+        return value
+    }
+}
+
+/// Which files the server asks for a proxy of as they are uploaded
+/// (lib/proxies.js shouldProxy): a video, by its type and name as
+/// lib/media.js fileKind has it, of at least PROXY_MIN_BYTES, in the bucket
+/// (every upload from this Mac is). The server decides; this only says
+/// which of this Mac's uploads a job will come for, so their bytes are
+/// worth keeping for it (ProxySources).
+public enum ProxyRule {
+    /// lib/proxies.js PROXY_MIN_BYTES.
+    public static let minBytes: Int64 = 200 * 1024 * 1024
+
+    public static func asksForProxy(name: String, mime: String?, size: Int64) -> Bool {
+        size >= minBytes && isVideo(name: name, mime: mime)
+    }
+
+    /// lib/media.js fileKind: an image by its type or its extension is an
+    /// image whatever else it says; then a video by either.
+    static func isVideo(name: String, mime: String?) -> Bool {
+        let type = (mime ?? "").lowercased()
+        let ext = (name as NSString).pathExtension.lowercased()
+        if type.hasPrefix("image/") || imageExtensions.contains(ext) { return false }
+        return type.hasPrefix("video/") || videoExtensions.contains(ext)
+    }
+
+    static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "webp", "gif", "svg", "avif", "heic", "heif",
+                                               "tif", "tiff"]
+    static let videoExtensions: Set<String> = ["mp4", "webm", "mov", "m4v", "ogv"]
 }
 
 /// What a finished proxy is (`PUT /api/files/<id>/proxy`): what the player

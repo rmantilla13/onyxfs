@@ -16,6 +16,17 @@ import Foundation
 /// same fetch. A read that is cancelled stops waiting, but the fetch goes on
 /// and is cached, and nothing half-fetched is ever kept.
 ///
+/// The reads waiting on a chunk have it the moment it arrives; the cache has
+/// it after. Written first, its digest and its write were part of every
+/// uncached read's wait: most of a scrub's first read at a new place on a
+/// fast line (ThroughputTests). Until the chunk is written, a read of it is
+/// handed the same bytes, so it is neither fetched again nor looked for in a
+/// cache that does not have it yet. Its slot goes to the next fetch as soon
+/// as it arrives, so the network does not wait on the disk either. But no
+/// more than six chunks are held in memory at once (`maxInMemory`), counting
+/// those on their way and those not yet written, so a disk slower than the
+/// network holds fetching back rather than piling chunks up.
+///
 /// The presigned URL is asked for only when a chunk is not cached, replaced a
 /// minute before it expires, and once more when storage refuses it (400,
 /// 403, 404, 416: expired, revoked, or the object moved). Network errors,
@@ -36,6 +47,10 @@ public actor FileReader {
         /// ...and at most.
         public var maxWindow = 16
         public var maxInFlight = 4
+        /// Chunks held in memory at once: on their way from storage, and
+        /// arrived but not yet written to the cache. Past it, fetching waits
+        /// for the disk.
+        public var maxInMemory = 6
         /// Tries per chunk against network errors, 408, 429 and 5xx.
         public var attempts = 3
         /// Seconds to wait before the second try, the third, and so on.
@@ -64,6 +79,11 @@ public actor FileReader {
         public var window = 0
         public var peakWindow = 0
         public var peakInFlight = 0
+        /// Chunks handed to reads and still on their way into the cache,
+        /// and chunks reads want that wait their turn to be fetched: both
+        /// now.
+        public var writing = 0
+        public var queued = 0
         /// Bytes handed to reads.
         public var bytesRead: Int64 = 0
     }
@@ -85,6 +105,10 @@ public actor FileReader {
         var task: Task<Void, Never>?
         var waiters: [UInt64: CheckedContinuation<Data, Error>] = [:]
         var readAhead: Bool
+        /// The chunk, once it has arrived and while it is written to the
+        /// cache: what any read of it is handed meanwhile. A flight that
+        /// has landed is never dropped; it only has the disk left to wait on.
+        var landed: Data?
     }
 
     /// A wait found no fetch to wait on: look again.
@@ -118,6 +142,8 @@ public actor FileReader {
     private var window: Int
 
     private var flights: [Int: Flight] = [:]
+    /// Fetches on their way from storage, each with its slot. One that has
+    /// arrived gives its slot back and is `writing` until the cache has it.
     private var running = 0
     /// Chunks reads are waiting for that have no slot yet, oldest first.
     private var queue: [Int] = []
@@ -182,9 +208,10 @@ public actor FileReader {
         }
     }
 
-    /// Stops fetching ahead: the file was closed. Reads still work.
+    /// Stops fetching ahead: the file was closed. Reads still work, and what
+    /// has arrived still goes into the cache.
     public func close() {
-        for (index, flight) in flights where flight.waiters.isEmpty && flight.task != nil {
+        for (index, flight) in flights where flight.waiters.isEmpty && flight.task != nil && flight.landed == nil {
             drop(index)
         }
         sequential = false
@@ -193,6 +220,8 @@ public actor FileReader {
     public func stats() -> Stats {
         var stats = counters
         stats.window = sequential ? effectiveWindow : 0
+        stats.writing = writing
+        stats.queued = queue.count
         return stats
     }
 
@@ -232,13 +261,14 @@ public actor FileReader {
         return result
     }
 
-    /// `range` of chunk `index`: from a fetch under way, the cache, or a new
-    /// fetch.
+    /// `range` of chunk `index`: from a fetch under way (or one that has
+    /// arrived and is still being cached), the cache, or a new fetch.
     private func bytes(of index: Int, range: Range<Int>, _ store: ChunkStore) async throws -> Data {
         var looked = false
         while true {
             try Task.checkCancellation()
             if stale { throw FSBridgeError.stale }
+            if let landed = flights[index]?.landed { return Self.slice(landed, range) }
             if flights[index] != nil {
                 do {
                     return Self.slice(try await wait(for: index), range)
@@ -275,6 +305,8 @@ public actor FileReader {
                     continuation.resume(throwing: CancellationError())
                 } else if flights[index] == nil {
                     continuation.resume(throwing: LookAgain())
+                } else if let landed = flights[index]?.landed {
+                    continuation.resume(returning: landed)
                 } else {
                     flights[index]?.waiters[waiter] = continuation
                 }
@@ -349,7 +381,7 @@ public actor FileReader {
     /// slots, then fills the free ones with the window ahead.
     private func pump(_ store: ChunkStore) async {
         for (index, flight) in flights
-        where flight.readAhead && flight.waiters.isEmpty && flight.task != nil && !wanted(index) {
+        where flight.readAhead && flight.waiters.isEmpty && flight.task != nil && flight.landed == nil && !wanted(index) {
             drop(index)
         }
         startQueued()
@@ -357,32 +389,45 @@ public actor FileReader {
         let upper = min(position + effectiveWindow, chunk(of: size - 1))
         guard position < upper else { return }
         for index in (position + 1)...upper {
-            guard running < tuning.maxInFlight else { return }
+            guard canLaunch else { return }
             guard flights[index] == nil, !cached.contains(index) else { continue }
             if await store.contains(key, index: index) {
                 cached.insert(index)
                 continue
             }
             // Reads may have moved on while we looked.
-            guard wanted(index), flights[index] == nil, running < tuning.maxInFlight, !stale, !local else { continue }
+            guard wanted(index), flights[index] == nil, canLaunch, !stale, !local else { continue }
             start(index, demand: false)
         }
     }
+
+    /// Whether another fetch may start: a slot free for it, and room in
+    /// memory for its chunk beside those still on their way into the cache.
+    private var canLaunch: Bool {
+        running < tuning.maxInFlight && running + writing < tuning.maxInMemory
+    }
+
+    /// Chunks that have arrived and are not yet in the cache.
+    private var writing: Int { flights.values.reduce(0) { $0 + ($1.landed == nil ? 0 : 1) } }
 
     private func start(_ index: Int, demand: Bool) {
         guard flights[index] == nil else { return }
         nextToken += 1
         flights[index] = Flight(token: nextToken, task: nil, readAhead: !demand)
-        if running < tuning.maxInFlight || (demand && makeRoom()) {
+        if canLaunch || (demand && makeRoom()) {
             launch(index)
         } else {
             queue.append(index)
         }
     }
 
-    /// Frees a slot by dropping the read-ahead furthest from what reads need.
+    /// Frees a slot, and a chunk's room in memory, by dropping the read-ahead
+    /// furthest from what reads need. One that has arrived is not dropped:
+    /// its bytes are here, and the disk is all it waits on.
     private func makeRoom() -> Bool {
-        let droppable = flights.filter { $0.value.readAhead && $0.value.waiters.isEmpty && $0.value.task != nil }
+        let droppable = flights.filter {
+            $0.value.readAhead && $0.value.waiters.isEmpty && $0.value.task != nil && $0.value.landed == nil
+        }
         guard let victim = droppable.keys.max(by: { distance($0) < distance($1) }) else { return false }
         drop(victim)
         return true
@@ -404,7 +449,7 @@ public actor FileReader {
     }
 
     private func startQueued() {
-        while running < tuning.maxInFlight, !queue.isEmpty {
+        while canLaunch, !queue.isEmpty {
             let index = queue.removeFirst()
             guard let flight = flights[index], flight.task == nil else { continue }
             if flight.waiters.isEmpty {
@@ -425,32 +470,54 @@ public actor FileReader {
         counters.droppedFetches += 1
     }
 
+    /// The chunk to the reads waiting on it, its slot to the next fetch, then
+    /// the chunk into the cache. The flight stays until the chunk is written:
+    /// a read that comes meanwhile is handed the same bytes.
     private func fetch(_ index: Int, token: UInt64) async {
-        let result: Result<Data, Error>
+        guard case let .bridge(_, store) = backing else { return }
+        let result: Result<Fetched, Error>
         do {
             result = .success(try await download(index))
         } catch {
             result = .failure(error)
         }
-        guard let flight = flights[index], flight.token == token else { return }
-        flights[index] = nil
-        running -= 1
+        guard var flight = flights[index], flight.token == token else { return }
         switch result {
-        case .success:
-            cached.insert(index)
-        case .failure:
+        case let .success(fetched):
+            let waiting = flight.waiters.values
+            flight.waiters = [:]
+            flight.landed = fetched.data
+            flights[index] = flight
+            running -= 1
+            for waiter in waiting { waiter.resume(returning: fetched.data) }
+            await pump(store)
+            var kept = false
+            if let key = fetched.cacheKey { kept = await store.write(key, index: index, data: fetched.data) }
+            // Let go of meanwhile: the file moved on to a new version.
+            guard flights[index]?.token == token else { return }
+            flights[index] = nil
+            if kept && fetched.cacheKey == key { cached.insert(index) }
+        case let .failure(error):
+            flights[index] = nil
+            running -= 1
             // Read-ahead that fails (the network is down) stops until reads
             // show they are sequential again.
             if flight.readAhead { sequential = false }
+            for waiter in flight.waiters.values { waiter.resume(throwing: error) }
         }
-        for waiter in flight.waiters.values { waiter.resume(with: result) }
-        guard case let .bridge(_, store) = backing else { return }
         await pump(store)
     }
 
-    /// One chunk, from storage, into the cache.
-    private func download(_ index: Int) async throws -> Data {
-        guard case let .bridge(client, store) = backing else { return Data() }
+    /// What a fetch brought: the chunk, and the key to cache it under — nil
+    /// for bytes read from this Mac, which are not cached again.
+    private struct Fetched {
+        let data: Data
+        let cacheKey: ChunkStore.Key?
+    }
+
+    /// One chunk, from storage.
+    private func download(_ index: Int) async throws -> Fetched {
+        guard case let .bridge(client, _) = backing else { return Fetched(data: Data(), cacheKey: nil) }
         var failures = 0
         var refused: Int?
         var refreshed = false
@@ -459,10 +526,11 @@ public actor FileReader {
             let link = try await currentLink(client, replacing: refused)
             let start = chunkStart(index)
             let expected = chunkLength(index)
-            guard expected > 0 else { return Data() }
+            guard expected > 0 else { return Fetched(data: Data(), cacheKey: nil) }
             guard let link else {
                 // The file turned out to be on this Mac.
-                return try await client.data(id: fileId, range: start..<(start + Int64(expected)))
+                let data = try await client.data(id: fileId, range: start..<(start + Int64(expected)))
+                return Fetched(data: data, cacheKey: nil)
             }
             let version = self.version, key = self.key, whole = size
             let answer: (status: Int, body: Data, contentRange: String?)
@@ -509,8 +577,7 @@ public actor FileReader {
                 try await pause(after: failures)
                 continue
             }
-            await store.write(key, index: index, data: data)
-            return data
+            return Fetched(data: data, cacheKey: key)
         }
     }
 
@@ -572,6 +639,11 @@ public actor FileReader {
             version = source.version
             key = ChunkStore.Key(fileId: fileId, version: version)
             cached.removeAll()
+            // Chunks of the old version still being cached (under its own
+            // key) are handed to no read of this one.
+            for (index, flight) in flights where flight.landed != nil {
+                flights[index] = nil
+            }
         }
         size = max(0, source.size)
         switch source.kind {

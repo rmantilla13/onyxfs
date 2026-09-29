@@ -909,6 +909,21 @@ final class DriveService: ObservableObject {
         return await pins?.localCopy(scope: scope, fileId: id, etag: entry.etag)
     }
 
+    /// A file's copy kept offline, found by its id alone, for the proxy
+    /// worker, which has no drive for it: in whichever open drive's mirror
+    /// has the file, and only at the version that mirror has now, as a read
+    /// from Finder would be served. With it, what the mirror says of the
+    /// bytes: its size, and its etag (the content hash, where the server has
+    /// one).
+    func keptCopy(fileId: String) async -> (url: URL, entry: MirrorEntry)? {
+        for (scope, mirror) in mirrors {
+            guard let entry = await mirror.snapshot.index.file(id: fileId),
+                  let url = await localCopy(scope: scope, entry: entry) else { continue }
+            return (url, entry)
+        }
+        return nil
+    }
+
     /// A pass for `scope` soon, not waited for. One at a time per scope: a
     /// call while one runs asks for one more after it, which reads the
     /// mirror's index as it is then. However many ticks go by during an

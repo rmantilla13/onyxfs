@@ -83,6 +83,9 @@ public actor ChunkStore {
     private var total: Int64 = 0
     private var counters = Stats()
     private let freeSpace: @Sendable (URL) -> Int64?
+    /// Awaited by each write before it touches the disk: how a test makes
+    /// the disk slow, and holds a write for as long as it likes.
+    private nonisolated let beforeWrite: (@Sendable (Int) async -> Void)?
     /// The disk's free bytes when last looked at (less what was written
     /// since), and when.
     private var lastFree: (bytes: Int64, at: TimeInterval)?
@@ -98,10 +101,12 @@ public actor ChunkStore {
         try self.init(directory: directory, limitBytes: limitBytes, freeSpace: { ChunkStore.availableCapacity($0) })
     }
 
-    init(directory: URL, limitBytes: Int64, freeSpace: @escaping @Sendable (URL) -> Int64?) throws {
+    init(directory: URL, limitBytes: Int64, freeSpace: @escaping @Sendable (URL) -> Int64?,
+         beforeWrite: (@Sendable (Int) async -> Void)? = nil) throws {
         self.directory = directory
         self.limitBytes = limitBytes > 0 ? limitBytes : .max
         self.freeSpace = freeSpace
+        self.beforeWrite = beforeWrite
         let files = FileManager.default
         try files.createDirectory(at: directory, withIntermediateDirectories: true)
         let temporary = directory.appendingPathComponent(".tmp", isDirectory: true)
@@ -171,17 +176,21 @@ public actor ChunkStore {
         return nil
     }
 
-    /// Keeps `data` as chunk `index`, replacing any chunk there. Best
-    /// effort: a chunk that cannot be kept (no room on the disk, a write that
-    /// fails) only means its next read goes to storage again.
-    public nonisolated func write(_ key: Key, index: Int, data: Data) async {
-        guard !data.isEmpty else { return }
+    /// Keeps `data` as chunk `index`, replacing any chunk there; whether it
+    /// was kept. Best effort: a chunk that cannot be kept (no room on the
+    /// disk, a write that fails) only means its next read goes to storage
+    /// again.
+    @discardableResult
+    public nonisolated func write(_ key: Key, index: Int, data: Data) async -> Bool {
+        guard !data.isEmpty else { return false }
+        if let beforeWrite { await beforeWrite(index) }
         let id = ChunkID(key: key.hex, index: index)
         let bytes = Int64(data.count + Self.digestLength)
-        guard await makeRoom(for: bytes, keeping: id) else { return }
+        guard await makeRoom(for: bytes, keeping: id) else { return false }
         let digest = Data(SHA256.hash(data: data))
-        guard Self.writeAtomically([data, digest], to: url(id), via: temporary) else { return }
+        guard Self.writeAtomically([data, digest], to: url(id), via: temporary) else { return false }
         await recordWrite(id, bytes: bytes)
+        return true
     }
 
     /// Free bytes on the disk holding `url`: what macOS would make room for
