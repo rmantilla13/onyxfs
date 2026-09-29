@@ -93,11 +93,13 @@ public struct FileMetadata: Codable, Sendable, Equatable {
     public var height: Double?
     /// Seconds, for video and audio.
     public var duration: Double?
+    /// A sound's shape (Waveform), once a browser or a Mac has drawn it.
+    public var waveform: Waveform?
 
-    enum CodingKeys: String, CodingKey { case width, height, duration }
+    enum CodingKeys: String, CodingKey { case width, height, duration, waveform }
 
-    public init(width: Double? = nil, height: Double? = nil, duration: Double? = nil) {
-        self.width = width; self.height = height; self.duration = duration
+    public init(width: Double? = nil, height: Double? = nil, duration: Double? = nil, waveform: Waveform? = nil) {
+        self.width = width; self.height = height; self.duration = duration; self.waveform = waveform
     }
 
     public init(from decoder: Decoder) throws {
@@ -110,6 +112,8 @@ public struct FileMetadata: Codable, Sendable, Equatable {
         width = number(.width)
         height = number(.height)
         duration = number(.duration)
+        // One this cannot read is no waveform, not a file that fails to decode.
+        waveform = (try? c.decodeIfPresent(String.self, forKey: .waveform)).flatMap { $0.flatMap(Waveform.init(stored:)) }
     }
 }
 

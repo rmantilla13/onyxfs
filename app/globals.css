@@ -936,6 +936,16 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   background: var(--surface-sunken);
 }
 .filecard-thumb img { width: 100%; height: 100%; -webkit-touch-callout: none; -webkit-user-drag: none; }
+/* A sound's tile: its waveform (Waveform, in the brand's gradient) over a
+   faint wash of the same two colours. */
+.filecard-thumb.is-sound {
+  background:
+    radial-gradient(120% 90% at 15% 0%, color-mix(in srgb, var(--aura-a, var(--accent)) 16%, transparent), transparent 62%),
+    radial-gradient(120% 90% at 90% 100%, color-mix(in srgb, var(--aura-b, var(--accent)) 14%, transparent), transparent 62%),
+    var(--surface-sunken);
+}
+.thumb-wave { display: block; width: 80%; height: 46%; }
+.filelist-thumb .thumb-wave, .col-thumb .thumb-wave { width: 86%; height: 62%; }
 .filecard-text { padding: 10px 12px 12px; }
 .filecard-name { font-size: var(--t-sm); min-width: 0; }
 .filecard-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }

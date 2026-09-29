@@ -76,3 +76,6 @@
   .ql-keys { display: none; }
   .ql-head { padding-top: calc(var(--s2) + env(safe-area-inset-top)); }
 }
+/* A sound: its name over the player, the waveform as wide as reads well. */
+.ql-audio { gap: var(--s4); }
+.ql-audio .audio-player { width: min(680px, 100%); }

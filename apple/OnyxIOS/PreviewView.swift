@@ -179,8 +179,10 @@ private struct PreviewPage: View {
         case "image":
             ImagePage(file: file)
                 .onTapGesture { chromeHidden.toggle() }
-        case "video", "audio":
+        case "video":
             MediaPage(file: file, active: active)
+        case "audio":
+            SoundPage(file: file, active: active)
         default:
             DocumentPage(file: file, active: active)
         }

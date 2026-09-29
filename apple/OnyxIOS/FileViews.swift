@@ -214,8 +214,8 @@ enum ThumbnailSize {
     case card
 }
 
-/// A file's picture, or its kind's symbol until there is one (or if there
-/// is none). A picture already in memory is there on the first frame, so
+/// A file's picture — a sound's waveform — or its kind's symbol until there
+/// is one (or if there is none). A picture already in memory is there on the first frame, so
 /// scrolling back never flickers; and coming into view, it tells the
 /// folder's prefetch where the eye is, so the next ones are ready too.
 struct Thumbnail: View {
@@ -238,6 +238,8 @@ struct Thumbnail: View {
                         .resizable()
                         .scaledToFill()
                         .transition(.opacity)
+                } else if file.kind == "audio", let waveform = file.metadata?.waveform {
+                    TileWaveform(waveform: waveform, compact: size == .row)
                 } else {
                     KindSymbol(file: file, compact: size == .row)
                 }

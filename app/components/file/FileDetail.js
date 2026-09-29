@@ -133,6 +133,15 @@ export default function FileDetail({
       .catch(() => { /* the assumed rate stands */ });
   }, [canWrite, kind, md.fps, md.fpsUnknown, file.id]);
 
+  // A sound with no waveform gets one from an editor's visit, as its tile
+  // would (lib/waveform-client.js): the player shows it the moment it is
+  // recorded, without stopping.
+  useEffect(() => {
+    if (kind === 'audio' && !md.waveform) backfill?.(file, { wave: true });
+    // Asked once per file; `file` changes as the backfill merges into it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backfill, kind, file.id]);
+
   // ── Review ──
   const tabs = useMemo(() => [review && 'comments', transcripts && 'transcript', 'details'].filter(Boolean), [review, transcripts]);
   const [tab, setTab] = useState(tabs[0]);
