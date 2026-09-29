@@ -3,6 +3,7 @@ import { loadBrand } from '@/lib/brand-config';
 import { presignFileUrls } from '@/lib/storage';
 import { recordShareView } from '@/lib/db';
 import { resolveShareAccess } from '@/lib/share-access';
+import { playableProxies, withProxyKeys } from '@/lib/file-listing';
 import { currentGuest } from '@/lib/share-review';
 import { kindLabel } from '@/lib/file-info';
 import { fmtSize, sharedFile } from '@/lib/media';
@@ -41,7 +42,11 @@ export default async function SharePage({ params }) {
     // resumes. Signed only now, after access was decided — and then cut down
     // to what the viewer reads (sharedFile): the preview runs in the
     // visitor's browser, so the whole row would be in the page's source.
-    const [signed] = await presignFileUrls([access.file], { expiresIn: 21600 });
+    // A heavy video's streamable copy is looked up first, as the file page
+    // does, under the flags the link was let in by: the player prefers it to
+    // streaming the master, and presignFileUrls signs it only from a key.
+    const proxies = await playableProxies([access.file], access.flags);
+    const [signed] = await presignFileUrls(withProxyKeys([access.file], proxies), { expiresIn: 21600 });
     const file = sharedFile(signed);
     const review = access.review;
     return (

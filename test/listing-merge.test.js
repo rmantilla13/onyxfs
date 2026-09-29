@@ -45,3 +45,13 @@ test('unchanged rows keep their object, so a memoized card does not re-render', 
   assert.equal(next[1].thumbnailUrl, 't2');
   assert.equal(next[2].id, 'c');
 });
+
+test('a rendition that finished since is taken, though the row itself did not change', () => {
+  // A proxy is not a column on `files`: finishing one moves no `seq`, so the
+  // refreshed row differs only in the URL Quick Look plays.
+  const a = row('a', { url: 'master' });
+  const [next] = keepUnchanged([a], [row('a', { url: 'master', proxyUrl: 'proxy' })]);
+  assert.notEqual(next, a);
+  assert.equal(next.proxyUrl, 'proxy');
+  assert.equal(keepUnchanged([next], [row('a', { url: 'master', proxyUrl: 'proxy' })])[0], next, 'and kept once it is there');
+});

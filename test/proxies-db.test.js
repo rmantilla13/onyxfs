@@ -17,6 +17,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 
 const URL_ = process.env.TEST_DATABASE_URL;
 async function reachable(url) {
@@ -101,7 +102,7 @@ before(async () => {
     size: 4_000_000_000, storage: 's3', storageKey: key, createdBy: by,
     metadata: { width: 3840, height: 2160 }, ...extra,
   });
-  cut = await video('cut.mov', `${PREFIX}/cut.mov`, OWNER);
+  cut = await video('cut.mov', `${PREFIX}/cut.mov`, OWNER, { contentHash: 'etag-cut' });
   mine = await video('mine.mov', `files/mine-${tag}.mov`, OWNER);        // the library, org-visible, OWNER's
   theirs = await video('theirs.mov', `files/theirs-${tag}.mov`, BOSS);   // the library, org-visible, not OWNER's
   secret = await video('secret.mov', `${SECRET}/secret.mov`, BOSS);      // a drive OWNER is not in
@@ -218,6 +219,7 @@ describe('proxies against a real database', { skip }, () => {
     const c = await call(claimRoute.POST, cut.id, 'POST', { device: 'Mac C' });
     assert.equal(c.status, 200);
     assert.notEqual(c.body.proxyKey, firstKey, 'a fresh key, so no cache holds the abandoned run’s bytes');
+    assert.equal(c.body.contentHash, 'etag-cut', 'the contents, so a Mac with a copy knows it is this one');
 
     as(first);
     assert.equal((await call(route.PUT, cut.id, 'PUT', { width: 1920, height: 1080 })).body.code, 'lost');
@@ -381,6 +383,53 @@ describe('proxies against a real database', { skip }, () => {
     // No job is made for one that should not have one.
     assert.equal((await call(claimRoute.POST, short.id, 'POST', {})).status, 404);
     assert.equal(await db.getProxy(short.id), null);
+  });
+
+  test('a listing signs the finished, current rendition of a heavy video, and nothing else', async () => {
+    const { proxyKeyFor } = await import('../lib/media.js');
+    const { listFilesPage } = await import('../lib/file-listing.js');
+    const { getPrincipal } = await import('../lib/authz.js');
+    const folder = `Listing ${tag}`;
+    const video = (name, size = 3_000_000_000) => db.createFile({
+      name, url: `https://s3.px.test/onyx-px/${PREFIX}/${folder}/${name}`, mime: 'video/mp4', kind: 'video',
+      size, storage: 's3', storageKey: `${PREFIX}/${folder}/${name}`, folder, createdBy: OWNER,
+    });
+    const done = await video('done.mp4');
+    const stale = await video('stale.mp4');
+    const queued = await video('queued.mp4');
+    const small = await video('small.mp4', 50_000_000);
+    made.push(done.id, stale.id, queued.id, small.id);
+    const job = (f, status, key, sourceKey) => db.sql`
+      INSERT INTO proxies (file_id, status, proxy_key, source_key, requested_at, updated_at)
+      VALUES (${f.id}, ${status}, ${key}, ${sourceKey}, now(), now())`;
+    const key = proxyKeyFor(randomUUID());
+    const smallKey = proxyKeyFor(randomUUID());
+    await job(done, 'done', key, done.storageKey);
+    await job(stale, 'done', proxyKeyFor(randomUUID()), `${PREFIX}/${folder}/stale v1.mp4`);
+    await job(queued, 'queued', null, null);
+    await job(small, 'done', smallKey, small.storageKey);
+
+    // The query: a finished job's key, and only while it is of these contents.
+    const keys = await db.finishedProxyKeys([done, stale, queued, small]);
+    assert.equal(keys.size, 2);
+    assert.equal(keys.get(done.id), key);
+    assert.equal(keys.get(small.id), smallKey);
+    assert.equal((await db.finishedProxyKeys([])).size, 0);
+
+    // The listing asks it only about a video worth a proxy, and signs what it says.
+    const p = await getPrincipal(OWNER);
+    const page = await listFilesPage({ principal: p, opts: { folder }, storagePrefix: PREFIX });
+    const rows = new Map(page.files.map((f) => [f.name, f]));
+    assert.equal(rows.size, 4);
+    assert.ok(rows.get('done.mp4').proxyUrl?.includes(key), rows.get('done.mp4').proxyUrl);
+    assert.match(rows.get('done.mp4').proxyUrl, /X-Amz-Signature=/);
+    for (const name of ['stale.mp4', 'queued.mp4', 'small.mp4']) assert.equal(rows.get(name).proxyUrl, undefined, name);
+    assert.equal(rows.get('done.mp4').can.edit, true, 'and what they may do to each, as before');
+
+    // With the flag off for them, none.
+    const off = await listFilesPage({ principal: { ...p, flags: { ...p.flags, proxies: false } }, opts: { folder }, storagePrefix: PREFIX });
+    assert.equal(off.files.length, 4);
+    assert.ok(off.files.every((f) => !f.proxyUrl));
   });
 
   test('a failed job is not offered again', async () => {

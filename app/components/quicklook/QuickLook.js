@@ -306,6 +306,9 @@ function ImageItem({ file, layers, onSharp, onOriginalBlob }) {
  * A plain <video>, not the file page's player: its keys are Quick Look's.
  * It plays at once (Space or Return was the gesture); refused, it tries
  * muted. Stepping away or closing drops its source, so the download stops.
+ * A heavy video plays its streamable copy when the listing found one
+ * (lib/file-listing.js), as the file page's player does: a glance at a 4K
+ * master is otherwise range requests into gigabytes.
  */
 function VideoItem({ file }) {
   const ref = useRef(null);
@@ -344,7 +347,7 @@ function VideoItem({ file }) {
         key={file.id}
         ref={ref}
         className="ql-video"
-        src={file.url}
+        src={file.proxyUrl || file.url}
         poster={poster}
         controls
         playsInline

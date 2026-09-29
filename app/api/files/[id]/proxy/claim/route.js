@@ -16,8 +16,8 @@ const URL_TTL = 21600;
 
 /**
  * POST /api/files/[id]/proxy/claim  Body: { device: "Ricky's MacBook Pro" }
- *   → { fileId, name, mime, size, sourceKey, sourceHeight, spec, maxBytes,
- *       downloadUrl, uploadUrl, proxyKey, leaseSeconds }
+ *   → { fileId, name, mime, size, sourceKey, contentHash, sourceHeight, spec,
+ *       maxBytes, downloadUrl, uploadUrl, proxyKey, leaseSeconds }
  *
  * A Mac takes a job. Atomic (lib/db.js claimProxy): it succeeds only on a job
  * that is queued, or working on a lease that has run out, so two Macs asking at
@@ -95,6 +95,10 @@ export async function POST(req, { params }) {
     mime: g.file.mime || null,
     size: g.file.size ?? null,
     sourceKey: job.sourceKey,
+    // The contents the master is: a Mac holding a copy of the file already
+    // (the one it uploaded, one kept offline) transcodes that instead of
+    // downloading it again, when it is these contents exactly.
+    contentHash: g.file.contentHash || null,
     sourceHeight,
     spec: proxySpec({ height: sourceHeight }),
     outputMime: PROXY_MIME,
