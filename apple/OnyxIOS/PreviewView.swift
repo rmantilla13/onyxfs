@@ -15,6 +15,7 @@ struct PreviewView: View {
     let files: [FileItem]
     @Environment(\.dismiss) private var dismiss
     @Environment(Session.self) private var session
+    @Environment(\.verticalSizeClass) private var verticalSize
     @State private var current: String?
     @State private var chromeHidden = false
     @State private var inspecting: FileItem?
@@ -28,31 +29,57 @@ struct PreviewView: View {
 
     private var file: FileItem? { files.first { $0.id == current } }
 
+    /// A phone on its side.
+    private var landscape: Bool { verticalSize == .compact }
+
+    /// A video on a phone on its side: the picture alone, the whole screen,
+    /// black around it — no bars, no tray — with the player's own controls
+    /// a tap away. Turned upright again, everything comes back.
+    private var immersive: Bool { landscape && file?.kind == "video" }
+
     var body: some View {
-        ScrollView(.horizontal) {
-            LazyHStack(spacing: 0) {
-                ForEach(files) { file in
-                    PreviewPage(file: file, active: current == file.id, chromeHidden: $chromeHidden)
-                        .containerRelativeFrame([.horizontal, .vertical])
-                        .clipped()
-                        .id(file.id)
+        ScrollViewReader { pager in
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(files) { file in
+                        PreviewPage(file: file, active: current == file.id, chromeHidden: $chromeHidden)
+                            .containerRelativeFrame([.horizontal, .vertical])
+                            .clipped()
+                            .id(file.id)
+                    }
                 }
+                .scrollTargetLayout()
             }
-            .scrollTargetLayout()
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $current)
+            .scrollIndicators(.hidden)
+            .background(Theme.page.ignoresSafeArea())
+            // On its side, each page is the whole screen — the notch's side
+            // too — so what it shows is centred on the screen, not on what
+            // is left between insets.
+            .ignoresSafeArea(edges: landscape ? .all : .bottom)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in
+                // A rotation changes every page's width, and a paging scroll
+                // view keeps its offset in points: the page on screen would
+                // be left part-way off it. Put it back, at once.
+                guard let current else { return }
+                var still = Transaction()
+                still.disablesAnimations = true
+                withTransaction(still) { pager.scrollTo(current, anchor: .center) }
+            }
         }
-        .scrollTargetBehavior(.paging)
-        .scrollPosition(id: $current)
-        .scrollIndicators(.hidden)
-        .background(Theme.page.ignoresSafeArea())
-        .ignoresSafeArea(edges: .bottom)
         .safeAreaInset(edge: .top, spacing: 0) {
-            if !chromeHidden {
+            if !chromeHidden, !immersive {
                 chrome.transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { DownloadTray() }
-        .statusBarHidden(chromeHidden)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !immersive { DownloadTray() }
+        }
+        .statusBarHidden(chromeHidden || immersive)
+        .persistentSystemOverlays(immersive ? .hidden : .automatic)
         .animation(.easeInOut(duration: 0.2), value: chromeHidden)
+        .animation(.easeInOut(duration: 0.25), value: immersive)
         .preferredColorScheme(.dark)
         .sheet(item: $inspecting) { FileInfoView(file: $0, place: nil) }
         .task(id: current) { await lookUpStreamable() }
