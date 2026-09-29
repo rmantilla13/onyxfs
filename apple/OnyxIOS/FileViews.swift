@@ -154,16 +154,18 @@ enum ThumbnailSize {
 
 /// A file's picture, or its kind's symbol until there is one (or if there
 /// is none). A picture already in memory is there on the first frame, so
-/// scrolling back never flickers.
+/// scrolling back never flickers; and coming into view, it tells the
+/// folder's prefetch where the eye is, so the next ones are ready too.
 struct Thumbnail: View {
     let file: FileItem
     let size: ThumbnailSize
+    @Environment(Session.self) private var session: Session?
     @State private var image: UIImage?
 
     init(file: FileItem, size: ThumbnailSize) {
         self.file = file
         self.size = size
-        _image = State(initialValue: file.thumbnail(size).flatMap { ThumbnailStore.shared.cached($0) })
+        _image = State(initialValue: file.picture(size).flatMap { ThumbnailStore.shared.cached($0) })
     }
 
     var body: some View {
@@ -179,10 +181,11 @@ struct Thumbnail: View {
                 }
             }
             .clipped()
-            .task(id: file.thumbnail(size)) {
-                guard let source = file.thumbnail(size) else { image = nil; return }
+            .task(id: file.picture(size)) {
+                ThumbnailPrefetcher.shared.appeared(file, size: size)
+                guard let source = file.picture(size) else { image = nil; return }
                 if let hit = ThumbnailStore.shared.cached(source) { image = hit; return }
-                let loaded = await ThumbnailStore.shared.image(source)
+                let loaded = await ThumbnailStore.shared.image(source, api: session?.api)
                 if !Task.isCancelled, let loaded {
                     withAnimation(.easeOut(duration: 0.15)) { image = loaded }
                 }
