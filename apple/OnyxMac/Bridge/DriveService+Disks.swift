@@ -211,6 +211,9 @@ extension DriveService {
     }
 
     private func uploadChanged(_ job: UploadJob) async {
+        // First: once the writer hears the upload is done and the mirror
+        // shows the file, the queue's copy of its bytes goes.
+        if job.state == .done { onUploadFinished?(job) }
         await writers[job.scope]?.uploadChanged(job)
         await refreshUploadSummary()
         if job.state == .failed, let why = job.lastError {

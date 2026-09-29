@@ -1464,3 +1464,114 @@ struct DriveMirrorTests {
         #expect(stub.server.requests(to: "/api/space/files/a").count == 2)
     }
 }
+
+// MARK: - Files' pictures
+
+/// What the thumbnail worker reads from a mirror: which files have a
+/// thumbnail. A thumbnail made later is news for the worker and nothing
+/// else — Finder's tree, the long-polls and the disk are left alone.
+struct DriveMirrorPreviewTests {
+    let server = URL(string: "https://www.onyxfs.io")!
+
+    private func pictured(_ file: FileItem) -> FileItem {
+        var file = file
+        file.thumbnailKey = "_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.webp"
+        file.thumbSizes = ["sm", "xs"]
+        return file
+    }
+
+    @Test func aThumbnailMadeLaterIsReportedButRebuildsNothing() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.mov", mime: "video/quicktime")], cursor: 10))
+        let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        #expect(await mirror.files(where: ThumbnailCandidate.lacksPreviews).map(\.id) == ["a"])
+        let revision = await mirror.revision
+
+        stub.server.page(at: 10, page([pictured(item("a", "a.mov", mime: "video/quicktime"))], cursor: 11))
+        let diff = try await mirror.sync()
+        #expect(diff.isEmpty && diff.previews == ["a"])
+        #expect(await mirror.revision == revision, "nothing Finder shows changed")
+        #expect(await mirror.files(where: ThumbnailCandidate.lacksPreviews).isEmpty)
+        #expect(await mirror.files(among: ["a", "gone"], where: { _ in true }).map(\.previews) == [[.thumbnail, .sizes]])
+    }
+
+    @Test func picturesAloneAreWrittenLazilyAndNeverPastTheCursor() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let clock = TestClock()
+        stub.server.page(at: 0, page([item("a", "a.mov")], cursor: 10))
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server, account: "me@example.com",
+                                 api: { stub.api }, clock: { clock.now })
+        _ = try await mirror.sync()
+        let file = dir.appendingPathComponent("library.json")
+        let progress = dir.appendingPathComponent("library.cursor.json")
+        let written = try Data(contentsOf: file)
+
+        // A thumbnail made, then a pass that only moves the cursor.
+        stub.server.page(at: 10, page([pictured(item("a", "a.mov"))], cursor: 11))
+        stub.server.page(at: 11, page([], deleted: ["elsewhere"], cursor: 12))
+        _ = try await mirror.sync()
+        _ = try await mirror.sync()
+        #expect(try Data(contentsOf: file) == written, "the whole drive is not rewritten for one picture")
+        #expect(!FileManager.default.fileExists(atPath: progress.path), "nor the cursor moved past what the disk lacks")
+        let relaunched = DriveMirror(scope: .library, directory: dir, server: server, account: "me@example.com",
+                                     api: { stub.api })
+        #expect(await relaunched.files(among: ["a"], where: { _ in true }).first?.previews == [],
+                "a relaunch now fetches the change again, from cursor 10")
+
+        // Minutes on, the next pass writes it all.
+        clock.advance(DriveMirror.previewSaveInterval + 1)
+        stub.server.page(at: 12, page([], cursor: 12))
+        _ = try await mirror.sync()
+        let stored = try JSONDecoder().decode(DriveMirror.Stored.self, from: Data(contentsOf: file))
+        #expect(stored.replica.cursor == 12 && stored.replica.file(id: "a")?.previews == [.thumbnail, .sizes])
+    }
+
+    @Test func aReplicaSavedBeforePicturesWereKeptIsFetchedAgainOnce() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var old = Replica()
+        old.apply(changed: [item("a", "a.mov"), item("b", "b.mov")], deleted: [], folders: [], cursor: 10)
+        old.scope = "s1"
+        let stored = DriveMirror.Stored(identity: .init(server: server.absoluteString, account: "me@example.com"),
+                                        replica: old, complete: true, generation: "g1")
+        // As an older build wrote it: no `previews` on any file.
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(stored)) as! [String: Any]
+        var fields = json["replica"] as! [String: Any]
+        var files = fields["files"] as! [String: [String: Any]]
+        for id in files.keys { files[id]?["previews"] = nil }
+        fields["files"] = files
+        json["replica"] = fields
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: json).write(to: dir.appendingPathComponent("drive.d1.json"))
+
+        let mirror = await DriveMirror.open(scope: .drive(id: "d1"), directory: dir, server: server,
+                                            account: "me@example.com", api: { stub.api })
+        #expect(await mirror.index.fileCount == 2)
+        #expect(await mirror.files(where: ThumbnailCandidate.lacksPreviews).isEmpty, "not known, so nothing is made")
+
+        // Fetched from the start, beside the tree; b has its pictures.
+        stub.server.page(at: 0, page([item("a", "a.mov"), pictured(item("b", "b.mov"))], cursor: 14, scope: "s1"))
+        let diff = try await mirror.sync()
+        #expect(Set(diff.updated).isSuperset(of: ["a", "b"]), "every file, for the worker to look at")
+        #expect(await mirror.isAuthoritative)
+        #expect(await mirror.files(where: ThumbnailCandidate.lacksPreviews).map(\.id) == ["a"])
+
+        // Once: the next pass carries on from the new cursor.
+        stub.server.page(at: 14, page([], cursor: 14, scope: "s1"))
+        _ = try await mirror.sync()
+        let cursors = stub.server.requests(to: "/api/files/delta").map {
+            URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "cursor" }?.value
+        }
+        #expect(cursors == ["0", "14"])
+    }
+}

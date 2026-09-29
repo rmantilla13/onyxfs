@@ -134,9 +134,13 @@ public struct Replica: Codable, Sendable, Equatable {
     public struct Diff: Equatable, Sendable {
         public var updated: [String] = []
         public var deleted: [String] = []
+        /// Files whose pictures alone changed (a thumbnail made since): not
+        /// a change to anything Finder lists, so neither in `updated` nor
+        /// counted by `isEmpty`. For the thumbnail worker.
+        public var previews: [String] = []
         public var isEmpty: Bool { updated.isEmpty && deleted.isEmpty }
-        public init(updated: [String] = [], deleted: [String] = []) {
-            self.updated = updated; self.deleted = deleted
+        public init(updated: [String] = [], deleted: [String] = [], previews: [String] = []) {
+            self.updated = updated; self.deleted = deleted; self.previews = previews
         }
     }
 
@@ -158,7 +162,11 @@ public struct Replica: Codable, Sendable, Equatable {
                 if files.removeValue(forKey: item.id) != nil { diff.deleted.append(item.id) }
             } else {
                 let file = ReplicaFile(item)
-                if files[file.id] != file { diff.updated.append(file.id) }
+                if let before = files[file.id], before.listsAlike(file) {
+                    if before.previews != file.previews { diff.previews.append(file.id) }
+                } else {
+                    diff.updated.append(file.id)
+                }
                 files[file.id] = file
             }
         }
@@ -194,6 +202,10 @@ public struct Replica: Codable, Sendable, Equatable {
         }
         diff.updated = Self.unique(diff.updated.filter(present))
         diff.deleted = Self.unique(diff.deleted.filter { !present($0) })
+        if !diff.previews.isEmpty {
+            let reported = Set(diff.updated)
+            diff.previews = Self.unique(diff.previews.filter { kept[$0] != nil && !reported.contains($0) })
+        }
         return diff
     }
 
@@ -238,6 +250,11 @@ public struct ReplicaFile: Codable, Sendable, Equatable, Identifiable {
     /// they were kept: nil, and the row's shown instead.
     public var fileCreatedAt: EpochMillis? = nil
     public var fileModifiedAt: EpochMillis? = nil
+    /// Which of the web's pictures of it exist (FilePreviews): what the
+    /// thumbnail worker finds the files that need one by. Nil in a replica
+    /// saved before they were kept, which the mirror fetches again once
+    /// (DriveMirror.previewsUnknown).
+    public var previews: FilePreviews? = nil
 
     public init(_ item: FileItem) {
         id = item.id
@@ -251,5 +268,17 @@ public struct ReplicaFile: Codable, Sendable, Equatable, Identifiable {
         updatedAt = item.updatedAt
         fileCreatedAt = item.fileCreatedAt
         fileModifiedAt = item.fileModifiedAt
+        previews = FilePreviews(item)
+    }
+
+    /// Whether Finder would list the two alike: all but their pictures,
+    /// which change with no change to the file's bytes, name or place — a
+    /// thumbnail made later moves the row's `seq` and nothing else.
+    func listsAlike(_ other: ReplicaFile) -> Bool {
+        var a = self
+        var b = other
+        a.previews = nil
+        b.previews = nil
+        return a == b
     }
 }
