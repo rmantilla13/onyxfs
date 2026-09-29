@@ -302,12 +302,17 @@ private struct ParentChip: View {
     let name: String
     let action: () -> Void
 
+    /// Its own width, whatever the toolbar offers: on iOS 26 the toolbar
+    /// squeezed a pill in the back button's group to "F…". A long name is
+    /// shortened here instead, so the pill never crowds the title.
+    private var shown: String { name.count > 22 ? String(name.prefix(20)) + "…" : name }
+
     var body: some View {
         Button(action: action) {
-            Text(name)
+            Text(shown)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
-                .frame(maxWidth: 180)
+                .fixedSize()
                 .padding(.horizontal, Theme.liquidGlass ? 6 : 14)
                 .padding(.vertical, Theme.liquidGlass ? 0 : 7)
                 .background {
