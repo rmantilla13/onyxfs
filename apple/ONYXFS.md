@@ -279,6 +279,20 @@ server's path (`MirrorEntry.serverPath`), and the writer sends that, not the
 shown name, to every folder route and as an upload's or move's folder
 (`DriveWriter.serverFolder`). Names Finder makes are NFC; the server stores
 new names NFC and reaches a folder stored decomposed by its composed name.
+
+Nor does the server keep a space at either end of a name: it trims every
+file and folder name (JavaScript's `trim`, lib/folder-ops.js), so "Selects "
+would be "Selects" there. The disk makes it so from the start
+(`DriveEngine.stored`): a name Finder asks for is made as the server will
+keep it, the kernel is told the name it has (`newItemName`, `newName`), and
+names compare without those spaces as they do without case — so Finder's
+next step, still asking for "Selects ", finds "Selects". Made as asked, the
+folder Finder had just made could not be found under that name, and Finder
+stopped the copy: "its name is too long or includes characters that are
+invalid on the destination volume" (folders named in Frame.io, copied from
+Frame.io Drive, often end in a space). macOS's own names are left as they
+are — "Icon\r" is a folder's custom icon, not "Icon" — and an AppleDouble
+`._` name follows its file's. A name the server refuses (400) is EINVAL.
 A folder delete the server refuses because it holds files this account cannot
 see (409 `hidden_files`, nothing deleted) is ENOTEMPTY in Finder; a folder
 that is not there is a 404, ENOENT.
@@ -362,6 +376,15 @@ extension's cached chunks.
   carry Finder's hidden flag (`UF_HIDDEN`), as on any disk — which is what
   keeps the Time Machine marker at each disk's root
   (`com.apple.timemachine.donotpresent`, no dot to hide it) out of sight.
+- **Finder's -8062** ("an unexpected error occurred") at the end of a copy is
+  its copy engine creating the source folder's `.DS_Store` — last, and
+  exclusively — in a folder where a Finder window showing it has already
+  written one: `File exists` in DesktopServicesHelper's log. It happens on
+  any volume without atomic renames (this one, SMB, exFAT), and more here,
+  where a copy from a slow source (Frame.io Drive) takes minutes. Every file
+  has arrived by then. Finder writes no `.DS_Store` to a volume that is not
+  local once `DSDontWriteNetworkStores` is set (com.apple.desktopservices)
+  and Finder has been relaunched; this volume is not local.
 - **Extended attributes** never leave this Mac. The engine can keep them
   per item (LocalStore), but FSKit never asks it to: OnyxVolume's
   `supportedXattrNames` answers `[]`, which FSKit takes as "limited"
@@ -455,11 +478,12 @@ letter in the logo's cyan.
 ## Activity
 
 The owner asked for a live view of what the drives are moving, like a
-network monitor's: download, read and write, each a figure and a graph.
-Onyx ▸ Activity (the Window menu, and the menu bar item) shows four:
-**Download** (from storage to this Mac), **Upload** (back), **Read** (what
-apps read from the disks) and **Write** (what apps wrote to them), in
-megabits a second, each over the last minute.
+network monitor's: download, read and write, each a figure and a graph —
+and then for it to be always in sight. It is a bar along the foot of the
+Onyx window (`ActivityBar`) with four: **Download** (from storage to this
+Mac), **Upload** (back), **Read** (what apps read from the disks) and
+**Write** (what apps wrote to them), in megabits a second, each over the
+last minute; and, at its end, the window's downloads.
 
 - **The extension counts** what only it sees (`TransferMeter`, OnyxFSCore):
   bytes the engine hands the kernel for a read, bytes a write gives it, and
@@ -477,14 +501,29 @@ megabits a second, each over the last minute.
   passed with nothing new, so an idle disk sends nothing. A report the app
   does not answer (an older app: 404) is dropped, not retried.
 - **The app adds its own**: what an upload sends (`APIUploadTransport`,
-  each `didSendBodyData`) and what fetching an offline copy receives
-  (`FileDownload`), into `TransferLog` (OnyxKit): a ring of one-second
-  buckets, five minutes long. Adding is a lock and an add; nothing runs to
-  keep it.
-- **The window reads it** once a second while it is open (a `TimelineView`),
-  and only then. Each graph is its last 60 whole seconds, each averaged with
-  its neighbours, since a disk's once-a-second reports can land two in one
+  each `didSendBodyData`), what fetching an offline copy receives
+  (`FileDownload`) and what the window's downloads receive (`WebDownloads`,
+  looked at once a second while one runs), into `TransferLog` (OnyxKit): a
+  ring of one-second buckets, five minutes long. Adding is a lock and an
+  add; nothing runs to keep it.
+- **The bar reads it** once a second from when bytes start to move until its
+  graphs are flat again, and not at all in between: the first bytes after a
+  quiet second wake it (`TransferLog.onWake`, called outside the lock), and
+  it stops itself once the log has been quiet for as long as a graph shows
+  (`ActivityClock`). Always on screen, it costs nothing while nothing moves.
+  Each graph is its last 60 whole seconds, each averaged with its
+  neighbours, since a disk's once-a-second reports can land two in one
   second and none in the next. The figure is the average of the last three.
+- **Downloads.** The web's Download buttons are links the web view saves
+  into Downloads (`WebController`, then `WebDownloads`, their delegate).
+  They used to run unseen — the owner clicked a 232 MB video three times and
+  got three copies. Now each shows at the bar's end the moment it is clicked
+  (the newest under way, the rest behind "+2"): its name, how far it has got
+  and how long is left, then Show in Finder once it is done. A click on one
+  already under way shows that one instead of saving it twice. What a
+  download that did not finish wrote is deleted — stopped, failed, or cut
+  short by quitting — since WebKit leaves it under the file's own name,
+  where it would pass for the file; Try Again asks for it afresh.
 - **Not seen:** the rclone NFS mounts in `~/Onyx` (macOS 26 and older, or a
-  disk not yet allowed) read storage themselves; the window shows nothing of
+  disk not yet allowed) read storage themselves; the bar shows nothing of
   them.

@@ -205,19 +205,23 @@ struct WorkspaceView: View {
     @ObservedObject var web: WebController
 
     var body: some View {
-        WebViewHost(webView: web.webView)
-            .overlay {
-                if let failure = web.failure {
-                    VStack(spacing: 14) {
-                        Image(lucide: "wifi-off", size: 34, strokeWidth: 1.5).foregroundStyle(.secondary)
-                        Text(failure).multilineTextAlignment(.center).frame(maxWidth: 440)
-                        Button("Try Again") { web.reload() }.keyboardShortcut(.defaultAction)
+        VStack(spacing: 0) {
+            WebViewHost(webView: web.webView)
+                .overlay {
+                    if let failure = web.failure {
+                        VStack(spacing: 14) {
+                            Image(lucide: "wifi-off", size: 34, strokeWidth: 1.5).foregroundStyle(.secondary)
+                            Text(failure).multilineTextAlignment(.center).frame(maxWidth: 440)
+                            Button("Try Again") { web.reload() }.keyboardShortcut(.defaultAction)
+                        }
+                        .padding(28)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
                     }
-                    .padding(28)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
                 }
-            }
-            .task { if web.webView.url == nil { web.signIn() } }
+            // What the drives and the window are moving, and the downloads.
+            ActivityBar(transfers: model.finder.transfers, downloads: web.downloads)
+        }
+        .task { if web.webView.url == nil { web.signIn() } }
     }
 }
 
@@ -365,7 +369,6 @@ struct MenuBarContent: View {
             }
             Divider()
             Button("Open Onyx") { open() }.keyboardShortcut("o")
-            Button("Activity") { open("activity") }
             FinderItems()
         } else {
             Text("Not signed in")
@@ -389,9 +392,9 @@ struct MenuBarContent: View {
         Button("Quit Onyx") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 
-    private func open(_ window: String = "main") {
+    private func open() {
         Background.shared.comeForward()
-        openWindow(id: window)
+        openWindow(id: "main")
     }
 }
 

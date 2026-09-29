@@ -15,9 +15,14 @@ import OnyxKit
 @MainActor
 final class WebController: NSObject, ObservableObject {
     weak var model: AppModel? {
-        didSet { followFinder() }
+        didSet {
+            followFinder()
+            downloads.transfers = model?.finder.transfers
+        }
     }
     let webView: OnyxWebView
+    /// What the web's Download buttons save, for the Activity bar to show.
+    let downloads = WebDownloads()
 
     @Published private(set) var canGoBack = false
     @Published private(set) var canGoForward = false
@@ -26,8 +31,6 @@ final class WebController: NSObject, ObservableObject {
     /// Set when the workspace could not be opened; the window says so, with a
     /// way to try again, rather than showing a blank page.
     @Published var failure: String?
-    /// The last download, for a moment of feedback.
-    @Published private(set) var lastDownload: URL?
 
     private var observations: [NSKeyValueObservation] = []
     private var lastHandoff: Date?
@@ -51,6 +54,7 @@ final class WebController: NSObject, ObservableObject {
         webView = OnyxWebView(frame: .zero, configuration: config)
         super.init()
         relay.controller = self
+        downloads.webView = webView
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
@@ -332,7 +336,7 @@ extension WebController: WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  preferences: WKWebpagePreferences) async -> (WKNavigationActionPolicy, WKWebpagePreferences) {
         guard let url = action.request.url else { return (.cancel, preferences) }
-        if action.shouldPerformDownload { return (.download, preferences) }
+        if action.shouldPerformDownload { return (downloadPolicy(for: url), preferences) }
 
         // mailto:, tel:, another app's scheme: not the web view's to open.
         if let scheme = url.scheme?.lowercased(), !["http", "https", "about", "blob", "data"].contains(scheme) {
@@ -353,13 +357,13 @@ extension WebController: WKNavigationDelegate {
             return (.cancel, preferences)
         }
 
-        // The web's download links answer with a redirect to the storage
-        // host. WebKit reports that redirect as a clicked link to another
-        // site, which the rule below would send to the browser — so the
-        // download is taken as one from the start, and follows the redirect
-        // itself.
-        if isOnServer(url), url.path.range(of: #"^/api/files/[^/]+/download$"#, options: .regularExpression) != nil {
-            return (.download, preferences)
+        // The web's download links — a file's, and a share link's — answer
+        // with a redirect to the storage host. WebKit reports that redirect
+        // as a clicked link to another site, which the rule below would send
+        // to the browser — so the download is taken as one from the start,
+        // and follows the redirect itself.
+        if isOnServer(url), url.path.range(of: #"^/(api/files|s)/[^/]+/download$"#, options: .regularExpression) != nil {
+            return (downloadPolicy(for: url), preferences)
         }
 
         // A link to somewhere else, clicked: the default browser, not here.
@@ -395,12 +399,18 @@ extension WebController: WKNavigationDelegate {
         return .allow
     }
 
+    /// A download, unless that one is under way already: a second click
+    /// shows it in the Activity bar rather than saving the file twice.
+    private func downloadPolicy(for url: URL) -> WKNavigationActionPolicy {
+        downloads.showIfRunning(url) ? .cancel : .download
+    }
+
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
-        download.delegate = self
+        downloads.adopt(download)
     }
 
     func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
-        download.delegate = self
+        downloads.adopt(download)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -485,39 +495,5 @@ private final class MessageRelay: NSObject, WKScriptMessageHandler {
             guard let controller, let url = message.frameInfo.request.url, controller.acceptsMessages(from: url) else { return }
             controller.received(body)
         }
-    }
-}
-
-// MARK: - WKDownloadDelegate
-
-extension WebController: WKDownloadDelegate {
-    /// Into Downloads, as Safari would, never over an existing file.
-    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse,
-                  suggestedFilename: String) async -> URL? {
-        let folder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        let name = suggestedFilename.isEmpty ? "Download" : suggestedFilename
-        let base = (name as NSString).deletingPathExtension
-        let ext = (name as NSString).pathExtension
-        var candidate = folder.appendingPathComponent(name)
-        var n = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            candidate = folder.appendingPathComponent(ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)")
-            n += 1
-        }
-        lastDownload = candidate
-        return candidate
-    }
-
-    func downloadDidFinish(_ download: WKDownload) {
-        guard let file = lastDownload else { return }
-        // Bounces the Downloads stack in the Dock, as a finished download
-        // in Safari does.
-        DistributedNotificationCenter.default().post(name: .init("com.apple.DownloadFileFinished"),
-                                                     object: file.resolvingSymlinksInPath().path)
-    }
-
-    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
-        model?.problem = "The download did not finish: \(error.localizedDescription)"
     }
 }

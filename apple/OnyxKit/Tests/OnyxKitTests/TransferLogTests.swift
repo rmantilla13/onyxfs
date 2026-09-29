@@ -79,5 +79,55 @@ import Foundation
         log.add(.write, -5)
         clock.advance(1)
         #expect(log.history(.write, seconds: 2) == [0, 0])
+        #expect(log.quiet(for: 60))
+    }
+
+    /// What shows the log sleeps while nothing moves: it is woken by the
+    /// first bytes after a quiet second, and not by every add while things
+    /// keep moving.
+    @Test func bytesAfterAQuietSecondWakeWhatShowsTheLog() {
+        let clock = Clock(7_000.5)
+        let log = TransferLog(span: 60, clock: { clock.read() })
+        let wakes = Counter()
+        log.onWake = { wakes.bump() }
+        log.add(.download, 10)              // the first bytes ever
+        #expect(wakes.value == 1)
+        log.add(.download, 10)              // the same second
+        clock.advance(1)
+        log.add(.read, 10)                  // the next: still moving
+        #expect(wakes.value == 1)
+        clock.advance(2)                    // 7002 was quiet
+        log.add(.write, 10)
+        #expect(wakes.value == 2)
+        log.add(.write, 0)                  // nothing is not a wake
+        clock.advance(5)
+        log.add(.write, 0)
+        #expect(wakes.value == 2)
+        log.onWake = nil
+        log.add(.upload, 10)
+        #expect(wakes.value == 2)
+    }
+
+    /// Quiet for a graph's length is when the graph is flat and can stop
+    /// being redrawn.
+    @Test func quietIsNothingInTheSecondUnderWayOrThoseBeforeIt() {
+        let clock = Clock(8_000.5)
+        let log = TransferLog(span: 120, clock: { clock.read() })
+        #expect(log.quiet(for: 60))
+        log.add(.upload, 1)
+        #expect(!log.quiet(for: 60))
+        clock.advance(60)                   // 8060: 8000 is the oldest second a graph of 60 shows
+        #expect(!log.quiet(for: 60))
+        #expect(log.history(.upload, seconds: 60).first == 1)
+        clock.advance(1)                    // 8061: it has scrolled off
+        #expect(log.quiet(for: 60))
+        #expect(log.history(.upload, seconds: 60).allSatisfy { $0 == 0 })
+    }
+
+    final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        var value: Int { lock.withLock { count } }
+        func bump() { lock.withLock { count += 1 } }
     }
 }

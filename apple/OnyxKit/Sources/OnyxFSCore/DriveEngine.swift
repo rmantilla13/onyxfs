@@ -140,9 +140,12 @@ public actor DriveEngine {
 
     // MARK: - Writing
 
-    public func create(_ name: String, in directory: UInt64, isDirectory: Bool) async throws -> VolumeNode {
+    /// The node is named as the server will name it (`stored`), which may
+    /// not be quite the name asked for: the kernel is told which it is.
+    public func create(_ asked: String, in directory: UInt64, isDirectory: Bool) async throws -> VolumeNode {
         let dir = try folder(directory)
         try await ensureListed(dir.id)
+        let name = Self.stored(asked)
         guard LocalOnlyPolicy.isValidName(name) else { throw VolumeError.posix(EINVAL) }
         guard nodes[dir.id]?.children?[Self.fold(name)] == nil else { throw VolumeError.posix(EEXIST) }
         let path = Self.join(dir.path, name)
@@ -266,11 +269,13 @@ public actor DriveEngine {
         await staging.remove(id)
     }
 
+    /// Named as the server will name it, as `create` is.
     public func rename(_ id: UInt64, from directory: UInt64, name: String,
-                       to newDirectory: UInt64, newName: String, replacing: UInt64?) async throws -> VolumeNode {
+                       to newDirectory: UInt64, newName asked: String, replacing: UInt64?) async throws -> VolumeNode {
         guard let node = nodes[id] else { throw VolumeError.posix(ESTALE) }
         let from = try folder(directory), to = try folder(newDirectory)
         try await ensureListed(to.id)
+        let newName = Self.stored(asked)
         guard LocalOnlyPolicy.isValidName(newName) else { throw VolumeError.posix(EINVAL) }
         let newPath = Self.join(to.path, newName)
         if to.path.hasPrefix("/.Trashes") || newName == ".Trashes" { throw VolumeError.posix(EPERM) }
@@ -403,6 +408,12 @@ public actor DriveEngine {
     private func ensureListed(_ id: UInt64) async throws {
         guard let dir = nodes[id] else { throw VolumeError.posix(ESTALE) }
         if let at = dir.listedAt, now().timeIntervalSince(at) < Self.listingTTL, dir.children != nil { return }
+        // The engine is an actor, and other calls run while this one waits
+        // for the bridge: anything in the folder by the time the listing
+        // arrives that was not in it when the listing was asked for was made
+        // meanwhile — a file Finder has begun to copy, a folder it has just
+        // made — and a listing older than it cannot say it is gone.
+        let before = Set(dir.children?.values ?? [:].values)
         var listing: [String: UInt64] = [:]
         if !dir.localOnly {
             let entries: [BridgeEntry]
@@ -419,12 +430,15 @@ public actor DriveEngine {
                 listing[Self.fold(entry.name)] = upsert(entry, parent: id)
             }
         }
-        // Files made here, not yet on the server, stay listed.
-        for child in dir.children?.values ?? [:].values {
-            guard let node = nodes[child], node.unsent || node.localOnly else { continue }
+        let kept = await local.names(in: dir.path)
+        // No more waiting from here: the folder as it is now is what is
+        // merged. Files made here, not yet on the server, stay listed, and
+        // so does whatever was made while the listing was on its way.
+        for child in nodes[id]?.children?.values ?? [:].values {
+            guard let node = nodes[child], node.unsent || node.localOnly || !before.contains(child) else { continue }
             listing[Self.fold(node.name)] = child
         }
-        for name in await local.names(in: dir.path) where listing[Self.fold(name)] == nil {
+        for name in kept where listing[Self.fold(name)] == nil {
             let path = Self.join(dir.path, name)
             let isDir = await local.isDirectory(path)
             let node = insert(name: name, parent: id, isDirectory: isDir, size: await local.size(path),
@@ -439,9 +453,16 @@ public actor DriveEngine {
                                                     fileId: nil, version: "", localOnly: true, unsent: false).id
             }
         }
-        // Gone from the listing: forgotten, with anything under it.
-        for (_, child) in nodes[id]?.children ?? [:] where !listing.values.contains(child) {
-            drop(child, fromParent: false)
+        // Gone from the listing: forgotten, with anything under it — if the
+        // listing could have known of it. What was made after it was asked
+        // for stays, whichever wait above it came during.
+        let listed = Set(listing.values)
+        for (_, child) in nodes[id]?.children ?? [:] where !listed.contains(child) {
+            if before.contains(child) {
+                drop(child, fromParent: false)
+            } else if let node = nodes[child] {
+                listing[Self.fold(node.name)] = child
+            }
         }
         nodes[id]?.children = listing
         nodes[id]?.listedAt = now()
@@ -581,9 +602,47 @@ public actor DriveEngine {
     }
 
     /// Names compare as Finder compares them: ignoring case, and the
-    /// Unicode form a name happened to be typed in.
+    /// Unicode form a name happened to be typed in — and as the server
+    /// stores them, without spaces at either end (`stored`).
     static func fold(_ path: String) -> String {
-        path.precomposedStringWithCanonicalMapping.lowercased()
+        trimmedSegments(path).precomposedStringWithCanonicalMapping.lowercased()
+    }
+
+    /// A name as the server will keep it: without the whitespace at either
+    /// end that it trims from every file and folder name (JavaScript's
+    /// `trim`, lib/folder-ops.js). Made here as asked, "Selects " would be
+    /// "Selects" on the server, and the folder Finder had just made could
+    /// not be found under the name it made it with — so Finder stopped the
+    /// copy with "its name is too long or includes characters that are
+    /// invalid". macOS's own names are left as they are — "Icon\r" is a
+    /// folder's custom icon, not "Icon" — but for the AppleDouble half of a
+    /// file, which follows the file's: "._Selects " is "._Selects".
+    static func stored(_ name: String) -> String {
+        if name.hasPrefix("._") { return "._" + stored(String(name.dropFirst(2))) }
+        return LocalOnly.names.contains(name) ? name : name.trimmingCharacters(in: serverTrims)
+    }
+
+    /// What JavaScript's `trim` takes: its WhiteSpace and LineTerminator.
+    static let serverTrims = CharacterSet(charactersIn:
+        "\u{9}\u{A}\u{B}\u{C}\u{D}\u{20}\u{A0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}"
+        + "\u{2007}\u{2008}\u{2009}\u{200A}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}")
+
+    /// Each segment of a path as `stored` makes it. Most paths have nothing
+    /// to trim, and are returned as they are without being split.
+    private static func trimmedSegments(_ path: String) -> String {
+        var previous: Unicode.Scalar = "/"
+        var edge = false
+        for scalar in path.unicodeScalars {
+            if (previous == "/" && serverTrims.contains(scalar)) || (scalar == "/" && serverTrims.contains(previous)) {
+                edge = true
+                break
+            }
+            previous = scalar
+        }
+        guard edge || path.unicodeScalars.last.map(serverTrims.contains) == true else { return path }
+        return path.split(separator: "/", omittingEmptySubsequences: false)
+            .map { stored(String($0)) }
+            .joined(separator: "/")
     }
 
     static func join(_ parent: String, _ name: String) -> String {

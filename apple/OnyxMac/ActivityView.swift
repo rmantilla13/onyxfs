@@ -1,36 +1,95 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import OnyxKit
 
 // MARK: - Activity
 
-/// What the drives are moving right now, a second at a time over the last
-/// minute: fetched from storage, sent to it, read by apps from the disks and
-/// written to them (DriveService.transfers, a TransferLog).
+/// The foot of the window: what is moving right now, a second at a time over
+/// the last minute — fetched from storage, sent to it, read by apps from the
+/// disks and written to them (DriveService.transfers, a TransferLog) — and
+/// the window's downloads, from the click until they are cleared.
 ///
-/// The log is kept by adding to it and nothing else; this window reads it
-/// once a second while it is open, and while it is shut nothing runs at all.
-struct ActivityView: View {
+/// It is always there, so it must cost nothing while nothing moves: the
+/// graphs are redrawn once a second from when bytes start to move until they
+/// have scrolled off (ActivityClock), and not at all in between.
+struct ActivityBar: View {
     let transfers: TransferLog
+    @ObservedObject var downloads: WebDownloads
+    @StateObject private var clock = ActivityClock()
+
+    static let height: CGFloat = 44
     /// How far back the graphs go.
     static let seconds = 60
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { _ in
-            HStack(spacing: 0) {
-                ForEach(Meter.all) { meter in
-                    if meter != Meter.all.first { Divider() }
-                    MeterColumn(meter: meter,
-                                samples: Sparkline.smoothed(transfers.history(meter.kind, seconds: Self.seconds)),
-                                rate: transfers.rate(meter.kind))
-                }
+        // Read, so each tick redraws the graphs.
+        let _ = clock.tick
+        HStack(spacing: 0) {
+            ForEach(Meter.all) { meter in
+                if meter != Meter.all.first { Divider().padding(.vertical, 10) }
+                MeterCell(meter: meter,
+                          samples: Sparkline.smoothed(transfers.history(meter.kind, seconds: Self.seconds)),
+                          rate: transfers.rate(meter.kind))
+            }
+            if let item = downloads.shown {
+                Divider()
+                // Room for a name before the graphs get theirs.
+                DownloadsSlot(item: item, downloads: downloads)
+                    .frame(minWidth: 240, maxWidth: 340)
+                    .layoutPriority(1)
             }
         }
-        .frame(minWidth: 640, idealWidth: 780, minHeight: 104, idealHeight: 120)
+        .frame(maxWidth: .infinity)
+        .frame(height: Self.height)
         .background(Color(nsColor: .windowBackgroundColor))
+        .overlay(alignment: .top) { Divider() }
+        .onAppear { clock.follow(transfers) }
+        .onDisappear { clock.stop() }
     }
 }
 
-/// One of the four, as the window shows it.
+/// Redraws the bar once a second from when bytes start to move until the
+/// graphs are flat again, and not at all in between: the log wakes it
+/// (TransferLog.onWake), and it stops itself once the log has been quiet for
+/// as long as a graph shows.
+@MainActor
+final class ActivityClock: ObservableObject {
+    @Published private(set) var tick = 0
+    private var loop: Task<Void, Never>?
+    private weak var transfers: TransferLog?
+
+    func follow(_ transfers: TransferLog) {
+        self.transfers = transfers
+        transfers.onWake = { [weak self] in
+            Task { @MainActor in self?.run() }
+        }
+        run()
+    }
+
+    func stop() {
+        transfers?.onWake = nil
+        loop?.cancel()
+        loop = nil
+    }
+
+    private func run() {
+        guard loop == nil else { return }
+        loop = Task { [weak self] in
+            while !Task.isCancelled {
+                // Just past each whole second, so each redraw moves the
+                // graphs one second along.
+                let now = Date().timeIntervalSince1970
+                try? await Task.sleep(nanoseconds: UInt64((now.rounded(.down) + 1.02 - now) * 1e9))
+                guard let self, !Task.isCancelled else { return }
+                self.tick &+= 1
+                if self.transfers?.quiet(for: ActivityBar.seconds) ?? true { break }
+            }
+            self?.loop = nil
+        }
+    }
+}
+
+/// One of the four, as the bar shows it.
 struct Meter: Identifiable, Equatable {
     let kind: TransferLog.Kind
     let title: String
@@ -46,7 +105,7 @@ struct Meter: Identifiable, Equatable {
     ]
 }
 
-private struct MeterColumn: View {
+private struct MeterCell: View {
     let meter: Meter
     /// Bytes per second, oldest first.
     let samples: [Double]
@@ -54,27 +113,24 @@ private struct MeterColumn: View {
     let rate: Double
 
     var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .topLeading) {
-                // The graph: the right of the column, above the figure,
-                // fading in at its left end.
-                Sparkline(samples: samples, color: meter.color)
-                    .frame(width: geometry.size.width * 0.62, height: max(0, geometry.size.height - 48))
-                    .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.3)],
-                                         startPoint: .leading, endPoint: .trailing))
-                    .offset(x: geometry.size.width * 0.38, y: 14)
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(meter.title)
-                        .font(.system(size: 15, weight: .semibold))
-                    Text(ActivityFormat.bitrate(rate))
-                        .font(.system(size: 14).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.leading, 20)
-                .frame(maxHeight: .infinity)
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(meter.title)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(ActivityFormat.bitrate(rate))
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
+            // As wide as the widest figure, so the graph does not shift as
+            // the figure changes.
+            .frame(width: 74, alignment: .leading)
+            Sparkline(samples: samples, color: meter.color)
+                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.3)],
+                                     startPoint: .leading, endPoint: .trailing))
+                .padding(.vertical, 9)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 12)
+        .frame(minWidth: 110, maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(meter.title)
         .accessibilityValue(ActivityFormat.spoken(rate))
@@ -102,7 +158,7 @@ struct Sparkline: View {
                 }
                 .fill(LinearGradient(colors: [color.opacity(0.28), color.opacity(0)], startPoint: .top, endPoint: .bottom))
                 Path { path in path.addLines(points) }
-                    .stroke(color, style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
+                    .stroke(color, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
             }
         }
     }
@@ -132,6 +188,159 @@ struct Sparkline: View {
     }
 }
 
+// MARK: - Downloads
+
+/// A view's own state. (Not @State: see FormState.)
+final class SlotState: ObservableObject {
+    @Published var listShown = false
+}
+
+/// The bar's end: the download under way — or the last one, done — and the
+/// rest behind "+2", in a list.
+private struct DownloadsSlot: View {
+    let item: WebDownloads.Item
+    @ObservedObject var downloads: WebDownloads
+    @StateObject private var ui = SlotState()
+
+    var body: some View {
+        HStack(spacing: 6) {
+            DownloadRow(item: item, downloads: downloads)
+            if downloads.items.count > 1 {
+                Button { ui.listShown.toggle() } label: {
+                    Text("+\(downloads.items.count - 1)")
+                        .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.quaternary, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("All downloads")
+                .popover(isPresented: $ui.listShown, arrowEdge: .top) { DownloadsList(downloads: downloads) }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Color.accentColor.opacity(downloads.flashed == item.id ? 0.22 : 0)))
+        .animation(.easeOut(duration: 0.25), value: downloads.flashed)
+        .padding(.horizontal, 4)
+    }
+}
+
+/// Every download the window has, newest first.
+private struct DownloadsList: View {
+    @ObservedObject var downloads: WebDownloads
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(downloads.items) { item in
+                    DownloadRow(item: item, downloads: downloads)
+                }
+            }
+            .padding(14)
+            if downloads.items.contains(where: { !$0.isActive }) {
+                Divider()
+                HStack {
+                    Spacer()
+                    Button("Clear") { downloads.clearEnded() }
+                        .help("Take the downloads that have ended off the list; the files stay where they are")
+                }
+                .padding(10)
+            }
+        }
+        .frame(width: 360)
+    }
+}
+
+/// One download: what it is, how far it has got, and what can be done
+/// with it — stopped while it runs, found or opened when it is done, asked
+/// for again when it did not finish.
+struct DownloadRow: View {
+    let item: WebDownloads.Item
+    let downloads: WebDownloads
+
+    var body: some View {
+        HStack(spacing: 8) {
+            icon.frame(width: 22, height: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name ?? "Starting download…")
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1).truncationMode(.middle)
+                if item.isActive { ProgressLine(fraction: item.fraction) }
+                Text(ActivityFormat.status(item))
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(failed ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
+                    .lineLimit(1).truncationMode(.tail)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) { downloads.open(item.id) }
+            // icons: x search refresh-ccw download
+            if item.isActive {
+                RowButton(icon: "x", help: "Stop this download") { downloads.cancel(item.id) }
+            } else {
+                if item.state == .finished {
+                    RowButton(icon: "search", help: "Show in Finder") { downloads.showInFinder(item.id) }
+                } else if item.canRetry {
+                    RowButton(icon: "refresh-ccw", help: "Try again") { downloads.retry(item.id) }
+                }
+                RowButton(icon: "x", help: "Clear from the list; the file stays where it is") { downloads.dismiss(item.id) }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(item.name ?? "Download")
+    }
+
+    private var failed: Bool {
+        if case .failed = item.state { return true }
+        return false
+    }
+
+    @ViewBuilder private var icon: some View {
+        if let name = item.name {
+            let type = UTType(filenameExtension: (name as NSString).pathExtension) ?? .data
+            Image(nsImage: NSWorkspace.shared.icon(for: type)).resizable().aspectRatio(contentMode: .fit)
+        } else {
+            Image(lucide: "download", size: 16).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// How far a download has got, as a hairline: full width and faint while
+/// the server has not said how big it is.
+private struct ProgressLine: View {
+    let fraction: Double?
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.quaternary)
+                if let fraction {
+                    Capsule().fill(Color.accentColor).frame(width: max(3, geometry.size.width * fraction))
+                }
+            }
+        }
+        .frame(height: 3)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct RowButton: View {
+    let icon: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(lucide: icon, size: 13).foregroundStyle(.secondary)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
 enum ActivityFormat {
     /// "47.36 Mbps", as a network is measured; "1.20 Gbps" past a thousand.
     static func bitrate(_ bytesPerSecond: Double) -> String {
@@ -147,10 +356,40 @@ enum ActivityFormat {
         bitrate(bytesPerSecond).replacingOccurrences(of: "Gbps", with: "gigabits per second")
             .replacingOccurrences(of: "Mbps", with: "megabits per second")
     }
+
+    /// "97.3 MB of 231.7 MB — 23 s left", "In Downloads — 231.7 MB".
+    static func status(_ item: WebDownloads.Item) -> String {
+        switch item.state {
+        case .starting:
+            return "Waiting for the server…"
+        case .running:
+            guard let expected = item.expected else { return size(item.received) }
+            let sofar = "\(size(item.received)) of \(size(expected))"
+            guard item.rate > 0, expected > item.received else { return sofar }
+            return "\(sofar) — \(left(Double(expected - item.received) / item.rate))"
+        case .finished:
+            let folder = item.destination?.deletingLastPathComponent().lastPathComponent ?? "Downloads"
+            return "In \(folder) — \(size(item.received))"
+        case let .failed(why):
+            return "Did not finish: \(why)"
+        }
+    }
+
+    static func size(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    /// "23 s left", "4 min left", "1 h 12 min left".
+    static func left(_ seconds: Double) -> String {
+        let s = Int(seconds.rounded(.up))
+        if s < 60 { return "\(max(1, s)) s left" }
+        if s < 3600 { return "\(Int((Double(s) / 60).rounded())) min left" }
+        return "\(s / 3600) h \((s % 3600) / 60) min left"
+    }
 }
 
 #if DEBUG
-/// Pretend traffic for the Activity window (`--demo-activity`, debug builds
+/// Pretend traffic for the Activity bar (`--demo-activity`, debug builds
 /// only): a video scrubbed from storage, a copy onto a drive and its upload.
 enum ActivityDemo {
     static func start(_ transfers: TransferLog) {

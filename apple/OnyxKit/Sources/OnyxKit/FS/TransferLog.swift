@@ -1,18 +1,20 @@
 import Foundation
 
-/// What the drives moved, second by second, for the Activity window: bytes
+/// What the drives moved, second by second, for the Activity bar: bytes
 /// fetched from storage, sent to it, read by apps from the disks and written
 /// by them to the disks.
 ///
 /// The last `span` seconds are kept in a ring of one-second buckets, so
-/// adding is a lock and an add, and nothing runs to keep it: the window reads
-/// it while it is open, and while it is shut nothing happens at all.
+/// adding is a lock and an add, and nothing runs to keep it: the bar reads it
+/// once a second while something moves, and `onWake` tells it when something
+/// starts to, so while nothing does nothing runs at all.
 ///
 /// Where the bytes come from: each disk's extension reports what it read,
 /// fetched and was given about once a second (TransferMeter, over `POST
-/// /fs/v1/activity`); the app itself counts what its uploads send and what
-/// fetching offline copies receives. A drive in `~/Onyx` (the rclone mount
-/// macOS 26 and older fall back to) reads storage directly, unseen here.
+/// /fs/v1/activity`); the app itself counts what its uploads send, what
+/// fetching offline copies receives and what the window's downloads receive.
+/// A drive in `~/Onyx` (the rclone mount macOS 26 and older fall back to)
+/// reads storage directly, unseen here.
 public final class TransferLog: @unchecked Sendable {
     public enum Kind: Int, CaseIterable, Sendable {
         /// From storage to this Mac.
@@ -33,6 +35,9 @@ public final class TransferLog: @unchecked Sendable {
     private var stamps: [Int64]
     private var buckets: [[Int64]]
     private let clock: @Sendable () -> Date
+    /// The latest second anything was added in.
+    private var lastSecond: Int64?
+    private var wake: (@Sendable () -> Void)?
 
     public init(span: Int = 300, clock: @escaping @Sendable () -> Date = { Date() }) {
         self.span = max(2, span)
@@ -41,17 +46,37 @@ public final class TransferLog: @unchecked Sendable {
         self.clock = clock
     }
 
+    /// Called when bytes arrive after at least a whole second of none — on
+    /// whichever thread added them, outside the lock. What shows the log
+    /// wakes to this and reads it while things move, rather than polling it
+    /// while nothing does.
+    public var onWake: (@Sendable () -> Void)? {
+        get { lock.withLock { wake } }
+        set { lock.withLock { wake = newValue } }
+    }
+
     public func add(_ kind: Kind, _ bytes: Int64) {
         guard bytes > 0 else { return }
         let second = Self.second(clock())
         let slot = slot(second)
-        lock.withLock {
+        let woken: (@Sendable () -> Void)? = lock.withLock {
             if stamps[slot] != second {
                 stamps[slot] = second
                 buckets[slot] = Array(repeating: 0, count: Kind.allCases.count)
             }
             buckets[slot][kind.rawValue] &+= bytes
+            let quiet = lastSecond.map { second - $0 >= 2 } ?? true
+            lastSecond = max(lastSecond ?? second, second)
+            return quiet ? wake : nil
         }
+        woken?()
+    }
+
+    /// Whether nothing was added in the second under way or the `seconds`
+    /// before it — once it is, a graph of that many seconds is flat.
+    public func quiet(for seconds: Int) -> Bool {
+        let now = Self.second(clock())
+        return lock.withLock { lastSecond.map { now - $0 > Int64(seconds) } ?? true }
     }
 
     /// Bytes moved in each of the `seconds` whole seconds before this one,

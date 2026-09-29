@@ -40,14 +40,6 @@ struct OnyxMacApp: App {
         .defaultSize(width: 1280, height: 820)
         .commands { OnyxCommands(model: model) }
 
-        // What the drives are moving right now (ActivityView): in the Window
-        // menu, and in the menu bar item's menu.
-        Window("Activity", id: "activity") {
-            ActivityView(transfers: model.finder.transfers)
-        }
-        .defaultSize(width: 780, height: 120)
-        .windowResizability(.contentMinSize)
-
         MenuBarExtra {
             MenuBarContent().environmentObject(model).environmentObject(model.updater).environmentObject(model.finder)
         } label: {
