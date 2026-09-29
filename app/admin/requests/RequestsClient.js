@@ -7,6 +7,7 @@ import Dialog from '@/app/components/ui/Dialog';
 import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
 import { REQUEST_FILTERS, askedLabel, revokeBlockedReason } from '@/lib/admin-requests';
+import { claimedDrivesMessage } from '@/lib/admin-drives';
 import AdminPage from '../_ui/AdminPage';
 import AdminState from '../_ui/AdminState';
 import RelativeTime from '../_ui/RelativeTime';
@@ -35,11 +36,12 @@ export default function RequestsClient({ status, rows, counts }) {
   const [passwordFor, setPasswordFor] = useState(null);
   const filter = REQUEST_FILTERS.find((f) => f.key === status) || REQUEST_FILTERS[0];
 
+  // `done` is the success toast, or a function of the answer that says it.
   const act = async (key, fn, done) => {
     setBusy(key);
     try {
-      await fn();
-      if (done) toast.success(done);
+      const result = await fn();
+      if (done) toast.success(typeof done === 'function' ? done(result) : done);
       router.refresh();
       return true;
     } catch (e) {
@@ -71,13 +73,20 @@ export default function RequestsClient({ status, rows, counts }) {
 
   const revoke = async (r) => {
     // What DELETE ?email= does now (removePerson): sign-in, drive access,
-    // devices and the links they made all go; their files stay.
+    // devices and the links they made all go; their files stay; and a drive
+    // they were the only owner of becomes this admin's, so it keeps one.
     const ok = await confirm({
       title: `Remove ${r.email}?`,
-      body: 'They can no longer sign in, and lose their drive access, devices and the links they made. Any open browser session ends on its next request, and the desktop app stops on its next request. Files they uploaded stay. You can add them again later.',
+      body: 'They can no longer sign in, and lose their drive access, devices and the links they made. Any open browser session ends on its next request, and the desktop app stops on its next request. Files they uploaded stay, and any drive they are the only owner of becomes yours. You can add them again later.',
       confirmLabel: 'Remove',
     });
-    if (ok) act(`revoke:${r.id}`, () => api(`${INVITES}?email=${encodeURIComponent(r.email)}`, { method: 'DELETE' }), `Removed ${r.email}.`);
+    if (ok) {
+      act(`revoke:${r.id}`, () => api(`${INVITES}?email=${encodeURIComponent(r.email)}`, { method: 'DELETE' }), (res) => {
+        const claimed = res?.removed?.claimed || [];
+        if (!claimed.length) return `Removed ${r.email}.`;
+        return `Removed ${r.email}. ${claimedDrivesMessage({ claimed })} They were ${claimed.length === 1 ? 'its' : 'their'} only owner.`;
+      });
+    }
   };
 
   return (

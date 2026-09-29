@@ -1,14 +1,14 @@
 'use client';
 
-import Link from 'next/link';
 import { fmtSize } from '@/lib/media';
 import { plural } from '@/lib/admin-format';
 import { healthChecks, isHealthReport } from '@/lib/health-checks';
 import { attentionItems } from '@/lib/admin-overview';
 import AdminPage, { AdminCard } from './_ui/AdminPage';
+import AttentionItem from './_ui/AttentionItem';
 import { StatTile } from './_ui/StatTile';
 import { useAdminResource } from './_ui/api';
-import Icon from '@/app/components/ui/Icon';
+import ClaimDrives from './drives/ClaimDrives';
 
 const size = (n) => fmtSize(n) || '0 B';
 const HEALTH_WORD = { ok: 'Working', warn: 'Needs a look', fail: 'Failing' };
@@ -23,6 +23,9 @@ const HEALTH_TONE = { warn: 'warning', fail: 'danger' };
  *
  * A tile's tone colours the words that say what is wrong (its sub-line),
  * never the number, and a danger tone its border too.
+ *
+ * Drives with no owner come with their fix beside the warning ("Make me the
+ * owner…", ClaimDrives): it needs no look first, only a confirm.
  */
 export default function Overview({ pending, drives, totals }) {
   const health = useAdminResource('/api/health', { accept: [503], valid: isHealthReport });
@@ -74,17 +77,9 @@ export default function Overview({ pending, drives, totals }) {
         ) : (
           <ul className="attention">
             {items.map((item) => (
-              <li key={item.id} className={`attention-item check is-${item.tone === 'danger' ? 'fail' : 'warn'}`}>
-                <Icon name={item.tone === 'danger' ? 'circle-x' : 'triangle-alert'} size={18} className="check-glyph" />
-                <div className="attention-text">
-                  <div className="attention-title">
-                    {item.title}
-                    <span className="sr-only">{item.tone === 'danger' ? ' — failing' : ' — warning'}</span>
-                  </div>
-                  {item.detail && <div className="attention-detail muted small">{item.detail}</div>}
-                </div>
-                <Link href={item.href} className="btn btn-sm">{item.action}</Link>
-              </li>
+              <AttentionItem key={item.id} item={item}>
+                {item.claim && <ClaimDrives drives={item.claim} />}
+              </AttentionItem>
             ))}
           </ul>
         )}

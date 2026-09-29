@@ -23,12 +23,19 @@ async function api(url, opts) {
  * owners and enforces the rules — this component only mirrors them so it does
  * not offer a control the server will refuse.
  *
+ * A drive always has an owner (lib/drive-access.js). An admin appears here
+ * only as one, so their role is not offered for change; an admin who removes
+ * or demotes a drive's only owner becomes its owner, which is said once it
+ * has happened; and an admin who is the only owner cannot step down until
+ * someone else is one.
+ *
  * `adminNote={false}` leaves out the sentence about admins, for a host that
  * says it already (the admin drive drawer).
  */
 export default function FilespaceMembers({ filespaceId, onChanged, adminNote = true }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
   const [busy, setBusy] = useState(null);
   const [draft, setDraft] = useState({ email: '', role: 'viewer' });
   const { confirm, confirmElement } = useConfirm();
@@ -41,9 +48,10 @@ export default function FilespaceMembers({ filespaceId, onChanged, adminNote = t
   useEffect(load, [load]);
 
   const change = async (email, body, label) => {
-    setBusy(label); setError(null);
+    setBusy(label); setError(null); setNotice(null);
     try {
-      await api(url, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, ...body }) });
+      const r = await api(url, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, ...body }) });
+      if (r.claimedBy) setNotice(`You own this drive now: ${email} was its only owner.`);
       load();
       onChanged?.();
       return true;
@@ -62,10 +70,10 @@ export default function FilespaceMembers({ filespaceId, onChanged, adminNote = t
     if (await change(email, { role: draft.role }, 'add')) setDraft({ email: '', role: draft.role });
   };
 
-  const remove = async (m) => {
+  const remove = async (m, { lastOwner = false } = {}) => {
     const ok = await confirm({
       title: `Remove ${m.email}?`,
-      body: 'They lose this drive on the files page and in the desktop app. A desktop mount they already have keeps working until its credentials next refresh (within an hour). Files are not affected.',
+      body: `They lose this drive on the files page and in the desktop app. A desktop mount they already have keeps working until its credentials next refresh (within an hour). Files are not affected.${lastOwner ? ' They are its only owner, so you become its owner.' : ''}`,
       confirmLabel: 'Remove',
     });
     if (ok) change(m.email, { grant: false }, `rm:${m.email}`);
@@ -75,6 +83,7 @@ export default function FilespaceMembers({ filespaceId, onChanged, adminNote = t
 
   const self = data.self || {};
   const members = data.members || [];
+  const owners = members.filter((m) => m.role === 'owner').length;
 
   return (
     <div className="fs-members">
@@ -89,19 +98,28 @@ export default function FilespaceMembers({ filespaceId, onChanged, adminNote = t
               const isSelf = m.email === self.email;
               // Owners cannot change their own grant; the server says so too.
               const locked = !self.isAdmin && isSelf;
+              const lastOwner = m.role === 'owner' && owners === 1;
+              // An admin is listed only as an owner (filespaceMemberDecision).
+              // The only owner cannot step down: the drive would be left with
+              // none, and the server refuses (lib/drive-access.js).
+              const roleTip = locked ? 'Ask another owner or an admin to change your access.'
+                : m.envAdmin ? 'An admin reaches every drive, so is listed only as an owner.' : undefined;
+              const removeTip = locked ? roleTip
+                : isSelf && lastOwner ? 'You are its only owner. Make someone else an owner first.' : undefined;
               return (
                 <tr key={m.email}>
                   <td className="fs-members-email">
                     <span title={m.email}>{m.email}</span>
                     {isSelf && <span className="tag" style={{ marginLeft: 6 }}>you</span>}
+                    {m.envAdmin && <span className="tag" style={{ marginLeft: 6 }}>admin</span>}
                   </td>
                   <td style={{ width: 1 }}>
                     <select
                       className="input"
                       aria-label={`Role for ${m.email}`}
                       value={m.role}
-                      disabled={locked || !!busy}
-                      title={locked ? 'Ask another owner or an admin to change your access.' : undefined}
+                      disabled={locked || m.envAdmin || !!busy}
+                      title={roleTip}
                       onChange={(e) => change(m.email, { role: e.target.value }, `role:${m.email}`)}
                     >
                       {ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
@@ -110,8 +128,9 @@ export default function FilespaceMembers({ filespaceId, onChanged, adminNote = t
                   <td style={{ width: 1, textAlign: 'right' }}>
                     <button
                       className="btn btn-ghost btn-sm"
-                      disabled={locked || !!busy}
-                      onClick={() => remove(m)}
+                      disabled={!!removeTip || !!busy}
+                      title={removeTip}
+                      onClick={() => remove(m, { lastOwner: lastOwner && self.isAdmin })}
                     >
                       {busy === `rm:${m.email}` ? 'Removing…' : 'Remove'}
                     </button>
@@ -151,6 +170,7 @@ export default function FilespaceMembers({ filespaceId, onChanged, adminNote = t
       <p className="small muted" style={{ margin: '8px 0 0' }}>
         {ROLES.map((r) => `${r.label}: ${r.hint}`).join(' ')}
       </p>
+      {notice && <p className="small muted" role="status" style={{ margin: '8px 0 0' }}>{notice}</p>}
       {error && <p className="small" role="alert" style={{ color: 'var(--danger)', margin: '8px 0 0' }}>{error}</p>}
       {confirmElement}
     </div>

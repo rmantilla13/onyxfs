@@ -92,8 +92,16 @@ describe('filespaceMemberDecision', () => {
     assert.equal(filespaceMemberDecision({ ...base, actor: owner, actorRole: 'owner', targetCanSignIn: false, grant: false }), null);
   });
 
-  test('admins are never stored as grants, and roles are checked', () => {
-    assert.equal(filespaceMemberDecision({ ...base, actor: admin, targetIsAdmin: true }).status, 400);
+  test('an admin is a member only as an owner, and roles are checked', () => {
+    // They reach every drive already: a viewer or editor row says nothing,
+    // an owner row says whose the drive is (lib/drive-access.js).
+    for (const role of ['viewer', 'editor']) {
+      assert.equal(filespaceMemberDecision({ ...base, role, actor: admin, targetIsAdmin: true }).status, 400, role);
+    }
+    assert.equal(filespaceMemberDecision({ ...base, role: 'owner', actor: admin, targetIsAdmin: true }), null);
+    assert.equal(filespaceMemberDecision({ ...base, role: 'owner', actor: admin, targetEmail: admin.email, targetIsAdmin: true }), null, 'themselves');
+    assert.equal(filespaceMemberDecision({ ...base, role: 'owner', actor: owner, actorRole: 'owner', targetIsAdmin: true }), null, 'by an owner');
+    assert.equal(filespaceMemberDecision({ ...base, actor: admin, targetIsAdmin: true, grant: false }), null, 'removing one');
     assert.equal(filespaceMemberDecision({ ...base, actor: admin, role: 'superuser' }).status, 400);
     assert.equal(filespaceMemberDecision({ ...base, actor: admin, targetEmail: 'not-an-email' }).status, 400);
   });
