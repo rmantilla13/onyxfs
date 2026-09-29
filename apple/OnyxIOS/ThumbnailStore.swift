@@ -183,7 +183,7 @@ final class ThumbnailStore: @unchecked Sendable {
     }
 
     /// Signing out: nothing of the account's is kept, and nothing on its
-    /// way lands after.
+    /// way lands after — its placeholders' pictures included.
     func removeAll() async {
         planning.replace(nil)
         await network.cancelAll()
@@ -192,6 +192,7 @@ final class ThumbnailStore: @unchecked Sendable {
         memory.removeAll()
         disk.removeAll()
         LocalFrames.forget()
+        PlaceholderImages.shared.removeAll()
     }
 
     /// What is on disk now, for Settings.

@@ -65,6 +65,11 @@ public struct PreviewSet: Sendable {
     /// original serves.
     public let large: EncodedPicture?
     public let media: MediaFacts
+    /// The tiles' stand-in while any of these loads (Placeholder): the
+    /// smallest of them again, 24 pixels on its long side. Nil when there
+    /// is none to make — a picture with transparency in it, which a JPEG
+    /// would put on black; a browser makes that one, in WebP.
+    public var placeholder: Placeholder? = nil
 
     /// The siblings there are, as `thumbSizes` names them, in its order.
     public var sizes: [String] { (sm == nil ? [] : ["sm"]) + (xs == nil ? [] : ["xs"]) }
@@ -78,7 +83,9 @@ public struct PreviewSet: Sendable {
     }
 
     /// Bytes of all of it, for the log.
-    public var byteCount: Int { [grid, sm, xs, large].compactMap { $0?.data.count }.reduce(0, +) }
+    public var byteCount: Int {
+        [grid, sm, xs, large].compactMap { $0?.data.count }.reduce(0, +) + (placeholder?.data.count ?? 0)
+    }
 }
 
 /// A frame of a video, or an image, drawn at every size the web makes, the
@@ -261,7 +268,8 @@ public enum ThumbnailRenderer {
     // MARK: - Drawing
 
     /// From a first step's picture to all of them: the large picture, the
-    /// grid poster from it, and each sibling from the one before.
+    /// grid poster from it, each sibling from the one before, and the
+    /// placeholder from the smallest.
     static func draw(_ frame: CGImage, plan: Poster.Plan, kind: Poster.Kind, format: PreviewFormat, alpha: Bool,
                      media: MediaFacts) throws -> PreviewSet {
         let top = try scale(frame, to: plan.large ?? plan.grid, alpha: alpha)
@@ -275,7 +283,64 @@ public enum ThumbnailRenderer {
                           grid: try encode(grid, as: format, quality: format.quality),
                           sm: try sm.map { try encode($0, as: format, quality: format.quality) },
                           xs: try xs.map { try encode($0, as: format, quality: format.quality) },
-                          large: large, media: media)
+                          large: large, media: media,
+                          placeholder: placeholder(of: xs ?? sm ?? grid, alpha: alpha))
+    }
+
+    // MARK: - Placeholder
+
+    /// A placeholder's JPEG quality: the browser's (thumbnail-client.js
+    /// PLACEHOLDER_QUALITY). Shown softened, at two dozen pixels, its
+    /// artefacts are nobody's to see.
+    static let placeholderQuality = 0.5
+
+    /// The tiles' stand-in (Placeholder) for a set whose smallest picture is
+    /// `image`: drawn `Placeholder.edge` pixels on its long side, through
+    /// Poster's steps, into sRGB — as it is when it is no bigger than that
+    /// — and written as a JPEG, all ImageIO can be relied on to write.
+    ///
+    /// ImageIO's JPEG this small is mostly what it carries besides the
+    /// picture (TinyJPEG): TinyJPEG.squeezed takes that off and loses
+    /// nothing, some 700 characters as a data URL where ImageIO's own would
+    /// be 1,100 and more. Kept only when it decodes to exactly the picture
+    /// ImageIO wrote; else ImageIO's without its APP segments, as the server
+    /// would keep it, if that does; else none. So no colour profile or Exif
+    /// is ever sent, and the squeezing never changes a picture, only its
+    /// size.
+    ///
+    /// About 0.2 ms, next to the hundreds a thumbnail takes. Nil, never an
+    /// error: the thumbnail is what matters, and a browser makes the
+    /// placeholder when it sees a tile without one.
+    static func placeholder(of image: CGImage, alpha: Bool) -> Placeholder? {
+        let from = PixelSize(width: image.width, height: image.height)
+        // A JPEG would put a transparent picture on black.
+        guard !alpha, let size = Placeholder.size(for: from) else { return nil }
+        let smaller = size.width < from.width || size.height < from.height
+        guard let tiny = try? smaller ? scale(image, to: size, alpha: false) : redraw(image, at: from, alpha: false),
+              let written = try? encode(tiny, as: .jpeg, quality: placeholderQuality).data else { return nil }
+        if let squeezed = TinyJPEG.squeezed(written), samePicture(squeezed, written) {
+            return Placeholder(format: .jpeg, data: squeezed)
+        }
+        if let bare = TinyJPEG.bare(written), samePicture(bare, written) {
+            return Placeholder(format: .jpeg, data: bare)
+        }
+        return nil
+    }
+
+    /// Whether two encodings decode to the same pixels, as ImageIO decodes
+    /// and draws them into sRGB.
+    static func samePicture(_ a: Data, _ b: Data) -> Bool {
+        guard let one = decoded(a), let other = decoded(b), one.width == other.width, one.height == other.height,
+              let x = rgba(of: one, width: one.width, height: one.height, interpolation: .none),
+              let y = rgba(of: other, width: other.width, height: other.height, interpolation: .none) else { return false }
+        return x == y
+    }
+
+    /// A small picture's bytes, decoded now.
+    static func decoded(_ data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary)
+        else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
     }
 
     /// `image` at exactly `size`, through Poster.downscalePlan's steps.

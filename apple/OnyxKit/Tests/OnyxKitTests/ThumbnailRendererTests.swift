@@ -163,6 +163,11 @@ struct ThumbnailRendererTests {
         #expect((Samples.look(set.grid)?.mean ?? 0) > 20)
         #expect(set.large != nil && Samples.look(set.large)?.size == PixelSize(width: 1280, height: 720))
         #expect(Samples.look(set.grid)?.size == PixelSize(width: 1024, height: 576))
+        // And its placeholder, from the xs (213x120), of the same frame.
+        let placeholder = try #require(set.placeholder)
+        let tiny = Samples.look(EncodedPicture(data: placeholder.data, size: PixelSize(width: 24, height: 14)))
+        #expect(tiny?.size == PixelSize(width: 24, height: 14))
+        #expect((tiny?.mean ?? 0) > 20, "bars, not the black opening")
     }
 
     @Test func aClipThatIsBlackThroughoutHasNoPoster() async throws {

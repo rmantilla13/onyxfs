@@ -11,7 +11,7 @@ public protocol ThumbnailServer: Sendable {
     func presignThumbnail(contentType: String, sizes: [String]) async throws -> OnyxAPI.PreviewTarget
     func presignPoster(contentType: String) async throws -> OnyxAPI.PreviewTarget
     func recordThumbnail(fileId: String, thumbnailKey: String, posterKey: String?, thumbSizes: [String],
-                         media: MediaFacts) async throws -> FileItem
+                         media: MediaFacts, placeholder: Placeholder?) async throws -> FileItem
     /// A picture to storage, by its presigned PUT.
     func put(_ data: Data, to url: URL, contentType: String, cacheControl: String?) async throws
     /// A small picture from storage: a thumbnail, to see how big it is.
@@ -41,10 +41,16 @@ public protocol ThumbnailDrawing: Sendable {
 ///   may      GET /api/files/<id>/thumbnail — 204 when this account may
 ///            record one — before anything is downloaded or drawn
 ///   draw     the frame (AVFoundation reads only the ranges it needs of a
-///            presigned link) or the image, at every size (Poster)
+///            presigned link) or the image, at every size (Poster), and
+///            its placeholder (Placeholder)
 ///   hand in  the presign route's PUTs for the pictures, then
-///            PUT /api/files/<id>/thumbnail with their keys: the file's seq
-///            moves, and every device picks the thumbnail up
+///            PUT /api/files/<id>/thumbnail with their keys and the
+///            placeholder: the file's seq moves, and every device picks the
+///            thumbnail up
+///
+/// A thumbnail made before placeholders is not fetched again for one: a
+/// browser draws it, from the smallest picture the row has, when its tile
+/// comes into view, which costs this Mac nothing.
 ///
 /// A file just uploaded skips the asking: it is new, and its bytes are here.
 ///
@@ -393,8 +399,9 @@ public actor ThumbnailWorker {
     }
 
     /// The pictures to storage under keys the server names, then recorded
-    /// on the file. A sibling or a large picture that does not land is left
-    /// out, as the web leaves it out; the grid thumbnail must land.
+    /// on the file, with the placeholder, which goes in the row itself. A
+    /// sibling or a large picture that does not land is left out, as the
+    /// web leaves it out; the grid thumbnail must land.
     private func handIn(_ set: PreviewSet, fileId: String) async throws -> FileItem {
         let type = set.format.contentType
         let grid = try await server.presignThumbnail(contentType: type, sizes: set.sizes)
@@ -421,7 +428,7 @@ public actor ThumbnailWorker {
         }
         try Task.checkCancellation()
         return try await server.recordThumbnail(fileId: fileId, thumbnailKey: grid.key, posterKey: posterKey,
-                                                thumbSizes: landed, media: set.media)
+                                                thumbSizes: landed, media: set.media, placeholder: set.placeholder)
     }
 
     // MARK: - Helpers
@@ -585,9 +592,9 @@ public struct APIThumbnailServer: ThumbnailServer {
     }
 
     public func recordThumbnail(fileId: String, thumbnailKey: String, posterKey: String?, thumbSizes: [String],
-                                media: MediaFacts) async throws -> FileItem {
+                                media: MediaFacts, placeholder: Placeholder?) async throws -> FileItem {
         try await api.recordThumbnail(fileId: fileId, thumbnailKey: thumbnailKey, posterKey: posterKey,
-                                      thumbSizes: thumbSizes, media: media)
+                                      thumbSizes: thumbSizes, media: media, placeholder: placeholder)
     }
 
     /// As the browser's putToBucket: the type, and the Cache-Control the

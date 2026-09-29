@@ -10,7 +10,7 @@ import Foundation
 ///     GET  /api/files/<id>             the file as it is now, presigned
 ///     POST /api/files/presign          PUTs for the pictures: { thumb, sizes }
 ///                                      or { poster }, never a file
-///     PUT  /api/files/<id>/thumbnail   record the keys
+///     PUT  /api/files/<id>/thumbnail   record the keys, and the placeholder
 ///
 /// The thumbnail route goes past the sign-in gate with a bearer token
 /// (lib/bearer-gate.js), as the write routes of Writes.swift do.
@@ -97,12 +97,16 @@ extension OnyxAPI {
 
     /// Record the pictures on the file, over any it had (the server deletes
     /// the ones replaced and moves the file's `seq`). `thumbSizes` names the
-    /// siblings that landed. Returns the file as it is now.
+    /// siblings that landed. `placeholder` is the new thumbnail's tiny copy
+    /// (Placeholder), which rides in the row: the server keeps it only when
+    /// it is one, and the old thumbnail's goes either way. A server from
+    /// before placeholders reads past it. Returns the file as it is now.
     public func recordThumbnail(fileId: String, thumbnailKey: String, posterKey: String?, thumbSizes: [String],
-                                media: MediaFacts) async throws -> FileItem {
+                                media: MediaFacts, placeholder: Placeholder? = nil) async throws -> FileItem {
         struct Answer: Decodable { let file: FileItem }
         var body: [String: Any] = ["thumbnailKey": thumbnailKey, "thumbSizes": thumbSizes, "media": media.json]
         if let posterKey { body["posterKey"] = posterKey }
+        if let placeholder { body["placeholder"] = placeholder.dataURL }
         return try decode(Answer.self, from: try await request(thumbnailURL(fileId), method: "PUT", json: body)).file
     }
 

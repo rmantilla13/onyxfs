@@ -641,15 +641,28 @@ the ones that are missing, exactly as a browser would have made them.
      grid thumbnail, then sm and xs, each drawn from the one before and each
      step at most halving. The decoder draws the first step itself, so a 4K
      frame is never held at 4K. For a 4K clip: 1920x1080, 1024x576,
-     683x384, 213x120.
+     683x384, 213x120. And the placeholder a tile shows until they load
+     (`Placeholder`, lib/placeholder.js): the smallest again, 24 on its
+     long side (24x14), as a JPEG at the browser's quality. ImageIO's JPEG
+     that small is mostly not picture — Exif and Photoshop segments, a
+     colour profile for anything not drawn in sRGB, and the standard
+     Huffman tables — so `TinyJPEG` writes it again without them, with
+     tables made for its own symbols: the same pixels, some 500–820
+     characters as a data URL where ImageIO's would be 1,100–1,250 once the
+     server had taken the segments off. It is kept only when it decodes to
+     exactly ImageIO's picture. A transparent picture has none (a JPEG would
+     put it on black), and a thumbnail from before placeholders gets none
+     from the Mac: a browser draws that one from the row's smallest picture
+     when its tile comes into view, and the Mac downloads nothing for it.
   5. `POST /api/files/presign` with `{ thumb, sizes }` and `{ poster }`: the
      server names the keys. The PUTs carry the type and the Cache-Control it
      asked for. A sibling or a poster that does not land is left out, as on
      the web.
   6. `PUT /api/files/<id>/thumbnail` with `thumbnailKey`, `posterKey`,
-     `thumbSizes` and `media` (width, height, duration): the server deletes
-     what it replaces and moves the file's `seq`, so the web, the phone and
-     every Mac pick it up as they would a browser's.
+     `thumbSizes`, `media` (width, height, duration) and `placeholder` (its
+     data URL): the server deletes what it replaces and moves the file's
+     `seq`, so the web, the phone and every Mac pick it up as they would a
+     browser's.
   A file just uploaded skips the first step: it is new, and its bytes are
   here (a hard link keeps them after the queue lets go of its copy).
 - **Format.** WebP where this Mac's ImageIO can write it (asked at run time,
@@ -677,3 +690,5 @@ the ones that are missing, exactly as a browser would have made them.
   end, as a camera writes it): 0.03–0.14 s from this disk; over a link 80 ms
   away at 100 Mbit/s, about 0.55 s in five range requests, some 1.3 MB read.
   Up: about 235 KB of JPEG (grid 52 KB, sm 28 KB, xs 6 KB, poster 150 KB).
+  A placeholder, drawn from the xs: about 0.2 ms, and 370–600 bytes on the
+  photos and clips it was measured on.

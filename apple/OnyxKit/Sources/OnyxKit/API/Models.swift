@@ -95,11 +95,17 @@ public struct FileMetadata: Codable, Sendable, Equatable {
     public var duration: Double?
     /// A sound's shape (Waveform), once a browser or a Mac has drawn it.
     public var waveform: Waveform?
+    /// The thumbnail's picture, tiny (Placeholder): what a tile shows,
+    /// softened, until the thumbnail itself has come. Only ever beside the
+    /// thumbnail it is a copy of.
+    public var placeholder: Placeholder?
 
-    enum CodingKeys: String, CodingKey { case width, height, duration, waveform }
+    enum CodingKeys: String, CodingKey { case width, height, duration, waveform, placeholder }
 
-    public init(width: Double? = nil, height: Double? = nil, duration: Double? = nil, waveform: Waveform? = nil) {
+    public init(width: Double? = nil, height: Double? = nil, duration: Double? = nil, waveform: Waveform? = nil,
+                placeholder: Placeholder? = nil) {
         self.width = width; self.height = height; self.duration = duration; self.waveform = waveform
+        self.placeholder = placeholder
     }
 
     public init(from decoder: Decoder) throws {
@@ -114,6 +120,10 @@ public struct FileMetadata: Codable, Sendable, Equatable {
         duration = number(.duration)
         // One this cannot read is no waveform, not a file that fails to decode.
         waveform = (try? c.decodeIfPresent(String.self, forKey: .waveform)).flatMap { $0.flatMap(Waveform.init(stored:)) }
+        // Likewise a placeholder: checked as the server checks one, and
+        // none if it is not one. Well under a microsecond a row, which a Mac
+        // syncing a drive pays too, though it shows no tiles of its own.
+        placeholder = (try? c.decodeIfPresent(String.self, forKey: .placeholder)).flatMap { $0.flatMap(Placeholder.init(dataURL:)) }
     }
 }
 

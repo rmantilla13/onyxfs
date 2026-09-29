@@ -36,8 +36,9 @@ One Swift codebase. On the Mac it is **Onyx.app**:
   it off.
 - **Thumbnails the web is missing**, made here: a 4K clip straight from a
   camera, or a HEIC or RAW a browser cannot draw, gets its thumbnail, the
-  smaller sizes and the player's poster from this Mac, at the web's sizes,
-  and every device shows them. For each file it uploads, from the bytes
+  smaller sizes, the player's poster and the placeholder a tile shows
+  until they load from this Mac, at the web's sizes, and every device
+  shows them. For each file it uploads, from the bytes
   still here, and for the files of the drives it syncs; one at a time, and
   nothing at all while nothing is missing. Settings › General turns it off
   (ONYXFS.md, "Thumbnails").
@@ -47,6 +48,8 @@ On iPhone and iPad it is **Onyx** (`OnyxIOS/`), native SwiftUI:
 - **The drives, browsed as the web lists them.** Folders as icons or a list,
   sorted by name, date or size, searched beneath the folder you are in, a
   page at a time — from the same access-checked listing the web reads.
+  Each tile has its picture at once: the placeholder in the file's row,
+  softened, until the thumbnail comes (`PlaceholderImages`).
 - **A file full screen.** Photos zoom, video and sound stream from storage
   (picture in picture, AirPlay), documents open in Quick Look; swipe
   through a folder, share a file, see its details.
@@ -291,7 +294,7 @@ open build/Onyx.app --args --server localhost:3000 --pair ABCD1234EFGH
 | Finder | One rclone NFS mount per drive, using macOS's own NFS client (no macFUSE), each in a folder of its own under `~/Onyx` (a drive whose name would land on another's folder, or on `Library`, gets `Name (2)`). It mounts a WebDAV bridge inside the app (`DAVServer` + `DAVResponder`) on 127.0.0.1, which needs a per-launch bearer token. The bridge lists from a `DriveMirror`: `GET /api/files/delta?drive=` synced into a `Replica` every 5 s while anything is happening, and every 30–60 s when nothing is. Reads are 302s to the file's presigned URL (`GET /api/space/files/<id>`), so rclone fetches byte ranges straight from storage, or they are served from a pinned copy (`PinStore`). A link is reused only while the file stays at the version it was signed for, since a rename or a move changes the object's key. rclone's VFS cache keeps what was read, and treats a cached file as stale when its size or modified time changes (vendor `rclone`; the bridge's time moves with every change to the file). Each drive's rclone keeps a cache of its own, capped at the size set in Settings → Storage when that drive mounted. |
 | Access | The delta uses the listing's own access rule. A row you may not see arrives as a bare id and is dropped. A change of drive membership, which writes no file row, shows up as a new `scope` fingerprint: the drive is fetched again from the start beside the tree Finder shows, and swapped in once whole. Offline copies are deleted only against a drive fetched to the end (`isAuthoritative`), never a half-fetched one. A drive the account has lost answers 404. The mirror withholds it at once (Finder shows it empty, nothing is deleted), since the server answers the same when one of its own queries fails. Only after refusals over ten minutes with no page between does it forget the drive and report `OnyxError.driveGone`, and the app then unmounts the drive, deletes its offline copies and stops mounting it at launch. |
 | Offline copies | A `PinStore` per account on one server (`Pinned/account-<hash>/`), as the mirrors are (`Mirrors/account-<hash>/`), so another account signing in on the Mac neither inherits the rules nor deletes the copies. A pass fetches what the rules reach straight into the store's folder, on the cache's own disk (`FileDownload`), three at a time and only while that disk has room (a gigabyte is kept free). A failed download waits 30 s, then twice as long each time up to an hour, or until the network comes back. While the cache's disk is not connected a pass does nothing at all, Settings says so, and the drives mount and stream regardless. A disk that comes back under a new device number (a USB disk plugged in again, a share reconnected) is still the store's if it is the same volume or the folder holds the store's `.store-id`; any other folder by that path is left alone. A pinned folder renamed on the web keeps its files' copies and shows as not found. One pass per drive at a time with at most one queued behind it, and `pins.json` is written only when something changed. A tick asks for a pass only when one is owed: the drive's mirror shows something new, a failed download is due again, or ten minutes have passed (a pass looks at every copy on disk). Sign-out stops the account's downloads. The whole cache moves to a folder the user picks, every account's store with it, but not into `~/Onyx` or into itself. |
-| Thumbnails | `ThumbnailService` runs OnyxKit's `ThumbnailWorker` over the files a drive's mirror says have none (`ReplicaFile.previews`, from the feed's `thumbnailKey`, `thumbSizes` and `posterKey`), and over each upload as it finishes. For each file: `GET /api/files/<id>` (still missing?), `GET /api/files/<id>/thumbnail` (a 204 when this account may record one), the pictures drawn with AVFoundation or ImageIO at `Poster`'s sizes (lib/poster.js), `POST /api/files/presign` with `{thumb, sizes}` and `{poster}`, the PUTs to storage, then `PUT /api/files/<id>/thumbnail`. The thumbnail route takes the device token, as the write routes do (lib/bearer-gate.js). |
+| Thumbnails | `ThumbnailService` runs OnyxKit's `ThumbnailWorker` over the files a drive's mirror says have none (`ReplicaFile.previews`, from the feed's `thumbnailKey`, `thumbSizes` and `posterKey`), and over each upload as it finishes. For each file: `GET /api/files/<id>` (still missing?), `GET /api/files/<id>/thumbnail` (a 204 when this account may record one), the pictures drawn with AVFoundation or ImageIO at `Poster`'s sizes (lib/poster.js), `POST /api/files/presign` with `{thumb, sizes}` and `{poster}`, the PUTs to storage, then `PUT /api/files/<id>/thumbnail`, which carries the placeholder too (`Placeholder`: the smallest picture at 24 px, a JPEG of a few hundred bytes). The thumbnail route takes the device token, as the write routes do (lib/bearer-gate.js). |
 
 ### Who can read a mounted drive
 
@@ -356,6 +359,10 @@ decode fails on HTML, with a complaint about the character `<`.
     clips and photos written for the test (4K HEVC, a portrait clip, a
     black opening, an EXIF-turned JPEG, a HEIC, a transparent PNG), and on
     ffmpeg's test source when there is an ffmpeg (`ONYX_FFMPEG`).
+  - Placeholders: the web's own strings read as the server reads them, and
+    nothing else; the Mac's kept by the server as sent, with no Exif or
+    colour profile, even from a Display P3 photo; TinyJPEG's rewriting
+    checked to decode to the same pixels.
 - **Thumbnails end to end:** OnyxKit's worker against a local server
   (`npm run dev:local`). A 4K HEVC master with none, one with an old 480px
   thumbnail, one with a newer thumbnail that has no smaller sizes, a HEIC,
