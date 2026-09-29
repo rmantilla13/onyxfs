@@ -1955,6 +1955,9 @@ body.is-marqueeing * { cursor: default !important; }
 .storage-stat { margin: 0 0 var(--s3); font-size: var(--t-xl); }
 .storage-stat strong { font-variant-numeric: tabular-nums; }
 .storage-foot { margin: 0; }
+/* The cost estimate's small print: what it counts, then a line per service. */
+.storage-notes p { margin: 0; max-width: 72ch; }
+.storage-notes p + p { margin-top: var(--s1); }
 
 .usage-bar { display: flex; gap: 2px; height: 14px; overflow: hidden; border-radius: var(--radius-pill); background: var(--surface-sunken); }
 .usage-seg { flex: none; min-width: 3px; height: 100%; }
