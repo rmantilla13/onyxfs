@@ -1,10 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 // useFormState (react-dom), not useActionState (react) — this is React 18.
 import { useFormState, useFormStatus } from 'react-dom';
 import { requestMagicLink, signInWithPassword } from './actions';
 import BrandLogo from '@/app/components/BrandLogo';
+import { clearPreviewCaches } from '@/lib/preview-cache';
 
 /**
  * Sign in, and nothing else: there is no sign-up. Someone new is added by an
@@ -20,6 +21,11 @@ export default function SignInClient({ brandName, tagline, logo, oktaEnabled, li
   const [passwordState, submitPassword] = useFormState(signInWithPassword, {});
   const [usePassword, setUsePassword] = useState(false);
   const [email, setEmail] = useState('');
+  // A session that ended without the Sign out button — it expired, was
+  // revoked, or was signed out everywhere — still left the pictures this
+  // browser kept of the library (lib/preview-cache.js). Whoever signs in
+  // next starts without them.
+  useEffect(() => { clearPreviewCaches(); }, []);
 
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>

@@ -8,6 +8,7 @@ import { crumbsFor } from '@/lib/folder-ops';
 import { kindLabel } from '@/lib/file-info';
 import { thumbSources } from '@/lib/renditions';
 import { BUILTIN_VIEWS } from '@/lib/builtin-views';
+import { clearPreviewCaches } from '@/lib/preview-cache';
 import Icon from '@/app/components/ui/Icon';
 
 /**
@@ -126,7 +127,8 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
     { id: 'light', label: 'Theme: Light', run: () => { setThemePref('light'); onClose(); } },
     { id: 'dark', label: 'Theme: Dark', run: () => { setThemePref('dark'); onClose(); } },
     { id: 'system', label: 'Theme: System', run: () => { setThemePref('system'); onClose(); } },
-    { id: 'signout', label: 'Sign out', run: () => { window.location.href = '/api/auth/signout'; } },
+    // The pictures kept of the library go first, as from the account menu.
+    { id: 'signout', label: 'Sign out', run: () => { clearPreviewCaches().then(() => { window.location.href = '/api/auth/signout'; }); } },
   ].filter(Boolean), [onFiles, isAdmin, go, command, onClose, onShortcuts]);
 
   const term = q.trim().toLowerCase();

@@ -62,8 +62,8 @@ function smallerThan(md, box) {
  * The picture of a file on a surface (lib/renditions.js): a card gets a
  * srcset of its sm sibling and the grid poster sized to the measured column
  * (`sizes`, CSS px); a list row, the palette and the storage pages its xs
- * sibling; Get info its sm. `eager` is for the first row of the grid, which
- * is on screen before anything else is.
+ * sibling; Get info its sm. `eager` is for the cards the grid's first screen
+ * shows, which are on screen before anything else is.
  */
 export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface = 'card', sizes, boxHeight, eager = false, fitMode = 'fill' }) {
   const kind = effectiveKind(file);

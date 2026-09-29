@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import FileCard from './FileCard';
-import { rowWindow, overscanFor } from '@/lib/virtual-rows';
+import { rowWindow, overscanFor, firstScreenCount } from '@/lib/virtual-rows';
 import { gridHits, overlaps } from '@/lib/marquee';
 import { rowsPerViewport } from '@/lib/nav-geometry';
 import { observeThumbLatency, thumbsAreSlow } from '@/lib/thumb-latency';
@@ -48,7 +48,11 @@ const OVERSCAN_ROWS = 4;
 // layout effect then measures them and switches to the windowed layout
 // before the browser paints again, and the two look the same.
 const FIRST_PAINT_CARDS = 40;
-// Cards on screen before anything else is: loaded at once, first.
+// Cards on screen before anything else is: loaded at once, first. Until the
+// grid is measured (the server render) that is a phone's first screen; from
+// then on, every card in the rows the top of the grid shows on this screen
+// (firstScreenCount) — three rows of five on a laptop, where eight was a row
+// and a half and the rest waited for a layout to ask for them.
 const EAGER_CARDS = 8;
 
 function FileGrid({
@@ -81,9 +85,10 @@ function FileGrid({
   const pendingFocus = useRef(null);
   const [active, setActive] = useState(0);
   // Layout read back from the stylesheet: columns, row pitch (card + gap), the
-  // grid's own bottom padding (the phone selection bar reserves some) and a
-  // column's width, which is the `sizes` each card's srcset is chosen by.
-  const [metrics, setMetrics] = useState({ cols: 1, pitch: 0, gap: 0, padBottom: 0, colW: 0 });
+  // grid's own bottom padding (the phone selection bar reserves some), a
+  // column's width, which is the `sizes` each card's srcset is chosen by, and
+  // how many cards the first screen shows (`eager`).
+  const [metrics, setMetrics] = useState({ cols: 1, pitch: 0, gap: 0, padBottom: 0, colW: 0, eager: 0 });
   const [range, setRange] = useState({ start: 0, end: 0 });
   const filesRef = useRef(files);
   filesRef.current = files;
@@ -113,9 +118,13 @@ function FileGrid({
     const pitch = Math.max(1, height + gap);
     // The picture inside the card's 1px border.
     const colW = Math.max(0, Math.round(width - 2));
-    setMetrics((m) => (m.cols === cols && Math.abs(m.pitch - pitch) < 0.5 && m.gap === gap && m.padBottom === padBottom && m.colW === colW
+    // From where the grid starts on the page, not the viewport, so it does
+    // not change as the page scrolls.
+    const box = outer.current?.getBoundingClientRect();
+    const eager = firstScreenCount({ cols, pitch, top: box ? box.top + window.scrollY : 0, viewport: window.innerHeight });
+    setMetrics((m) => (m.cols === cols && Math.abs(m.pitch - pitch) < 0.5 && m.gap === gap && m.padBottom === padBottom && m.colW === colW && m.eager === eager
       ? m
-      : { cols, pitch, gap, padBottom, colW }));
+      : { cols, pitch, gap, padBottom, colW, eager }));
   }, []);
 
   const rowCount = Math.ceil(files.length / metrics.cols);
@@ -275,7 +284,7 @@ function FileGrid({
       selected={selected?.has(f.id) || false}
       tabIndex={i === tabbable ? 0 : -1}
       handlers={handlers}
-      eager={i < EAGER_CARDS}
+      eager={i < (metrics.eager || EAGER_CARDS)}
       sizes={sizes}
       onMissingThumb={onMissingThumb}
       fields={fields}
