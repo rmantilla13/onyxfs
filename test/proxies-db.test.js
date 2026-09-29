@@ -76,6 +76,10 @@ const queue = async () => {
   return { status: res.status, body: await res.json().catch(() => null) };
 };
 const ids = (q) => q.body.jobs.map((j) => j.fileId);
+// The jobs someone asked for. After them the queue offers large videos with no
+// job at all (listProxyJobs), which another test file's rows can add to in a
+// shared database — so the exact lists below are of what was asked for.
+const asked = (q) => q.body.jobs.filter((j) => j.requestedAt).map((j) => j.fileId);
 
 let drive; let secretDrive; let priorStorage;
 let cut; let mine; let theirs; let secret; let binned; let pic;
@@ -133,13 +137,13 @@ describe('proxies against a real database', { skip }, () => {
     as(OWNER);
     const own = await queue();
     assert.equal(own.status, 200);
-    assert.deepEqual(ids(own), [cut.id, mine.id], 'their drive’s job and their own upload — not an org file they only see, not another drive');
+    assert.deepEqual(asked(own), [cut.id, mine.id], 'their drive’s job and their own upload — not an org file they only see, not another drive');
     as(VIEWER);
     assert.deepEqual(ids(await queue()), [], 'a drive viewer may change nothing in it, nor others’ uploads');
     as(OUTSIDER);
     assert.deepEqual(ids(await queue()), [], 'sees the library, may change none of it');
     as(BOSS);
-    assert.deepEqual(ids(await queue()), [cut.id, mine.id, theirs.id, secret.id], 'an admin: everything but the trash');
+    assert.deepEqual(asked(await queue()), [cut.id, mine.id, theirs.id, secret.id], 'an admin: everything but the trash');
     const job = (await queue()).body.jobs[0];
     assert.deepEqual(Object.keys(job).sort(), ['fileId', 'height', 'mime', 'name', 'requestedAt', 'size']);
     assert.equal(job.height, 2160, 'the source height, so a worker sees what it is in for');
@@ -342,5 +346,54 @@ describe('proxies against a real database', { skip }, () => {
     as(OWNER);
     assert.deepEqual((await call(route.DELETE, cut.id, 'DELETE')).body, { ok: true });
     assert.deepEqual((await call(route.GET, cut.id, 'GET')).body.proxy.status, 'none');
+  });
+  test('a large video no one asked for is offered after the rest, and claiming it makes its job', async () => {
+    const file = (name, size) => db.createFile({
+      name, url: `https://s3.px.test/onyx-px/${PREFIX}/${name}`, mime: 'video/mp4', kind: 'video',
+      size, storage: 's3', storageKey: `${PREFIX}/${name}`, createdBy: OWNER, metadata: { width: 3840, height: 2160 },
+    });
+    const quiet = await file('quiet.mp4', 3_000_000_000);  // from before proxies were asked for at upload
+    const short = await file('short.mp4', 50_000_000);     // too small to be worth one
+    made.push(quiet.id, short.id);
+
+    as(OWNER);
+    const q = await queue();
+    const at = ids(q).indexOf(quiet.id);
+    assert.ok(at >= 0, 'offered');
+    assert.ok(at >= asked(q).length, 'after everything someone asked for');
+    assert.equal(q.body.jobs[at].requestedAt, null, 'no one asked: no job yet');
+    assert.ok(!ids(q).includes(short.id), 'a small video is not worth one');
+    as(VIEWER);
+    assert.ok(!ids(await queue()).includes(quiet.id), 'a drive viewer is offered nothing');
+    as(OUTSIDER);
+    assert.ok(!ids(await queue()).includes(quiet.id), 'nor someone outside the drive');
+
+    // Claiming it makes the job, and it is a claim like any other.
+    as(OTHER);
+    const got = await call(claimRoute.POST, quiet.id, 'POST', { device: 'Other’s Mac' });
+    assert.equal(got.status, 200, JSON.stringify(got.body));
+    assert.ok(isProxyKey(got.body.proxyKey));
+    assert.equal((await db.getProxy(quiet.id)).status, 'working');
+    as(OWNER);
+    assert.equal((await call(claimRoute.POST, quiet.id, 'POST', {})).status, 409, 'taken, as any job is');
+    assert.ok(!ids(await queue()).includes(quiet.id), 'offered no more: it has a job now');
+
+    // No job is made for one that should not have one.
+    assert.equal((await call(claimRoute.POST, short.id, 'POST', {})).status, 404);
+    assert.equal(await db.getProxy(short.id), null);
+  });
+
+  test('a failed job is not offered again', async () => {
+    const failed = await db.createFile({
+      name: 'broken.mp4', url: `https://s3.px.test/onyx-px/${PREFIX}/broken.mp4`, mime: 'video/mp4', kind: 'video',
+      size: 3_000_000_000, storage: 's3', storageKey: `${PREFIX}/broken.mp4`, createdBy: OWNER,
+    });
+    made.push(failed.id);
+    assert.equal(await db.queueProxyIfMissing(failed.id), true);
+    await db.sql`UPDATE proxies SET status = 'failed', error = 'unreadable' WHERE file_id = ${failed.id}`;
+    as(OWNER);
+    assert.ok(!ids(await queue()).includes(failed.id));
+    assert.equal(await db.queueProxyIfMissing(failed.id), false, 'a job of any kind is left as it is');
+    assert.equal((await db.getProxy(failed.id)).status, 'failed');
   });
 });

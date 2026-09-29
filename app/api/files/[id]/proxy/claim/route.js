@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { claimProxy, failProxy } from '@/lib/db';
+import { claimProxy, failProxy, queueProxyIfMissing } from '@/lib/db';
 import { presignFileUrls, getStorageConfig, storageMode, s3PresignProxyPut } from '@/lib/storage';
 import { openProxy, readJson, json } from '@/lib/proxy-guard';
 import { proxyKeyFor } from '@/lib/media';
-import { normalizeDevice, proxySpec, LEASE_SECONDS, PROXY_MAX_PUT_BYTES, PROXY_MIME } from '@/lib/proxies';
+import { normalizeDevice, proxySpec, shouldProxy, LEASE_SECONDS, PROXY_MAX_PUT_BYTES, PROXY_MIME } from '@/lib/proxies';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,6 +23,11 @@ const URL_TTL = 21600;
  * that is queued, or working on a lease that has run out, so two Macs asking at
  * once cannot both have it. 409 { code: 'taken' } when another holds it; 404
  * when there is no job.
+ *
+ * A large video with no job at all — one the queue offered because nothing
+ * asked for was waiting (lib/db.js listProxyJobs) — gets its job here, from
+ * whoever claims it, and the claim goes ahead. Only one that should have a
+ * proxy (lib/proxies.js shouldProxy), and only after the same checks.
  *
  * AUTHORIZE → FILTER → PRESIGN. The caller is held to the same checks as a
  * request (files.edit, write access to the file, drives included); the job is
@@ -53,9 +58,14 @@ export async function POST(req, { params }) {
   // expired key cannot overwrite the newer rendition.
   const proxyKey = proxyKeyFor(randomUUID());
 
-  const claimed = await claimProxy(g.file.id, {
+  const claim = () => claimProxy(g.file.id, {
     email: g.email, device, sourceKey: g.file.storageKey || null, proxyKey,
   });
+  let claimed = await claim();
+  if (claimed.missing && shouldProxy(g.file)) {
+    await queueProxyIfMissing(g.file.id);
+    claimed = await claim();
+  }
   if (claimed.taken) return json({ error: 'Another Mac is transcoding this file.', code: 'taken' }, 409);
   if (claimed.missing) return json({ error: 'There is no proxy job for this file.' }, 404);
   const job = claimed.row;

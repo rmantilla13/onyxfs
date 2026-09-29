@@ -24,6 +24,11 @@ const json = (body, status = 200, headers = {}) => NextResponse.json(body, { sta
  * drives are boundaries here too. No URL is minted here; a claim does that, for
  * the one job it takes.
  *
+ * Once everything someone asked for is listed, the page is filled with large
+ * videos that have no job at all, newest first — every large video is meant
+ * to have a streamable version, and these came before one was asked for at
+ * upload. Their `requestedAt` is null; claiming one makes its job.
+ *
  * `height` is the source's, from the file's own metadata, so a worker can see
  * what it is in for before claiming. Null when nothing probed it; the claim
  * sends the rendition either way.
