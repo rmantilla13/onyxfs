@@ -10,6 +10,9 @@ struct Place: Hashable, Identifiable, Sendable {
     let name: String
     /// viewer | editor | owner, for a drive; nil for All Files.
     let role: String?
+    /// The drive's own colour, "#RRGGBB" — the dot beside its name on the
+    /// web. Nil for All Files, and from an older server.
+    var color: String? = nil
 
     var id: String { scope.identifier }
     var isLibrary: Bool { scope == .library }
@@ -37,6 +40,13 @@ final class Session {
     private(set) var signingIn = false
     /// What went wrong last, in words for the screen it happened on.
     var problem: String?
+    /// The account, with the name it gave itself, for the Home's greeting.
+    private(set) var identity: Identity?
+    /// What each place holds for this account (Place.id), as the listing
+    /// counts it: the Home's cards and storage, the drive list's lines.
+    private(set) var usage: [String: PlaceUsage] = [:]
+    /// When the places were last counted, and which they were.
+    private var usageAsked: (at: Date, places: Set<String>)?
 
     private(set) var api: OnyxAPI
     private var auth: AuthClient
@@ -181,6 +191,7 @@ final class Session {
         forget()
         await ThumbnailStore.shared.removeAll()
         PreviewFiles.removeAll()
+        DownloadCenter.shared.removeAll()
     }
 
     /// Everything of the signed-in account, forgotten here.
@@ -191,6 +202,9 @@ final class Session {
         drives = []
         isAdmin = false
         trees = [:]
+        identity = nil
+        usage = [:]
+        usageAsked = nil
         placesLoaded = false
         phase = .signedOut
     }
@@ -204,7 +218,7 @@ final class Session {
         do {
             let (list, admin, address, _) = try await api.drives()
             drives = list.filter(\.isMember)
-                .map { Place(scope: .drive(id: $0.id), name: $0.name, role: $0.role) }
+                .map { Place(scope: .drive(id: $0.id), name: $0.name, role: $0.role, color: $0.color) }
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             isAdmin = admin
             if let address {
@@ -216,6 +230,29 @@ final class Session {
         } catch {
             failed(error)
         }
+    }
+
+    /// Who is signed in, and what every place holds: asked together, each
+    /// place at once — at most once a minute for the same places, unless
+    /// `refresh`. A place that cannot be counted keeps what it last said.
+    func loadOverview(refresh: Bool = false) async {
+        guard phase == .signedIn, placesLoaded else { return }
+        let places = drives + [Place.library]
+        let ids = Set(places.map(\.id))
+        if !refresh, let asked = usageAsked, asked.places == ids, Date().timeIntervalSince(asked.at) < 60 { return }
+        usageAsked = (Date(), ids)
+        let api = api
+        async let who = try? api.identity()
+        let counted = await withTaskGroup(of: (String, PlaceUsage?).self) { group in
+            for place in places {
+                group.addTask { (place.id, try? await api.usage(of: place.scope)) }
+            }
+            var out: [String: PlaceUsage] = [:]
+            for await (id, usage) in group { if let usage { out[id] = usage } }
+            return out
+        }
+        usage.merge(counted) { _, new in new }
+        if let identity = await who { self.identity = identity }
     }
 
     /// Every folder in `place`, from the first visit on; asked again only

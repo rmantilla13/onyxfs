@@ -26,10 +26,25 @@
 	<!-- Standard HTTPS only: exempt from export documentation. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
-	<!-- Picture in picture keeps playing when the app is left. -->
+	<!-- Picture in picture keeps playing when the app is left. Downloads
+	     need no mode of their own: a background URLSession carries on
+	     without one (DownloadTransport). -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
 	</array>
+	<!-- The web's dark scheme, always, for UIKit's screens too: the share
+	     sheet, the Files picker, alerts, the keyboard. -->
+	<key>UIUserInterfaceStyle</key>
+	<string>Dark</string>
+	<!-- Launching on the page's own near-black (Assets: Paper). -->
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>Paper</string>
+	</dict>
+	<!-- Save to Photos: add-only, never reading the library. -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Onyx saves the photos and videos you choose to your library.</string>
 </dict>
 </plist>

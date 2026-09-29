@@ -54,6 +54,16 @@ describe('parameter binding', () => {
     assert.ok(!/ORDER BY/.test(countText), 'count should not order');
     assert.ok(!/LIMIT/.test(countText), 'count should not limit');
   });
+
+  test('the total weighs the rows it counts, and no others', () => {
+    // What a drive holds for this caller, as the iPhone's Home shows it:
+    // summed over exactly the rows the count counts — the listing's own
+    // filters and access — never over the drive's prefix alone.
+    const { countText, text } = buildFileQuery({ opts: { folder: 'A' }, principal: viewer });
+    assert.match(countText, /COALESCE\(sum\(f\.size\), 0\)::bigint AS bytes/);
+    const where = (sql) => sql.slice(sql.indexOf('WHERE'), sql.search(/ORDER BY|$/));
+    assert.equal(where(countText).trim(), where(text).trim(), 'the sum is filtered as the listing is');
+  });
 });
 
 describe('access control', () => {

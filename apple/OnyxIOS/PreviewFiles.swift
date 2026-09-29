@@ -19,8 +19,7 @@ enum PreviewFiles {
     static func local(for file: FileItem, api: OnyxAPI,
                       progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> URL {
         let versions = folder.appendingPathComponent(file.id, isDirectory: true)
-        let target = versions.appendingPathComponent("v\(file.version)", isDirectory: true)
-            .appendingPathComponent(safeName(file.name))
+        let target = location(of: file)
         if FileManager.default.fileExists(atPath: target.path) { return target }
 
         let link = try await api.contentLink(fileId: file.id)
@@ -37,6 +36,19 @@ enum PreviewFiles {
         return target
     }
 
+    /// This version of the file, if it is on this device already — for a
+    /// save, which then need not download it again.
+    static func cached(for file: FileItem) -> URL? {
+        let target = location(of: file)
+        return FileManager.default.fileExists(atPath: target.path) ? target : nil
+    }
+
+    private static func location(of file: FileItem) -> URL {
+        folder.appendingPathComponent(file.id, isDirectory: true)
+            .appendingPathComponent("v\(file.version)", isDirectory: true)
+            .appendingPathComponent(safeName(file.name))
+    }
+
     static func removeAll() {
         try? FileManager.default.removeItem(at: folder)
     }
@@ -44,9 +56,7 @@ enum PreviewFiles {
     /// The name as a file on this device may have it: no path separators,
     /// never empty.
     static func safeName(_ name: String) -> String {
-        let cleaned = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.isEmpty || cleaned == "." || cleaned == ".." ? "file" : cleaned
+        SavePlan.fileName(name)
     }
 
     /// Reports a download's progress as it goes.
