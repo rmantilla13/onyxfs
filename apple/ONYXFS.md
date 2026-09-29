@@ -470,6 +470,30 @@ letter in the logo's cyan.
   paste) and is never replaced. One that is removed comes back at the next
   mount, as the disk's own. A new drawing, from a new design or a new colour,
   replaces the old one at the next mount.
+- **It follows the drive while mounted.** A drive given a new colour or name
+  on the web gets its new icon at once, not at its disk's next mount: the app
+  sets it as any app sets an icon (`DiskIcons`, `NSWorkspace.setIcon`, which
+  writes `/.VolumeIcon.icns` through the disk and which Finder shows at
+  once). The drive list that brings the change is asked for again when the
+  menu bar panel opens (if older than 10 s), when Onyx comes forward (30 s)
+  and every five minutes (`AppModel.refreshIfOlder`). The same rule holds:
+  only an icon that is the app's is replaced — the extension's, as drawn now,
+  or the last one set this way, whose bytes are remembered in UserDefaults
+  (`diskIcons`, with the drawing they were of) — so the person's own stays.
+  The volume's name is still the one it mounted with; a renamed drive's disk
+  takes its new name at its next mount.
+- **In Finder's sidebar.** Finder lists a volume under Locations by itself
+  when it arrives as a disk or a server does, and never lists an FSKit
+  volume: its record of every volume it has shown (the Locations list,
+  `com.apple.LSSharedFileList.FavoriteVolumes`) held the owner's external
+  disks, installers and Frame.io Drive's shares, and no Onyx disk. So each
+  disk is added to that list as it mounts (`FinderSidebar`, as Frame.io Drive
+  adds its own) and taken off when it is turned off in Onyx or ejected; one
+  that is only unmounted (quitting, signing out) keeps its place and shows
+  again when it is back. LSSharedFileList is deprecated since macOS 10.11 and
+  still how the list is kept; its "last" position is the sentinel `0x2`,
+  which Swift would retain as an object, so an entry goes after the list's
+  last entry instead.
 - **Not on NFS.** Drives mounted the other way, the rclone NFS mounts in
   `~/Onyx`, keep macOS's generic network-volume icon. macOS reads no Finder
   info over NFSv3: a root's `._.` and a file's `._name` are both ignored (tried
@@ -483,7 +507,11 @@ and then for it to be always in sight. It is a bar along the foot of the
 Onyx window (`ActivityBar`) with four: **Download** (from storage to this
 Mac), **Upload** (back), **Read** (what apps read from the disks) and
 **Write** (what apps wrote to them), in megabits a second, each over the
-last minute; and, at its end, the window's downloads.
+last minute; and, at its end, the window's downloads. Settings › General
+and View › Show Activity hide it (`showsActivityBar` in UserDefaults). The
+menu bar item's panel (`MenuPanel`) shows the same four, as tiles two by
+two, above what is on its way and the drives — each with its disk's icon,
+drawn by the same `DriveIcon` the extension puts on the disk.
 
 - **The extension counts** what only it sees (`TransferMeter`, OnyxFSCore):
   bytes the engine hands the kernel for a read, bytes a write gives it, and
@@ -506,11 +534,13 @@ last minute; and, at its end, the window's downloads.
   looked at once a second while one runs), into `TransferLog` (OnyxKit): a
   ring of one-second buckets, five minutes long. Adding is a lock and an
   add; nothing runs to keep it.
-- **The bar reads it** once a second from when bytes start to move until its
-  graphs are flat again, and not at all in between: the first bytes after a
-  quiet second wake it (`TransferLog.onWake`, called outside the lock), and
-  it stops itself once the log has been quiet for as long as a graph shows
-  (`ActivityClock`). Always on screen, it costs nothing while nothing moves.
+- **The bar and the panel read it** once a second from when bytes start to
+  move until the graphs are flat again, and not at all in between: the first
+  bytes after a quiet second wake the one clock they share
+  (`TransferLog.onWake`, called outside the lock; `AppModel.activity`), which
+  stops itself once the log has been quiet for as long as a graph shows, and
+  when the last view showing the graphs goes (`attach`/`detach`). Always on
+  screen, the bar costs nothing while nothing moves.
   Each graph is its last 60 whole seconds, each averaged with its
   neighbours, since a disk's once-a-second reports can land two in one
   second and none in the next. The figure is the average of the last three.

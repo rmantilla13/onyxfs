@@ -39,6 +39,8 @@ final class AppModel: ObservableObject {
     let finder = DriveService()
     /// Transcripts requested on the web, made on this Mac.
     let transcriber = TranscriptionService()
+    /// What redraws the activity graphs, wherever they show (ActivityClock).
+    lazy var activity = ActivityClock(transfers: finder.transfers)
     private let settings = SharedSettings()
     /// Signed in as the app opened: bringing the drives back, in the
     /// background. Launch arguments that need the drives wait for it.
@@ -53,6 +55,14 @@ final class AppModel: ObservableObject {
         web.model = self
         updater.model = self
         if phase == .signedIn { startup = Task { await afterSignIn() } }
+        // Back to Onyx from the browser, say, where a drive may have changed.
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task { await self.refreshIfOlder(than: 30) }
+            }
+        }
         // Quitting unmounts every drive, so none is left for the system to
         // reap, and takes away downloads cut short.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
@@ -250,6 +260,7 @@ final class AppModel: ObservableObject {
                 await finder.start(model: self)
             }
             drivesLoaded = true
+            drivesRefreshedAt = Date()
             if problem == listingProblem { problem = nil }
             listingProblem = nil
         } catch OnyxError.notAuthenticated {
@@ -264,6 +275,8 @@ final class AppModel: ObservableObject {
             listingProblem = problem
             return
         }
+        // A drive with a new colour or name: its disk's icon follows.
+        finder.drivesChanged()
         // The drives wanted in Finder that are not there yet — all of them,
         // when this is the first list since the server came within reach.
         await finder.mountWanted()
@@ -271,6 +284,18 @@ final class AppModel: ObservableObject {
 
     /// The drives Finder can show: the ones whose files are yours to see.
     var finderDrives: [Filespace] { drives.filter(\.isMember) }
+
+    /// When the drive list last came.
+    private(set) var drivesRefreshedAt = Date.distantPast
+
+    /// The drive list again, if it is older than `age` seconds: a drive
+    /// given a new colour or name on the web shows here, and on its disk in
+    /// Finder, without a request each time the panel opens or Onyx comes
+    /// forward.
+    func refreshIfOlder(than age: TimeInterval) async {
+        guard phase == .signedIn, drivesLoaded, Date().timeIntervalSince(drivesRefreshedAt) > age else { return }
+        await refresh()
+    }
 
     func isMounted(_ scope: SyncDomain) -> Bool { finder.isMounted(scope) }
 

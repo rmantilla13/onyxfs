@@ -60,7 +60,10 @@ extension DriveService {
         for attempt in 1...2 {
             do {
                 let resource = try await onyxfsResourceURL(for: scope)
-                if await disks.mount(scope, name: name, resource: resource) { return true }
+                if await disks.mount(scope, name: name, resource: resource) {
+                    syncDiskIcon(scope)
+                    return true
+                }
             } catch {
                 appLog.error("onyxfs: no resource for \(scope.identifier, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 return false
@@ -73,6 +76,21 @@ extension DriveService {
             await disks.reregister()
         }
         return false
+    }
+
+    /// Each mounted disk's icon, as its drive now is on the web (DiskIcons):
+    /// after the drive list comes, which may bring a new colour or name.
+    func drivesChanged() {
+        guard let model else { return }
+        for drive in model.finderDrives { syncDiskIcon(.drive(id: drive.id)) }
+    }
+
+    /// The library's disk is the app's own icon, which no drive changes.
+    func syncDiskIcon(_ scope: SyncDomain) {
+        guard #available(macOS 27.0, *), let disks, case let .drive(id) = scope,
+              case let .mounted(volume)? = disks.state(of: scope),
+              let drive = model?.drives.first(where: { $0.id == id }) else { return }
+        DiskIcons.sync(scope, volume: volume, color: drive.color, name: drive.name)
     }
 
     func diskUnmount(_ scope: SyncDomain) async {

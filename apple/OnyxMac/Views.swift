@@ -203,6 +203,7 @@ struct SignInView: View {
 struct WorkspaceView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var web: WebController
+    @AppStorage(ActivityBar.setting) private var showsActivity = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -219,7 +220,9 @@ struct WorkspaceView: View {
                     }
                 }
             // What the drives and the window are moving, and the downloads.
-            ActivityBar(transfers: model.finder.transfers, downloads: web.downloads)
+            if showsActivity {
+                ActivityBar(clock: model.activity, downloads: web.downloads)
+            }
         }
         .task { if web.webView.url == nil { web.signIn() } }
     }
@@ -231,59 +234,6 @@ struct WebViewHost: NSViewRepresentable {
     let webView: WKWebView
     func makeNSView(context: Context) -> WKWebView { webView }
     func updateNSView(_ view: WKWebView, context: Context) {}
-}
-
-// MARK: - Finder
-
-/// One entry per drive, and one for the library, in the menu bar item. (The
-/// window's bar has the same menu, drawn by the page: FinderMenu.js.)
-struct FinderItems: View {
-    @EnvironmentObject var model: AppModel
-    @EnvironmentObject var finder: DriveService
-
-    var body: some View {
-        Section("Show in Finder") {
-            if model.finderDrives.isEmpty {
-                Text("No drives yet")
-            }
-            ForEach(model.finderDrives) { drive in
-                toggle(.drive(id: drive.id), name: drive.name, detail: roleWord(drive.role))
-            }
-            toggle(.library, name: "Library", detail: "files in no drive")
-        }
-        let open = model.finderDrives.filter { model.isMounted(.drive(id: $0.id)) }
-        if !open.isEmpty || model.isMounted(.library) {
-            Section("Open in Finder") {
-                ForEach(open) { drive in
-                    Button(drive.name) { model.reveal(.drive(id: drive.id)) }
-                }
-                if model.isMounted(.library) {
-                    Button("Library") { model.reveal(.library) }
-                }
-            }
-        }
-        Divider()
-        Button("Sync Now") { Task { await model.syncNow() } }
-    }
-
-    private func toggle(_ scope: SyncDomain, name: String, detail: String?) -> some View {
-        Toggle(isOn: Binding(
-            get: { finder.wantMounted.contains(scope.identifier) },
-            set: { on in Task { await model.setMounted(scope, name: name, on) } }
-        )) {
-            Text(name) + Text(detail.map { "  \($0)" } ?? "").foregroundColor(.secondary)
-        }
-        .disabled(model.busy.contains(scope.identifier))
-    }
-
-    private func roleWord(_ role: String?) -> String? {
-        switch role {
-        case "owner": return "owner"
-        case "editor": return "can edit"
-        case "viewer": return "can view"
-        default: return nil
-        }
-    }
 }
 
 // MARK: - Menu bar
@@ -299,6 +249,17 @@ enum MenuBarStatus: Equatable {
         case .syncing: return "refresh-cw"
         case .offline: return "cloud-off"
         case .attention: return "triangle-alert"
+        }
+    }
+
+    /// The panel's dot beside the line: green when all is well, the accent
+    /// while syncing, orange when something needs a look.
+    var tint: Color {
+        switch self {
+        case .idle, .mounted: return .green
+        case .syncing: return .accentColor
+        case .signedOut, .offline: return .secondary
+        case .attention: return .orange
         }
     }
 
@@ -350,54 +311,6 @@ struct MenuBarIcon: View {
     }
 }
 
-struct MenuBarContent: View {
-    @EnvironmentObject var model: AppModel
-    @EnvironmentObject var updater: Updater
-    @EnvironmentObject var finder: DriveService
-    @ObservedObject private var background = Background.shared
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        let status = MenuBarStatus.of(model, finder)
-        if model.phase == .signedIn {
-            Text(model.email ?? "Signed in")
-            Text(status.line)
-            TranscriptionMenuLine(transcriber: model.transcriber)
-            UploadsMenuLines(summary: finder.uploadSummary) { id in finder.retryUpload(id) }
-            if finder.pinnedBytes > 0 {
-                Text("Kept offline: \(ByteCountFormatter.string(fromByteCount: finder.pinnedBytes, countStyle: .file))")
-            }
-            Divider()
-            Button("Open Onyx") { open() }.keyboardShortcut("o")
-            FinderItems()
-        } else {
-            Text("Not signed in")
-            Button("Sign In…") { open() }
-        }
-        Divider()
-        if let release = updater.available {
-            Button("Update to Onyx \(release.version)…") { open(); updater.showSheet = true }
-        } else {
-            Button("Check for Updates…") {
-                open()
-                Task { await updater.check(userInitiated: true) }
-            }
-        }
-        Toggle("Open at Login", isOn: Binding(
-            get: { background.opensAtLogin },
-            set: { background.setOpensAtLogin($0) }
-        ))
-        SettingsLink { Text("Settings…") }.keyboardShortcut(",")
-        Divider()
-        Button("Quit Onyx") { NSApp.terminate(nil) }.keyboardShortcut("q")
-    }
-
-    private func open() {
-        Background.shared.comeForward()
-        openWindow(id: "main")
-    }
-}
-
 // MARK: - Settings
 
 struct SettingsView: View {
@@ -405,7 +318,7 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
-            AccountSettings().tabItem { Label { Text("Account") } icon: { Image(lucide: "circle-user") } }
+            AccountSettings().tabItem { Label { Text("General") } icon: { Image(lucide: "circle-user") } }
             FinderSettings(finder: model.finder).tabItem { Label { Text("Finder") } icon: { Image(lucide: "hard-drive") } }
             StorageSettings(finder: model.finder).tabItem { Label { Text("Storage") } icon: { Image(lucide: "database") } }
         }
@@ -418,6 +331,7 @@ struct AccountSettings: View {
     @EnvironmentObject var updater: Updater
     @ObservedObject private var background = Background.shared
     @StateObject private var form = FormState()
+    @AppStorage(ActivityBar.setting) private var showsActivity = true
 
     var body: some View {
         Form {
@@ -444,6 +358,11 @@ struct AccountSettings: View {
             }
             Section {
                 Text("Changing servers signs you out: a sign-in belongs to the server that issued it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Window") {
+                Toggle("Show activity at the bottom of the window", isOn: $showsActivity)
+                Text("Downloads, uploads and what apps read from and write to your drives, live, with each download as it arrives. The menu bar item shows the same.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("In the background") {
@@ -495,9 +414,9 @@ struct FinderSettings: View {
             FullDiskAccessRow()
             List {
                 ForEach(model.finderDrives) { drive in
-                    row(.drive(id: drive.id), name: drive.name)
+                    row(.drive(id: drive.id), name: drive.name, icon: DriveIcons.image(for: drive))
                 }
-                row(.library, name: "Library")
+                row(.library, name: "Library", icon: DriveIcons.library)
             }
             HStack {
                 Text(finder.drivesAreDisks
@@ -515,9 +434,10 @@ struct FinderSettings: View {
         .task { await model.refresh() }
     }
 
-    private func row(_ scope: SyncDomain, name: String) -> some View {
+    private func row(_ scope: SyncDomain, name: String, icon: NSImage) -> some View {
         let pinnedDrive = PinRule(scope: scope.identifier, target: .folder(path: ""))
         return HStack(spacing: 12) {
+            Image(nsImage: icon).resizable().interpolation(.high).frame(width: 18, height: 18)
             Toggle(name, isOn: Binding(
                 get: { finder.wantMounted.contains(scope.identifier) },
                 set: { on in Task { await model.setMounted(scope, name: name, on) } }
@@ -734,23 +654,5 @@ final class FullDiskAccess: ObservableObject {
     static func openSettings() {
         let pane = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles")!
         NSWorkspace.shared.open(pane)
-    }
-}
-
-/// The menu bar's lines for files on their way to Onyx.
-struct UploadsMenuLines: View {
-    let summary: UploadSummary
-    let retry: (UUID) -> Void
-
-    var body: some View {
-        if summary.waiting > 0 {
-            let percent = Int((summary.fraction * 100).rounded())
-            Text(summary.waiting == 1
-                 ? "Uploading \(summary.current ?? "a file") — \(percent)%"
-                 : "Uploading \(summary.waiting) files — \(percent)%")
-        }
-        ForEach(summary.failed) { job in
-            Button("Retry “\(job.name)”: \(job.lastError ?? "did not upload")") { retry(job.id) }
-        }
     }
 }

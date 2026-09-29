@@ -598,6 +598,10 @@ final class DriveService: ObservableObject {
             await model.refresh()
             guard started == generation else { return }
         }
+        // And every five minutes once it has: a colour or name changed on
+        // the web reaches the drive's disk icon (drivesChanged).
+        await model?.refreshIfOlder(than: 300)
+        guard started == generation else { return }
         // A cache disk plugged back in: its store opens now.
         if pins == nil {
             openPins()
