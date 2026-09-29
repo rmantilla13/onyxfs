@@ -5,13 +5,13 @@ import {
 import { resolveActor } from '@/lib/desktop-guard';
 import { presignFileUrls } from '@/lib/storage';
 import { drivePatterns } from '@/lib/drive-access';
-import { accessFingerprint, syncScope } from '@/lib/sync-scope';
+import { accessFingerprint, foldersTag, syncScope } from '@/lib/sync-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * GET /api/files/delta?cursor=<n>&limit=<n>&drive=<id|library>&folders=1
+ * GET /api/files/delta?cursor=<n>&limit=<n>&drive=<id|library>&folders=1&foldersTag=<tag>
  *
  * What changed since `cursor`: the endpoint a sync client enumerates against —
  * the File Provider behind Onyx in Finder and in Files.app. Cursor 0 means
@@ -31,7 +31,10 @@ export const dynamic = 'force-dynamic';
  * `scope` fingerprints the access the page was computed under. When it
  * differs from the last one a client saw, the client re-syncs from cursor 0
  * (lib/sync-scope.js says why). `folders=1` adds the scope's folders, whole,
- * so empty ones appear too.
+ * so empty ones appear too, and `foldersTag`, a digest of that list
+ * (lib/sync-scope.js foldersTag). A client that sends back the tag it was
+ * last given, and whose list has not changed since, gets the tag alone and
+ * keeps the list it has; one that sends none gets the list every time.
  */
 export async function GET(req) {
   const actor = await resolveActor(req);
@@ -105,7 +108,12 @@ export async function GET(req) {
   const body = { changed, deleted: page.deleted, cursor: page.cursor, done: page.done, scope: tag };
   if (url.searchParams.get('folders') === '1') {
     const storagePrefix = drive ? String(drive.prefix || '').replace(/^\/+|\/+$/g, '') : undefined;
-    body.folders = driveParam ? await listSyncFolders(principal, { storagePrefix }) : [];
+    const folders = driveParam ? await listSyncFolders(principal, { storagePrefix }) : [];
+    // The list this caller already holds (the tag it was last sent, handed
+    // back) is not sent again: a mounted drive asks every few seconds, and
+    // its folders rarely change between two asks.
+    body.foldersTag = foldersTag(folders);
+    if (url.searchParams.get('foldersTag') !== body.foldersTag) body.folders = folders;
   }
   return NextResponse.json(body);
 }

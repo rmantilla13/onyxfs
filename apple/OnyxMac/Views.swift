@@ -527,6 +527,9 @@ struct StorageSettings: View {
             }
         }
         .formStyle(.grouped)
+        // "In use" is worked out only while it is on screen.
+        .onAppear { finder.showUsage(true) }
+        .onDisappear { finder.showUsage(false) }
     }
 
     private func choose() {

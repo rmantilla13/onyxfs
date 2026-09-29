@@ -60,11 +60,13 @@ final class AppModel: ObservableObject {
         updater.model = self
         thumbnailer.attach(to: self)
         if phase == .signedIn { startup = Task { await afterSignIn() } }
-        // Back to Onyx from the browser, say, where a drive may have changed.
+        // Back to Onyx from the browser, say, where a drive may have changed:
+        // the drive list, and the drives' own ticks, catch up.
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                self.finder.noteActivity()
                 Task { await self.refreshIfOlder(than: 30) }
             }
         }

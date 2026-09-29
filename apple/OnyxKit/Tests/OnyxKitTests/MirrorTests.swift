@@ -438,6 +438,8 @@ private final class MirrorStubServer: @unchecked Sendable {
     private var linkDelay: TimeInterval = 0
     private var refusal: (status: Int, body: String)?
     private var log: [URL] = []
+    /// Pages sent without their folder list: asked for under its own tag.
+    private var leftOut = 0
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var servers: [String: MirrorStubServer] = [:]
@@ -460,6 +462,13 @@ private final class MirrorStubServer: @unchecked Sendable {
     }
     var requests: [URL] { lock.withLock { log } }
     func requests(to path: String) -> [URL] { requests.filter { $0.path == path } }
+    var foldersLeftOut: Int { lock.withLock { leftOut } }
+    /// A parameter of the last delta request.
+    func lastDelta(_ name: String) -> String? {
+        requests(to: "/api/files/delta").last.flatMap {
+            URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == name }?.value
+        }
+    }
 
     func respond(to url: URL) -> (status: Int, body: Data, delay: TimeInterval) {
         lock.withLock {
@@ -469,6 +478,15 @@ private final class MirrorStubServer: @unchecked Sendable {
                 if let refusal { return (refusal.status, Data(refusal.body.utf8), delay) }
                 let cursor = query.first { $0.name == "cursor" }.flatMap { Int64($0.value ?? "") } ?? -1
                 guard let page = pages[cursor] else { return (500, Data(#"{"error":"no page"}"#.utf8), delay) }
+                // As the server does: the list left out when the tag sent
+                // back is still its tag (lib/sync-scope.js foldersTag).
+                let held = query.first { $0.name == "foldersTag" }?.value
+                if let tag = page.foldersTag, held == tag {
+                    leftOut += 1
+                    let lean = DeltaPage(changed: page.changed, deleted: page.deleted, cursor: page.cursor, done: page.done,
+                                         scope: page.scope, folders: nil, foldersTag: tag)
+                    return (200, try! JSONEncoder().encode(lean), delay)
+                }
                 return (200, try! JSONEncoder().encode(page), delay)
             }
             let prefix = "/api/space/files/"
@@ -528,9 +546,9 @@ private struct MirrorStubbedAPI {
 }
 
 private func page(_ changed: [FileItem], deleted: [String] = [], cursor: Int64, done: Bool = true,
-                  scope: String? = "s1", folders: [String]? = []) -> DeltaPage {
+                  scope: String? = "s1", folders: [String]? = [], foldersTag: String? = nil) -> DeltaPage {
     DeltaPage(changed: changed, deleted: deleted.map { Tombstone(id: $0, seq: cursor) }, cursor: cursor,
-              done: done, scope: scope, folders: folders)
+              done: done, scope: scope, folders: folders, foldersTag: foldersTag)
 }
 
 private func temporaryDirectory() -> URL {
@@ -1143,6 +1161,74 @@ struct DriveMirrorTests {
             URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "cursor" }?.value
         }
         #expect(last == "30")
+    }
+
+    /// A drive's folders come with every pass (`folders=1`), and on a quiet
+    /// pass they were most of what came. The mirror sends back the tag the
+    /// list came with; while the list is the same the server leaves it out,
+    /// and the mirror goes on with the one it has — kept on disk with its
+    /// tag, so a relaunch sends it too.
+    @Test func anUnchangedFolderListIsNotSentAgain() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 10, folders: ["Empty"], foldersTag: "t1"))
+        let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        #expect(stub.server.lastDelta("foldersTag") == nil, "nothing held yet: the list is asked for whole")
+        #expect(stub.server.lastDelta("folders") == "1")
+        #expect(await mirror.index.entry(at: "Empty")?.isFolder == true)
+
+        // The same folders: the tag goes back, the list does not come, and
+        // the empty folder is still there.
+        stub.server.page(at: 10, page([], cursor: 10, folders: ["Empty"], foldersTag: "t1"))
+        #expect(try await mirror.sync().isEmpty)
+        #expect(stub.server.lastDelta("foldersTag") == "t1")
+        #expect(stub.server.foldersLeftOut == 1)
+        #expect(await mirror.index.entry(at: "Empty")?.isFolder == true)
+
+        // A folder made on the web: the list moved on, and comes whole.
+        stub.server.page(at: 10, page([], cursor: 10, folders: ["Empty", "New"], foldersTag: "t2"))
+        #expect(try await mirror.sync().updated == ["folder:New"])
+        #expect(stub.server.lastDelta("foldersTag") == "t1")
+        #expect(stub.server.foldersLeftOut == 1)
+
+        // Kept with the replica: a relaunch sends the tag it has, and keeps
+        // the list it read back.
+        let reopened = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                   account: "me@example.com", api: { stub.api })
+        #expect(try await reopened.sync().isEmpty)
+        #expect(stub.server.lastDelta("foldersTag") == "t2")
+        #expect(stub.server.foldersLeftOut == 2)
+        #expect(await reopened.index.entry(at: "New")?.isFolder == true)
+    }
+
+    /// A fetch from the start — the access changed — holds no list yet, so
+    /// it asks for the list whole, whatever tag the tree still shown has.
+    @Test func aFetchFromTheStartAsksForTheFoldersWhole() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 10, scope: "s1", folders: ["Empty"], foldersTag: "t1"))
+        let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+
+        // Joined another drive's worth of access: the scope moves, and the
+        // drive is fetched again beside the tree shown.
+        stub.server.page(at: 10, page([], cursor: 10, scope: "s2", folders: ["Empty"], foldersTag: "t1"))
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 12, scope: "s2", folders: ["Empty"], foldersTag: "t1"))
+        _ = try await mirror.sync()
+        let fromTheStart = stub.server.requests(to: "/api/files/delta").last { url in
+            URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains(URLQueryItem(name: "cursor", value: "0")) == true
+        }
+        let query = fromTheStart.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems } ?? []
+        #expect(!query.contains { $0.name == "foldersTag" }, "a fresh replica has no list to keep")
+        #expect(await mirror.index.entry(at: "Empty")?.isFolder == true)
+        #expect(await mirror.isAuthoritative)
     }
 
     @Test func overlappingSyncsShareOnePass() async throws {

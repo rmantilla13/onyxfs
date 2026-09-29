@@ -71,6 +71,39 @@ import Testing
         #expect(heard.scopes == [Self.scope])
     }
 
+    /// What the disk's streaming cache holds reaches the app with each
+    /// report, and once as it mounts, from the cache's own running total:
+    /// Settings shows it with nothing walked.
+    @Test func whatADisksCacheHoldsReachesTheApp() async throws {
+        let server = Server()
+        let take = Pattern.bytes(3 << 20)
+        try await server.add("/Take 1.mov", take)
+        let mount = try await Mount(server)
+        defer { mount.remove() }
+        let heard = Tally()
+        mount.app.onActivity { scope, moved in heard.add(scope, moved) }
+        // As it mounts: nothing moved, only the figure.
+        try await mount.client.activity(.init())
+        #expect(heard.cache == 0 && heard.total == FSActivity())
+
+        let engine = mount.engine
+        let file = try await engine.lookup("Take 1.mov", in: DriveEngine.rootID)
+        var read = 0
+        while read < take.count {
+            read += try await engine.read(file.id, at: Int64(read), count: 1 << 20).count
+        }
+        // The report comes about a second after the bytes moved.
+        var held: Int64 = 0
+        let deadline = ContinuousClock.now + .seconds(5)
+        repeat {
+            held = await mount.store.stats().bytes
+            if held > 0, heard.cache == held { break }
+            try await Task.sleep(for: .milliseconds(50))
+        } while ContinuousClock.now < deadline
+        #expect(held > Int64(take.count), "every byte read is cached, with its digests")
+        #expect(heard.cache == held)
+    }
+
     @Test func theDrivesIconIsOnTheDisk() async throws {
         let server = Server()
         try await server.add("/Readme.md", Data("hello".utf8))
@@ -206,6 +239,7 @@ final class Tally: @unchecked Sendable {
     private let lock = NSLock()
     private var sum = FSActivity()
     private var heardFrom: Set<String> = []
+    private var cached: Int64?
 
     func add(_ scope: String, _ moved: FSActivity) {
         lock.withLock {
@@ -213,11 +247,14 @@ final class Tally: @unchecked Sendable {
             sum.download += moved.download
             sum.write += moved.write
             heardFrom.insert(scope)
+            if let cache = moved.cache { cached = cache }
         }
     }
 
     var total: FSActivity { lock.withLock { sum } }
     var scopes: Set<String> { lock.withLock { heardFrom } }
+    /// What the last report said the disk's cache holds.
+    var cache: Int64? { lock.withLock { cached } }
 }
 
 /// One drive mounted: the app's bridge serving `server`'s drive, and the
@@ -225,6 +262,8 @@ final class Tally: @unchecked Sendable {
 struct Mount {
     let app: FSBridge
     let drive: Drive
+    let client: FSBridgeClient
+    let store: ChunkStore
     let bridge: ClientBridge
     let engine: DriveEngine
     let dir: URL
@@ -242,8 +281,11 @@ struct Mount {
 
         let ticket = app.sessions.issueTicket(for: RoundTripTests.scope)
         let url = URL(string: "onyxfs-drive://127.0.0.1:\(port)/\(RoundTripTests.scope)?ticket=\(ticket)&name=Client%20Deliverables&v=1")!
-        let client = try await FSBridgeClient.connect(to: try FSMountResource(url: url), configuration: Loopback.configuration)
-        let store = try ChunkStore(directory: dir.appendingPathComponent("chunks"), limitBytes: client.session.cacheLimitBytes)
+        client = try await FSBridgeClient.connect(to: try FSMountResource(url: url), configuration: Loopback.configuration)
+        store = try ChunkStore(directory: dir.appendingPathComponent("chunks"), limitBytes: client.session.cacheLimitBytes)
+        // As EngineFactory does: the cache's running total rides along with
+        // each report.
+        client.reportsCache { [store] in await store.stats().bytes }
         let local = try LocalStore(directory: dir.appendingPathComponent("local"))
         // As EngineFactory does, before anything is listed.
         if let icon = try await client.volumeIcon() { try await local.placeVolumeIcon(icon) }

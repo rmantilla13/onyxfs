@@ -23,11 +23,52 @@ actor FakeServer: UploadTransport {
     var mostPutsAtOnce = 0
     var partsInFlight: [String: Int] = [:]
     var mostUploadsAtOnce = 0
+    /// PUTs that have landed.
+    var landed = 0
+    /// Holds each PUT, or each record, until let through: what a test
+    /// counts on is what the queue did before it was let go, not a clock.
+    var putTurnstile: Turnstile?
+    var recordTurnstile: Turnstile?
+    private var watchers: [CheckedContinuation<Void, Never>] = []
 
     func setPutDelay(_ nanoseconds: UInt64) { putDelay = nanoseconds }
+    /// How long signing a batch of parts takes: a round trip to the server.
+    var signDelay: UInt64 = 0
+    func setSignDelay(_ nanoseconds: UInt64) { signDelay = nanoseconds }
+    func holdPuts(_ turnstile: Turnstile) { putTurnstile = turnstile }
+    func holdRecords(_ turnstile: Turnstile) { recordTurnstile = turnstile }
+
+    /// Waits until `ready` holds, woken by each call the server logs and
+    /// each PUT as it starts and lands — never by the clock, except to give
+    /// up after `limit`, so a queue that never gets there fails the test
+    /// rather than hanging it.
+    @discardableResult
+    func until(_ limit: Duration = .seconds(10), _ ready: @Sendable (isolated FakeServer) -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + limit
+        let alarm = Task { [weak self] in
+            try? await Task.sleep(until: deadline, clock: .continuous)
+            await self?.wake()
+        }
+        defer { alarm.cancel() }
+        while !ready(self) {
+            guard ContinuousClock.now < deadline else { return false }
+            await withCheckedContinuation { watchers.append($0) }
+        }
+        return true
+    }
+
+    private func wake() {
+        let woken = watchers
+        watchers = []
+        woken.forEach { $0.resume() }
+    }
+
+    /// The PUTs asked for, in order: "put <name>", or "put <part>".
+    var puts: [String] { calls.filter { $0.hasPrefix("put ") } }
 
     func log(_ call: String) throws {
         calls.append(call)
+        wake()
         if var errors = failNext[call], !errors.isEmpty {
             let error = errors.removeFirst()
             failNext[call] = errors.isEmpty ? nil : errors
@@ -57,6 +98,7 @@ actor FakeServer: UploadTransport {
 
     func signParts(uploadId: String, parts: [Int]) async throws -> [Int: URL] {
         try log("sign \(parts.map(String.init).joined(separator: ","))")
+        if signDelay > 0 { try await Task.sleep(nanoseconds: signDelay) }
         return Dictionary(uniqueKeysWithValues: parts.map { ($0, URL(string: "https://bucket.test/part/\(uploadId)/\($0)")!) })
     }
 
@@ -81,6 +123,7 @@ actor FakeServer: UploadTransport {
 
     func record(_ job: UploadJob, key: String, publicUrl: String?) async throws -> OnyxAPI.RecordedFile {
         try log("record \(job.path)")
+        await recordTurnstile?.pass()
         dates[job.path] = (job.fileCreatedAt, job.fileModifiedAt)
         return .init(id: "file-\(job.name)", name: job.name, folder: job.folder, size: job.size)
     }
@@ -108,7 +151,10 @@ actor FakeServer: UploadTransport {
                 partsInFlight[upload, default: 1] -= 1
                 if partsInFlight[upload] == 0 { partsInFlight[upload] = nil }
             }
+            wake()
         }
+        wake()
+        await putTurnstile?.pass()
         if putDelay > 0 { try await Task.sleep(nanoseconds: putDelay) }
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
@@ -120,7 +166,36 @@ actor FakeServer: UploadTransport {
         } else {
             objects[url.lastPathComponent] = data
         }
+        landed += 1
         progress(Int64(data.count))
+    }
+}
+
+/// Lets through as many as it is told to, in the order they came.
+actor Turnstile {
+    private var admitted = 0
+    private var open = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func pass() async {
+        if open { return }
+        if admitted > 0 {
+            admitted -= 1
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func admit(_ count: Int = 1) {
+        for _ in 0..<count {
+            if waiting.isEmpty { admitted += 1 } else { waiting.removeFirst().resume() }
+        }
+    }
+
+    func openAll() {
+        open = true
+        waiting.forEach { $0.resume() }
+        waiting = []
     }
 }
 
@@ -526,5 +601,298 @@ private actor Seen {
         #expect(tally.finished(1, 40) == 145)
         #expect(tally.finished(2, 40) == 180)
         #expect(tally.total == 180)
+    }
+
+    /// Each batch of part URLs is asked for while the batch before it
+    /// sends. Waiting for all sixteen parts to land before asking for the
+    /// next sixteen, the line went idle every 128 MB for a round trip to
+    /// the server and for the slowest part of the batch. Still four parts
+    /// at a time, never more.
+    @Test func theNextPartsAreSignedWhileTheseAreSending() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        let data = big(3)
+        await server.setPartSize(Int64(data.count / 39)) // 40 parts: 16, 16 and 8 to a batch
+        let turnstile = Turnstile()
+        await server.holdPuts(turnstile)
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 0, sleep: { _ in })
+        try await queue.enqueue(from: try source(data), scope: "library", filespaceId: nil, folder: "",
+                                name: "big.mov", mime: "video/quicktime")
+        let first = (1...16).map(String.init).joined(separator: ","), second = (17...32).map(String.init).joined(separator: ",")
+        // The first four parts on their way, none landed — and the second
+        // batch already signed.
+        let signedAhead = await server.until { $0.putsInFlight == 4 && $0.calls.contains("sign \(second)") }
+        #expect(signedAhead, "the next batch is asked for before this one's parts land")
+        #expect(await server.landed == 0)
+        #expect(await server.calls.filter { $0.hasPrefix("sign") } == ["sign \(first)", "sign \(second)"])
+
+        await turnstile.openAll()
+        await server.until { $0.calls.contains("record /big.mov") }
+        await settle(queue)
+        #expect(await server.calls.filter { $0.hasPrefix("sign") }.count == 3, "each batch signed once")
+        #expect(await server.mostPutsAtOnce == UploadQueue.partConcurrency)
+        #expect(await server.objects["assembled"] == data, "every part, in its place")
+        #expect(await queue.all().isEmpty)
+    }
+
+    /// The next batch's signing failed: the parts already on their way land
+    /// first, and the next attempt asks storage which it has and sends only
+    /// the rest.
+    @Test func aBatchThatCouldNotBeSignedIsAskedForAgain() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        let data = big(4)
+        await server.setPartSize(Int64(data.count / 39))
+        let second = (17...32).map(String.init).joined(separator: ",")
+        await server.setFailure("sign \(second)", URLError(.networkConnectionLost))
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 0, sleep: { _ in })
+        try await queue.enqueue(from: try source(data), scope: "library", filespaceId: nil, folder: "",
+                                name: "big.mov", mime: "video/quicktime")
+        await server.until { $0.calls.contains("record /big.mov") }
+        await settle(queue)
+        let calls = await server.calls
+        #expect(calls.filter { $0 == "status" }.count == 2)
+        #expect(calls.filter { $0 == "sign \(second)" }.count == 2)
+        #expect(calls.filter { $0 == "put 1" }.count == 1, "what landed is not sent again")
+        #expect(await server.objects["assembled"] == data)
+    }
+}
+
+/// The order jobs go in, and where they wait. A job waits out its settle
+/// moment beside the others, not in one of the four slots: those are for
+/// sending.
+@Suite struct UploadOrderTests {
+    /// Held at four in flight, each slot that frees goes to the next job in
+    /// the order they came — not to whichever sorted first by its id.
+    @Test func waitingJobsStartInTheOrderTheyCame() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        let turnstile = Turnstile()
+        await server.holdPuts(turnstile)
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 0, sleep: { _ in })
+        for n in 1...8 {
+            try await queue.enqueue(from: try source(Data([UInt8(n)])), scope: "library", filespaceId: nil, folder: "",
+                                    name: "\(n).jpg", mime: "image/jpeg")
+        }
+        #expect(await server.until { $0.putsInFlight == 4 })
+        #expect(Set(await server.puts) == ["put 1.jpg", "put 2.jpg", "put 3.jpg", "put 4.jpg"])
+        for n in 5...8 {
+            await turnstile.admit()
+            #expect(await server.until { $0.puts.count == n })
+            #expect(await server.puts.last == "put \(n).jpg")
+        }
+        await turnstile.openAll()
+        await server.until { $0.calls.filter { $0.hasPrefix("record") }.count == 8 }
+        await settle(queue)
+        #expect(await queue.all().isEmpty)
+    }
+
+    /// Four new files waiting out their moment take no slot: a job tried
+    /// again (the menu's Retry) goes at once beside them. When each waited
+    /// in a slot of its own, four of them held all four.
+    @Test func aJobTriedAgainGoesAtOnceWhileOthersSettle() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let refusing = FakeServer()
+        await refusing.setFailure("presign", OnyxError.http(status: 403, message: "Not yet."))
+        let first = try UploadQueue(directory: dir, transport: refusing, settle: 0, sleep: { _ in })
+        let failed = try await first.enqueue(from: try source(Data([1])), scope: "library", filespaceId: nil,
+                                             folder: "", name: "later.txt", mime: "text/plain")
+        await settle(first)
+        #expect(await first.job(failed.id)?.state == .failed)
+
+        let server = FakeServer()
+        let settling = Gate()
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 2, sleep: { _ in await settling.wait() })
+        for n in 1...4 {
+            try await queue.enqueue(from: try source(Data([UInt8(n)])), scope: "library", filespaceId: nil, folder: "",
+                                    name: "new-\(n).txt", mime: "text/plain")
+        }
+        await queue.retry(failed.id)
+        #expect(await server.until { $0.calls.contains("record /later.txt") })
+        #expect(await server.calls == ["presign", "put later.txt", "record /later.txt"], "the new ones still settling")
+        await settling.open()
+        await server.until { $0.calls.filter { $0.hasPrefix("record") }.count == 5 }
+        await settle(queue)
+        #expect(await queue.all().isEmpty)
+    }
+
+    /// A thousand copied at once settle together: one timer for the
+    /// soonest, each let go when its moment has passed, and nothing sent
+    /// before then.
+    @Test func nothingIsSentBeforeItsMomentAndEverythingSoonAfter() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        let moment = Gate()
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 2, sleep: { _ in await moment.wait() })
+        for n in 1...20 {
+            try await queue.enqueue(from: try source(Data([UInt8(n)])), scope: "library", filespaceId: nil, folder: "",
+                                    name: "\(n).jpg", mime: "image/jpeg")
+        }
+        #expect(await server.calls.isEmpty)
+        await moment.open()
+        #expect(await server.until { $0.calls.filter { $0.hasPrefix("record") }.count == 20 })
+        #expect(await server.mostPutsAtOnce <= UploadQueue.concurrency)
+    }
+}
+
+/// What the queue keeps on disk, and what a restart finds there. Every
+/// change is on disk before anything is done about it — a line added to
+/// jobs.log — and jobs.json is written whole only now and then.
+@Suite struct UploadJournalTests {
+    /// The app stops once the bytes are in storage, before the answer to
+    /// the record comes back. The key was on disk before the record was
+    /// asked for: the next run records it — its 409 meaning done — and
+    /// sends nothing again. Sent again, the bytes would land under a new
+    /// key, "a (2).txt", as a second file.
+    @Test func aCrashAfterTheBytesLandedNeverSendsThemAgain() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        let held = Turnstile()
+        await server.holdRecords(held)
+        let first = try UploadQueue(directory: dir, transport: server, settle: 0, sleep: { _ in })
+        try await first.enqueue(from: try source(Data("bytes".utf8)), scope: "library", filespaceId: nil, folder: "",
+                                name: "a.txt", mime: "text/plain")
+        #expect(await server.until { $0.calls.contains("record /a.txt") })
+
+        // The next run, from what is on disk.
+        let restarted = FakeServer()
+        await restarted.setFailure("record /a.txt",
+                                   OnyxAPI.Refusal(status: 409, message: "That stored object already belongs to a file in the library."))
+        let second = try UploadQueue(directory: dir, transport: restarted, settle: 0, sleep: { _ in })
+        let found = await second.all()
+        #expect(found.map(\.name) == ["a.txt"])
+        #expect(found.first?.uploadedKey == "drive/a.txt")
+        await second.resume()
+        #expect(await restarted.until { $0.calls.contains("record /a.txt") })
+        await settle(second)
+        #expect(await restarted.calls == ["record /a.txt"], "no presign, no PUT: the bytes are there")
+        #expect(await second.all().isEmpty)
+        await held.openAll()
+    }
+
+    /// What is waiting comes back in the order it came, whatever the names.
+    @Test func aRestartGoesOnInTheOrderTheyCame() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let offline = FakeServer()
+        await offline.setFailure("presign", URLError(.notConnectedToInternet), times: 30)
+        let gate = Gate()
+        let first = try UploadQueue(directory: dir, transport: offline, settle: 0, sleep: { _ in await gate.wait() })
+        for name in ["zebra.jpg", "apple.jpg", "mango.jpg"] {
+            try await first.enqueue(from: try source(Data(name.utf8)), scope: "library", filespaceId: nil, folder: "",
+                                    name: name, mime: "image/jpeg")
+        }
+        #expect(await first.all().map(\.name) == ["zebra.jpg", "apple.jpg", "mango.jpg"])
+        let second = try UploadQueue(directory: dir, transport: FakeServer(), settle: 0, sleep: { _ in })
+        #expect(await second.all().map(\.name) == ["zebra.jpg", "apple.jpg", "mango.jpg"])
+        await gate.open()
+    }
+
+    /// A crash as a line was being written leaves half a line: it says
+    /// nothing, and everything before it stands. It is folded into
+    /// jobs.json at once, so the log starts afresh.
+    @Test func aLineCutShortIsPassedOver() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let offline = FakeServer()
+        await offline.setFailure("presign", URLError(.notConnectedToInternet), times: 30)
+        let gate = Gate()
+        let first = try UploadQueue(directory: dir, transport: offline, settle: 0, sleep: { _ in await gate.wait() })
+        try await first.enqueue(from: try source(Data("kept".utf8)), scope: "library", filespaceId: nil, folder: "",
+                                name: "kept.txt", mime: "text/plain")
+        let log = dir.appendingPathComponent(UploadQueue.logFile)
+        let handle = try FileHandle(forWritingTo: log)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(#"{"job":{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","sco"#.utf8))
+        try handle.close()
+
+        let second = try UploadQueue(directory: dir, transport: FakeServer(), settle: 0, sleep: { _ in })
+        #expect(await second.all().map(\.name) == ["kept.txt"])
+        #expect(!FileManager.default.fileExists(atPath: log.path), "folded into jobs.json")
+        let saved = try JSONDecoder().decode([UploadJob].self, from: Data(contentsOf: dir.appendingPathComponent(UploadQueue.jobsFile)))
+        #expect(saved.map(\.name) == ["kept.txt"])
+        await gate.open()
+    }
+
+    /// jobs.json from before the log (every build until this one) is read
+    /// as it always was.
+    @Test func aQueueFromBeforeTheLogStillLoads() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("files"), withIntermediateDirectories: true)
+        let staged = dir.appendingPathComponent("files/6F9619FF-8B86-D011-B42D-00C04FC964FF")
+        try Data("old".utf8).write(to: staged)
+        let json = #"[{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","scope":"library","folder":"","name":"old.txt","staged":"\#(staged.path)","size":3,"mime":"text/plain","state":"uploading","attempts":1}]"#
+        try Data(json.utf8).write(to: dir.appendingPathComponent(UploadQueue.jobsFile))
+        let server = FakeServer()
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 0, sleep: { _ in })
+        #expect(await queue.all().map(\.state) == [.queued])
+        await queue.resume()
+        #expect(await server.until { $0.calls.contains("record /old.txt") })
+    }
+}
+
+/// The menu bar's summary, in one question: how many are on their way, how
+/// far they have got, and which did not make it.
+@Suite struct UploadSummaryTests {
+    @Test func theSummaryCountsWhatIsOnItsWayAndWhatFailed() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        await server.setFailure("presign for gone", OnyxAPI.Refusal(status: 403, message: "You may not change it."))
+        let turnstile = Turnstile()
+        await server.holdPuts(turnstile)
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 0, sleep: { _ in })
+        let changes = Changes()
+        await queue.observe { job in Task { await changes.add(job) } }
+        try await queue.enqueue(from: try source(Data(count: 100)), scope: "library", filespaceId: nil, folder: "",
+                                name: "a.mov", mime: "video/quicktime")
+        try await queue.enqueue(from: try source(Data(count: 50)), scope: "library", filespaceId: nil, folder: "",
+                                name: "b.mov", mime: "video/quicktime")
+        try await queue.enqueue(from: try source(Data(count: 7)), scope: "library", filespaceId: nil, folder: "",
+                                name: "c.txt", mime: "text/plain", replaceOf: "gone")
+        #expect(await server.until { $0.putsInFlight == 2 })
+        #expect(await changes.until { $0.jobs.contains { $0.name == "c.txt" && $0.state == .failed } })
+        var summary = await queue.summary()
+        #expect(summary.waiting == 2)
+        #expect(summary.totalBytes == 150)
+        #expect(summary.sentBytes == 0)
+        #expect(summary.failed.map(\.name) == ["c.txt"])
+        #expect(["a.mov", "b.mov"].contains(summary.current ?? ""))
+
+        await turnstile.openAll()
+        #expect(await changes.until { $0.jobs.filter { $0.state == .done }.count == 2 })
+        summary = await queue.summary()
+        #expect(summary.waiting == 0 && summary.totalBytes == 0 && summary.sentBytes == 0)
+        #expect(summary.failed.map(\.name) == ["c.txt"])
+    }
+}
+
+/// What the queue said of its jobs, in the order it was heard, for a test
+/// to wait on: `until` is woken by each change, not by a clock.
+actor Changes {
+    private(set) var jobs: [UploadJob] = []
+    private var watchers: [CheckedContinuation<Void, Never>] = []
+
+    func add(_ job: UploadJob) {
+        jobs.append(job)
+        wake()
+    }
+
+    @discardableResult
+    func until(_ limit: Duration = .seconds(10), _ ready: @Sendable (isolated Changes) -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + limit
+        let alarm = Task { [weak self] in
+            try? await Task.sleep(until: deadline, clock: .continuous)
+            await self?.wake()
+        }
+        defer { alarm.cancel() }
+        while !ready(self) {
+            guard ContinuousClock.now < deadline else { return false }
+            await withCheckedContinuation { watchers.append($0) }
+        }
+        return true
+    }
+
+    private func wake() {
+        let woken = watchers
+        watchers = []
+        woken.forEach { $0.resume() }
     }
 }

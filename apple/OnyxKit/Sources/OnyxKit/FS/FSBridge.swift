@@ -273,8 +273,9 @@ public final class FSBridge: @unchecked Sendable {
 
     /// `POST /fs/v1/activity`: `{ "read": n, "download": n, "write": n }`,
     /// the bytes the session's disk moved since its last report, for the
-    /// Activity window. A read-only disk reports too: reading is most of it.
-    /// Tells the handler and nothing else; the answer carries nothing.
+    /// Activity window, and `"cache": n`, what its streaming cache holds now.
+    /// A read-only disk reports too: reading is most of it. Tells the
+    /// handler and nothing else; the answer carries nothing.
     private func activity(_ request: DAVRequest, session: FSSessions.Session) -> DAVResponse {
         guard request.method == "POST" else { return Self.notAllowed("POST") }
         guard let moved = try? JSONDecoder().decode(FSActivity.self, from: request.body), moved.isPlausible else {
@@ -398,9 +399,14 @@ public struct FSActivity: Decodable, Sendable, Equatable {
     public var read: Int64
     public var download: Int64
     public var write: Int64
+    /// What the disk's streaming cache holds now, in bytes: the cache's own
+    /// running total (ChunkStore), sent with each report and once as the
+    /// disk mounts. Settings shows it without the cache being walked. Nil
+    /// from an extension that does not say.
+    public var cache: Int64?
 
-    public init(read: Int64 = 0, download: Int64 = 0, write: Int64 = 0) {
-        self.read = read; self.download = download; self.write = write
+    public init(read: Int64 = 0, download: Int64 = 0, write: Int64 = 0, cache: Int64? = nil) {
+        self.read = read; self.download = download; self.write = write; self.cache = cache
     }
 
     public init(from decoder: any Decoder) throws {
@@ -408,13 +414,15 @@ public struct FSActivity: Decodable, Sendable, Equatable {
         read = try c.decodeIfPresent(Int64.self, forKey: .read) ?? 0
         download = try c.decodeIfPresent(Int64.self, forKey: .download) ?? 0
         write = try c.decodeIfPresent(Int64.self, forKey: .write) ?? 0
+        cache = try c.decodeIfPresent(Int64.self, forKey: .cache)
     }
 
-    private enum CodingKeys: String, CodingKey { case read, download, write }
+    private enum CodingKeys: String, CodingKey { case read, download, write, cache }
 
     /// None below zero, and none past a tebibyte: a second's worth, from a
-    /// disk on this Mac.
+    /// disk on this Mac. A cache past a pebibyte is not one either.
     var isPlausible: Bool {
         [read, download, write].allSatisfy { (0...(1 << 40)).contains($0) }
+            && (cache.map { (0...(1 << 50)).contains($0) } ?? true)
     }
 }

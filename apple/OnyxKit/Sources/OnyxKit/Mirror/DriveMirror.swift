@@ -341,7 +341,14 @@ public actor DriveMirror {
 
         do {
             while pages < Self.maxPages {
-                let page = try await api().delta(cursor: staged?.cursor ?? replica.cursor, domain: scope, folders: true)
+                // The folder list is asked for with its tag, so an unchanged
+                // one is not sent again: the drive's folders, every pass,
+                // every few seconds, were most of what a quiet pass carried.
+                // The tag is the replica's the page goes into — a fetch from
+                // the start has none, and gets the list whole.
+                let tag = staged == nil ? replica.foldersTag : staged!.foldersTag
+                let page = try await api().delta(cursor: staged?.cursor ?? replica.cursor, domain: scope,
+                                                 folders: true, foldersTag: tag)
                 pages += 1
                 isGone = false
                 // The server answers for the drive again: what was withheld
@@ -389,7 +396,7 @@ public actor DriveMirror {
                     // Applied in place: a copy would cost the whole replica.
                     let cursor = staged!.cursor
                     staged!.apply(changed: page.changed, deleted: page.deleted.map(\.id),
-                                  folders: page.folders, cursor: page.cursor)
+                                  folders: page.folders, foldersTag: page.foldersTag, cursor: page.cursor)
                     guard Self.isLast(page, from: cursor, to: staged!.cursor) else { continue }
                     promoteStaged()
                     unsaved = .everything
@@ -400,7 +407,7 @@ public actor DriveMirror {
                 let cursor = replica.cursor
                 let listed = replica.listedFolders
                 let diff = replica.apply(changed: page.changed, deleted: page.deleted.map(\.id),
-                                         folders: page.folders, cursor: page.cursor)
+                                         folders: page.folders, foldersTag: page.foldersTag, cursor: page.cursor)
                 unreported.updated += diff.updated
                 unreported.deleted += diff.deleted
                 unreported.previews += diff.previews

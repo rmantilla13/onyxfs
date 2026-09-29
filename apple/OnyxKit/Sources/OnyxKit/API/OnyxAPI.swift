@@ -77,14 +77,21 @@ public actor OnyxAPI {
     /// One page of changes since `cursor`, within one Finder location's scope
     /// (nil: everything this account may see). Cursor 0 means everything, so
     /// first sync and incremental catch-up are the same code path.
+    ///
+    /// `foldersTag`, with `folders`: the tag of the folder list held
+    /// already (DeltaPage.foldersTag). While it still matches, the page
+    /// leaves the list out.
     public func delta(cursor: Int64, limit: Int = 500, domain: SyncDomain? = nil,
-                      folders: Bool = false) async throws -> DeltaPage {
+                      folders: Bool = false, foldersTag: String? = nil) async throws -> DeltaPage {
         var query: [URLQueryItem] = [
             .init(name: "cursor", value: String(cursor)),
             .init(name: "limit", value: String(limit)),
         ]
         if let domain { query.append(.init(name: "drive", value: domain.deltaParameter)) }
-        if folders { query.append(.init(name: "folders", value: "1")) }
+        if folders {
+            query.append(.init(name: "folders", value: "1"))
+            if let foldersTag { query.append(.init(name: "foldersTag", value: foldersTag)) }
+        }
         return try decode(DeltaPage.self, from: try await request(config.url("api/files/delta", query: query)))
     }
 
