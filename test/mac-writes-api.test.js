@@ -119,6 +119,7 @@ const fileRoute = await import('../app/api/files/[id]/route.js');
 const contentRoute = await import('../app/api/files/[id]/content/route.js');
 const thumbnailRoute = await import('../app/api/files/[id]/thumbnail/route.js');
 const waveformRoute = await import('../app/api/files/[id]/waveform/route.js');
+const filmstripRoute = await import('../app/api/files/[id]/filmstrip/route.js');
 const foldersRoute = await import('../app/api/files/folders/route.js');
 const restoreRoute = await import('../app/api/admin/trash/restore/route.js');
 // What a route finishes after it answers: a trashed file's object moving to the trash.
@@ -226,7 +227,7 @@ describe('the sign-in gate (middleware.js)', () => {
   test('a bearer token takes those paths, and only those, past the gate', async () => {
     for (const p of PATHS) assert.ok(passed(await run(p, { authorization: 'Bearer dt_live_x' })), p);
     for (const p of [
-      '/api/files/abc/comments', '/api/files/abc/thumbnail/sizes', '/api/files/abc/download', '/api/files/upload',
+      '/api/files/abc/comments', '/api/files/abc/thumbnail/sizes', '/api/files/abc/filmstrip', '/api/files/abc/download', '/api/files/upload',
       '/api/files/config', '/api/admin/people', '/api/admin/trash', '/api/filespaces', '/files/abc', '/admin',
     ]) {
       assert.ok(redirected(await run(p, { authorization: 'Bearer dt_live_x' })), p);
@@ -1259,6 +1260,90 @@ describe('a sound’s waveform', () => {
     const edit = await patchFile(mac(ED), f.id, { metadata: { waveform: '1:zzzz', client: 'Acme' } });
     assert.equal(edit.status, 200, JSON.stringify(edit.body));
     assert.equal(row(f.id).metadata.waveform, WAVE, 'nor can a metadata edit write one');
+  });
+});
+
+// A browser records an upload without waiting long for its hover-scrub
+// sheet (lib/upload-client.js), and attaches the sheet once it is in the
+// bucket: PUT /api/files/[id]/filmstrip, with the thumbnail PUT's checks.
+describe('a filmstrip attached after its file was recorded', () => {
+  const attach = (who, id, body) => call(filmstripRoute.PUT, `/api/files/${id}/filmstrip`, { method: 'PUT', body, params: { id }, ...who });
+  const LAYOUT = { frames: 40, columns: 8, tileWidth: 160, tileHeight: 90 };
+  /** A sheet in the bucket, at the key the presign route names. */
+  const sheet = async (who) => {
+    const p = await presign(who, { strip: true, contentType: 'image/webp' });
+    assert.equal(p.status, 200, JSON.stringify(p.body));
+    assert.match(p.body.key, /^_thumbs\/[0-9a-f-]{36}\.strip\.webp$/);
+    put(p.body.putUrl, Buffer.alloc(300, 7));
+    return p.body.key;
+  };
+
+  test('recorded on the file: the key, its layout, seq moved, and nothing else', async () => {
+    const who = web(ED);
+    const f = await upload(who, { name: 'A001.mov' });
+    const before = structuredClone(row(f.id));
+    const key = await sheet(who);
+    const out = await attach(who, f.id, { filmstripKey: key, filmstrip: LAYOUT });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    const r = row(f.id);
+    assert.equal(r.filmstripKey, key);
+    assert.deepEqual(r.metadata.filmstrip, LAYOUT);
+    assert.ok(r.seq > before.seq, 'seq moves: every device picks it up');
+    assert.equal(r.version, before.version, 'a preview is not an edit');
+    assert.equal(r.updatedAt, before.updatedAt);
+    assert.match(out.body.file.filmstripUrl, /^http:\/\/s3\.test\/onyx\/_thumbs\/[0-9a-f-]{36}\.strip\.webp\?.*X-Amz-/, 'signed for the answer');
+  });
+
+  test('a new sheet replaces the old, which leaves the bucket once nothing points at it', async () => {
+    const who = web(ED);
+    const f = await upload(who, { name: 'A002.mov' });
+    const first = await sheet(who);
+    assert.equal((await attach(who, f.id, { filmstripKey: first, filmstrip: LAYOUT })).status, 200);
+    const second = await sheet(who);
+    assert.equal((await attach(who, f.id, { filmstripKey: second, filmstrip: LAYOUT })).status, 200);
+    assert.equal(row(f.id).filmstripKey, second);
+    assert.equal(stored(first), null, 'the replaced sheet is deleted');
+    assert.ok(stored(second));
+  });
+
+  test('only a filmstrip key, with a layout that places every tile, and never another file’s', async () => {
+    const f = await upload(web(ED), { name: 'A003.mov' });
+    const theirs = await upload(web(ED2), { name: 'B001.mov' });
+    const taken = await sheet(web(ED2));
+    assert.equal((await attach(web(ED2), theirs.id, { filmstripKey: taken, filmstrip: LAYOUT })).status, 200);
+    const uuid = randomUUID();
+    for (const [body, status, why] of [
+      [{ filmstripKey: `_thumbs/${uuid}.webp`, filmstrip: LAYOUT }, 400, 'a thumbnail’s key'],
+      [{ filmstripKey: f.storageKey, filmstrip: LAYOUT }, 400, 'the file itself'],
+      [{ filmstripKey: `_thumbs/${uuid}.strip.webp` }, 400, 'no layout'],
+      [{ filmstripKey: `_thumbs/${uuid}.strip.webp`, filmstrip: { ...LAYOUT, columns: 0 } }, 400, 'a layout that places nothing'],
+      [{ filmstripKey: `_thumbs/${uuid}.strip.webp`, filmstrip: { ...LAYOUT, tileWidth: 1000 } }, 400, 'a sheet past 4096px'],
+      [{ filmstripKey: taken, filmstrip: LAYOUT }, 409, 'another file’s sheet'],
+    ]) {
+      const out = await attach(web(ED), f.id, body);
+      assert.equal(out.status, status, why);
+    }
+    assert.equal(row(f.id).filmstripKey, null, 'nothing recorded');
+    assert.equal(row(theirs.id).filmstripKey, taken, 'theirs as it was');
+    const deck = await upload(web(ED), { name: 'Deck.pdf', mime: 'application/pdf' });
+    const onDeck = await attach(web(ED), deck.id, { filmstripKey: await sheet(web(ED)), filmstrip: LAYOUT });
+    assert.equal(onDeck.status, 400, 'only a video is scrubbed');
+    assert.equal(onDeck.body.error, 'Only a video has a filmstrip.');
+    assert.equal(row(deck.id).filmstripKey, null);
+  });
+
+  test('who may: an editor of the file — not a viewer, the Viewer role, nobody, or anyone for a trashed file', async () => {
+    const f = await upload(web(ED), { name: 'A004.mov' });
+    const key = await sheet(web(ED));
+    const body = { filmstripKey: key, filmstrip: LAYOUT };
+    assert.equal((await attach(web(DV), f.id, body)).status, 403, 'a viewer of the drive');
+    assert.equal((await attach(web(VR), f.id, body)).status, 403, 'the Viewer role, granted editor');
+    assert.equal((await attach({}, f.id, body)).status, 401);
+    assert.equal((await attach(web(ED), 'no-such-file', body)).status, 404);
+    await trashFile(web(ED), f.id);
+    assert.equal((await attach(web(ED), f.id, body)).status, 404, 'in the trash');
+    assert.equal(row(f.id).filmstripKey, null);
+    assert.equal((await attach(web(ED2), (await upload(web(ED2), { name: 'B002.mov' })).id, body)).status, 200, 'another editor of the drive, on a file of theirs');
   });
 });
 

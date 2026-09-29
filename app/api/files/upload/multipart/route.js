@@ -7,7 +7,7 @@ import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 import { replacementTarget, replacementKey } from '@/lib/replace-content';
 import { vacateTrashedKey } from '@/lib/trash-move';
 import {
-  getStorageConfig, storageMode, cfgForFilespace, choosePartSize, partCount, buildObjectKey,
+  getStorageConfig, storageMode, cfgForFilespace, partSizeFor, partCount, buildObjectKey,
   s3CreateMultipartUpload, s3PresignUploadParts, s3ListParts,
   s3CompleteMultipartUpload, s3AbortMultipartUpload,
 } from '@/lib/storage';
@@ -26,7 +26,9 @@ export const maxDuration = 30;
  * retryable parts.
  *
  * Actions (POST body `action`):
- *   create    → start an upload, get { id, partSize, partCount }
+ *   create    → start an upload, get { id, partSize, partCount }; an optional
+ *               `partSize` asks for parts of that size (lib/storage.js
+ *               partSizeFor says what is honoured)
  *   sign      → presign a batch of part URLs
  *   status    → which parts S3 already holds (this is what resume reads)
  *   complete  → assemble the parts into the final object
@@ -130,7 +132,11 @@ export async function POST(req) {
       // moves, is much kinder than failing on the final assemble. It reads
       // the ceiling from the config the upload will actually use, so a
       // filespace on a different provider gets that provider's limit.
-      const partSize = choosePartSize(size, scoped);
+      // `partSize` is the size the client would like its parts, which the
+      // browser sets well above the floor; partSizeFor keeps it inside the
+      // limits, and what it settles on is what every later action — and a
+      // resume — uses.
+      const partSize = partSizeFor(size, scoped, body.partSize);
 
       // As in the presign route: a role that may add files, landing inside a
       // drive takes its editor, and the size is held to the limits — for new

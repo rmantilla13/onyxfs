@@ -906,6 +906,9 @@ export default function FilesClient({
         filespaceId: live.current.filespaceId,
         resumeId: item.resumeId,
         ...opts,
+        // A file is recorded without waiting long for its previews; one that
+        // lands afterwards comes here, onto its tile if it is on screen.
+        onPreview: (f) => setFiles((prev) => prev.map((x) => (x.id === f.id ? mergeBackfilled(x, f) : x))),
       });
       // New tiles appear while the rest of the batch is still going, a
       // refresh every second or so rather than one per file.
