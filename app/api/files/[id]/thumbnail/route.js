@@ -4,6 +4,7 @@ import { requirePrincipal, can, refusal } from '@/lib/authz';
 import { presignFileUrls } from '@/lib/storage';
 import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
 import { isThumbKey, isPosterKey, mediaFacts, thumbSizesFrom } from '@/lib/media';
+import { placeholderFacts } from '@/lib/placeholder';
 
 export const runtime = 'nodejs';
 
@@ -36,7 +37,7 @@ export async function GET(req, { params }) {
 }
 
 /**
- * PUT /api/files/[id]/thumbnail  Body: { thumbnailKey, posterKey?, thumbSizes?, media? }
+ * PUT /api/files/[id]/thumbnail  Body: { thumbnailKey, posterKey?, thumbSizes?, media?, placeholder? }
  *                                   or { posterKey, media? } — the preview alone
  *
  * Attach a thumbnail the browser made for a file that has none, whose
@@ -47,6 +48,9 @@ export async function GET(req, { params }) {
  * to the bucket through the presign route, which named the keys; this only
  * records them. A write, so it takes the same files.edit capability and
  * canModifyFile check as PATCH.
+ *
+ * `placeholder` is the new thumbnail's tiny copy (lib/placeholder.js), kept
+ * only when it is one; the old thumbnail's goes either way.
  *
  * With no thumbnailKey, only the large preview is recorded (setFilePoster):
  * an image whose thumbnail stands, given the preview a writer's browser drew
@@ -86,7 +90,9 @@ export async function PUT(req, { params }) {
   try {
     file = posterOnly
       ? await setFilePoster(existing.id, body.posterKey, mediaFacts(body.media))
-      : await setFileThumbnail(existing.id, body.thumbnailKey, mediaFacts(body.media), body.posterKey || null, thumbSizesFrom(body.thumbSizes));
+      : await setFileThumbnail(existing.id, body.thumbnailKey, mediaFacts(body.media), body.posterKey || null, thumbSizesFrom(body.thumbSizes), {
+        placeholder: placeholderFacts(body.placeholder),
+      });
   } catch (e) {
     return NextResponse.json({ error: e.message || 'Could not save the thumbnail.' }, { status: 500 });
   }

@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useEffect, useRef, useState } from 'react';
-import { effectiveKind, drawableKind, fmtDuration, fmtSize } from '@/lib/media';
+import { effectiveKind, drawableKind, fmtDuration, fmtSize, isThumbKey } from '@/lib/media';
 import { isUndersizedPoster, thumbSiblingSizes } from '@/lib/poster';
 import { thumbSources } from '@/lib/renditions';
 import { fileKey } from '@/lib/selection';
@@ -102,13 +102,23 @@ export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface 
   // editor's browser for one that has none.
   const wave = kind === 'audio' ? file.metadata?.waveform : null;
   const needsWave = !!onMissingThumb && kind === 'audio' && !wave && file.storage === 's3' && file.can?.edit !== false;
+  // The thumbnail's picture, tiny (lib/placeholder.js), shown blurred under
+  // it until it loads — so a tile has its picture the moment it is drawn, not
+  // once its request comes back. A thumbnail from before placeholders gets
+  // one drawn from its smallest sibling by an editor's browser (the sizes job
+  // draws it for one without siblings).
+  const placeholder = src && fit !== 'scale-down' ? file.metadata?.placeholder : null;
+  const [loadedSrc, setLoadedSrc] = useState(null);
+  const needsPlaceholder = !!onMissingThumb && !needsThumb && !needsSizes && !!file.thumbnailUrl
+    && isThumbKey(file.thumbnailKey) && !file.metadata?.placeholder && file.can?.edit !== false;
 
   // Asked once the tile is near the viewport, through one shared observer.
   useEffect(() => {
     const el = ref.current;
-    if (!el || (!needsThumb && !needsSizes && !needsWave)) return undefined;
-    return watch(el, () => onMissingThumb(file, needsWave ? { wave: true } : needsThumb ? {} : { sizes: true }));
-  }, [needsThumb, needsSizes, needsWave, file, onMissingThumb]);
+    if (!el || (!needsThumb && !needsSizes && !needsWave && !needsPlaceholder)) return undefined;
+    const want = needsWave ? { wave: true } : needsThumb ? {} : needsSizes ? { sizes: true } : { placeholder: true };
+    return watch(el, () => onMissingThumb(file, want));
+  }, [needsThumb, needsSizes, needsWave, needsPlaceholder, file, onMissingThumb]);
 
   const inspect = (img) => {
     if (!img || !img.naturalWidth) return;
@@ -130,13 +140,19 @@ export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface 
       onMissingThumb(file, { upgrade: true });
     }
   };
-  const onLoad = (e) => inspect(e.currentTarget);
+  const onLoad = (e) => {
+    setLoadedSrc(src);
+    inspect(e.currentTarget);
+  };
   // The grid is server-rendered, and an image that finished loading before
   // hydration fired its `load` before React was listening — React does not
   // replay it — so a tile already on screen is inspected here instead.
   useEffect(() => {
     const img = imgRef.current;
-    if (img?.complete) inspect(img);
+    if (img?.complete && img.naturalWidth) {
+      setLoadedSrc(src);
+      inspect(img);
+    }
     // Once per picture; `inspect` reads the rest fresh on each call.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src]);
@@ -145,10 +161,14 @@ export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface 
   const drawn = !src && wave;
   return (
     <div ref={ref} className={drawn ? 'filecard-thumb is-sound' : 'filecard-thumb'}>
+      {placeholder && loadedSrc !== src && (
+        <img className="thumb-ph" src={placeholder} alt="" aria-hidden draggable={false} style={{ objectFit: fit }} />
+      )}
       {src
         ? (
           <img
             ref={imgRef}
+            className="thumb-main"
             src={src}
             srcSet={srcSet}
             sizes={sizesAttr}
