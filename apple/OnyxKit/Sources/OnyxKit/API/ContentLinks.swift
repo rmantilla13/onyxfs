@@ -62,7 +62,7 @@ public actor ContentLinks {
     private var generation: UInt64 = 0
     private let now: @Sendable () -> Date
 
-    public init(now: @escaping @Sendable () -> Date = Date.init) {
+    public init(now: @escaping @Sendable () -> Date = { Date() }) {
         self.now = now
     }
 

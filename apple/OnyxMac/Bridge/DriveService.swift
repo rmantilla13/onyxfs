@@ -638,9 +638,6 @@ final class DriveService: ObservableObject {
 
     // MARK: - Ticking
 
-    /// Drives synced at once in a tick. One after another, a drive slow to
-    /// answer held up every drive after it.
-    static let syncsAtOnce = 4
     /// How often a tick comes: every 5 s within a minute of anything
     /// happening, or while a window is open; every 30 s after that; every
     /// minute once ten have gone by with nothing. Each tick is a request per
@@ -744,74 +741,66 @@ final class DriveService: ObservableObject {
         let pinnedScopes = Set(pinRules.map(\.scope))
         let due = mirrors.filter { wantMounted.contains($0.key) || pinnedScopes.contains($0.key) || onyxfsScopes.contains($0.key) }
         var gone: Set<String> = []
-        var signedOut = false
-        await withTaskGroup(of: (id: String, mirror: DriveMirror, result: Result<Replica.Diff, Error>).self) { group in
-            var waiting = Array(due)[...]
-            var inFlight = 0
-            while true {
-                while inFlight < Self.syncsAtOnce, started == generation, let (id, mirror) = waiting.popFirst() {
-                    syncing.insert(id)
-                    group.addTask {
-                        do { return (id, mirror, .success(try await mirror.sync())) } catch { return (id, mirror, .failure(error)) }
-                    }
-                    inFlight += 1
+        // One drive after another. They went four at a time in a task group
+        // in 0.5.14, and on macOS 27 the group's children crashed the app as
+        // they reported back — EXC_BAD_ACCESS in TaskGroup::offer, the moment
+        // a launch's first syncs finished, on every launch. A drive with
+        // nothing new answers in a few hundred milliseconds; in turn is what
+        // 0.5.13 did, for as long as it ran.
+        for (id, mirror) in due {
+            guard started == generation else { return }
+            syncing.insert(id)
+            let result: Result<Replica.Diff, Error>
+            do { result = .success(try await mirror.sync()) } catch { result = .failure(error) }
+            // Signed out while it synced: nothing more for that account.
+            guard started == generation else { return }
+            switch result {
+            case let .success(diff):
+                onMirrorSynced?(mirror, diff)
+                // Something changed on the web: the ticks keep up for a while.
+                if !diff.isEmpty { noteActivity() }
+                // Files this Mac uploaded that the mirror now shows stop
+                // being pending, and their staged copies go.
+                await writers[id]?.mirrorChanged()
+                if isOffline {
+                    isOffline = false
+                    // Back: what failed for want of a network is tried now,
+                    // not after its wait — every pinned drive's.
+                    await pins?.retryNow()
+                    reconciled = [:]
                 }
-                guard let (id, mirror, result) = await group.next() else { break }
-                inFlight -= 1
-                // Signed out while it synced: nothing more for that account.
-                guard started == generation else { continue }
-                switch result {
-                case let .success(diff):
-                    onMirrorSynced?(mirror, diff)
-                    // Something changed on the web: the ticks keep up for a while.
-                    if !diff.isEmpty { noteActivity() }
-                    // Files this Mac uploaded that the mirror now shows stop
-                    // being pending, and their staged copies go.
-                    await writers[id]?.mirrorChanged()
-                    if isOffline {
-                        isOffline = false
-                        // Back: what failed for want of a network is tried
-                        // now, not after its wait — every pinned drive's.
-                        await pins?.retryNow()
-                        reconciled = [:]
-                    }
-                case let .failure(error):
-                    if case .notAuthenticated? = error as? OnyxError {
-                        syncing.remove(id)
-                        // Only for the sign-in this tick began under: signed
-                        // out meanwhile, the token was simply gone, and
-                        // whoever is signed in now is not to be signed out
-                        // for it.
-                        if started == generation { await model?.tokenRejected() }
-                        signedOut = true
-                        group.cancelAll()
-                        return
-                    }
-                    if case .driveGone? = error as? OnyxError {
-                        syncing.remove(id)
-                        gone.insert(id)
-                        await driveGone(mirror.scope)
-                        continue
-                    }
-                    if error is URLError {
-                        // Offline: the mount keeps answering from the last
-                        // good mirror, and pinned files keep working.
-                        isOffline = true
-                    }
-                    // Otherwise a server hiccup: the same, and the next tick
-                    // tries again. A refusal of the drive lands here too
-                    // until it has gone on long enough to be believed; the
-                    // mirror withholds the drive meanwhile, and a pass
-                    // against it deletes nothing.
+            case let .failure(error):
+                if case .notAuthenticated? = error as? OnyxError {
+                    syncing.remove(id)
+                    // For the sign-in this tick began under, which it still is
+                    // (checked above): whoever is signed in now is not to be
+                    // signed out for another's token.
+                    await model?.tokenRejected()
+                    return
                 }
-                guard started == generation else { continue }
-                syncing.remove(id)
-                // Not waited for: a pin downloading for hours must not hold
-                // up the syncing of every drive after this one.
-                if pinnedScopes.contains(id), await reconcileOwed(id, mirror) { reconcileSoon(id) }
+                if case .driveGone? = error as? OnyxError {
+                    syncing.remove(id)
+                    gone.insert(id)
+                    await driveGone(mirror.scope)
+                    continue
+                }
+                if error is URLError {
+                    // Offline: the mount keeps answering from the last good
+                    // mirror, and pinned files keep working.
+                    isOffline = true
+                }
+                // Otherwise a server hiccup: the same, and the next tick tries
+                // again. A refusal of the drive lands here too until it has
+                // gone on long enough to be believed; the mirror withholds the
+                // drive meanwhile, and a pass against it deletes nothing.
             }
+            guard started == generation else { return }
+            syncing.remove(id)
+            // Not waited for: a pin downloading for hours must not hold up
+            // the syncing of every drive after this one.
+            if pinnedScopes.contains(id), await reconcileOwed(id, mirror) { reconcileSoon(id) }
         }
-        guard !signedOut, started == generation else { return }
+        guard started == generation else { return }
         // Pins in drives that are not mounted still need their mirror.
         for scope in pinnedScopes where mirrors[scope] == nil && !gone.contains(scope) {
             // Checked before opening one, which would be for whoever is
