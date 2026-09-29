@@ -4,6 +4,8 @@
 // lib/replace-content.js — and only the database is replaced, by an
 // in-memory store in globalThis.__mw that the test arranges. (The bucket is
 // replaced one level further down, at the S3 client's send(); see the test.)
+// test/playback-links.test.js runs the listing and the download routes
+// against the same store.
 //
 // The access answers are computed, not configured: canModifyFile is the real
 // fileWriteDecision over the real driveAccess, getFilespaceForWrite the real
@@ -52,6 +54,13 @@ export async function getDesktopTokenByRaw(raw) {
 }
 export async function touchDesktopToken() {}
 export async function insertAuditEvent(e) { s().audit.push(e); return { id: String(s().audit.length), at: now() }; }
+// A share link's row as stored (snake_case, as lib/db.js getShareRow returns
+// it), for lib/share-access.js to decide from as it does from the real one.
+export async function getShareRow(token) { return copy(s().shares?.get(token) || null); }
+export async function isLinkCreatorPaused(email) {
+  const p = s().people.get(norm(email));
+  return p?.status === 'suspended' && p.pauseLinks !== false;
+}
 export async function getFileMetadataSchema() { return null; }
 
 // ── drives and access ──
@@ -186,6 +195,21 @@ export async function getProxies(ids = []) {
   return m;
 }
 export async function attachProxies(files = []) { return files; }
+// What a listing plays (lib/file-listing.js playableProxies), by the SQL's
+// rule: a finished job's key, unless the file's contents changed since. Each
+// call is kept in `proxyLookups`, so a test sees which rows were asked about
+// — and that a page with nothing worth a proxy asks about none.
+export async function finishedProxyKeys(files = []) {
+  const list = (files || []).filter((f) => f?.id);
+  (s().proxyLookups ||= []).push(list.map((f) => f.id));
+  const out = new Map();
+  for (const f of list) {
+    const r = s().proxies?.get(String(f.id));
+    const stale = !!r?.sourceKey && !!f.storageKey && r.sourceKey !== f.storageKey;
+    if (r?.status === 'done' && r.proxyKey && !stale) out.set(f.id, r.proxyKey);
+  }
+  return out;
+}
 export async function proxyKeysFor(ids = []) {
   const list = Array.isArray(ids) ? ids : [ids];
   return list.map((id) => s().proxies?.get(String(id))?.proxyKey).filter(Boolean);

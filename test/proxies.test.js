@@ -366,6 +366,31 @@ describe('the player and the queue agree on the words', () => {
     assert.match(player, /const proxy = \(row && !row\.stale \? row\.url : null\) \|\| file\?\.proxyUrl \|\| null;/);
     assert.match(player, /const proxyStatus = row\?\.status \|\| file\?\.proxyStatus \|\| null;/);
   });
+
+  test('a clip light enough to stream loads its metadata at once; a heavy master waits for play', async () => {
+    const player = await src('app/components/video/VideoPlayer.js');
+    assert.match(player, /const heavy = !proxy && Number\(file\?\.size\) > HEAVY_BYTES;/);
+    assert.match(player, /preload=\{started \|\| !heavy \? 'metadata' : 'none'\}/);
+  });
+});
+
+// Where the server-rendered and listed rows are played: what signs the
+// rendition is test/playback-links.test.js's (and its SQL proxies-db's); these
+// are the two places a browser is handed it that no test can render.
+describe('every player a row reaches prefers the rendition', () => {
+  test('Quick Look plays the streamable copy the listing found', async () => {
+    const ql = await src('app/components/quicklook/QuickLook.js');
+    assert.match(ql, /className="ql-video"\s+src=\{file\.proxyUrl \|\| file\.url\}/);
+  });
+
+  test('the share page looks it up before it signs, under the flags the link was let in by', async () => {
+    const page = await src('app/s/[token]/page.js');
+    const lookup = page.indexOf('await playableProxies([access.file], access.flags)');
+    const sign = page.indexOf('await presignFileUrls(withProxyKeys([access.file], proxies)');
+    assert.ok(lookup > 0, 'the page no longer looks up the proxy');
+    assert.ok(sign > lookup, 'signed before the key is there to sign');
+    assert.ok(page.indexOf('sharedFile(signed)') > sign);
+  });
 });
 
 describe('a heavy upload is queued without being able to fail the upload', () => {

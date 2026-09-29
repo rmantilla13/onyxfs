@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { resolveShareAccess } from '@/lib/share-access';
-import { getStorageConfig, storageMode, s3PresignGet, storageForKey } from '@/lib/storage';
+import { getStorageConfig, storageMode, s3PresignGet, storageForKey, ORIGINAL_URL_TTL } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -10,6 +10,12 @@ export const dynamic = 'force-dynamic';
  * decision as the page (lib/share-access), made again rather than trusted
  * from having rendered it: the link may have been revoked, expired or
  * re-passworded since. Anyone not let in is sent to the page, which says why.
+ *
+ * Signed for six hours (ORIGINAL_URL_TTL), as the page's player is, so a
+ * large download cut off part way can resume: a browser resumes by asking for
+ * the same URL again. The trade is the player's too: revoking the link stops
+ * every new download at once, but a URL already handed out keeps working for
+ * up to six hours.
  */
 export async function GET(req, { params }) {
   const { token } = params;
@@ -25,7 +31,7 @@ export async function GET(req, { params }) {
       const cfg = await getStorageConfig();
       if (storageMode(cfg) === 's3') {
         // Signed where the object is: a drive in a bucket of its own keeps it there.
-        const url = await s3PresignGet(await storageForKey(cfg, file.storageKey), file.storageKey, { download: true, filename: file.name, expiresIn: 600 });
+        const url = await s3PresignGet(await storageForKey(cfg, file.storageKey), file.storageKey, { download: true, filename: file.name, expiresIn: ORIGINAL_URL_TTL });
         return NextResponse.redirect(url);
       }
     } catch (e) {
