@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useRef } from 'react';
+import { useCallback, useEffect, useId, useRef } from 'react';
 import { effectiveKind, drawableKind, fmtSize, fmtDuration } from '@/lib/media';
 import { thumbSources } from '@/lib/renditions';
 import { probedNow, decodeProbe } from '@/lib/decode-probe';
@@ -11,6 +11,7 @@ import { parseKey } from '@/lib/selection';
 import { modKey } from '@/lib/keys';
 import ProgressiveImage from '@/app/components/media/ProgressiveImage';
 import AudioPlayer from '@/app/components/media/AudioPlayer';
+import { DownloadButtons } from '@/app/components/download/DownloadAs';
 import useQuickLook from './useQuickLook';
 import useOpenPrefetch from '@/app/files/useOpenPrefetch';
 import '@/app/components/review/review.css';
@@ -117,6 +118,8 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
   const live = useRef(null);
   live.current = { ql, key, file, folder, onOpen, onInfo };
   const hadOriginal = useRef({ id: null, yes: false });
+  // The video on screen, for a still of its frame (Download as…).
+  const qlVideo = useCallback(() => root.current?.querySelector('video.ql-video') || null, []);
 
   // Focus into the dialog on open; the page puts it back on close (onClose).
   // While it is open the page behind is inert: out of reach of Tab and of a
@@ -224,7 +227,8 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
           </div>
           <div className="spacer" />
           <button type="button" className="btn btn-sm" onClick={() => onOpen?.(key)} title="Open (Return)">Open</button>
-          {file && <a className="btn btn-sm" href={`/api/files/${file.id}/download`}>Download</a>}
+          {/* Download as… opens a <dialog>, whose keys are its own (see onKey). */}
+          {file && <DownloadButtons file={file} small frame={qlVideo} />}
           <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => ql.close()} aria-label="Close" title="Close (Space)">
             <Icon name="x" />
           </button>

@@ -339,6 +339,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({
     hold,
     frame: () => onScreen.current.frame(),
     time: position,
+    // The <video> itself, for "Download as…" to take a still of the frame on
+    // screen (from a copy of its own: this one is not CORS-read, so not readable).
+    element: () => video.current,
   }), [seekToFrame, hold, seek, position]);
 
   // A track added after the video loaded is not shown by `default` alone in

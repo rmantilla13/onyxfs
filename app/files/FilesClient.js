@@ -12,6 +12,7 @@ import FileList from '@/app/components/ui/FileList';
 import FilterPanel, { ActiveFilters, countActive } from '@/app/components/ui/FilterPanel';
 import InfoDialog from '@/app/components/ui/InfoDialog';
 import ShareDialog from '@/app/components/ShareDialog';
+import { useDownloadAs } from '@/app/components/download/DownloadAs';
 import { DriveList, DriveMembersDialog } from '@/app/components/Drives';
 import NewDriveDialog from '@/app/components/drives/NewDriveDialog';
 import { useDeleteDrive } from '@/app/components/drives/DeleteDriveConfirm';
@@ -319,6 +320,8 @@ export default function FilesClient({
   const { prompt, promptElement } = usePrompt();
   const { pick, pickerElement } = useFolderPicker();
   const { openMenu, contextMenuElement } = useContextMenu();
+  // Download as… — another format or size (app/components/download/).
+  const downloadAs = useDownloadAs();
 
   const inputRef = useRef(null);
   const folderInputRef = useRef(null);
@@ -1422,6 +1425,7 @@ export default function FilesClient({
       { label: 'Quick Look', hint: 'Space', onSelect: () => quickLook(fileKey(f.id)) },
       { label: 'Get info', hint: `${modKey()}I`, onSelect: () => infoForFiles([f.id]) },
       { label: 'Download', onSelect: () => downloadFile(f) },
+      downloadAs.offers(f) && { label: 'Download as…', onSelect: () => downloadAs.open(f) },
       // In the Mac app only: a copy on this Mac that opens without a connection.
       mac.inApp && fileOfflineItem(f),
       // The flag is the role's (the page computed it); the route checks both
@@ -2486,6 +2490,7 @@ export default function FilesClient({
       {promptElement}
       {pickerElement}
       {contextMenuElement}
+      {downloadAs.element}
       {isAdmin && flags.metadata && addingField && (
         <NewFieldDialog open onClose={() => setAddingField(false)} onCreate={createField} />
       )}
