@@ -218,42 +218,109 @@ enum ThumbnailSize {
 /// is one (or if there is none). A picture already in memory is there on the first frame, so
 /// scrolling back never flickers; and coming into view, it tells the
 /// folder's prefetch where the eye is, so the next ones are ready too.
+///
+/// Until the picture has come, its placeholder (PlaceholderImages): the
+/// thumbnail two dozen pixels across, from the file's own row, softened —
+/// the picture the moment the tile is drawn, not once its request comes
+/// back. The picture fades in over it, and then it goes. One not decoded
+/// yet is asked for beside the picture, never ahead of it, and the tile
+/// shows its plain ground for the frame or two that takes, not a symbol it
+/// would take back at once.
 struct Thumbnail: View {
     let file: FileItem
     let size: ThumbnailSize
     @Environment(Session.self) private var session: Session?
     @State private var image: UIImage?
+    /// The placeholder, under the picture until the picture has faded in.
+    @State private var still: UIImage?
+    /// A placeholder is on its way: nothing is drawn meanwhile.
+    @State private var stillComing: Bool
 
     init(file: FileItem, size: ThumbnailSize) {
         self.file = file
         self.size = size
-        _image = State(initialValue: file.picture(size).flatMap { ThumbnailStore.shared.cached($0) })
+        let shown = file.picture(size).flatMap { ThumbnailStore.shared.cached($0) }
+        let still = shown == nil ? PlaceholderImages.shared.cached(file) : nil
+        _image = State(initialValue: shown)
+        _still = State(initialValue: still)
+        _stillComing = State(initialValue: shown == nil && still == nil && file.metadata?.placeholder != nil)
     }
 
     var body: some View {
         Color(.secondarySystemFill)
             .overlay {
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .transition(.opacity)
-                } else if file.kind == "audio", let waveform = file.metadata?.waveform {
-                    TileWaveform(waveform: waveform, compact: size == .row)
-                } else {
-                    KindSymbol(file: file, compact: size == .row)
+                ZStack {
+                    if let still {
+                        Image(uiImage: still)
+                            .resizable()
+                            .scaledToFill()
+                            .accessibilityHidden(true)
+                    }
+                    if let image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                            .transition(.opacity)
+                    } else if still == nil, !stillComing {
+                        if file.kind == "audio", let waveform = file.metadata?.waveform {
+                            TileWaveform(waveform: waveform, compact: size == .row)
+                        } else {
+                            KindSymbol(file: file, compact: size == .row)
+                        }
+                    }
                 }
             }
             .clipped()
-            .task(id: file.picture(size)) {
-                ThumbnailPrefetcher.shared.appeared(file, size: size)
-                guard let source = file.picture(size) else { image = nil; return }
-                if let hit = ThumbnailStore.shared.cached(source) { image = hit; return }
-                let loaded = await ThumbnailStore.shared.image(source, api: session?.api)
-                if !Task.isCancelled, let loaded {
-                    withAnimation(.easeOut(duration: 0.15)) { image = loaded }
+            .task(id: file.picture(size)) { await show() }
+    }
+
+    /// The picture, from memory, disk or storage, and meanwhile its
+    /// placeholder: both asked for at once, and each shown as it comes — the
+    /// placeholder only while the picture has not, so it never holds the
+    /// picture up.
+    private func show() async {
+        ThumbnailPrefetcher.shared.appeared(file, size: size)
+        guard let source = file.picture(size) else {
+            image = nil
+            still = nil
+            stillComing = false
+            return
+        }
+        if let hit = ThumbnailStore.shared.cached(source) {
+            image = hit
+            still = nil
+            stillComing = false
+            return
+        }
+        let api = session?.api, file = self.file
+        let wantsStill = image == nil && still == nil && file.metadata?.placeholder != nil
+        await withTaskGroup(of: Arrival.self) { group in
+            group.addTask { .picture(await ThumbnailStore.shared.image(source, api: api)) }
+            if wantsStill { group.addTask { .still(await PlaceholderImages.shared.image(for: file)) } }
+            for await arrival in group {
+                guard !Task.isCancelled else { return }
+                switch arrival {
+                case let .still(tiny):
+                    if image == nil { still = tiny }
+                    stillComing = false
+                case let .picture(loaded):
+                    // None to be had: the placeholder, if one is coming, stays.
+                    guard let loaded else { continue }
+                    stillComing = false
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        image = loaded
+                    } completion: {
+                        // Covered now: a layer less to draw.
+                        still = nil
+                    }
                 }
             }
+        }
+    }
+
+    private enum Arrival: Sendable {
+        case picture(UIImage?)
+        case still(UIImage?)
     }
 }
 

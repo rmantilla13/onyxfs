@@ -12,7 +12,10 @@ import SwiftUI
 /// in memory on its first frame.
 ///
 /// Thumbnails only: a frame drawn from a video costs a megabyte or so, and
-/// is drawn for a cell on screen, not ahead of one.
+/// is drawn for a cell on screen, not ahead of one. And the placeholders
+/// the near ones will show until their thumbnails come (PlaceholderImages),
+/// which are in the listing already and only need decoding: a new folder's
+/// first screen as soon as it is listed, then the warm window's as it moves.
 @MainActor
 final class ThumbnailPrefetcher {
     static let shared = ThumbnailPrefetcher()
@@ -61,13 +64,27 @@ final class ThumbnailPrefetcher {
                 replan(listing)
             } else {
                 listing.focus.reset()
+                firstScreen(files)
             }
             touch(listing)
         } else {
             let listing = Listing(owner: owner, files: files)
             listings.append(listing)
             if listings.count > 6 { listings.removeFirst(listings.count - 6) }
+            firstScreen(files)
         }
+    }
+
+    /// The placeholders a listing's first screen shows, decoded now, before
+    /// its cells ask: most are ready for their first frame. None for a
+    /// picture in memory already, at either size (no cell has said which
+    /// yet): that is on its cell's first frame itself.
+    private func firstScreen(_ files: [FileItem]) {
+        let first = files.prefix(window.warmAhead + window.warmBehind).filter { file in
+            file.metadata?.placeholder != nil
+                && ![ThumbnailSize.card, .row].contains { file.thumbnail($0).flatMap(ThumbnailStore.shared.cached) != nil }
+        }
+        PlaceholderImages.shared.warm(first, priority: .userInitiated)
     }
 
     /// A cell came into view showing `file` at `size`.
@@ -118,6 +135,11 @@ final class ThumbnailPrefetcher {
         let fetch = plan.fetch.compactMap { listing.files[$0].thumbnail(size) }
         let warm = plan.warm.compactMap { listing.files[$0].thumbnail(size) }
         ThumbnailStore.shared.prefetch(fetch: fetch, warm: warm)
+        // What the near ones show until then: none for a picture in memory
+        // already, which is on its cell's first frame.
+        PlaceholderImages.shared.warm(plan.warm.lazy.map { listing.files[$0] }.filter { file in
+            file.metadata?.placeholder != nil && file.thumbnail(size).map { ThumbnailStore.shared.cached($0) == nil } == true
+        })
     }
 
     private func touch(_ listing: Listing) {

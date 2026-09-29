@@ -196,11 +196,21 @@ private struct PreviewPage: View {
 /// The picture at up to 2400 pixels — its preview, made at upload — which
 /// fills any phone or iPad screen; the original only for a picture that has
 /// none, and then decoded down to that size.
+///
+/// Until it comes, the tile's picture, stretched; or, when that is not in
+/// memory either, the placeholder from the file's row (PlaceholderImages),
+/// soft already — asked for on its own, so it never holds up the preview.
 private struct ImagePage: View {
     let file: FileItem
     @Environment(Session.self) private var session
     @State private var image: UIImage?
     @State private var failed = false
+    @State private var still: UIImage?
+
+    init(file: FileItem) {
+        self.file = file
+        _still = State(initialValue: PlaceholderImages.shared.cached(file))
+    }
 
     var body: some View {
         ZStack {
@@ -210,6 +220,9 @@ private struct ImagePage: View {
                 // The tile's picture, stretched, until the sharp one comes.
                 Image(uiImage: small).resizable().scaledToFit().blur(radius: 6)
                 ProgressView().tint(.white)
+            } else if let still, !failed {
+                Image(uiImage: still).resizable().scaledToFit().accessibilityHidden(true)
+                ProgressView().tint(.white)
             } else if failed {
                 KindSymbol(file: file)
             } else {
@@ -217,6 +230,10 @@ private struct ImagePage: View {
             }
         }
         .task(id: file.id) { await load() }
+        .task(id: file.id) {
+            guard still == nil, image == nil, let tiny = await PlaceholderImages.shared.image(for: file) else { return }
+            if !Task.isCancelled, image == nil { still = tiny }
+        }
     }
 
     private func load() async {

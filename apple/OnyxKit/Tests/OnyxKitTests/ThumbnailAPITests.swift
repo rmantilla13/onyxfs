@@ -156,12 +156,14 @@ struct ThumbnailAPITests {
         #expect(asked.allSatisfy { $0["filename"] == nil && $0["size"] == nil }, "never a file")
     }
 
-    @Test func theKeysAreRecordedWithTheMediaFacts() async throws {
+    @Test func theKeysAreRecordedWithTheMediaFactsAndThePlaceholder() async throws {
         let stub = try ThumbStub { _ in (200, #"{"file":\#(fileJSON)}"#) }
         defer { stub.tearDown() }
+        let placeholder = try #require(Placeholder(dataURL: "data:image/jpeg;base64,/9j/4AAQSkZJRg=="))
         let file = try await stub.api.recordThumbnail(fileId: "f1", thumbnailKey: "_thumbs/a.jpg", posterKey: "_thumbs/a.poster.jpg",
                                                       thumbSizes: ["sm", "xs"],
-                                                      media: MediaFacts(width: 3840, height: 2160, duration: 60.02))
+                                                      media: MediaFacts(width: 3840, height: 2160, duration: 60.02),
+                                                      placeholder: placeholder)
         #expect(file.id == "f1")
         let asked = try #require(stub.requests.first)
         #expect(asked.method == "PUT" && asked.path == "/api/files/f1/thumbnail")
@@ -170,11 +172,14 @@ struct ThumbnailAPITests {
         #expect(body["thumbSizes"] as? [String] == ["sm", "xs"])
         let media = try #require(body["media"] as? [String: Any])
         #expect(media["width"] as? Int == 3840 && media["height"] as? Int == 2160 && media["duration"] as? Double == 60.02)
-        // No poster: the key is left out, not sent as null.
+        // The placeholder as the route reads it (body.placeholder): the data URL.
+        #expect(body["placeholder"] as? String == "data:image/jpeg;base64,/9j/4AAQSkZJRg==")
+        // No poster and no placeholder: the keys are left out, not sent as null.
         _ = try await stub.api.recordThumbnail(fileId: "f1", thumbnailKey: "_thumbs/b.jpg", posterKey: nil, thumbSizes: [],
                                                media: MediaFacts(width: 640, height: 360, duration: nil))
         let second = try #require(stub.requests.last?.json)
         #expect(second["posterKey"] == nil && (second["media"] as? [String: Any])?["duration"] == nil)
+        #expect(second["placeholder"] == nil)
     }
 
     @Test func picturesGoToStorageWithTheHeadersItKeeps() async throws {

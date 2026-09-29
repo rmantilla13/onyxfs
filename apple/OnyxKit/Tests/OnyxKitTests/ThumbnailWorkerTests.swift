@@ -48,7 +48,9 @@ private final class StubServer: ThumbnailServer, @unchecked Sendable {
     private var stored: [String: Data] = [:]
     private var unsupported = false
     private var calls: [String] = []
-    private(set) var records: [(fileId: String, thumbnailKey: String, posterKey: String?, sizes: [String], media: MediaFacts)] = []
+    typealias Record = (fileId: String, thumbnailKey: String, posterKey: String?, sizes: [String], media: MediaFacts,
+                        placeholder: Placeholder?)
+    private(set) var records: [Record] = []
     private var putHeaders: [(url: URL, type: String, cache: String?)] = []
     private var keys = 0
 
@@ -58,7 +60,7 @@ private final class StubServer: ThumbnailServer, @unchecked Sendable {
     func stopTakingThumbnails() { lock.withLock { unsupported = true } }
     var log: [String] { lock.withLock { calls } }
     var puts: [(url: URL, type: String, cache: String?)] { lock.withLock { putHeaders } }
-    func recorded() -> [(fileId: String, thumbnailKey: String, posterKey: String?, sizes: [String], media: MediaFacts)] {
+    func recorded() -> [Record] {
         lock.withLock { records }
     }
     private func note(_ call: String) { lock.withLock { calls.append(call) } }
@@ -102,9 +104,9 @@ private final class StubServer: ThumbnailServer, @unchecked Sendable {
     }
 
     func recordThumbnail(fileId: String, thumbnailKey: String, posterKey: String?, thumbSizes: [String],
-                         media: MediaFacts) async throws -> FileItem {
+                         media: MediaFacts, placeholder: Placeholder?) async throws -> FileItem {
         note("record \(fileId)")
-        lock.withLock { records.append((fileId, thumbnailKey, posterKey, thumbSizes, media)) }
+        lock.withLock { records.append((fileId, thumbnailKey, posterKey, thumbSizes, media, placeholder)) }
         var file = lock.withLock { rows[fileId] } ?? row(fileId, "uploaded.mov")
         file.thumbnailKey = thumbnailKey
         file.thumbSizes = thumbSizes
@@ -157,7 +159,8 @@ private final class StubDrawing: ThumbnailDrawing, @unchecked Sendable {
     var isHolding: Bool { lock.withLock { gate != nil } }
 
     static let set = PreviewSet(format: .jpeg, grid: picture(1024, 576), sm: picture(683, 384), xs: picture(213, 120),
-                                large: picture(1920, 1080), media: MediaFacts(width: 3840, height: 2160, duration: 42.5))
+                                large: picture(1920, 1080), media: MediaFacts(width: 3840, height: 2160, duration: 42.5),
+                                placeholder: Placeholder(dataURL: "data:image/jpeg;base64,/9j/4AAQSkZJRg=="))
 
     private func draw(_ what: String) async throws -> PreviewSet {
         let (error, seconds, wait) = lock.withLock { () -> (Error?, TimeInterval, Bool) in
@@ -243,6 +246,8 @@ struct ThumbnailWorkerTests {
         #expect(record.posterKey == "_thumbs/00000000-0000-4000-8000-000000000002.poster.jpg")
         #expect(record.sizes == ["sm", "xs"])
         #expect(record.media == MediaFacts(width: 3840, height: 2160, duration: 42.5))
+        #expect(record.placeholder != nil && record.placeholder == StubDrawing.set.placeholder,
+                "the placeholder goes with the keys, in the one PUT")
         #expect(await worker.ledgerForTesting.entries["v1"]?.outcome == .made)
         #expect(await worker.candidateIDs.isEmpty)
         #expect(rig.watcher.reports.map(\.outcome) == [.made])
