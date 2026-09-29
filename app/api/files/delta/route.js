@@ -4,6 +4,7 @@ import {
 } from '@/lib/db';
 import { resolveActor } from '@/lib/desktop-guard';
 import { presignFileUrls } from '@/lib/storage';
+import { syncFeedRow } from '@/lib/media';
 import { drivePatterns } from '@/lib/drive-access';
 import { accessFingerprint, foldersTag, syncScope } from '@/lib/sync-scope';
 
@@ -102,8 +103,11 @@ export async function GET(req) {
   // 100k files pages through in chunks rather than signing them all at once.
   // Originals only: a device shows no thumbnails from this feed, and a row
   // now has up to five preview URLs (thumbnail, sm, xs, poster, strip) —
-  // each only another bearer token in a response of up to 500 rows.
-  const changed = await presignFileUrls(page.changed, { previews: false });
+  // each only another bearer token in a response of up to 500 rows. Nor the
+  // pictures a row's metadata carries for tiles, its placeholder and a
+  // sound's waveform (lib/media.js syncFeedRow): they more than doubled a
+  // page of pictures, for every Mac, every time a browser drew one.
+  const changed = (await presignFileUrls(page.changed, { previews: false })).map(syncFeedRow);
 
   const body = { changed, deleted: page.deleted, cursor: page.cursor, done: page.done, scope: tag };
   if (url.searchParams.get('folders') === '1') {
