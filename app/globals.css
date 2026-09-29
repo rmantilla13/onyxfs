@@ -125,6 +125,13 @@ html, body {
 /* The paper is the canvas (html). body stays transparent: its own background
    would paint OVER the aura layer below, which sits at z-index -1. */
 html { background: var(--paper); }
+/* And the paper is at least the window. Onyx for Mac's web view is
+   transparent (apple/OnyxMac/WebController.swift, drawsBackground), and while
+   anything on the page is animated on a layer of its own — the admin panel's
+   pulsing skeletons — WebKit paints the paper only as far down as the page
+   reaches: on a page shorter than the window, the window's grey showed below
+   it. 100%, not 100vh: on an iPhone 100vh is taller than what shows. */
+html { min-height: 100%; }
 /* A scrollbar that comes and goes (a mouse attached, or "Always" in System
    Settings) keeps its room either way, so the page never shifts sideways when
    a listing grows past the window or shrinks back. Overlay scrollbars take no
