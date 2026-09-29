@@ -48,7 +48,7 @@ public actor ProxySources {
     /// was for jobs it never got to.
     public init(folder: URL) {
         self.init(folder: folder, maxAge: Self.maxAge, maxBytes: Self.maxBytes, spareSpace: Self.spareSpace,
-                  freeSpace: { PinStore.availableCapacity($0) }, now: Date.init)
+                  freeSpace: { PinStore.availableCapacity($0) }, now: { Date() })
     }
 
     init(folder: URL, maxAge: TimeInterval, maxBytes: Int64, spareSpace: Int64,

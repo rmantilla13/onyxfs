@@ -648,27 +648,42 @@ public actor UploadQueue {
             var inFlight = 0
             var urls = try await signed(0)
             for index in batches.indices {
-                async let upcoming = signed(index + 1)
-                for part in batches[index] {
-                    if inFlight == Self.partConcurrency {
-                        try await group.next()
-                        inFlight -= 1
-                    }
-                    try Task.checkCancellation()
-                    guard let url = urls[part] else { throw OnyxError.decoding("part \(part) was not signed") }
-                    let offset = Int64(part - 1) * partSize
-                    let length = min(partSize, size - offset)
-                    group.addTask {
-                        try await transport.put(file, offset: offset, length: length, to: url, contentType: nil) { sent in
-                            let total = tally.sending(part, sent)
-                            Task { await self.setProgress(id, total) }
+                // The next batch's URLs, asked for in a task of their own
+                // beside the group rather than an `async let` among its
+                // children: 0.5.14's drive sync crashed on macOS 27 as a task
+                // group's children reported back, and this was the one other
+                // place that release mixed the two. Cancelled with this
+                // attempt.
+                let upcoming = Task { try await signed(index + 1) }
+                do {
+                    for part in batches[index] {
+                        if inFlight == Self.partConcurrency {
+                            try await group.next()
+                            inFlight -= 1
                         }
-                        await self.setProgress(id, tally.finished(part, length))
+                        try Task.checkCancellation()
+                        guard let url = urls[part] else { throw OnyxError.decoding("part \(part) was not signed") }
+                        let offset = Int64(part - 1) * partSize
+                        let length = min(partSize, size - offset)
+                        group.addTask {
+                            try await transport.put(file, offset: offset, length: length, to: url, contentType: nil) { sent in
+                                let total = tally.sending(part, sent)
+                                Task { await self.setProgress(id, total) }
+                            }
+                            await self.setProgress(id, tally.finished(part, length))
+                        }
+                        inFlight += 1
                     }
-                    inFlight += 1
+                } catch {
+                    upcoming.cancel()
+                    throw error
                 }
                 do {
-                    urls = try await upcoming
+                    urls = try await withTaskCancellationHandler {
+                        try await upcoming.value
+                    } onCancel: {
+                        upcoming.cancel()
+                    }
                 } catch {
                     // The parts already on their way are let land, so the
                     // next attempt need not send them again.

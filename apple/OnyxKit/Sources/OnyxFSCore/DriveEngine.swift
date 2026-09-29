@@ -71,7 +71,7 @@ public actor DriveEngine {
     private let now: @Sendable () -> Date
 
     public init(bridge: any EngineBridge, volume: BridgeVolume, staging: StagingArea, local: LocalStore,
-                now: @escaping @Sendable () -> Date = Date.init) {
+                now: @escaping @Sendable () -> Date = { Date() }) {
         self.bridge = bridge
         self.volume = volume
         self.staging = staging
