@@ -154,8 +154,13 @@ public struct DeltaPage: Codable, Sendable {
     /// the replica must start again from cursor 0 (lib/sync-scope.js).
     public let scope: String?
     /// Present when asked for (`folders=1`): every folder of the scope, whole,
-    /// so empty ones appear. Nil means "not sent", not "no folders".
+    /// so empty ones appear. Nil means "not sent", not "no folders" — nor,
+    /// when `foldersTag` is the one the request sent back, any change.
     public let folders: [String]?
+    /// A digest of the folder list, with it (`folders=1`). Sent back with
+    /// the next request, it leaves the list out while the list is still
+    /// this one (lib/sync-scope.js foldersTag). Nil from an older server.
+    public var foldersTag: String? = nil
 }
 
 /// A drive (a "filespace" on the wire): a named folder of the bucket with

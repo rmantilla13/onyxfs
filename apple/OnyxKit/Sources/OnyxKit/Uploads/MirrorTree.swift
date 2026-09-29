@@ -3,13 +3,18 @@ import Foundation
 /// A drive's mirror as DriveWriter asks it: what is at a path, and "bring
 /// yourself up to date now". `refresh` is the app's, which syncs the mirror
 /// and passes the change on (to the bridge's listings, to the page).
+/// `refreshSoon` is the app's too, for uploads finishing: it syncs at most
+/// once a second however many finish, and tells the writer after.
 public struct MirrorTree: DriveTree {
     let mirror: DriveMirror
     let refreshing: @Sendable () async -> Void
+    let refreshingSoon: @Sendable () async -> Void
 
-    public init(mirror: DriveMirror, refresh: @escaping @Sendable () async -> Void) {
+    public init(mirror: DriveMirror, refresh: @escaping @Sendable () async -> Void,
+                refreshSoon: (@Sendable () async -> Void)? = nil) {
         self.mirror = mirror
         self.refreshing = refresh
+        self.refreshingSoon = refreshSoon ?? refresh
     }
 
     public func item(at path: String) async -> DriveItem? {
@@ -35,4 +40,6 @@ public struct MirrorTree: DriveTree {
     }
 
     public func refresh() async { await refreshing() }
+
+    public func refreshSoon() async { await refreshingSoon() }
 }

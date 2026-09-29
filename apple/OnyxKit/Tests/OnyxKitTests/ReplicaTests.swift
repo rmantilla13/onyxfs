@@ -35,6 +35,32 @@ struct ReplicaTests {
         #expect(r.folders == ["Deep", "Deep/Empty"])
     }
 
+    /// The server's tag for its folder list is kept with the list it names:
+    /// left out under that tag, the list held is the list; left out under
+    /// another, it stands but is asked for whole next time; sent with none
+    /// (an older server), it has none.
+    @Test func theFolderListsTagGoesWithTheList() throws {
+        var r = Replica()
+        r.apply(changed: [], deleted: [], folders: ["Empty"], foldersTag: "t1")
+        #expect(r.foldersTag == "t1")
+        #expect(r.apply(changed: [], deleted: [], folders: nil, foldersTag: "t1").isEmpty)
+        #expect(r.folders == ["Empty"] && r.foldersTag == "t1")
+
+        r.apply(changed: [], deleted: [], folders: nil, foldersTag: "t9")
+        #expect(r.folders == ["Empty"] && r.foldersTag == nil)
+
+        r.apply(changed: [], deleted: [], folders: ["Empty", "B"], foldersTag: "t2")
+        r.apply(changed: [], deleted: [], folders: ["Empty"])
+        #expect(r.foldersTag == nil, "a list with no tag")
+
+        r.apply(changed: [], deleted: [], folders: ["X"], foldersTag: "t3")
+        let back = try JSONDecoder().decode(Replica.self, from: JSONEncoder().encode(r))
+        #expect(back == r && back.foldersTag == "t3")
+
+        r.reset(scope: "s2")
+        #expect(r.foldersTag == nil, "started over: nothing held")
+    }
+
     @Test func renamingAFolderOnTheWebMovesItsFilesAndSwapsTheFolder() {
         var r = Replica()
         r.apply(changed: [file("a", "a.png", in: "Old"), file("b", "b.png", in: "Old/Sub")], deleted: [])

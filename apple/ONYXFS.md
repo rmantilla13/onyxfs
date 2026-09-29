@@ -346,7 +346,10 @@ extension's cached chunks.
   cannot be swapped into another, nor the reverse, so the kind is settled
   before anything is sent: a new job waits 2 s first (UploadQueue.settle),
   long enough for an app's rename-over-the-document to arrive, and an upload
-  already under way as the other kind starts again.
+  already under way as the other kind starts again. It waits beside the
+  others, not in one of the four slots, so a thousand files copied at once
+  settle together and then go as fast as the line takes them, in the order
+  they came.
 - **Nothing is sent twice.** Once the bytes are in storage their key is kept
   with the job, so a retry only records or swaps. `POST /api/files` is not
   idempotent: asked again after a lost answer it says 409, which the queue
@@ -354,7 +357,12 @@ extension's cached chunks.
   (403 `not_issued`: over a day old or used; 409 `moved`, `conflict`,
   `changed`) is traded for a new one and the bytes sent again; new contents
   for a file deleted on the web meanwhile (404) become a file of their own
-  where Finder has them.
+  where Finder has them. Every change to a job is on disk before anything
+  is done about it — a line added to `jobs.log`, with `jobs.json` written
+  whole only once the log outgrows it, at most once a second — the key
+  before the record is asked for. A crash between the two records the key
+  again, and the 409 says done; without the key the bytes would go up under
+  a new one, "name (2)", as a second file.
 - The mirror is updated at once from each response (the delta confirms it
   later), so Finder, the menus and the web page inside the app agree
   immediately.
@@ -398,10 +406,17 @@ extension's cached chunks.
   copy of the web's, kept in step with nothing.
 
 ### Keeping them the same
-The app syncs a mounted drive's mirror every 5 s (not 15) while it is
-mounted, and the bridge's `changes` long-poll carries that to the extension,
-which invalidates listings and the kernel's cache for changed files
-(`KernelCacheCoherencyAction.revoke` / `.invalidate`).
+The app syncs a mounted drive's mirror every 5 s while anything is
+happening — a change made here, one the server showed, an upload on its
+way, the Onyx window open — in the last minute; every 30 s after that, and
+every minute once ten have passed with nothing (DriveService.tickPace, one
+timer with a tenth of its wait as tolerance). Drives sync four at a time.
+Each pass sends back the tag of the folder list it holds (`foldersTag`), and
+the server leaves the list out while it still matches (lib/sync-scope.js),
+so a quiet pass is a few hundred bytes. The bridge's `changes` long-poll
+carries each change to the extension, which invalidates listings and the
+kernel's cache for changed files (`KernelCacheCoherencyAction.revoke` /
+`.invalidate`).
 
 A file written here is listed as pending (served from this Mac) until the
 mirror shows that change itself — its id, and an entry at least as new as
@@ -524,6 +539,9 @@ drawn by the same `DriveIcon` the extension puts on the disk.
       bytes since the last report; a field left out is 0. 200
       `{ "ok": true }`; 400 for anything that is not that (a negative, or
       past a tebibyte). Any session reports, a read-only disk's included.
+      `"cache": n` rides along: what the disk's chunk cache holds now, its
+      own running total (`ChunkStore.stats`), sent once as the disk mounts
+      too. Settings › Storage shows it with nothing walked.
   Counting is a lock and an add on the read path. The first bytes after a
   quiet spell start one report loop, which ends by itself once a second has
   passed with nothing new, so an idle disk sends nothing. A report the app

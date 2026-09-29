@@ -290,13 +290,24 @@ public actor PinStore {
         return kept
     }
 
-    /// Bytes on disk: the recorded copies, each checked with one stat.
+    /// Bytes kept, from the records: each copy's size as it was stored.
+    /// Nothing on disk is looked at. The app asks after every pass, and a
+    /// stat for each of a hundred thousand copies each time was a cost with
+    /// no one looking. A copy deleted by hand is counted until a pass finds
+    /// it short (`needsDownload`), and is never served (`localCopy`).
     public func usage() -> Int64 {
         state.copies.keys.reduce(0) { $0 + usage(scope: $1) }
     }
 
     public func usage(scope: String) -> Int64 {
-        (state.copies[scope] ?? [:]).values.reduce(0) { $0 + (Self.fileSize(at: location(of: $1, in: scope)) ?? 0) }
+        (state.copies[scope] ?? [:]).values.reduce(0) { $0 + $1.size }
+    }
+
+    /// Whether a download of `scope`'s that failed is due to be tried again:
+    /// a pass is owed then, even with nothing else changed.
+    public func retryDue(scope: String) -> Bool {
+        let prefix = scope + "\n", now = ContinuousClock.now
+        return failures.contains { $0.key.hasPrefix(prefix) && $0.value.retryAt <= now }
     }
 
     /// Forget a scope: its rules and its copies. For a drive the user left or

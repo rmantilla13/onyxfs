@@ -22,6 +22,10 @@ public struct Replica: Codable, Sendable, Equatable {
     public private(set) var files: [String: ReplicaFile] = [:]
     /// The scope's folders as the server last listed them (`folders=1`).
     public private(set) var listedFolders: Set<String> = []
+    /// The server's tag for that list (DeltaPage.foldersTag), sent back with
+    /// the next request so an unchanged list is not sent again. Nil when the
+    /// server gave none, or the list held may not be the one it named.
+    public private(set) var foldersTag: String?
     /// Where the next delta request starts.
     public var cursor: Int64 = 0
     /// The access fingerprint the replica was built under (DeltaPage.scope).
@@ -37,15 +41,17 @@ public struct Replica: Codable, Sendable, Equatable {
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case files, listedFolders, cursor, scope, folderSeen
+        case files, listedFolders, foldersTag, cursor, scope, folderSeen
     }
 
     /// By hand only so a replica saved before `folderSeen` existed still
-    /// loads: its folders count as there from the start.
+    /// loads: its folders count as there from the start. One saved before
+    /// `foldersTag` has none, and asks for the list whole once.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         files = try c.decode([String: ReplicaFile].self, forKey: .files)
         listedFolders = try c.decode(Set<String>.self, forKey: .listedFolders)
+        foldersTag = try c.decodeIfPresent(String.self, forKey: .foldersTag)
         cursor = try c.decode(Int64.self, forKey: .cursor)
         scope = try c.decodeIfPresent(String.self, forKey: .scope)
         folderSeen = try c.decodeIfPresent([String: Int64].self, forKey: .folderSeen) ?? [:]
@@ -150,10 +156,13 @@ public struct Replica: Codable, Sendable, Equatable {
     /// the changes (the current one does not; an older one did), so trash
     /// never shows in Finder. `folders`, when present, replaces the listed
     /// folders wholesale — the server sends the complete list, because an
-    /// empty folder can come or go without any file row changing.
+    /// empty folder can come or go without any file row changing — and
+    /// `foldersTag` is kept with it. Absent under the tag already held, the
+    /// list held stands; under any other, it stands but is asked for whole
+    /// next time.
     @discardableResult
     public mutating func apply(changed: [FileItem], deleted: [String], folders listed: [String]? = nil,
-                               cursor newCursor: Int64? = nil) -> Diff {
+                               foldersTag tag: String? = nil, cursor newCursor: Int64? = nil) -> Diff {
         let before = folders
         var diff = Diff()
 
@@ -173,7 +182,12 @@ public struct Replica: Codable, Sendable, Equatable {
         for id in deleted where files.removeValue(forKey: id) != nil {
             diff.deleted.append(id)
         }
-        if let listed { listedFolders = Set(listed.map(Self.clean).filter { !$0.isEmpty }) }
+        if let listed {
+            listedFolders = Set(listed.map(Self.clean).filter { !$0.isEmpty })
+            foldersTag = tag
+        } else if tag != foldersTag {
+            foldersTag = nil
+        }
 
         let after = folders
         let appeared = after.subtracting(before), vanished = before.subtracting(after)
@@ -213,6 +227,7 @@ public struct Replica: Codable, Sendable, Equatable {
     public mutating func reset(scope: String? = nil) {
         files = [:]
         listedFolders = []
+        foldersTag = nil
         cursor = 0
         self.scope = scope
         folderSeen = [:]

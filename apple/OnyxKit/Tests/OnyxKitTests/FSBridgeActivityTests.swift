@@ -36,8 +36,26 @@ extension FSBridgeTests {
         #expect(heard.all.first?.moved == FSActivity(write: 4096))
     }
 
+    /// What the disk's cache holds rides along (`cache`), a level rather
+    /// than bytes moved, so a report of nothing moved may carry it alone. An
+    /// extension that does not say leaves it unknown, not 0.
+    @Test func aDisksCacheSizeComesWithItsReport() async throws {
+        let rig = try await rig()
+        defer { rig.remove() }
+        let heard = Heard()
+        rig.bridge.onActivity { scope, moved in heard.add(scope, moved) }
+        #expect(try await post(rig, "activity", ["read": 0, "download": 0, "write": 0, "cache": 3_145_760]).status == 200)
+        #expect(try await post(rig, "activity", ["read": 4096]).status == 200)
+        #expect(heard.all.map(\.moved) == [FSActivity(cache: 3_145_760), FSActivity(read: 4096)])
+        #expect(heard.all.last?.moved.cache == nil)
+        // Past a tebibyte is a cache, not a second's reading.
+        #expect(try await post(rig, "activity", ["cache": Int64(2) << 40]).status == 200)
+    }
+
     @Test(arguments: [
         #"{"read": -1}"#,
+        #"{"cache": -1}"#,
+        #"{"cache": 2251799813685249}"#,
         #"{"download": 1099511627777}"#,
         #"{"read": "a lot"}"#,
         #"["read", 1]"#,

@@ -24,6 +24,11 @@ public protocol DriveTree: Sendable {
     /// Bring the mirror up to date now, after a change made here, so the
     /// next listing already shows it.
     func refresh() async
+    /// Bring the mirror up to date before long: after an upload finishes,
+    /// whose file is listed meanwhile (pending, read from this Mac's copy).
+    /// The app's syncs at most once a second, however many finish, and
+    /// tells the writer when the mirror has moved (`mirrorChanged`).
+    func refreshSoon() async
     /// The folder at `path` as the server names it, where the mirror shows
     /// it under a name of its own (MirrorEntry.serverPath); "" for the drive
     /// itself, nil when there is no folder there.
@@ -33,6 +38,9 @@ public protocol DriveTree: Sendable {
 extension DriveTree {
     /// A tree whose names are the server's own.
     public func serverPath(at path: String) async -> String? { nil }
+    /// A tree that can only be brought up to date now. Whoever keeps it
+    /// tells the writer when it has moved, as the app does (`mirrorChanged`).
+    public func refreshSoon() async { await refresh() }
 }
 
 public enum DriveItem: Sendable, Equatable {
@@ -90,6 +98,9 @@ public actor DriveWriter {
     private var pending: [String: Pending] = [:] {
         didSet { revision &+= 1 }
     }
+    /// Each pending file's path, by its job: the queue's news names the job,
+    /// and a thousand files on their way are not searched for each.
+    private var jobPaths: [UUID: String] = [:]
     /// Uploads recorded, not yet in the mirror, by path.
     private var arrived: [String: Arrival] = [:]
     /// Moves whenever the pending files change, so the bridge's view of the
@@ -141,7 +152,7 @@ public actor DriveWriter {
         if existing == .folder { throw Failure.posix(EISDIR, nil) }
         var replaceOf: String?
         if case let .file(id)? = existing { replaceOf = id }
-        if let waiting = pending.removeValue(forKey: path) {
+        if let waiting = unlist(path) {
             // Written again before the first copy arrived: only the latest
             // goes — as new contents for the file the first became, if it has.
             if let id = await arrivedFile(waiting) {
@@ -163,7 +174,7 @@ public actor DriveWriter {
         }
         let entry = Pending(job: job.id, path: path, size: job.size, staged: job.staged,
                             modified: modified ?? Date(), created: created, failed: nil, replaceOf: replaceOf)
-        pending[path] = entry
+        list(entry)
         return entry
     }
 
@@ -192,7 +203,7 @@ public actor DriveWriter {
 
         if let moving = pending[from], let id = await arrivedFile(moving) {
             // Uploaded a moment ago: it is a file on the server now.
-            pending[from] = nil
+            unlist(from)
             arrived[from] = nil
             try await renameFile(id, from: from, to: to, over: target)
             await tree.refresh()
@@ -204,7 +215,7 @@ public actor DriveWriter {
             // a file, it becomes that file's new contents (an app's save).
             var over: String?
             if case let .file(id)? = await tree.item(at: to) { over = id }
-            if let other = pending.removeValue(forKey: to) {
+            if let other = unlist(to) {
                 if let id = await arrivedFile(other) {
                     over = id
                     await uploads.release(other.job)
@@ -226,8 +237,8 @@ public actor DriveWriter {
             var moved = moving
             moved.path = to
             moved.replaceOf = replacing
-            pending[from] = nil
-            pending[to] = moved
+            unlist(from)
+            list(moved)
             if moving.replaceOf != nil { await tree.refresh() }
             return
         }
@@ -267,7 +278,7 @@ public actor DriveWriter {
     public func delete(path: String) async throws {
         if let waiting = pending[path] {
             let uploaded = await arrivedFile(waiting)
-            pending[path] = nil
+            unlist(path)
             arrived[path] = nil
             if let id = uploaded {
                 // Uploaded a moment ago: delete the file it became.
@@ -304,18 +315,22 @@ public actor DriveWriter {
 
     // MARK: - Uploads finishing
 
-    /// The upload queue's news about one of this drive's jobs.
+    /// The upload queue's news about one of this drive's jobs. Only what
+    /// changes the listing moves `revision`: a job going from waiting to
+    /// sending, a thousand times over, is not news to Finder.
     public func uploadChanged(_ job: UploadJob) async {
-        guard job.scope == scope, let path = pending.first(where: { $0.value.job == job.id })?.key else { return }
+        guard job.scope == scope, let path = jobPaths[job.id], let entry = pending[path] else { return }
         switch job.state {
         case .done:
-            arrived[path] = Arrival(id: job.fileId ?? pending[path]?.replaceOf, changedAt: job.changedAt)
-            await tree.refresh()
-            await mirrorChanged()
+            arrived[path] = Arrival(id: job.fileId ?? entry.replaceOf, changedAt: job.changedAt)
+            // Before long, however many finish at once (DriveTree.refreshSoon).
+            // The file stays listed meanwhile, read from its copy here, and
+            // leaves pending once the mirror shows it (mirrorChanged).
+            await tree.refreshSoon()
         case .failed:
-            pending[path]?.failed = job.lastError
+            if entry.failed != job.lastError { pending[path]?.failed = job.lastError }
         default:
-            pending[path]?.failed = nil
+            if entry.failed != nil { pending[path]?.failed = nil }
         }
     }
 
@@ -330,8 +345,24 @@ public actor DriveWriter {
             arrived[path] = nil
             // The mirror shows the server's copy now: Finder reads that,
             // and the staged one can go.
-            if let job = pending.removeValue(forKey: path)?.job { await uploads.release(job) }
+            if let job = unlist(path)?.job { await uploads.release(job) }
         }
+    }
+
+    /// A file on its way, listed at its path.
+    private func list(_ entry: Pending) {
+        if let other = pending.updateValue(entry, forKey: entry.path), other.job != entry.job {
+            jobPaths[other.job] = nil
+        }
+        jobPaths[entry.job] = entry.path
+    }
+
+    /// No longer listed at `path`: arrived, cancelled or moved.
+    @discardableResult
+    private func unlist(_ path: String) -> Pending? {
+        guard let entry = pending.removeValue(forKey: path) else { return nil }
+        if jobPaths[entry.job] == path { jobPaths[entry.job] = nil }
+        return entry
     }
 
     /// The file a pending upload became, once the server has it.

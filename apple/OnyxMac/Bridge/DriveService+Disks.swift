@@ -1,4 +1,5 @@
 import Foundation
+import os
 import OnyxKit
 
 /// Drives as disks of their own (onyxfs, ONYXFS.md) and the writes that come
@@ -114,6 +115,7 @@ extension DriveService {
         disksUnmountAllNow()
         writers = [:]
         uploads = nil
+        uploadSummaryRound += 1
         uploadTicker?.cancel()
         uploadTicker = nil
         uploadSummary = UploadSummary()
@@ -174,11 +176,9 @@ extension DriveService {
 
     // MARK: - Uploads
 
+    /// The queue's news of it moves the menu (summarizeUploads).
     func retryUpload(_ id: UUID) {
-        Task {
-            await uploads?.retry(id)
-            await refreshUploadSummary()
-        }
+        Task { await uploads?.retry(id) }
     }
 
     /// ~/Library/Application Support/Onyx/Uploads/<account>: what is on its
@@ -198,16 +198,34 @@ extension DriveService {
                                         transport: APIUploadTransport(api: model.api,
                                                                       sent: { transfers.add(.upload, $0) }))
             uploads = queue
+            let wanted = uploadSummaryWanted
             Task { [weak self] in
                 await queue.observe { [weak self] job in
-                    Task { @MainActor in await self?.uploadChanged(job) }
+                    // The writer and the thumbnails hear what they act on;
+                    // a job going from waiting to sending is not that, and
+                    // a thousand files copied in are four thousand changes.
+                    if Self.writerHears(job) {
+                        Task { @MainActor in await self?.uploadChanged(job) }
+                    }
+                    // The menu's summary: one loop, however many changes.
+                    let first = wanted.withLock { asked in
+                        defer { asked = true }
+                        return !asked
+                    }
+                    if first { Task { @MainActor in self?.summarizeUploads() } }
                 }
                 await queue.resume()
-                await self?.refreshUploadSummary()
+                self?.summarizeUploads()
             }
         } catch {
             appLog.error("uploads: could not open the queue: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// What the drive's writer acts on (DriveWriter.uploadChanged): a job
+    /// done, failed, or waiting afresh (just queued, or tried again).
+    nonisolated static func writerHears(_ job: UploadJob) -> Bool {
+        job.state == .done || job.state == .failed || (job.state == .queued && job.attempts == 0)
     }
 
     private func uploadChanged(_ job: UploadJob) async {
@@ -215,38 +233,34 @@ extension DriveService {
         // shows the file, the queue's copy of its bytes goes.
         if job.state == .done { onUploadFinished?(job) }
         await writers[job.scope]?.uploadChanged(job)
-        await refreshUploadSummary()
         if job.state == .failed, let why = job.lastError {
             appLog.error("uploads: \(job.name, privacy: .public) failed: \(why, privacy: .public)")
         }
     }
 
-    func refreshUploadSummary() async {
-        guard let uploads else { uploadSummary = UploadSummary(); return }
-        let jobs = await uploads.all()
-        var summary = UploadSummary()
-        for job in jobs {
-            switch job.state {
-            case .queued, .uploading:
-                summary.waiting += 1
-                summary.totalBytes += job.size
-                summary.sentBytes += await uploads.sent(job.id)
-                if summary.current == nil { summary.current = job.name }
-            case .failed:
-                summary.failed.append(job)
-            case .done:
-                break
+    /// The menu's summary, asked of the queue in one question
+    /// (UploadQueue.summary) at most four times a second: while anything
+    /// is on its way, so the percentage moves, and after any change. Not at
+    /// all while nothing is. It asked for every job, and each one's
+    /// progress in turn, on every change to any of them.
+    func summarizeUploads() {
+        guard uploadTicker == nil else { return }
+        let round = uploadSummaryRound, wanted = uploadSummaryWanted
+        uploadTicker = Task { [weak self] in
+            while let self, let uploads = self.uploads, round == self.uploadSummaryRound, !Task.isCancelled {
+                wanted.withLock { $0 = false }
+                let summary = await uploads.summary()
+                guard round == self.uploadSummaryRound else { return }
+                if summary != self.uploadSummary { self.uploadSummary = summary }
+                // Uploads on their way keep the drives' ticks at their pace.
+                if summary.waiting > 0 { self.noteActivity() }
+                guard summary.waiting > 0 || wanted.withLock({ $0 }) else { break }
+                try? await Task.sleep(for: .milliseconds(250))
             }
-        }
-        uploadSummary = summary
-        // While something is on its way, the percentage moves every second
-        // (one ticker, however many changes asked for a refresh).
-        if summary.waiting > 0, uploadTicker == nil {
-            uploadTicker = Task {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                self.uploadTicker = nil
-                await self.refreshUploadSummary()
-            }
+            guard let self, round == self.uploadSummaryRound else { return }
+            self.uploadTicker = nil
+            // Told of a change after the last look: one more loop for it.
+            if wanted.withLock({ $0 }) { self.summarizeUploads() }
         }
     }
 
@@ -257,7 +271,9 @@ extension DriveService {
         guard let uploads, let model else { return nil }
         guard let mirror = await mirrorForWrites(scope) else { return nil }
         let filespaceId: String? = if case let .drive(id) = scope { id } else { nil }
-        let tree = MirrorTree(mirror: mirror) { [weak self] in await self?.syncForWrites(scope) }
+        let tree = MirrorTree(mirror: mirror,
+                              refresh: { [weak self] in await self?.syncForWrites(scope) },
+                              refreshSoon: { [weak self] in await self?.syncSoon(scope) })
         let writer = DriveWriter(scope: scope.identifier, filespaceId: filespaceId, api: model.api,
                                  tree: tree, uploads: uploads)
         writers[scope.identifier] = writer
@@ -265,14 +281,5 @@ extension DriveService {
     }
 }
 
-/// What the menu bar says about uploads.
-struct UploadSummary: Equatable {
-    var waiting = 0
-    var sentBytes: Int64 = 0
-    var totalBytes: Int64 = 0
-    /// The name of one on its way, for "Uploading Take 1.mov".
-    var current: String?
-    var failed: [UploadJob] = []
-
-    var fraction: Double { totalBytes > 0 ? min(1, Double(sentBytes) / Double(totalBytes)) : 0 }
-}
+/// What the menu bar says about uploads: the queue's own summary.
+typealias UploadSummary = UploadQueue.Summary
