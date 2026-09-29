@@ -1250,6 +1250,7 @@ describe('a sound’s waveform', () => {
     assert.equal(row(f.id).metadata.waveform, undefined);
     assert.equal((await recordWave(mac(ED), 'nope', { waveform: WAVE })).status, 404);
     assert.equal((await recordWave({}, f.id, { waveform: WAVE })).status, 401);
+    assert.equal((await recordWave({}, f.id, { waveform: 'junk' })).status, 401, 'asked who it is before what it sent');
   });
 
   test('new contents take the old shape with them', async () => {
