@@ -28,6 +28,8 @@ import {
 } from '@/lib/views';
 import { driveColor } from '@/lib/drive-color';
 import { coverChangeable, effectiveKind } from '@/lib/media';
+import { redrawOffered } from '@/lib/preview-jobs';
+import { probedNow } from '@/lib/decode-probe';
 import { isReviewableKind } from '@/lib/review';
 import UploadPanel from '@/app/components/ui/UploadPanel';
 import { useToast } from '@/app/components/ui/Toast';
@@ -1250,6 +1252,28 @@ export default function FilesClient({
     a.remove();
   };
 
+  // Regenerate thumbnail: every preview of one file drawn again from its
+  // original, in this browser (lib/thumbnail-regen.js, loaded when first
+  // used), then folded into its tile. Once at a time per file.
+  const redrawingRef = useRef(new Set());
+  const regenerateThumbnail = async (f) => {
+    if (redrawingRef.current.has(f.id)) return;
+    redrawingRef.current.add(f.id);
+    const note = toast.push(`Redrawing the thumbnail of “${f.name}”…`, { duration: 0 });
+    try {
+      const { redrawThumbnail, mergeRedrawn } = await import('@/lib/thumbnail-regen');
+      const row = await redrawThumbnail(f);
+      setFiles((prev) => prev.map((x) => (x.id === row.id ? mergeRedrawn(x, row) : x)));
+      listingCache.clear();
+      toast.success(`Redrew the thumbnail of “${f.name}”.`);
+    } catch (e) {
+      toast.error(e?.message || 'Could not redraw the thumbnail.');
+    } finally {
+      toast.dismiss(note);
+      redrawingRef.current.delete(f.id);
+    }
+  };
+
   // A card drag carries the whole selection when the card is part of it, and
   // says so: dragging a hundred files under the image of one reads as
   // dragging one. A card outside the selection is selected on its own and
@@ -1407,6 +1431,7 @@ export default function FilesClient({
       can.edit && { label: 'Rename…', onSelect: () => renameFileUI(f) },
       can.edit && { label: 'Move…', onSelect: () => moveFilesUI([f.id]) },
       can.edit && coverChangeable(f) && { label: 'Change cover…', onSelect: () => setCovering(f) },
+      can.edit && redrawOffered(f, { decodes: probedNow() }) && { label: 'Regenerate thumbnail', onSelect: () => regenerateThumbnail(f) },
       { label: selNow.has(f.id) ? 'Deselect' : 'Select', hint: '⇧Space', onSelect: () => toggleSelect(f) },
       can.delete && '-',
       can.delete && { label: 'Delete…', danger: true, onSelect: () => removeFiles([f.id]) },
