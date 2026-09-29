@@ -131,6 +131,28 @@ import Testing
         #expect(try await engine.read(cut.id, at: 6, count: 50) == Data("world".utf8))
     }
 
+    /// A folder from Frame.io Drive named with a space at its end, copied in
+    /// by Finder. The server keeps names without one (as `Server` does here),
+    /// so the disk makes it without one, and Finder, which goes on asking for
+    /// it with the space, finds it — and what it copies into it.
+    @Test func aFolderWhoseNameEndsInASpaceIsCopiedIn() async throws {
+        let server = Server()
+        let mount = try await Mount(server)
+        defer { mount.remove() }
+        let engine = mount.engine
+        let made = try await engine.create("0065_Enraged:PaidMedia ", in: DriveEngine.rootID, isDirectory: true)
+        #expect(made.name == "0065_Enraged:PaidMedia")
+        let folder = try await engine.lookup("0065_Enraged:PaidMedia ", in: DriveEngine.rootID)
+        #expect(folder.id == made.id)
+        let cut = try await engine.create("cut.mov ", in: folder.id, isDirectory: false)
+        try await engine.beginWriting(cut.id, truncating: false)
+        _ = try await engine.write(cut.id, at: 0, data: Data("frames".utf8))
+        try await engine.finishWriting(cut.id)
+        #expect(await server.calls == ["mkdir /0065_Enraged:PaidMedia", "write /0065_Enraged:PaidMedia/cut.mov 6"])
+        #expect(try await engine.children(of: folder.id).map(\.name) == ["cut.mov"])
+        #expect(try await engine.read(cut.id, at: 0, count: 50) == Data("frames".utf8))
+    }
+
     /// A viewer's drive: the engine refuses before asking, and the bridge
     /// refuses whoever asks anyway.
     @Test func aViewersDriveIsReadOnlyAllTheWay() async throws {
@@ -331,7 +353,7 @@ actor Server: FSWriteTarget {
 
     func makeFolder(path: String) async throws {
         calls.append("mkdir \(path)")
-        folders.append(String(path.dropFirst()))
+        folders.append(Self.kept(String(path.dropFirst())))
         await publish()
     }
 
@@ -387,9 +409,17 @@ actor Server: FSWriteTarget {
         await drive?.show(MirrorIndex(replica))
     }
 
+    /// As the server stores a path: each name without spaces at its ends
+    /// (lib/folder-ops.js cleanFolder, and file names on the way in).
     static func split(_ path: String) -> (folder: String, name: String) {
-        let parts = path.split(separator: "/").map(String.init)
+        let parts = kept(path).split(separator: "/").map(String.init)
         return (parts.dropLast().joined(separator: "/"), parts.last ?? "")
+    }
+
+    static func kept(_ path: String) -> String {
+        path.split(separator: "/", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .joined(separator: "/")
     }
 
     static func item(_ id: String, _ name: String, in folder: String, size: Int64, version: Int, updated: Int64) -> FileItem {

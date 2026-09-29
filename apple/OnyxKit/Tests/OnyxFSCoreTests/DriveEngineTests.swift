@@ -23,6 +23,15 @@ private actor FakeBridge: EngineBridge {
     func setReadOnly(_ on: Bool) { readOnly = on }
     func bytes(_ path: String) -> Data? { files[path]?.bytes }
     func push(_ changes: BridgeChanges) { pendingChanges.append(changes) }
+
+    /// The next listing of a path is answered as the folder is when it is
+    /// asked for, but only once released: a listing on its way while the
+    /// engine goes on answering other calls.
+    private var holdNext: Set<String> = []
+    private var held: [String: CheckedContinuation<Void, Never>] = [:]
+    func holdNextListing(of path: String) { holdNext.insert(path) }
+    func isHolding(_ path: String) -> Bool { held[path] != nil }
+    func release(_ path: String) { held.removeValue(forKey: path)?.resume() }
     func replaceBytes(_ path: String, _ bytes: Data) {
         guard let file = files[path] else { return }
         files[path] = (file.id, bytes, "v\(Int(file.version.dropFirst())! + 1)")
@@ -35,6 +44,12 @@ private actor FakeBridge: EngineBridge {
     func list(_ path: String) async throws -> [BridgeEntry] {
         calls.append("list \(path)")
         guard folders.contains(path) else { throw BridgeFailure.notFound }
+        let out = entries(in: path)
+        if holdNext.remove(path) != nil { await withCheckedContinuation { held[path] = $0 } }
+        return out
+    }
+
+    private func entries(in path: String) -> [BridgeEntry] {
         let prefix = path == "/" ? "/" : path + "/"
         var out: [BridgeEntry] = []
         for folder in folders where folder != path && folder.hasPrefix(prefix) && !folder.dropFirst(prefix.count).contains("/") {
@@ -269,6 +284,78 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
             _ = try await engine.rename(other.id, from: DriveEngine.rootID, name: "other.txt", to: DriveEngine.rootID,
                                         newName: "report.pages", replacing: nil)
         }
+    }
+
+    /// Finder asks for "Selects " — a folder from Frame.io Drive, say, with
+    /// a space at the end of its name. The server keeps names without one,
+    /// so it is made as "Selects", and Finder's next step, which still says
+    /// "Selects ", finds it. Before, the folder it had just made could not be
+    /// found, and Finder stopped the copy: "its name is too long or includes
+    /// characters that are invalid on the destination volume".
+    @Test func aNameIsMadeAsTheServerWillKeepIt() async throws {
+        let bridge = FakeBridge()
+        let engine = try await makeEngine(bridge)
+        let selects = try await engine.create("Selects ", in: DriveEngine.rootID, isDirectory: true)
+        #expect(selects.name == "Selects")
+        #expect(try await engine.lookup("Selects ", in: DriveEngine.rootID).id == selects.id)
+        #expect(try await engine.lookup(" selects", in: DriveEngine.rootID).id == selects.id)
+        let cut = try await engine.create("cut.mov\u{A0}", in: selects.id, isDirectory: false)
+        #expect(cut.name == "cut.mov")
+        _ = try await engine.write(cut.id, at: 0, data: Data("take".utf8))
+        try await engine.finishWriting(cut.id)
+        _ = try await engine.rename(cut.id, from: selects.id, name: "cut.mov ", to: selects.id, newName: " final.mov ", replacing: nil)
+        #expect(try await engine.children(of: selects.id).map(\.name) == ["final.mov"])
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") } == [
+            "mkdir /Selects", "put /Selects/cut.mov 4", "rename /Selects/cut.mov -> /Selects/final.mov",
+        ])
+        // The name of one that is there already, but for its spaces: that one.
+        await #expect(throws: VolumeError.posix(EEXIST)) {
+            try await engine.create("Selects\t", in: DriveEngine.rootID, isDirectory: true)
+        }
+        // Nothing but spaces is no name at all.
+        await #expect(throws: VolumeError.posix(EINVAL)) {
+            try await engine.create("   ", in: DriveEngine.rootID, isDirectory: true)
+        }
+    }
+
+    /// macOS's own names are not the server's to trim: "Icon\r" holds a
+    /// folder's custom icon, and is not the person's file "Icon". The
+    /// AppleDouble half of a file follows the file's name.
+    @Test func macOSOwnNamesAreKeptAsTheyAre() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFile("/Icon", Data("mine".utf8))
+        let engine = try await makeEngine(bridge)
+        let icon = try await engine.create("Icon\r", in: DriveEngine.rootID, isDirectory: false)
+        #expect(icon.name == "Icon\r")
+        #expect(try await engine.lookup("Icon\r", in: DriveEngine.rootID).id == icon.id)
+        #expect(try await engine.lookup("Icon", in: DriveEngine.rootID).id != icon.id)
+        let apple = try await engine.create("._Selects ", in: DriveEngine.rootID, isDirectory: false)
+        #expect(apple.name == "._Selects")
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") }.isEmpty)
+    }
+
+    /// The engine answers other calls while a listing is on its way. What
+    /// they make meanwhile — a file Finder has begun to copy, a folder it has
+    /// just made — is still there when the listing lands, rather than
+    /// forgotten because the listing was asked for before it existed.
+    @Test func whatIsMadeWhileAListingIsOnItsWayStaysListed() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Selects")
+        let engine = try await makeEngine(bridge)
+        let selects = try await engine.lookup("Selects", in: DriveEngine.rootID)
+        await bridge.holdNextListing(of: "/Selects")
+        let listing = Task { try await engine.children(of: selects.id) }
+        for _ in 0..<400 where await !bridge.isHolding("/Selects") { try await Task.sleep(nanoseconds: 5_000_000) }
+        #expect(await bridge.isHolding("/Selects"))
+        let cut = try await engine.create("cut.mov", in: selects.id, isDirectory: false)
+        let day = try await engine.create("Day 1", in: selects.id, isDirectory: true)
+        await bridge.release("/Selects")
+        _ = try await listing.value
+        #expect(Set(try await engine.children(of: selects.id).map(\.name)) == ["cut.mov", "Day 1"])
+        #expect(try await engine.lookup("Day 1", in: selects.id).id == day.id)
+        _ = try await engine.write(cut.id, at: 0, data: Data("take".utf8))
+        try await engine.finishWriting(cut.id)
+        #expect(await bridge.bytes("/Selects/cut.mov") == Data("take".utf8))
     }
 
     @Test func finderGetsNoTrashAndDeletesToTheWebsInstead() async throws {

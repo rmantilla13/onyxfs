@@ -279,6 +279,20 @@ server's path (`MirrorEntry.serverPath`), and the writer sends that, not the
 shown name, to every folder route and as an upload's or move's folder
 (`DriveWriter.serverFolder`). Names Finder makes are NFC; the server stores
 new names NFC and reaches a folder stored decomposed by its composed name.
+
+Nor does the server keep a space at either end of a name: it trims every
+file and folder name (JavaScript's `trim`, lib/folder-ops.js), so "Selects "
+would be "Selects" there. The disk makes it so from the start
+(`DriveEngine.stored`): a name Finder asks for is made as the server will
+keep it, the kernel is told the name it has (`newItemName`, `newName`), and
+names compare without those spaces as they do without case — so Finder's
+next step, still asking for "Selects ", finds "Selects". Made as asked, the
+folder Finder had just made could not be found under that name, and Finder
+stopped the copy: "its name is too long or includes characters that are
+invalid on the destination volume" (folders named in Frame.io, copied from
+Frame.io Drive, often end in a space). macOS's own names are left as they
+are — "Icon\r" is a folder's custom icon, not "Icon" — and an AppleDouble
+`._` name follows its file's. A name the server refuses (400) is EINVAL.
 A folder delete the server refuses because it holds files this account cannot
 see (409 `hidden_files`, nothing deleted) is ENOTEMPTY in Finder; a folder
 that is not there is a 404, ENOENT.
@@ -362,6 +376,15 @@ extension's cached chunks.
   carry Finder's hidden flag (`UF_HIDDEN`), as on any disk — which is what
   keeps the Time Machine marker at each disk's root
   (`com.apple.timemachine.donotpresent`, no dot to hide it) out of sight.
+- **Finder's -8062** ("an unexpected error occurred") at the end of a copy is
+  its copy engine creating the source folder's `.DS_Store` — last, and
+  exclusively — in a folder where a Finder window showing it has already
+  written one: `File exists` in DesktopServicesHelper's log. It happens on
+  any volume without atomic renames (this one, SMB, exFAT), and more here,
+  where a copy from a slow source (Frame.io Drive) takes minutes. Every file
+  has arrived by then. Finder writes no `.DS_Store` to a volume that is not
+  local once `DSDontWriteNetworkStores` is set (com.apple.desktopservices)
+  and Finder has been relaunched; this volume is not local.
 - **Extended attributes** never leave this Mac. The engine can keep them
   per item (LocalStore), but FSKit never asks it to: OnyxVolume's
   `supportedXattrNames` answers `[]`, which FSKit takes as "limited"

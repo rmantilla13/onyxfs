@@ -352,6 +352,9 @@ public actor DriveWriter {
             try await call()
         } catch let OnyxError.http(status, message) {
             switch status {
+            // Refused as asked: most often a name the server will not take
+            // (lib/folder-ops.js), which Finder says is a name it cannot use.
+            case 400: throw Failure.posix(EINVAL, message)
             case 401, 403: throw Failure.posix(EACCES, message)
             case 404: throw Failure.posix(ENOENT, message)
             case 409: throw Failure.posix(EEXIST, message)
