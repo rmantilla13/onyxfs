@@ -24,6 +24,13 @@ One Swift codebase. On the Mac it is **Onyx.app**:
   graph, and each download from its click until it is done, with Show in
   Finder. It costs nothing while nothing moves (ONYXFS.md, "Activity"), and
   Settings › General (or View › Show Activity) hides it.
+- **Streamable versions of heavy videos.** A large video — an action
+  camera's 4K HEVC runs at 60–120 Mbps — stalls on a phone. The server asks
+  for a 1080p H.264 copy of each one (lib/proxies.js); this Mac takes the
+  jobs from its queue while Onyx runs, downloads the master, re-encodes it on
+  the media engine (`ProxyTranscoder`, about 7× real time for 4K60 on Apple
+  silicon) and uploads the copy, which the web and the iPhone then play.
+  Settings › General turns it off.
 
 On iPhone and iPad it is **Onyx** (`OnyxIOS/`), native SwiftUI:
 

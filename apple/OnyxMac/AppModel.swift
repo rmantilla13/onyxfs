@@ -39,6 +39,8 @@ final class AppModel: ObservableObject {
     let finder = DriveService()
     /// Transcripts requested on the web, made on this Mac.
     let transcriber = TranscriptionService()
+    /// Streamable versions of heavy videos, made on this Mac.
+    let proxies = ProxyService()
     /// What redraws the activity graphs, wherever they show (ActivityClock).
     lazy var activity = ActivityClock(transfers: finder.transfers)
     private let settings = SharedSettings()
@@ -66,9 +68,10 @@ final class AppModel: ObservableObject {
         // Quitting unmounts every drive, so none is left for the system to
         // reap, and takes away downloads cut short.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
-                                               object: nil, queue: .main) { [finder, transcriber, web] _ in
+                                               object: nil, queue: .main) { [finder, transcriber, proxies, web] _ in
             MainActor.assumeIsolated {
                 transcriber.stop()
+                proxies.stop()
                 finder.quit()
                 web.downloads.discardUnfinished()
             }
@@ -131,6 +134,7 @@ final class AppModel: ObservableObject {
         // so there is no one to put drives in Finder for.
         guard phase == .signedIn else { return }
         transcriber.start(model: self)
+        proxies.start(model: self)
         // A sign-in kept from before the account was recorded (0.2.0 did not
         // record it): the drive list usually names it, and if the server
         // could not be asked yet, this does.
@@ -174,6 +178,7 @@ final class AppModel: ObservableObject {
         libraryCan = nil
         phase = .signedOut
         transcriber.stop()
+        proxies.stop()
         finder.stop()
         await web.signOut()
         // Finder locations stay: removing one deletes its downloaded copies,
@@ -233,6 +238,7 @@ final class AppModel: ObservableObject {
         phase = .signedOut
         problem = "Your sign-in on this Mac has expired or was revoked. Sign in again."
         transcriber.stop()
+        proxies.stop()
         finder.stop()
         await web.signOut()
     }

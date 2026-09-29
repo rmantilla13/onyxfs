@@ -378,6 +378,7 @@ struct AccountSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             TranscriptionSettings(transcriber: model.transcriber)
+            ProxySettings(proxies: model.proxies)
             Section("Updates") {
                 LabeledContent("Version") {
                     Text(BuildInfo.build.map { "\(BuildInfo.version) (\($0))" } ?? BuildInfo.version)

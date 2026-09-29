@@ -195,6 +195,65 @@ public actor OnyxAPI {
         return data
     }
 
+    // MARK: - Proxies
+
+    /// Ask for a video's streamable copy (the web's own request, from a
+    /// device): a Mac running Onyx makes it within minutes. Refused (403)
+    /// for someone who may only view the file, which is nothing to report.
+    public func requestProxy(fileId: String) async throws {
+        _ = try await proxyRequest(proxyURL(fileId), method: "POST")
+    }
+
+    /// Videos waiting for a streamable copy that this account may make:
+    /// queued, or left by a Mac whose lease ran out. Oldest first.
+    public func proxyQueue() async throws -> [ProxyJob] {
+        struct Wrapper: Decodable { let jobs: [ProxyJob] }
+        let data = try await proxyRequest(config.url("api/proxies/queue"), method: "GET")
+        return try decode(Wrapper.self, from: data).jobs
+    }
+
+    /// Take a job, for ten minutes that every progress report extends.
+    /// Throws `ProxyConflict.taken` when another Mac got there first.
+    public func claimProxy(fileId: String, device: String) async throws -> ProxyClaim {
+        let body = try JSONSerialization.data(withJSONObject: ["device": String(device.prefix(80))])
+        return try decode(ProxyClaim.self, from: try await proxyRequest(proxyURL(fileId, "claim"), method: "POST", body: body))
+    }
+
+    /// How far along, 0…1; also keeps the lease. Throws `ProxyConflict.lost`
+    /// when the job is no longer this Mac's.
+    public func reportProxyProgress(fileId: String, progress: Double) async throws {
+        let rounded = (min(max(progress, 0), 1) * 1000).rounded() / 1000
+        let body = try JSONSerialization.data(withJSONObject: ["progress": rounded])
+        _ = try await proxyRequest(proxyURL(fileId), method: "PATCH", body: body)
+    }
+
+    /// Give the job up as failed, saying why in a sentence someone can read.
+    public func reportProxyFailure(fileId: String, message: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["status": "failed", "error": String(message.prefix(500))])
+        _ = try await proxyRequest(proxyURL(fileId), method: "PATCH", body: body)
+    }
+
+    /// The copy is in the bucket, where the claim said. Throws
+    /// `ProxyConflict.lost` when the job was taken away meanwhile.
+    public func finishProxy(fileId: String, _ result: ProxyResult) async throws {
+        _ = try await proxyRequest(proxyURL(fileId), method: "PUT", body: try JSONEncoder().encode(result))
+    }
+
+    /// `api/files/<id>/proxy[/<tail>]`, the id escaped as one path component.
+    private func proxyURL(_ fileId: String, _ tail: String? = nil) -> URL {
+        var url = config.url("api/files").appending(component: fileId).appending(path: "proxy")
+        if let tail { url.append(path: tail) }
+        return url
+    }
+
+    /// As `request`, with a 409 told apart by its code (`taken`, `lost`).
+    private func proxyRequest(_ url: URL, method: String, body: Data? = nil) async throws -> Data {
+        let (data, status) = try await send(url, method: method, body: body)
+        if let conflict = ProxyConflict.from(status: status, data: data) { throw conflict }
+        try Self.check(status, data)
+        return data
+    }
+
     // MARK: - Updates
 
     /// The newest Mac release this server knows of, or nil when none has been

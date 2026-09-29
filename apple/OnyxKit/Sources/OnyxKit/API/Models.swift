@@ -228,6 +228,10 @@ public struct ContentLink: Codable, Sendable {
     public let expiresAt: EpochMillis?
     public let version: Int?
     public let contentHash: String?
+    /// A video's streamable copy, when one has been made: what a player
+    /// should play, the original being what is downloaded. Nil from a server
+    /// that does not send it.
+    public let proxyUrl: URL?
 }
 
 /// `POST /api/desktop/web-session`: the one-time URL that signs a web view in.

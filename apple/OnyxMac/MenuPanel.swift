@@ -73,6 +73,8 @@ struct MenuPanel: View {
             PanelUploads(summary: finder.uploadSummary) { finder.retryUpload($0) }
             TranscriptionMenuLine(transcriber: model.transcriber)
                 .font(.system(size: 11)).foregroundStyle(.secondary)
+            ProxyMenuLine(proxies: model.proxies)
+                .font(.system(size: 11)).foregroundStyle(.secondary)
         }
         .padding(12)
     }
