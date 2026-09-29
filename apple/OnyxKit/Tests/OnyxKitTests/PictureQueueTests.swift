@@ -121,16 +121,39 @@ struct PictureQueueTests {
         #expect(held.started.count == 9)
     }
 
-    /// Through URLSession, as the app fetches: a store that takes 200 ms to
+    /// Rounds, exactly: with a limit of four, twelve pictures start four at
+    /// a time, each four only once the last four are done.
+    @Test func twelvePicturesAtFourAtATimeTakeThreeRounds() async throws {
+        let held = Held()
+        let queue = Self.queue(limit: 4, ahead: 0, held: held)
+        let names = (0..<12).map { "p\($0)" }
+        let asks = names.map { name in Task { try await queue.data(key: name, url: Self.url(name)) } }
+        var rounds: [[String]] = []
+        while held.started.count < 12 {
+            let before = held.started.count
+            await Self.until { held.started.count == min(before + 4, 12) }
+            await Self.tick()
+            let round = Array(held.started[before...])
+            #expect(round.count == 4, "round \(rounds.count + 1): \(round)")
+            rounds.append(round)
+            for name in round { held.open(name) }
+            if round.isEmpty { break }
+        }
+        for ask in asks { _ = try await ask.value }
+        #expect(rounds.count == 3)
+        #expect(held.maxAtOnce == 4)
+    }
+
+    /// Through URLSession, as the app fetches: a store that takes 400 ms to
     /// answer, twelve pictures, and a limit of four, take three rounds; a
     /// limit of twelve, one. (The app's own limit, and URLSession's per-host
     /// one, are what made a phone's first screen take three round trips.)
-    /// Rounds are counted from when the store saw each request start — a
-    /// new round is a start a good part of a round trip after the last
-    /// round's first — so a busy machine running other tests cannot blur them.
+    /// A request's round is one more than that of the latest request the
+    /// store had answered when it arrived — cause and effect, not the clock,
+    /// so a machine busy with other tests cannot blur the rounds together.
     @Test(arguments: [(4, 3), (6, 2), (12, 1)])
     func twelvePicturesTakeAsManyRoundsAsTheLimitMakes(limit: Int, rounds: Int) async throws {
-        let latency = 0.2
+        let latency = 0.4
         let host = "rounds-\(limit)-\(UUID().uuidString.prefix(8)).latency.test"
         LatencyStub.register(host: host, latency: latency)
         let session = LatencyStub.session()
@@ -149,17 +172,16 @@ struct PictureQueueTests {
             for try await data in group { #expect(data.count == 1000) }
         }
         let elapsed = clock.now - began
-        let starts = LatencyStub.starts(host).sorted()
-        var waves = 0
-        var waveBegan = -Double.infinity
-        for start in starts where start - waveBegan > latency * 0.6 {
-            waves += 1
-            waveBegan = start
+        let requests = LatencyStub.requests(host).sorted { $0.start < $1.start }
+        var round: [Int] = []
+        for (i, request) in requests.enumerated() {
+            let answeredBefore = requests.indices.filter { $0 < i && requests[$0].end <= request.start }
+            round.append(1 + (answeredBefore.map { round[$0] }.max() ?? 0))
         }
-        #expect(starts.count == 12)
+        #expect(requests.count == 12)
         #expect(LatencyStub.peak(host) == limit)
-        #expect(waves == rounds, "starts: \(starts.map { Int(($0 - starts[0]) * 1000) }) ms")
-        #expect(elapsed >= .milliseconds(Int(latency * 1000) * rounds - 20))
+        #expect(round.max() == rounds, "rounds: \(round)")
+        #expect(elapsed >= .milliseconds(Int(latency * 1000) * rounds - 20), "never faster than the rounds allow")
     }
 
     // MARK: - What is on screen first
@@ -415,14 +437,17 @@ final class LatencyStub: URLProtocol {
     nonisolated(unsafe) private static var latencies: [String: TimeInterval] = [:]
     nonisolated(unsafe) private static var current: [String: Int] = [:]
     nonisolated(unsafe) private static var peaks: [String: Int] = [:]
-    nonisolated(unsafe) private static var startTimes: [String: [TimeInterval]] = [:]
+    nonisolated(unsafe) private static var answered: [String: [(start: TimeInterval, end: TimeInterval)]] = [:]
 
     static func register(host: String, latency: TimeInterval) {
-        lock.withLock { latencies[host] = latency; current[host] = 0; peaks[host] = 0; startTimes[host] = [] }
+        lock.withLock { latencies[host] = latency; current[host] = 0; peaks[host] = 0; answered[host] = [] }
     }
     static func peak(_ host: String) -> Int { lock.withLock { peaks[host] ?? 0 } }
-    /// When each request reached the store, in seconds of uptime.
-    static func starts(_ host: String) -> [TimeInterval] { lock.withLock { startTimes[host] ?? [] } }
+    /// When each request reached the store and when it was answered, in
+    /// seconds of uptime.
+    static func requests(_ host: String) -> [(start: TimeInterval, end: TimeInterval)] {
+        lock.withLock { answered[host] ?? [] }
+    }
 
     /// No limit of URLSession's own in the way: the queue's is the one tested.
     static func session() -> URLSession {
@@ -446,13 +471,16 @@ final class LatencyStub: URLProtocol {
             client?.urlProtocol(self, didFailWithError: URLError(.cannotFindHost))
             return
         }
+        let start = ProcessInfo.processInfo.systemUptime
         Self.lock.withLock {
             Self.current[host, default: 0] += 1
             Self.peaks[host] = max(Self.peaks[host] ?? 0, Self.current[host] ?? 0)
-            Self.startTimes[host, default: []].append(ProcessInfo.processInfo.systemUptime)
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + latency) { [self] in
-            Self.lock.withLock { Self.current[host, default: 0] -= 1 }
+            Self.lock.withLock {
+                Self.current[host, default: 0] -= 1
+                Self.answered[host, default: []].append((start, ProcessInfo.processInfo.systemUptime))
+            }
             guard !Self.lock.withLock({ stopped }) else { return }
             let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
                                            headerFields: ["Content-Type": "image/webp"])!
