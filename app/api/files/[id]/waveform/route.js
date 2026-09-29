@@ -53,13 +53,13 @@ export async function GET(req, { params }) {
  * shape is of a sound the file no longer holds.
  */
 export async function PUT(req, { params }) {
+  // Who is asking, and whether they may, before anything they sent is read.
+  const w = await writableSound(req, params.id);
+  if (w.error) return w.error;
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
   const waveform = waveformFacts(body?.waveform);
   if (!waveform) return NextResponse.json({ error: 'Not a waveform.' }, { status: 400 });
-
-  const w = await writableSound(req, params.id);
-  if (w.error) return w.error;
 
   let file;
   try {
