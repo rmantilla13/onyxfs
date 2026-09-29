@@ -5,6 +5,7 @@ import FolderDrop, { startFolderDrag } from './FolderDrop';
 import { folderKey } from '@/lib/selection';
 import { overlaps } from '@/lib/marquee';
 import FolderGlyph from '@/app/components/ui/FolderGlyph';
+import OfflineMark from '@/app/components/ui/OfflineMark';
 import { describeFolder } from '@/lib/folder-ops';
 
 // Past this many subfolders the tree is the better way in; the items are not
@@ -96,7 +97,7 @@ function useFolderNav({ folders, navRef, columns }) {
   return { list, active, onFocus };
 }
 
-const FolderTile = memo(function FolderTile({ folder: f, detail, glyph, selected, tabbable, handlers, canWrite, onDrop }) {
+const FolderTile = memo(function FolderTile({ folder: f, detail, glyph, selected, tabbable, handlers, canWrite, onDrop, kept = false }) {
   const key = folderKey(f.folder);
   return (
     <FolderDrop target={f.folder} enabled={canWrite} onDrop={onDrop} className="folder-tile-wrap">
@@ -115,7 +116,10 @@ const FolderTile = memo(function FolderTile({ folder: f, detail, glyph, selected
       >
         <FolderGlyph size={glyph} className="folder-tile-icon" />
         <span className="folder-tile-text">
-          <span className="folder-tile-name truncate">{f.name}</span>
+          <span className="folder-tile-title">
+            <span className="folder-tile-name truncate">{f.name}</span>
+            {kept && <OfflineMark />}
+          </span>
           {detail && <span className="folder-tile-meta truncate">{detail}</span>}
         </span>
       </div>
@@ -132,7 +136,7 @@ const FolderTile = memo(function FolderTile({ folder: f, detail, glyph, selected
  * uploads, draggable onto another folder on its own, and carries data-folder
  * so the page's context menu finds it. `summaries` is folderSummaries().
  */
-export const FolderTiles = memo(function FolderTiles({ folders, summaries, cardSize = 'm', selected, handlers, canWrite, onDrop, navRef }) {
+export const FolderTiles = memo(function FolderTiles({ folders, summaries, cardSize = 'm', selected, handlers, canWrite, onDrop, navRef, keptFolder }) {
   const shown = folders.slice(0, MAX_TILES);
   const { list, active, onFocus } = useFolderNav({ folders: shown, navRef });
   return (
@@ -148,6 +152,7 @@ export const FolderTiles = memo(function FolderTiles({ folders, summaries, cardS
           handlers={handlers}
           canWrite={canWrite}
           onDrop={onDrop}
+          kept={!!keptFolder?.(f.folder)}
         />
       ))}
       {folders.length > shown.length && (
@@ -172,7 +177,7 @@ function folderCell(summary, c) {
   return '';
 }
 
-const FolderRow = memo(function FolderRow({ folder: f, summary, columns, selected, tabbable, handlers, canWrite, onDrop }) {
+const FolderRow = memo(function FolderRow({ folder: f, summary, columns, selected, tabbable, handlers, canWrite, onDrop, kept = false }) {
   const key = folderKey(f.folder);
   return (
     <FolderDrop target={f.folder} enabled={canWrite} onDrop={onDrop}>
@@ -190,7 +195,7 @@ const FolderRow = memo(function FolderRow({ folder: f, summary, columns, selecte
         onDragStart={canWrite ? (e) => startFolderDrag(e, f.folder) : undefined}
       >
         <span className="filelist-thumb filelist-folder-icon" aria-hidden><FolderGlyph size={24} /></span>
-        <span className="filelist-name"><span className="truncate">{f.name}</span></span>
+        <span className="filelist-name"><span className="truncate">{f.name}</span>{kept && <OfflineMark />}</span>
         {columns.map((c) => (
           <span key={c.key} className="filelist-cell muted truncate">{folderCell(summary, c)}</span>
         ))}
@@ -200,7 +205,7 @@ const FolderRow = memo(function FolderRow({ folder: f, summary, columns, selecte
   );
 });
 
-export const FolderRows = memo(function FolderRows({ folders, summaries, columns, selected, handlers, canWrite, onDrop, navRef }) {
+export const FolderRows = memo(function FolderRows({ folders, summaries, columns, selected, handlers, canWrite, onDrop, navRef, keptFolder }) {
   const shown = folders.slice(0, MAX_TILES);
   const { list, active, onFocus } = useFolderNav({ folders: shown, navRef, columns: 1 });
   return (
@@ -216,6 +221,7 @@ export const FolderRows = memo(function FolderRows({ folders, summaries, columns
           handlers={handlers}
           canWrite={canWrite}
           onDrop={onDrop}
+          kept={!!keptFolder?.(f.folder)}
         />
       ))}
       {folders.length > shown.length && (

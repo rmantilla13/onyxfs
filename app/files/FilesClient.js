@@ -38,6 +38,8 @@ import { MenuItem, MenuSeparator, MenuLabel } from '@/app/components/ui/Menu';
 import { useContextMenu } from '@/app/components/ui/ContextMenu';
 import useMarquee, { MarqueeRect } from '@/app/components/ui/useMarquee';
 import useMacApp from '@/app/components/useMacApp';
+import OfflineMark from '@/app/components/ui/OfflineMark';
+import { offlineMarks, keptWith } from '@/lib/offline-marks';
 import { canFor, canForSome } from './can-for';
 import { fileKey, folderKey, parseKey } from '@/lib/selection';
 import FolderDrop, { DRAG_FILES, DRAG_FOLDER, startFolderDrag } from './FolderDrop';
@@ -269,6 +271,23 @@ export default function FilesClient({
   const [selected, setSelected] = useState(() => new Set());
   // The Mac app's offline and Finder actions, when running inside it.
   const mac = useMacApp();
+  // What it keeps offline, as marks on the cards, rows, folders and drives
+  // (lib/offline-marks.js). Nothing outside the app, where nothing is kept.
+  const marks = useMemo(
+    () => (mac.inApp ? offlineMarks({ pinned: mac.pinned, pinnedFolders: mac.pinnedFolders, driveId: filespaceId, drives }) : null),
+    [mac.inApp, mac.pinned, mac.pinnedFolders, filespaceId, drives],
+  );
+  const keptFolder = useCallback((path) => !!marks?.folder(path).kept, [marks]);
+  const keptDrive = useCallback((id) => !!marks?.drive(id), [marks]);
+  const keptFile = useCallback((f) => !!marks?.file(f), [marks]);
+  // "Kept offline with “Footage”" for a file its folder keeps, naming the
+  // drive when that is what is kept; null for one kept on its own.
+  const fileKeptWords = useCallback((f) => {
+    const by = marks?.fileKeptBy(f);
+    if (!by) return null;
+    const root = by.scope === 'library' ? 'All files' : drives.find((d) => `drive.${d.id}` === by.scope)?.name;
+    return keptWith(by.path, root);
+  }, [marks, drives]);
   const [uploadSnap, setUploadSnap] = useState(null);
   const [dragging, setDragging] = useState(false);
   // The facet filters live in a panel under the toolbar, open only while
@@ -1315,6 +1334,34 @@ export default function FilesClient({
     type: 'folder', path, stats: folderStats(folders, path), canOpen: path !== folder,
   });
 
+  // Keeping offline, in the Mac app. A file or folder that a kept folder
+  // already keeps says so instead of offering to keep it: letting go of it
+  // alone would change nothing, since it goes with the folder.
+  const fileOfflineItem = (f) => {
+    const words = fileKeptWords(f);
+    if (words) return { label: words, disabled: true };
+    return mac.pinned.has(f.id)
+      ? { label: 'Remove offline copy', onSelect: () => mac.unpinFiles([f.id], filespaceId) }
+      : { label: 'Keep offline on this Mac', onSelect: () => mac.pinFiles([f.id], filespaceId) };
+  };
+  const filesOfflineItem = (ids) => {
+    const byId = new Map(files.map((x) => [x.id, x]));
+    // Those a folder keeps are its to let go of; only the rest are changed.
+    const own = ids.filter((id) => !(byId.has(id) && fileKeptWords(byId.get(id))));
+    if (!own.length) return { label: 'Kept offline with their folders', disabled: true };
+    const toKeep = own.filter((id) => !mac.pinned.has(id));
+    return toKeep.length
+      ? { label: `Keep ${toKeep.length} ${toKeep.length === 1 ? 'file' : 'files'} offline on this Mac`, onSelect: () => mac.pinFiles(toKeep, filespaceId) }
+      : { label: `Remove ${own.length} offline ${own.length === 1 ? 'copy' : 'copies'}`, onSelect: () => mac.unpinFiles(own, filespaceId) };
+  };
+  const folderOfflineItem = (path) => {
+    const { kept, by } = marks?.folder(path) || { kept: false, by: null };
+    if (kept && by !== path) return { label: keptWith(by, rootName), disabled: true };
+    return kept
+      ? { label: 'Remove offline copies', onSelect: () => mac.pinFolder(path, filespaceId, false) }
+      : { label: 'Keep folder offline on this Mac', onSelect: () => mac.pinFolder(path, filespaceId, true) };
+  };
+
   // Per file, the server's word on what may be done to it (./can-for.js):
   // a Member is not offered Rename on a colleague's file the route refuses.
   // `selNow` is the selection the menu acts on: what was selected, or — for
@@ -1322,16 +1369,13 @@ export default function FilesClient({
   const fileMenu = (f, selNow = selected) => {
     const many = selNow.has(f.id) && selNow.size > 1 ? [...selNow] : null;
     if (many) {
-      const allPinned = many.every((id) => mac.pinned.has(id));
       const canMove = canForSome(many, files, 'edit', { canWrite });
       const canDelete = canForSome(many, files, 'delete', { canWrite });
       return [
         { heading: `${many.length} files selected` },
         { label: `Quick Look ${many.length} items`, hint: 'Space', onSelect: () => quickLook(fileKey(f.id)) },
         { label: 'Get info', hint: `${modKey()}I`, onSelect: () => infoForFiles(many) },
-        mac.inApp && (allPinned
-          ? { label: `Remove ${many.length} offline copies`, onSelect: () => mac.unpinFiles(many, filespaceId) }
-          : { label: `Keep ${many.length} files offline on this Mac`, onSelect: () => mac.pinFiles(many, filespaceId) }),
+        mac.inApp && filesOfflineItem(many),
         canMove && { label: `Move ${many.length} files…`, onSelect: () => moveFilesUI(many) },
         { label: 'Clear selection', onSelect: () => sel.clear() },
         canDelete && '-',
@@ -1346,9 +1390,7 @@ export default function FilesClient({
       { label: 'Get info', hint: `${modKey()}I`, onSelect: () => infoForFiles([f.id]) },
       { label: 'Download', onSelect: () => downloadFile(f) },
       // In the Mac app only: a copy on this Mac that opens without a connection.
-      mac.inApp && (mac.pinned.has(f.id)
-        ? { label: 'Remove offline copy', onSelect: () => mac.unpinFiles([f.id], filespaceId) }
-        : { label: 'Keep offline on this Mac', onSelect: () => mac.pinFiles([f.id], filespaceId) }),
+      mac.inApp && fileOfflineItem(f),
       // The flag is the role's (the page computed it); the route checks both
       // it and write access to this file again.
       flags.shares && can.share && { label: 'Share…', onSelect: () => setSharing(f) },
@@ -1367,9 +1409,7 @@ export default function FilesClient({
     { label: 'Open', hint: 'Return', onSelect: () => navigate(path) },
     itemFolders.some((f) => f.folder === path) && { label: 'Quick Look', hint: 'Space', onSelect: () => quickLook(folderKey(path)) },
     { label: 'Get info', onSelect: () => infoForFolder(path) },
-    mac.inApp && (mac.folderPinned(path, filespaceId)
-      ? { label: 'Remove offline copies', onSelect: () => mac.pinFolder(path, filespaceId, false) }
-      : { label: 'Keep folder offline on this Mac', onSelect: () => mac.pinFolder(path, filespaceId, true) }),
+    mac.inApp && folderOfflineItem(path),
     canWrite && '-',
     canWrite && { label: 'New folder inside…', onSelect: () => newFolder(path) },
     canWrite && { label: 'Rename…', onSelect: () => renameFolderUI(path) },
@@ -1951,8 +1991,9 @@ export default function FilesClient({
       : e === 'soon' ? <span className="tag tag-warning">Expiring</span>
         : null;
     const review = flags.review ? reviewBadges(f) : null;
-    return expiry || review ? <>{expiry}{review}</> : null;
-  }, [flags.usageRights, flags.review, schema]);
+    const kept = marks?.file(f) ? <OfflineMark title={fileKeptWords(f) || undefined} /> : null;
+    return expiry || review || kept ? <>{expiry}{review}{kept}</> : null;
+  }, [flags.usageRights, flags.review, schema, marks, fileKeptWords]);
   const itemHandlers = useMemo(
     () => ({ ...sel.handlers, dragStart: canWrite ? onDragFile : undefined }),
     [sel.handlers, canWrite, onDragFile],
@@ -2122,12 +2163,13 @@ export default function FilesClient({
             canCreate={isAdmin}
             onOpen={openDrive}
             onNew={() => setNewDrive(true)}
+            keptDrive={marks ? keptDrive : undefined}
           />
           <div className="side-folders">
             <Section title={activeDrive ? `Folders in ${activeDrive.name}` : 'Folders'}>
               <div className="folder-list edge-scroll">
                 <FolderDrop target="" enabled={canWrite} onDrop={onTreeDrop}>
-                  <FolderLink active={!folder} onClick={() => navigate('')} path=""><span className="folder-name">{rootName}</span></FolderLink>
+                  <FolderLink active={!folder} onClick={() => navigate('')} path=""><span className="folder-name">{rootName}</span>{keptFolder('') && <OfflineMark size={12} />}</FolderLink>
                 </FolderDrop>
                 <FolderTree
                   folders={folders}
@@ -2137,6 +2179,7 @@ export default function FilesClient({
                   canWrite={canWrite}
                   onDrop={onItemDrop}
                   storageKey={`onyx.tree.open:${filespaceId || 'all'}`}
+                  keptFolder={marks ? keptFolder : undefined}
                 />
               </div>
             </Section>
@@ -2262,6 +2305,8 @@ export default function FilesClient({
                 onMissingThumb={requestThumb}
                 fields={columns}
                 cardSize={display.size}
+                keptFolder={marks ? keptFolder : undefined}
+                keptFile={marks ? keptFile : undefined}
                 emptyText={emptyWords || (noFiles ? 'Nothing here' : 'No files match those filters.')}
               />
             ) : layout === 'list' ? (
@@ -2286,6 +2331,7 @@ export default function FilesClient({
                     canWrite={canWrite}
                     onDrop={onItemDrop}
                     navRef={sel.navRef}
+                    keptFolder={marks ? keptFolder : undefined}
                   />
                 ) : null}
               />
@@ -2305,6 +2351,7 @@ export default function FilesClient({
                       canWrite={canWrite}
                       onDrop={onItemDrop}
                       navRef={sel.navRef}
+                      keptFolder={marks ? keptFolder : undefined}
                     />
                   </div>
                 )}
@@ -2555,7 +2602,7 @@ function readOpen(key) {
  */
 // Memoized: a click or an arrow in the pane re-renders the page, and the tree
 // of a big library is hundreds of rows that have not changed.
-const FolderTree = memo(function FolderTree({ folders, summaries, selected, onSelect, canWrite, onDrop, storageKey }) {
+const FolderTree = memo(function FolderTree({ folders, summaries, selected, onSelect, canWrite, onDrop, storageKey, keptFolder }) {
   const [open, setOpen] = useState(() => new Set());
   const loaded = useRef(null);
 
@@ -2644,6 +2691,7 @@ const FolderTree = memo(function FolderTree({ folders, summaries, selected, onSe
           onDragStart={canWrite ? (e) => startFolderDrag(e, f.folder) : undefined}
         >
           <span className="folder-name">{f.name}</span>
+          {keptFolder?.(f.folder) && <OfflineMark size={12} />}
           {f.count != null && <span className="muted folder-count">{summaries?.get(f.folder)?.total ?? f.count}</span>}
         </FolderLink>
       </FolderDrop>
