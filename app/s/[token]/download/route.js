@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { resolveShareAccess } from '@/lib/share-access';
 import { getStorageConfig, storageMode, s3PresignGet, storageForKey, ORIGINAL_URL_TTL } from '@/lib/storage';
+import { parseDownloadVariant } from '@/lib/download-formats';
+import { variantDownload } from '@/lib/download-variants';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,6 +18,9 @@ export const dynamic = 'force-dynamic';
  * the same URL again. The trade is the player's too: revoking the link stops
  * every new download at once, but a URL already handed out keeps working for
  * up to six hours.
+ *
+ * `?variant=proxy` / `?variant=poster`: a video's streamable copy or its cover,
+ * for the guests the page offers them to — decided after the link is.
  */
 export async function GET(req, { params }) {
   const { token } = params;
@@ -26,6 +31,12 @@ export async function GET(req, { params }) {
   if (access.state !== 'ok') return NextResponse.redirect(new URL(`/s/${token}`, req.url));
 
   const { file } = access;
+  // A video's proxy or cover (lib/download-variants.js), past the same gates,
+  // under the flags the link was let in by — the ones its page played by.
+  const asked = parseDownloadVariant(new URL(req.url).searchParams.get('variant'));
+  if (asked.error) return NextResponse.json({ error: asked.error }, { status: 400 });
+  if (asked.variant) return variantDownload(file, asked.variant, { flags: access.flags });
+
   if (file.storage === 's3' && file.storageKey) {
     try {
       const cfg = await getStorageConfig();

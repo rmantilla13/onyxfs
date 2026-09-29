@@ -30,6 +30,7 @@ import useTranscript from '@/app/components/transcript/useTranscript';
 import useProxy from '@/app/components/video/useProxy';
 import { createMediaClock } from '@/app/components/transcript/mediaClock';
 import useMacApp from '@/app/components/useMacApp';
+import { DownloadButtons } from '@/app/components/download/DownloadAs';
 import { toVTT } from '@/lib/transcripts';
 
 /**
@@ -164,6 +165,15 @@ export default function FileDetail({
   // ── Proxy ── watched for as long as the page is open, since a transcode
   // finishing is what lets the player switch sources.
   const proxy = useProxy(file.id, { enabled: proxies });
+  // Download as…: the proxy by the live job once it has loaded (a transcode
+  // that lands while the page is open, or one since removed), else as the
+  // page was rendered with; a still from the frame the player is showing.
+  const job = proxy.proxy;
+  const proxyOffer = useMemo(() => ({
+    available: job ? job.status === 'done' && !job.stale && !!job.url : !!file.proxyUrl,
+    size: job?.size ?? null,
+  }), [job, file.proxyUrl]);
+  const playerVideo = useCallback(() => player.current?.element?.() || null, []);
   const clock = useMemo(createMediaClock, []);
   const mac = useMacApp();
   const seekTo = useCallback((seconds) => player.current?.seekTo?.(seconds), []);
@@ -279,7 +289,7 @@ export default function FileDetail({
         {review && <ReviewStatusTag status={status} className="review-status-head" />}
         <div className="spacer" />
         {canShare && <button type="button" className="btn" onClick={() => setSharing(true)}>Share</button>}
-        <a className="btn" href={`/api/files/${file.id}/download`}>Download</a>
+        <DownloadButtons file={file} frame={playerVideo} proxy={proxies ? proxyOffer : null} />
         {canWrite && (
           <Menu label="File actions">
             <MenuItem onClick={() => { setName(file.name); setRenaming(true); }}>Rename…</MenuItem>

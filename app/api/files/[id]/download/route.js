@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { getFileById, canAccessFile } from '@/lib/db';
 import { requirePrincipal } from '@/lib/authz';
 import { getStorageConfig, storageMode, s3PresignGet, storageForKey, ORIGINAL_URL_TTL } from '@/lib/storage';
+import { parseDownloadVariant } from '@/lib/download-formats';
+import { variantDownload } from '@/lib/download-variants';
 
 export const runtime = 'nodejs';
 
@@ -16,14 +18,22 @@ export const runtime = 'nodejs';
  * URL again, and a large one cut off after ten minutes could only start over.
  * The cost is the one playback already pays — a URL handed out keeps working
  * for up to six hours after the access behind it is taken away.
+ *
+ * `?variant=proxy` is a video's streamable 1080p copy and `?variant=poster`
+ * its cover picture (lib/download-variants.js), each saved under a name of
+ * its own — asked only once the caller is known to be able to see the file.
  */
-export async function GET(_req, { params }) {
+export async function GET(req, { params }) {
   const g = await requirePrincipal();
   if (g.error) return g.error;
 
   const file = await getFileById(params.id);
   if (!file) return NextResponse.json({ error: 'File not found' }, { status: 404 });
   if (!(await canAccessFile(file, g.principal))) return NextResponse.json({ error: 'No access' }, { status: 403 });
+
+  const asked = parseDownloadVariant(new URL(req.url).searchParams.get('variant'));
+  if (asked.error) return NextResponse.json({ error: asked.error }, { status: 400 });
+  if (asked.variant) return variantDownload(file, asked.variant, { flags: g.principal.flags });
 
   if (file.storage === 's3' && file.storageKey) {
     try {

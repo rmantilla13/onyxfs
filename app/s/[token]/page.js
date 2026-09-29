@@ -9,6 +9,7 @@ import { kindLabel } from '@/lib/file-info';
 import { fmtSize, sharedFile } from '@/lib/media';
 import FilePreview from '@/app/components/file/FilePreview';
 import PreviewPreconnect from '@/app/components/PreviewPreconnect';
+import { DownloadButtons } from '@/app/components/download/DownloadAs';
 import UnlockForm from './UnlockForm';
 import ShareReview from './ShareReview';
 import BrandLogo from '@/app/components/BrandLogo';
@@ -66,7 +67,9 @@ export default async function SharePage({ params }) {
             {access.kind === 'private' && (
               <a className="btn" href={`/files/${file.id}`}>Open in {brand.name}</a>
             )}
-            <a className="btn btn-primary" href={`/s/${token}/download`}>Download</a>
+            {/* The original, and Download as… for the same choices a member gets:
+                the proxy and the cover through this link's own download route. */}
+            <DownloadButtons file={file} base={`/s/${token}/download`} primary guest frame=".share-file video" />
           </div>
           {review
             ? <ShareReview file={file} token={token} level={review} guest={currentGuest(token)} />
