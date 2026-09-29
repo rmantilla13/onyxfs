@@ -40,7 +40,7 @@ final class ThumbnailStore: @unchecked Sendable {
     /// Downloads at a time, and how many of them may be ahead of the scroll:
     /// the rest are always free for a cell that has just appeared.
     static let connections = 16
-    static let aheadConnections = 6
+    static let aheadConnections = 10
 
     private let memory = PictureMemory()
     private let disk: ThumbnailDisk
