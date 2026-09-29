@@ -5,6 +5,7 @@ import SwiftUI
 /// iPad, the first screen on an iPhone.
 struct PlacesView: View {
     @Environment(Session.self) private var session
+    @Environment(\.horizontalSizeClass) private var width
     @Binding var selection: Place?
     @State private var showingAccount = false
 
@@ -13,13 +14,15 @@ struct PlacesView: View {
             if !session.drives.isEmpty {
                 Section("Drives") {
                     ForEach(session.drives) { place in
-                        NavigationLink(value: place) { PlaceRow(place: place) }
+                        NavigationLink(value: place) { PlaceRow(place: place, chosen: chosen(place)) }
+                            .glassRow(selected: chosen(place))
                     }
                 }
             }
             if session.placesLoaded {
                 Section {
-                    NavigationLink(value: Place.library) { PlaceRow(place: .library) }
+                    NavigationLink(value: Place.library) { PlaceRow(place: .library, chosen: chosen(.library)) }
+                        .glassRow(selected: chosen(.library))
                 } footer: {
                     if session.drives.isEmpty {
                         Text("Drives you're added to on the web appear here.")
@@ -27,6 +30,7 @@ struct PlacesView: View {
                 }
             }
         }
+        .auraBackground()
         .navigationTitle("Onyx")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -47,9 +51,11 @@ struct PlacesView: View {
                         Text(problem)
                     } actions: {
                         Button("Try Again") { Task { await session.loadPlaces() } }
+                            .buttonStyle(BrandButtonStyle())
                     }
+                    .onyxStyle()
                 } else {
-                    ProgressView()
+                    ProgressView().controlSize(.large)
                 }
             }
         }
@@ -57,23 +63,33 @@ struct PlacesView: View {
         .task { if !session.placesLoaded { await session.loadPlaces() } }
         .sheet(isPresented: $showingAccount) { AccountView() }
     }
+
+    /// Side by side (an iPad), the place open beside the list is marked in
+    /// it; one after the other, nothing stays chosen once it is left.
+    private func chosen(_ place: Place) -> Bool {
+        width == .regular && selection == place
+    }
 }
 
 private struct PlaceRow: View {
     let place: Place
+    var chosen = false
 
     var body: some View {
-        Label {
+        HStack(spacing: 12) {
+            SymbolChip(systemName: place.isLibrary ? "square.grid.2x2.fill" : "externaldrive.fill",
+                       tint: place.tint, chosen: chosen, size: 34)
             VStack(alignment: .leading, spacing: 2) {
-                Text(place.name).lineLimit(1)
+                Text(place.name)
+                    .font(.body.weight(chosen ? .semibold : .regular))
+                    .lineLimit(1)
                 if let role = roleName {
                     Text(role).font(.caption).foregroundStyle(.secondary)
                 }
             }
-        } icon: {
-            Image(systemName: place.isLibrary ? "square.grid.2x2" : "externaldrive.fill")
-                .foregroundStyle(.tint)
         }
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .combine)
     }
 
     /// What this account is in the drive, when that limits it.
@@ -82,5 +98,14 @@ private struct PlaceRow: View {
         case "viewer": return "View only"
         default: return nil
         }
+    }
+}
+
+extension Place {
+    /// The drive's own colour, as the web's dot beside its name and the
+    /// Mac's disk icon have it; the accent for All Files, or a drive the
+    /// server gave none.
+    var tint: Color {
+        color.flatMap(Color.init(hex:)) ?? .accentColor
     }
 }

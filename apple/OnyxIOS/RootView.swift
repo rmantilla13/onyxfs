@@ -41,8 +41,14 @@ private struct Browser: View {
             } else {
                 ContentUnavailableView("Choose a drive", systemImage: "externaldrive",
                                        description: Text("Its folders and files open here."))
+                    .onyxStyle()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background { AuraBackground() }
             }
         }
+        // What is being saved, under every folder; a file open full screen
+        // shows its own (PreviewView).
+        .safeAreaInset(edge: .bottom, spacing: 0) { DownloadTray() }
         .onChange(of: place) { path = [] }
         // Side by side, the first drive is open rather than an empty half of
         // the screen; one after the other (an iPhone), the list comes first.

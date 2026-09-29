@@ -9,51 +9,71 @@ struct FileTile: View {
     let file: FileItem
     /// A search's results come from anywhere beneath the folder: each says where.
     var showsFolder = false
+    @Environment(\.fileSelection) private var selection
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let chosen = selection?.contains(file.id) == true
+        VStack(alignment: .leading, spacing: 0) {
             Thumbnail(file: file, size: .card)
                 .aspectRatio(1, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.tileCorner - 5, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: Theme.tileCorner - 5, style: .continuous)
+                        .strokeBorder(Theme.edge, lineWidth: 0.5)
                 }
                 .overlay(alignment: .bottomTrailing) {
                     if let length = FileFormat.duration(file) {
                         Text(length)
                             .font(.caption2.monospacedDigit().weight(.semibold))
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 5)
+                            .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(.black.opacity(0.55), in: Capsule())
                             .padding(6)
                     }
                 }
                 .overlay(alignment: .topTrailing) { ReviewBadge(file: file).padding(6) }
-            Text(file.name)
-                .font(.caption)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-            Text(showsFolder ? FileFormat.folderName(file) : FileFormat.size(file.size))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .overlay(alignment: .topLeading) {
+                    if selection != nil { SelectionCheck(chosen: chosen).padding(6) }
+                }
+                .padding(5)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(file.name)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(2, reservesSpace: true)
+                    .multilineTextAlignment(.leading)
+                Text(showsFolder ? FileFormat.folderName(file) : FileFormat.size(file.size))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 9)
+            .padding(.top, 3)
+            .padding(.bottom, 9)
         }
-        .contentShape(Rectangle())
+        .background { TileCard(chosen: chosen) }
+        .contentShape(RoundedRectangle(cornerRadius: Theme.tileCorner, style: .continuous))
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 }
 
 struct FileRow: View {
     let file: FileItem
     var showsFolder = false
+    @Environment(\.fileSelection) private var selection
 
     var body: some View {
+        let chosen = selection?.contains(file.id) == true
         HStack(spacing: 12) {
+            if selection != nil { SelectionCheck(chosen: chosen) }
             Thumbnail(file: file, size: .row)
                 .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
+                        .strokeBorder(Theme.edge, lineWidth: 0.5)
+                }
             VStack(alignment: .leading, spacing: 3) {
                 Text(file.name).lineLimit(1)
                 Text(showsFolder ? "\(FileFormat.folderName(file)) · \(FileFormat.summary(file))" : FileFormat.summary(file))
@@ -65,34 +85,51 @@ struct FileRow: View {
             ReviewBadge(file: file)
         }
         .contentShape(Rectangle())
+        .listRowBackground(chosen ? AnyView(Rectangle().fill(Theme.selection)) : AnyView(Color.clear))
+        .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 }
 
 struct FolderTile: View {
     let node: FolderNode
     let items: Int
+    @Environment(\.fileSelection) private var selection
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Color.clear
+        VStack(alignment: .leading, spacing: 0) {
+            RoundedRectangle(cornerRadius: Theme.tileCorner - 5, style: .continuous)
+                .fill(Color.accentColor.opacity(0.10))
                 .aspectRatio(1, contentMode: .fit)
                 .overlay {
                     Image(systemName: "folder.fill")
                         .resizable()
                         .scaledToFit()
-                        .padding(18)
+                        .padding(26)
                         .foregroundStyle(.tint)
                         .symbolRenderingMode(.hierarchical)
                 }
-            Text(node.name)
-                .font(.caption)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-            Text(FileFormat.items(items))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .overlay {
+                    RoundedRectangle(cornerRadius: Theme.tileCorner - 5, style: .continuous)
+                        .strokeBorder(Color.accentColor.opacity(0.16), lineWidth: 0.5)
+                }
+                .padding(5)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(node.name)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(2, reservesSpace: true)
+                    .multilineTextAlignment(.leading)
+                Text(FileFormat.items(items))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 9)
+            .padding(.top, 3)
+            .padding(.bottom, 9)
         }
-        .contentShape(Rectangle())
+        .background { TileCard() }
+        .contentShape(RoundedRectangle(cornerRadius: Theme.tileCorner, style: .continuous))
+        // Choosing files: a folder is not one of them.
+        .opacity(selection == nil ? 1 : 0.4)
         .accessibilityElement(children: .combine)
     }
 }
@@ -100,13 +137,11 @@ struct FolderTile: View {
 struct FolderRow: View {
     let node: FolderNode
     let items: Int
+    @Environment(\.fileSelection) private var selection
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "folder.fill")
-                .font(.title2)
-                .foregroundStyle(.tint)
-                .frame(width: 44, height: 44)
+            SymbolChip(systemName: "folder.fill", size: 44)
             VStack(alignment: .leading, spacing: 3) {
                 Text(node.name).lineLimit(1)
                 Text(FileFormat.items(items))
@@ -114,7 +149,56 @@ struct FolderRow: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .opacity(selection == nil ? 1 : 0.4)
     }
+}
+
+/// A tile's card: frosted on the page, as the web's cards sit on the aura;
+/// tinted and ringed in the brand gradient when chosen. Not glass — a grid
+/// of files is content, and would cost a blur per tile — only its look.
+private struct TileCard: View {
+    var chosen = false
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.tileCorner, style: .continuous)
+        shape.fill(chosen ? AnyShapeStyle(Color.accentColor.opacity(0.22))
+                          : AnyShapeStyle(reduceTransparency ? Theme.surface : Theme.frost))
+            .overlay {
+                if chosen {
+                    shape.strokeBorder(Theme.brand, lineWidth: 2)
+                } else {
+                    shape.strokeBorder(Theme.edge, lineWidth: 0.5)
+                }
+            }
+    }
+}
+
+/// Whether a file is among those chosen, while choosing.
+struct SelectionCheck: View {
+    let chosen: Bool
+
+    var body: some View {
+        ZStack {
+            if chosen {
+                Circle().fill(Theme.brand)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .heavy))
+                    .foregroundStyle(Theme.onAura)
+            } else {
+                Circle().fill(.black.opacity(0.28))
+            }
+            Circle().strokeBorder(.white.opacity(0.9), lineWidth: 1.5)
+        }
+        .frame(width: 24, height: 24)
+        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+        .accessibilityHidden(true)
+    }
+}
+
+extension EnvironmentValues {
+    /// The files chosen in the folder on screen, while choosing; nil when not.
+    @Entry var fileSelection: Set<String>? = nil
 }
 
 /// Approved, changes asked for, and open comments: a file's review at a glance.
@@ -124,13 +208,7 @@ struct ReviewBadge: View {
     var body: some View {
         HStack(spacing: 4) {
             if let comments = file.openComments, comments > 0 {
-                Label("\(comments)", systemImage: "text.bubble.fill")
-                    .labelStyle(.titleAndIcon)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(Color.accentColor, in: Capsule())
+                CountBadge(text: "\(comments)", systemImage: "text.bubble.fill")
             }
             if let status = file.reviewStatus, let color = FileFormat.reviewColor(status) {
                 Circle()

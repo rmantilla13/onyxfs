@@ -6,6 +6,8 @@ import SwiftUI
 /// A folder's files full screen, one at a time, swiped through: a picture
 /// zooms, a video or a song plays (picture in picture, AirPlay), and a
 /// document opens in Quick Look. A tap on a picture hides everything else.
+/// The bottom bar shares the file, or saves it — to Photos or to Files,
+/// and a heavy video's smaller streamable copy beside the original.
 struct PreviewView: View {
     let files: [FileItem]
     @Environment(\.dismiss) private var dismiss
@@ -13,9 +15,8 @@ struct PreviewView: View {
     @State private var current: String?
     @State private var chromeHidden = false
     @State private var inspecting: FileItem?
-    @State private var sharing: ShareItem?
-    @State private var shareProgress: Double?
-    @State private var shareProblem: String?
+    /// Each video's streamable copy, once asked about (StreamableCopy.lookup).
+    @State private var streamables: [String: StreamableCopy] = [:]
 
     init(files: [FileItem], startID: String) {
         self.files = files
@@ -40,8 +41,9 @@ struct PreviewView: View {
             .scrollTargetBehavior(.paging)
             .scrollPosition(id: $current)
             .scrollIndicators(.hidden)
-            .background(Color.black.ignoresSafeArea())
+            .background(Theme.paper.ignoresSafeArea())
             .ignoresSafeArea(edges: .bottom)
+            .safeAreaInset(edge: .bottom, spacing: 0) { DownloadTray() }
             .navigationTitle(file?.name ?? "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -50,15 +52,16 @@ struct PreviewView: View {
                         .accessibilityLabel("Close")
                 }
                 ToolbarItemGroup(placement: .bottomBar) {
-                    Button { share() } label: {
-                        if let shareProgress {
-                            ProgressView(value: shareProgress).progressViewStyle(.circular).controlSize(.small)
-                        } else {
-                            Image(systemName: "square.and.arrow.up")
+                    Button { save(to: .share) } label: { Image(systemName: "square.and.arrow.up") }
+                        .accessibilityLabel("Share")
+                    if let file {
+                        Menu {
+                            SaveMenuContent(file: file, streamable: streamables[file.id])
+                        } label: {
+                            Image(systemName: "arrow.down.circle")
                         }
+                        .accessibilityLabel("Save")
                     }
-                    .disabled(shareProgress != nil)
-                    .accessibilityLabel("Share")
                     Spacer()
                     if let index = files.firstIndex(where: { $0.id == current }), files.count > 1 {
                         Text("\(index + 1) of \(files.count)")
@@ -71,42 +74,43 @@ struct PreviewView: View {
                 }
             }
             .toolbar(chromeHidden ? .hidden : .visible, for: .navigationBar, .bottomBar)
-            .toolbarBackground(.visible, for: .navigationBar, .bottomBar)
+            .modifier(PreviewBars())
             .statusBarHidden(chromeHidden)
             .animation(.easeInOut(duration: 0.2), value: chromeHidden)
         }
         .preferredColorScheme(.dark)
         .sheet(item: $inspecting) { FileInfoView(file: $0, place: nil) }
-        .sheet(item: $sharing) { ShareSheet(items: [$0.url]).presentationDetents([.medium, .large]) }
-        .alert("Can't Share", isPresented: Binding(get: { shareProblem != nil }, set: { if !$0 { shareProblem = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(shareProblem ?? "")
-        }
+        .task(id: current) { await lookUpStreamable() }
     }
 
-    /// The file itself goes to the share sheet, so it is downloaded first
-    /// (once: it is kept for a Quick Look or a second share).
-    private func share() {
-        guard let file, shareProgress == nil else { return }
-        shareProgress = 0
-        Task {
-            defer { shareProgress = nil }
-            do {
-                let url = try await PreviewFiles.local(for: file, api: session.api) { fraction in
-                    Task { @MainActor in if shareProgress != nil { shareProgress = fraction } }
-                }
-                sharing = ShareItem(url: url)
-            } catch {
-                if !Session.isCancel(error) { shareProblem = session.explain(error) }
-            }
+    /// The file itself goes to the share sheet, so it is downloaded first:
+    /// the tray shows it coming, and the sheet opens once it is here.
+    private func save(to destination: SaveDestination) {
+        guard let file else { return }
+        DownloadCenter.shared.save([file], to: destination, api: session.api)
+    }
+
+    /// Whether the video on screen has a smaller copy to offer beside it.
+    private func lookUpStreamable() async {
+        guard let file, streamables[file.id] == nil, StreamableCopy.mayHave(file) else { return }
+        if let copy = await StreamableCopy.lookup(file, api: session.api), !Task.isCancelled {
+            streamables[file.id] = copy
         }
     }
 }
 
-private struct ShareItem: Identifiable {
-    let url: URL
-    var id: URL { url }
+/// The preview's bars: Liquid Glass floats its controls over the picture on
+/// iOS 26; before it, the bars are frosted glass across the edges.
+private struct PreviewBars: ViewModifier {
+    func body(content: Content) -> some View {
+        if Theme.liquidGlass {
+            content
+        } else {
+            content
+                .toolbarBackground(.ultraThinMaterial, for: .navigationBar, .bottomBar)
+                .toolbarBackground(.visible, for: .navigationBar, .bottomBar)
+        }
+    }
 }
 
 /// One file, full screen.
@@ -258,11 +262,13 @@ private struct MediaPage: View {
             if let player {
                 PlayerView(player: player)
             } else if let problem {
-                Label(problem, systemImage: "exclamationmark.triangle")
+                Label(problem, systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote)
-                    .foregroundStyle(.white)
-                    .padding(12)
-                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+                    .symbolRenderingMode(.multicolor)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .glassSurface(Capsule())
+                    .padding(24)
             } else if active {
                 ProgressView().tint(.white)
             }
@@ -359,7 +365,16 @@ private struct DocumentPage: View {
                 VStack(spacing: 14) {
                     KindSymbol(file: file)
                         .scaleEffect(1.6)
-                        .padding(.bottom, 12)
+                        .frame(width: 112, height: 112)
+                        .background {
+                            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                                .fill(Theme.frost)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                                        .strokeBorder(Theme.edge, lineWidth: 0.5)
+                                }
+                        }
+                        .padding(.bottom, 10)
                     Text(file.name)
                         .font(.headline)
                         .multilineTextAlignment(.center)
@@ -367,18 +382,22 @@ private struct DocumentPage: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     if let progress {
-                        ProgressView(value: progress)
+                        GradientProgressBar(fraction: progress)
                             .frame(maxWidth: 220)
+                            .padding(.top, 6)
                     } else if let problem {
-                        Text(problem).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center)
+                        Text(problem).font(.footnote).foregroundStyle(.orange).multilineTextAlignment(.center)
                         Button("Try Again") { asked = true; Task { await download() } }
+                            .glassButtonStyle()
                     } else if !wantsDownload {
                         Button("Download to Preview") { asked = true; Task { await download() } }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(BrandButtonStyle())
+                            .padding(.top, 6)
                     }
                 }
                 .padding(32)
-                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background { AuraBackground() }
             }
         }
         .task(id: active) {
@@ -429,15 +448,4 @@ private struct QuickLookView: UIViewControllerRepresentable {
             url as NSURL
         }
     }
-}
-
-/// The system share sheet, for a file on this device.
-struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
