@@ -1,6 +1,7 @@
 import AVFoundation
 import OnyxKit
 import SwiftUI
+import UIKit
 
 /// Onyx for iPhone and iPad: the drives, their folders and files, native.
 ///
@@ -9,6 +10,7 @@ import SwiftUI
 /// here is exactly what it may see there.
 @main
 struct OnyxIOSApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var session = Session()
 
     init() {
@@ -16,16 +18,36 @@ struct OnyxIOSApp: App {
         // in any player.
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         ThumbnailStore.trimInBackground()
+        // Downloads the system carried on with while the app was away are
+        // picked up, and taken where they were going.
+        _ = DownloadCenter.shared
     }
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(session)
+                // The web's dark scheme, always: near-black, the aura, glass.
+                // Info.plist's UIUserInterfaceStyle does the same for what
+                // UIKit shows (the share sheet, the Files picker, alerts).
+                .preferredColorScheme(.dark)
                 // A sign-in finished outside the sign-in sheet — the magic
                 // link opened from Mail into Safari — comes back here.
                 .onOpenURL { session.handle(callback: $0) }
                 .task { await session.start(arguments: ProcessInfo.processInfo.arguments) }
         }
+    }
+}
+
+/// Woken by iOS for a background download's events — one it finished, or
+/// that failed, while the app was suspended or ended.
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        guard identifier == DownloadTransport.identifier else {
+            completionHandler()
+            return
+        }
+        DownloadCenter.shared.transport.handleBackgroundEvents(completionHandler)
     }
 }

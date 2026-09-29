@@ -10,6 +10,9 @@ struct Place: Hashable, Identifiable, Sendable {
     let name: String
     /// viewer | editor | owner, for a drive; nil for All Files.
     let role: String?
+    /// The drive's own colour, "#RRGGBB" — the dot beside its name on the
+    /// web. Nil for All Files, and from an older server.
+    var color: String? = nil
 
     var id: String { scope.identifier }
     var isLibrary: Bool { scope == .library }
@@ -181,6 +184,7 @@ final class Session {
         forget()
         await ThumbnailStore.shared.removeAll()
         PreviewFiles.removeAll()
+        DownloadCenter.shared.removeAll()
     }
 
     /// Everything of the signed-in account, forgotten here.
@@ -204,7 +208,7 @@ final class Session {
         do {
             let (list, admin, address, _) = try await api.drives()
             drives = list.filter(\.isMember)
-                .map { Place(scope: .drive(id: $0.id), name: $0.name, role: $0.role) }
+                .map { Place(scope: .drive(id: $0.id), name: $0.name, role: $0.role, color: $0.color) }
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             isAdmin = admin
             if let address {
