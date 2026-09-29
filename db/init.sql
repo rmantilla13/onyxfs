@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 139
+-- Statements: 140
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -567,6 +567,19 @@ CREATE TABLE IF NOT EXISTS proxies (
 );
 
 CREATE INDEX IF NOT EXISTS proxies_queue_idx ON proxies (requested_at) WHERE status IN ('queued', 'working');
+
+CREATE TABLE IF NOT EXISTS storage_prices (
+  account        TEXT PRIMARY KEY,
+  rate           NUMERIC NOT NULL,
+  unit           TEXT NOT NULL,
+  base           INT NOT NULL,
+  free_bytes     BIGINT NOT NULL DEFAULT 0,
+  minimum_bytes  BIGINT NOT NULL DEFAULT 0,
+  fee            NUMERIC NOT NULL DEFAULT 0,
+  note           TEXT,
+  set_at         BIGINT NOT NULL,
+  set_by         TEXT
+);
 
 CREATE TABLE IF NOT EXISTS sign_in_passwords (
   email         TEXT PRIMARY KEY,

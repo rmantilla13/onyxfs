@@ -41,7 +41,7 @@ describe('every admin route checks first', () => {
       'people/[id]/reactivate/route.js', 'people/[id]/signout-everywhere/route.js', 'people/[id]/devices/[tokenId]/route.js',
       'roles/route.js', 'policy/route.js', 'links/route.js', 'trash/route.js', 'trash/restore/route.js',
       'trash/purge/route.js', 'maintenance/route.js', 'maintenance/run/route.js', 'invites/route.js',
-      'passwords/route.js',
+      'passwords/route.js', 'storage-prices/route.js',
     ]) assert.ok(rel.includes(r), r);
   });
 
@@ -103,6 +103,7 @@ describe('every admin route checks first', () => {
     ['policy/route.js', 'GET'], ['policy/route.js', 'PUT'], ['links/route.js', 'GET'], ['links/route.js', 'DELETE'],
     ['trash/route.js', 'GET'], ['trash/restore/route.js', 'POST'], ['trash/purge/route.js', 'POST'],
     ['maintenance/route.js', 'GET'], ['maintenance/run/route.js', 'POST'], ['invites/route.js', 'PATCH'],
+    ['storage-prices/route.js', 'PUT'], ['storage-prices/route.js', 'DELETE'],
   ];
   for (const [r, method] of CALLS) {
     test(`${method} ${r} without a session → 401, before any query`, async () => {

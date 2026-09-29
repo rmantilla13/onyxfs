@@ -1,18 +1,21 @@
 import Link from 'next/link';
 import {
   storageReport, listDrivesWithUsage, duplicateSummary, getFeatureFlags, storageByPerson, frameModelSummary,
+  billableStorage, listDriveStorage, listStoragePrices,
 } from '@/lib/db';
-import { presignFileUrls } from '@/lib/storage';
+import { presignFileUrls, getStorageConfig, storageMode, cfgForDrive } from '@/lib/storage';
 import { fmtSize } from '@/lib/media';
 import { crumbsFor } from '@/lib/folder-ops';
 import { driveForKey } from '@/lib/admin-drives';
 import { kindLabel, formatLabel, TRASH_RETENTION_DAYS } from '@/lib/storage-report';
+import { estimateStorageCost, storageParts, storageLocation, pricesByAccount } from '@/lib/storage-pricing';
 import { Thumb } from '@/app/components/ui/FileCard';
 import { requireAdminPage } from '../_lib/guard';
 import AdminPage from '../_ui/AdminPage';
 import AdminState from '../_ui/AdminState';
 import KindBreakdown from '../_ui/KindBreakdown';
 import FrameRates from './FrameRates';
+import StorageCost from './StorageCost';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Usage · Admin' };
@@ -26,8 +29,23 @@ const bar = (n, max) => (n > 0 ? { width: `${(n / max) * 100}%` } : { width: 0, 
 const extOf = (name) => (/\.([A-Za-z0-9]{1,8})$/.exec(String(name || '')) || [])[1] || null;
 
 /**
+ * What storing the library costs a month, by where it is kept. A drive's
+ * files are priced where its objects are read from (lib/storage.js
+ * cfgForDrive): its own bucket when it has one, else the Storage bucket.
+ * `own` are the drives with their keys, which go no further than cfgForDrive;
+ * the estimate names only provider, bucket and region. `prices` are the
+ * prices of our own (Admin → Storage → Prices), which win over the list.
+ */
+function costEstimate(cfg, drives, stored, own, prices) {
+  const byId = new Map(own.map((d) => [d.id, d]));
+  const locate = (drive) => storageLocation(cfgForDrive(cfg, drive ? byId.get(drive.id) : null));
+  return estimateStorageCost(storageParts({ stored, drives, locate }), { overrides: pricesByAccount(prices) });
+}
+
+/**
  * Admin → Storage → Usage (was /storage): what is using the space — by type,
- * drive, format and person, the largest files, the duplicates and the trash.
+ * drive, format and person, the largest files, the duplicates and the trash,
+ * and what keeping it all costs a month.
  *
  * It describes every file, whoever may open it, so it is gated here and the
  * queries (lib/db.js) do not filter. The largest files are presigned last,
@@ -36,12 +54,17 @@ const extOf = (name) => (/\.([A-Za-z0-9]{1,8})$/.exec(String(name || '')) || [])
 export default async function UsagePage() {
   await requireAdminPage('/admin/usage');
   const [drives, flags] = await Promise.all([listDrivesWithUsage(), getFeatureFlags()]);
-  const [report, dups, people, rates] = await Promise.all([
+  const [report, dups, people, rates, cfg, billable] = await Promise.all([
     storageReport({ drivePrefixes: drives.map((d) => d.prefix) }),
     duplicateSummary(),
     storageByPerson({ limit: 10 }),
     // Videos still without an exact frame rate, for "Probe all videos".
     frameModelSummary().catch(() => ({ videos: 0 })),
+    getStorageConfig(),
+    // The estimate is one card: a failed read leaves it out, not the page —
+    // and prices of our own that could not be read would be list prices
+    // passed off as ours, so they are part of it.
+    Promise.all([billableStorage(), listDriveStorage(), listStoragePrices()]).catch(() => null),
   ]);
 
   if (!report) {
@@ -77,6 +100,11 @@ export default async function UsagePage() {
   const driveMax = Math.max(1, ...byDrive.map((d) => d.bytes), report.outsideDrives.bytes);
   const formatMax = Math.max(1, ...report.formats.map((f) => f.bytes));
   const personMax = Math.max(1, ...people.people.map((p) => p.bytes), people.unattributed.bytes);
+  // Vercel Blob has no bucket to price, and the card says so; a bucket whose
+  // figures could not be read leaves the card out.
+  const inBucket = storageMode(cfg) === 's3';
+  const [stored, own, prices] = billable || [];
+  const cost = inBucket && stored ? costEstimate(cfg, drives, stored, own, prices) : null;
 
   return (
     <AdminPage
@@ -98,6 +126,8 @@ export default async function UsagePage() {
         <h2 id="st-kind" className="admin-h2 admin-card-title">By type</h2>
         <KindBreakdown rows={report.kinds} total={total} />
       </section>
+
+      {(cost || !inBucket) && <StorageCost estimate={cost} stored={stored} />}
 
       <div className="admin-cols">
         <section className="card admin-card" aria-labelledby="st-drives">
