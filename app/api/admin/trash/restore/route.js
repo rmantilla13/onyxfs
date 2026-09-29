@@ -47,7 +47,7 @@ export async function POST(req) {
       const own = await storageForKey(cfg, f.storageKey);
       const taken = await storageKeyInUse(target, { exceptId: f.id }) || await s3ObjectExists(own, target).catch(() => false);
       if (taken) target = await s3UniqueKey(own, target);
-      await s3MoveObject(own, f.trashKey, target);
+      await s3MoveObject(own, f.trashKey, target, { size: f.size });
       storageKey = target;
     }
     const restored = await restoreFile(f.id, { storageKey });
