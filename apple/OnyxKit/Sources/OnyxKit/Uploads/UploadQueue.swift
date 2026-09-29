@@ -62,8 +62,8 @@ public protocol UploadTransport: Sendable {
              progress: @escaping @Sendable (Int64) -> Void) async throws
 }
 
-/// Uploads, one after another in pairs, surviving a restart of the app and
-/// a network that comes and goes. The web's own flow (OnyxAPI.Writes): a
+/// Uploads, several at once, surviving a restart of the app and a network
+/// that comes and goes. The web's own flow (OnyxAPI.Writes): a
 /// small file in one presigned PUT, a large one in parts, then recorded —
 /// or, for a file saved over, swapped in as that file's new contents.
 ///
@@ -74,7 +74,20 @@ public protocol UploadTransport: Sendable {
 /// and bytes already in storage are never sent twice.
 public actor UploadQueue {
     public static let multipartThreshold: Int64 = 64 << 20
-    static let concurrency = 2
+    /// Files at once. A small one is a presign, one PUT from the file on disk
+    /// and a record — mostly waiting on the network, little of this Mac's —
+    /// so a folder of photos goes four at a time.
+    static let concurrency = 4
+    /// Of those, large ones (in parts) at once: each sends its own parts in
+    /// parallel already.
+    static let largeConcurrency = 2
+    /// A large file's parts in flight at once. One after another, each part
+    /// waited out a round trip to storage before the next began, which on a
+    /// fast line is most of the time; in parallel the line stays full. Each
+    /// is read into memory (8 MB at the server's usual part size), so at
+    /// most largeConcurrency × this — 64 MB — while two large files go up,
+    /// and nothing when none does.
+    static let partConcurrency = 4
     static let maxAttempts = 12
 
     private let directory: URL
@@ -232,10 +245,24 @@ public actor UploadQueue {
     private func pump() {
         let waiting = jobs.values.filter { $0.state == .queued && running[$0.id] == nil }
             .sorted { $0.id.uuidString < $1.id.uuidString }
-        for job in waiting.prefix(max(0, Self.concurrency - running.count)) {
+        var free = Self.concurrency - running.count
+        var largeFree = Self.largeConcurrency - running.keys.filter { jobs[$0].map(Self.sendsParts) ?? false }.count
+        for job in waiting where free > 0 {
+            if Self.sendsParts(job) {
+                // A large one waits for another to finish; a small one
+                // behind it may go meanwhile.
+                guard largeFree > 0 else { continue }
+                largeFree -= 1
+            }
+            free -= 1
             let token = UUID()
             running[job.id] = (token, Task { await self.run(job.id, token: token) })
         }
+    }
+
+    /// Whether a job still has parts to send: large, and not in storage yet.
+    static func sendsParts(_ job: UploadJob) -> Bool {
+        job.size >= multipartThreshold && job.uploadedKey == nil
     }
 
     private func run(_ id: UUID, token: UUID) async {
@@ -370,21 +397,38 @@ public actor UploadQueue {
             partCount = status.partCount
         }
         let done = status.done
-        var sentBefore = Int64(done.count) * partSize
-        setProgress(id, sentBefore)
+        let tally = PartTally(sent: Int64(done.count) * partSize)
+        setProgress(id, tally.total)
         let missing = (1...max(1, partCount)).filter { !done.contains($0) }
+        let transport = self.transport
+        let size = job.size
         for batch in stride(from: 0, to: missing.count, by: 16).map({ Array(missing[$0..<min($0 + 16, missing.count)]) }) {
             let urls = try await Self.expiring { try await self.transport.signParts(uploadId: uploadId, parts: batch) }
-            for part in batch {
-                try Task.checkCancellation()
-                guard let url = urls[part] else { throw OnyxError.decoding("part \(part) was not signed") }
-                let offset = Int64(part - 1) * partSize
-                let length = min(partSize, job.size - offset)
-                let base = sentBefore
-                try await transport.put(file, offset: offset, length: length, to: url, contentType: nil) { sent in
-                    Task { await self.setProgress(id, base + sent) }
+            // partConcurrency at a time. A part that fails stops the rest of
+            // this attempt; the next asks storage which parts it has, and
+            // sends only the others.
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                var next = batch.makeIterator()
+                var inFlight = 0
+                while true {
+                    while inFlight < Self.partConcurrency, let part = next.next() {
+                        try Task.checkCancellation()
+                        guard let url = urls[part] else { throw OnyxError.decoding("part \(part) was not signed") }
+                        let offset = Int64(part - 1) * partSize
+                        let length = min(partSize, size - offset)
+                        group.addTask {
+                            try await transport.put(file, offset: offset, length: length, to: url, contentType: nil) { sent in
+                                let total = tally.sending(part, sent)
+                                Task { await self.setProgress(id, total) }
+                            }
+                            await self.setProgress(id, tally.finished(part, length))
+                        }
+                        inFlight += 1
+                    }
+                    guard inFlight > 0 else { break }
+                    try await group.next()
+                    inFlight -= 1
                 }
-                sentBefore += length
             }
         }
         let completed = try await Self.expiring { try await self.transport.completeMultipart(uploadId: uploadId) }
@@ -474,5 +518,35 @@ public actor UploadQueue {
     private func save() {
         guard let data = try? JSONEncoder().encode(Array(jobs.values)) else { return }
         try? data.write(to: directory.appendingPathComponent("jobs.json"), options: .atomic)
+    }
+}
+
+/// A large upload's bytes sent: the parts done, and how far each part in
+/// flight has got — several at once, so each reports into this rather than
+/// adding to a running total of its own.
+final class PartTally: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done: Int64
+    private var inFlight: [Int: Int64] = [:]
+
+    init(sent: Int64) { done = sent }
+
+    var total: Int64 { lock.withLock { done + inFlight.values.reduce(0, +) } }
+
+    /// `part` has sent `bytes` so far. → the total now.
+    func sending(_ part: Int, _ bytes: Int64) -> Int64 {
+        lock.withLock {
+            inFlight[part] = bytes
+            return done + inFlight.values.reduce(0, +)
+        }
+    }
+
+    /// `part` is in storage, all `length` of it. → the total now.
+    func finished(_ part: Int, _ length: Int64) -> Int64 {
+        lock.withLock {
+            inFlight[part] = nil
+            done += length
+            return done + inFlight.values.reduce(0, +)
+        }
     }
 }

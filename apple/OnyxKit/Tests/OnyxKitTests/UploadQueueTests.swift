@@ -16,6 +16,15 @@ actor FakeServer: UploadTransport {
     var failNext: [String: [Error]] = [:]
     var partSize: Int64 = 10
     var partCount = 0
+    /// How long each PUT takes, and how many were in flight at once: all of
+    /// them, and of the large uploads, how many had a part in flight.
+    var putDelay: UInt64 = 0
+    var putsInFlight = 0
+    var mostPutsAtOnce = 0
+    var partsInFlight: [String: Int] = [:]
+    var mostUploadsAtOnce = 0
+
+    func setPutDelay(_ nanoseconds: UInt64) { putDelay = nanoseconds }
 
     func log(_ call: String) throws {
         calls.append(call)
@@ -86,6 +95,21 @@ actor FakeServer: UploadTransport {
     func put(_ file: URL, offset: Int64, length: Int64, to url: URL, contentType: String?,
              progress: @escaping @Sendable (Int64) -> Void) async throws {
         try log("put \(url.lastPathComponent)")
+        let upload = url.path.contains("/part/") ? url.deletingLastPathComponent().lastPathComponent : nil
+        putsInFlight += 1
+        mostPutsAtOnce = max(mostPutsAtOnce, putsInFlight)
+        if let upload {
+            partsInFlight[upload, default: 0] += 1
+            mostUploadsAtOnce = max(mostUploadsAtOnce, partsInFlight.count)
+        }
+        defer {
+            putsInFlight -= 1
+            if let upload {
+                partsInFlight[upload, default: 1] -= 1
+                if partsInFlight[upload] == 0 { partsInFlight[upload] = nil }
+            }
+        }
+        if putDelay > 0 { try await Task.sleep(nanoseconds: putDelay) }
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
         try handle.seek(toOffset: UInt64(offset))
@@ -429,4 +453,78 @@ private actor Seen {
     var jobs: [UploadJob] = []
     var last: UploadJob? { jobs.last }
     func add(_ job: UploadJob) { jobs.append(job) }
+}
+
+
+/// Several at once: a large file's parts, small files, large files — each
+/// within its own limit.
+@Suite struct UploadConcurrencyTests {
+    private func big(_ fill: UInt8) -> Data {
+        Data(repeating: fill, count: Int(UploadQueue.multipartThreshold)) + Data((0..<95).map { UInt8($0) })
+    }
+
+    @Test func aLargeFileSendsItsPartsSeveralAtOnce() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        let data = big(7)
+        await server.setPartSize(Int64(data.count / 9))
+        await server.setPutDelay(50_000_000)
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 0, sleep: { _ in })
+        try await queue.enqueue(from: try source(data), scope: "library", filespaceId: nil, folder: "",
+                                name: "big.mov", mime: "video/quicktime")
+        await settle(queue)
+        #expect(await server.mostPutsAtOnce == UploadQueue.partConcurrency, "four parts in flight, not one after another")
+        #expect(await server.objects["assembled"] == data, "every part, in its place")
+        #expect(await queue.all().isEmpty)
+    }
+
+    @Test func smallFilesGoFourAtATime() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        await server.setPutDelay(50_000_000)
+        // All of them queued before any is sent (the settle moment waits on
+        // the gate), so what goes at once is the queue's limit, not how fast
+        // this test could hand them over.
+        let gate = Gate()
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 1, sleep: { _ in await gate.wait() })
+        for n in 1...7 {
+            try await queue.enqueue(from: try source(Data([UInt8(n)])), scope: "library", filespaceId: nil, folder: "",
+                                    name: "photo-\(n).jpg", mime: "image/jpeg")
+        }
+        await gate.open()
+        for _ in 0..<5 { await settle(queue) }
+        #expect(await server.mostPutsAtOnce == UploadQueue.concurrency)
+        #expect(await server.objects.count == 7)
+        #expect(await queue.all().isEmpty)
+    }
+
+    @Test func noMoreThanTwoLargeFilesAtOnceAndSmallOnesGoBesideThem() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        await server.setPartSize(Int64(big(0).count / 3))
+        await server.setPutDelay(50_000_000)
+        let gate = Gate()
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 1, sleep: { _ in await gate.wait() })
+        for n in 1...3 {
+            try await queue.enqueue(from: try source(big(UInt8(n))), scope: "library", filespaceId: nil, folder: "",
+                                    name: "take-\(n).mov", mime: "video/quicktime")
+        }
+        try await queue.enqueue(from: try source(Data([9])), scope: "library", filespaceId: nil, folder: "",
+                                name: "note.txt", mime: "text/plain")
+        await gate.open()
+        for _ in 0..<5 { await settle(queue) }
+        #expect(await server.mostUploadsAtOnce == UploadQueue.largeConcurrency)
+        #expect(await server.objects["note.txt"] == Data([9]), "a small file is not held up behind them")
+        #expect(await queue.all().isEmpty)
+    }
+
+    @Test func progressCountsWhatEachPartInFlightHasSent() {
+        let tally = PartTally(sent: 100)
+        #expect(tally.sending(1, 10) == 110)
+        #expect(tally.sending(2, 5) == 115)
+        #expect(tally.sending(1, 30) == 135, "a part's own progress replaces, not adds to, what it said before")
+        #expect(tally.finished(1, 40) == 145)
+        #expect(tally.finished(2, 40) == 180)
+        #expect(tally.total == 180)
+    }
 }
