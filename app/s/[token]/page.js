@@ -8,6 +8,7 @@ import { currentGuest } from '@/lib/share-review';
 import { kindLabel } from '@/lib/file-info';
 import { fmtSize, sharedFile } from '@/lib/media';
 import FilePreview from '@/app/components/file/FilePreview';
+import PreviewPreconnect from '@/app/components/PreviewPreconnect';
 import UnlockForm from './UnlockForm';
 import ShareReview from './ShareReview';
 import BrandLogo from '@/app/components/BrandLogo';
@@ -51,6 +52,8 @@ export default async function SharePage({ params }) {
     const review = access.review;
     return (
       <Shell brand={brand} wide={!!review}>
+        {/* Only once the link has let them in: a locked link connects to nothing. */}
+        <PreviewPreconnect urls={[file.thumbnailUrl, file.posterUrl, file.proxyUrl, file.url]} />
         <div className="share-file">
           <div className="share-head">
             <div style={{ minWidth: 0 }}>

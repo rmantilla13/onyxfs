@@ -119,6 +119,7 @@ const fileRoute = await import('../app/api/files/[id]/route.js');
 const contentRoute = await import('../app/api/files/[id]/content/route.js');
 const thumbnailRoute = await import('../app/api/files/[id]/thumbnail/route.js');
 const waveformRoute = await import('../app/api/files/[id]/waveform/route.js');
+const placeholderRoute = await import('../app/api/files/[id]/placeholder/route.js');
 const filmstripRoute = await import('../app/api/files/[id]/filmstrip/route.js');
 const foldersRoute = await import('../app/api/files/folders/route.js');
 const restoreRoute = await import('../app/api/admin/trash/restore/route.js');
@@ -1188,6 +1189,56 @@ describe('a thumbnail made on the Mac', () => {
     const f = await upload(web(ED));
     assert.equal((await mayRecord(web(ED), f.id)).status, 204);
     assert.equal((await mayRecord(web(DV), f.id)).status, 403);
+  });
+});
+
+describe('a thumbnail’s placeholder', () => {
+  // A real 24×18 WebP (test/placeholder.test.js has the rest of what one may be).
+  const PH = 'data:image/webp;base64,UklGRkQAAABXRUJQVlA4IDgAAAAQAwCdASoYABIAPtFiqk+oJaOiKAgBABoJZQDKABanFAAA/uX6P+HPtj97JX/VR2OO4YxZAAAAAA==';
+  const recordThumb = (who, id, body) => call(thumbnailRoute.PUT, `/api/files/${id}/thumbnail`, { method: 'PUT', body, params: { id }, ...who });
+  const recordPh = (who, id, body) => call(placeholderRoute.PUT, `/api/files/${id}/placeholder`, { method: 'PUT', body, params: { id }, ...who });
+  const thumbKey = async (who) => {
+    const grid = await presign(who, { thumb: true, sizes: [], contentType: 'image/webp' });
+    assert.equal(grid.status, 200, JSON.stringify(grid.body));
+    put(grid.body.putUrl, Buffer.alloc(50, 3));
+    return grid.body.key;
+  };
+
+  test('comes with its thumbnail, and goes when the thumbnail is replaced without one', async () => {
+    const who = mac(ED);
+    const f = await upload(who, { name: 'A001.mov' });
+    const first = await recordThumb(who, f.id, { thumbnailKey: await thumbKey(who), placeholder: PH });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.equal(row(f.id).metadata.placeholder, PH);
+    const junk = await recordThumb(who, f.id, { thumbnailKey: await thumbKey(who), placeholder: 'data:image/svg+xml;base64,PHN2Zz4=' });
+    assert.equal(junk.status, 200, 'a bad placeholder never costs the thumbnail');
+    assert.equal(row(f.id).metadata.placeholder, undefined, 'and the old picture’s does not stay on the new one');
+  });
+
+  test('is recorded later for the thumbnail it was drawn from, and only that one', async () => {
+    const who = web(ED);
+    const f = await upload(who, { name: 'A002.mov' });
+    const key = await thumbKey(who);
+    assert.equal((await recordThumb(who, f.id, { thumbnailKey: key })).status, 200);
+    const before = structuredClone(row(f.id));
+    const out = await recordPh(who, f.id, { placeholder: PH, thumbnailKey: key });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.equal(row(f.id).metadata.placeholder, PH);
+    assert.ok(row(f.id).seq > before.seq, 'listings and devices pick it up');
+    assert.equal(row(f.id).version, before.version, 'not an edit');
+    assert.equal((await recordPh(who, f.id, { placeholder: PH, thumbnailKey: await thumbKey(who) })).status, 409, 'another thumbnail’s');
+  });
+
+  test('refused: a viewer, nobody, something that is not one, a key that is not a thumbnail’s', async () => {
+    const f = await upload(web(ED), { name: 'A003.mov' });
+    const key = await thumbKey(web(ED));
+    await recordThumb(web(ED), f.id, { thumbnailKey: key });
+    assert.equal((await recordPh(web(DV), f.id, { placeholder: PH, thumbnailKey: key })).status, 403);
+    assert.equal((await recordPh({}, f.id, { placeholder: 'junk', thumbnailKey: key })).status, 401, 'asked who before what');
+    assert.equal((await recordPh(web(ED), f.id, { placeholder: 'junk', thumbnailKey: key })).status, 400);
+    assert.equal((await recordPh(web(ED), f.id, { placeholder: PH, thumbnailKey: 'files/A003.mov' })).status, 400);
+    assert.equal((await recordPh(web(ED), 'nope', { placeholder: PH, thumbnailKey: key })).status, 404);
+    assert.equal(row(f.id).metadata.placeholder, undefined);
   });
 });
 

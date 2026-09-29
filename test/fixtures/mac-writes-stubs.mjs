@@ -153,13 +153,23 @@ export async function updateFile(id, fields = {}) {
 // A thumbnail recorded after the fact, as lib/db.js's setFileThumbnail
 // records it: the siblings and the poster that came with it or none, the
 // media facts merged in, and seq moved — not version, nor updatedAt.
-export async function setFileThumbnail(id, thumbnailKey, media = {}, posterKey = null, thumbSizes = null) {
+export async function setFileThumbnail(id, thumbnailKey, media = {}, posterKey = null, thumbSizes = null, { placeholder = null } = {}) {
   const row = s().files.get(String(id));
   if (!row) return null;
+  const { placeholder: _old, ...kept } = row.metadata || {};
   Object.assign(row, {
     thumbnailKey, thumbnailUrl: null, posterKey: posterKey || null, thumbSizes: thumbSizes || [],
-    metadata: { ...row.metadata, ...media }, seq: nextSeq(),
+    metadata: { ...kept, ...media, ...(placeholder ? { placeholder } : {}) }, seq: nextSeq(),
   });
+  return copy(row);
+}
+// A thumbnail's placeholder, as setFilePlaceholder records it: for a live row
+// whose thumbnail is still the one it was drawn from.
+export async function setFilePlaceholder(id, placeholder, { thumbnailKey } = {}) {
+  const row = s().files.get(String(id));
+  if (!row || row.deletedAt) return null;
+  if (row.thumbnailKey !== thumbnailKey) return 'changed';
+  Object.assign(row, { metadata: { ...row.metadata, placeholder }, seq: nextSeq() });
   return copy(row);
 }
 // A sound's waveform, as lib/db.js's setFileWaveform records it: merged into

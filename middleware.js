@@ -77,11 +77,15 @@ export const config = {
   //                analytics script to /signin and nothing is ever recorded.
   // file extensions Anything in /public with an extension, so the mark in the
   //                magic-link email loads without being redirected to /signin.
+  // thumb-sw.js    The preview worker's script (public/thumb-sw.js). A share
+  //                link registers it for a visitor with no account, and a
+  //                browser that installed it has to be able to fetch its
+  //                replacement — the kill switch — signed in or not.
   //
   // Note that the /space/authorize PAGE (no api/ prefix) stays matched: an
   // unauthenticated user opening the desktop hand-off link SHOULD be sent to
   // sign in and bounced back afterwards.
   matcher: [
-    '/((?!api/auth|api/desktop|api/space|api/files/delta|api/files/[^/]+/transcript|api/transcripts|api/files/[^/]+/proxy|api/proxies|api/health|api/cron|signin|verify|download|s/|_next/static|_next/image|_vercel|favicon.ico|icon.png|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
+    '/((?!api/auth|api/desktop|api/space|api/files/delta|api/files/[^/]+/transcript|api/transcripts|api/files/[^/]+/proxy|api/proxies|api/health|api/cron|signin|verify|download|s/|_next/static|_next/image|_vercel|favicon.ico|icon.png|thumb-sw\\.js$|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
   ],
 };

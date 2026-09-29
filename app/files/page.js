@@ -14,6 +14,8 @@ import {
 import { normalizeSchema } from '@/lib/dam';
 import { canWriteDrive } from '@/lib/drive-access';
 import TopNav from '@/app/components/TopNav';
+import PreviewPreconnect from '@/app/components/PreviewPreconnect';
+import { thumbSources } from '@/lib/renditions';
 import FilesClient from './FilesClient';
 import { buildLabel, buildDetail } from '@/lib/version';
 
@@ -128,6 +130,10 @@ export default async function FilesPage({ searchParams }) {
 
   return (
     <>
+      {/* The bucket the first page's pictures come from — and a drive's own,
+          for a small original standing in for a missing thumbnail —
+          connected to before the grid asks for any of them. */}
+      <PreviewPreconnect urls={initial?.files?.map((f) => thumbSources(f).src)} />
       <TopNav
         build={{ label: buildLabel(), detail: buildDetail() }}
         brandName={brand.name}

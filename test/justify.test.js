@@ -3,7 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { justifyRows, rowsInView, tileHits, tileStep, aspectOf, MIN_ASPECT, MAX_ASPECT, DEFAULT_ASPECT } from '../lib/justify.js';
+import { justifyRows, rowsInView, firstScreenTiles, tileHits, tileStep, aspectOf, MIN_ASPECT, MAX_ASPECT, DEFAULT_ASPECT } from '../lib/justify.js';
 
 const W = 1000;
 const GAP = 8;
@@ -124,5 +124,24 @@ describe('arrows over tiles', () => {
     assert.equal(tileStep(layout, 3, 'ArrowDown', { width: 300 }), null);
     assert.equal(tileStep(layout, 3, 'ArrowLeft', { width: 300 }), null, '← → are the flat order’s');
     assert.equal(tileStep(layout, 99, 'ArrowUp', { width: 300 }), null);
+  });
+});
+
+describe('the first screen of tiles', () => {
+  // Squares at 100px, three to a 316px row: rows 100 + 20 + 8 apart.
+  const layout = justifyRows(Array(20).fill(1), { width: 316, target: 100, gap: 8, caption: 20 });
+
+  test('every tile of each row at least partly in view, from where the set starts', () => {
+    assert.deepEqual(layout.rows.slice(0, 3).map((r) => [r.start, r.end, r.top]), [[0, 3, 0], [3, 6, 128], [6, 9, 256]]);
+    assert.equal(firstScreenTiles(layout, { top: 0, viewport: 127, caption: 20 }), 3, 'the first row, and nothing of the second');
+    assert.equal(firstScreenTiles(layout, { top: 0, viewport: 129, caption: 20 }), 6, 'a pixel of the second is the second');
+    assert.equal(firstScreenTiles(layout, { top: 100, viewport: 400, caption: 20 }), 9);
+    assert.equal(firstScreenTiles(layout, { top: 0, viewport: 10000, caption: 20 }), 20, 'all of a short set');
+  });
+
+  test('below the fold, the first row still; with no layout, none', () => {
+    assert.equal(firstScreenTiles(layout, { top: 5000, viewport: 400, caption: 20 }), 3);
+    assert.equal(firstScreenTiles({ rows: [] }, { top: 0, viewport: 800 }), 0);
+    assert.equal(firstScreenTiles(null, { top: 0, viewport: 800 }), 0);
   });
 });

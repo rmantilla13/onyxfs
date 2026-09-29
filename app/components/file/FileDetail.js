@@ -15,6 +15,8 @@ import { useConfirm } from '@/app/components/ui/Confirm';
 import { deriveAuto } from '@/lib/dam';
 import { whenCreated } from '@/lib/file-dates';
 import { effectiveKind, fmtSize, coverChangeable } from '@/lib/media';
+import { redrawOffered } from '@/lib/preview-jobs';
+import { probedNow } from '@/lib/decode-probe';
 import { toRate, rateLabel, timecode, ASSUMED_RATE } from '@/lib/video-time';
 import ShareDialog from '@/app/components/ShareDialog';
 import CoverDialog from '@/app/components/video/CoverDialog';
@@ -223,6 +225,30 @@ export default function FileDetail({
     if (await patch({ name: next }, 'Renamed.')) setRenaming(false);
   };
 
+  // Regenerate thumbnail: every preview drawn again from the original, in
+  // this browser (lib/thumbnail-regen.js, loaded when first used). A video's
+  // is its automatic frame; choosing one is Change cover's.
+  const [redrawing, setRedrawing] = useState(false);
+  const regenerate = async () => {
+    if (redrawing) return;
+    setRedrawing(true);
+    const note = toast.push('Redrawing the thumbnail…', { duration: 0 });
+    try {
+      const { redrawThumbnail, mergeRedrawn } = await import('@/lib/thumbnail-regen');
+      const row = await redrawThumbnail(file);
+      setFile((x) => mergeRedrawn(x, row));
+      // The old pictures are deleted: ← Back must not bring their URLs back.
+      returnSlot.updateFile(row.id, (x) => mergeRedrawn(x, row));
+      listingCache.clear();
+      toast.success('Thumbnail redrawn.');
+    } catch (e) {
+      toast.error(e?.message || 'Could not redraw the thumbnail.');
+    } finally {
+      toast.dismiss(note);
+      setRedrawing(false);
+    }
+  };
+
   const trash = async () => {
     const ok = await confirm({
       title: `Move “${file.name}” to trash?`,
@@ -259,6 +285,9 @@ export default function FileDetail({
             <MenuItem onClick={() => { setName(file.name); setRenaming(true); }}>Rename…</MenuItem>
             {coverChangeable(file) && (
               <MenuItem onClick={() => { player.current?.pause?.(); setCovering({ at: player.current?.time?.() ?? null }); }}>Change cover…</MenuItem>
+            )}
+            {redrawOffered(file, { decodes: probedNow() }) && (
+              <MenuItem onClick={regenerate} disabled={redrawing}>Regenerate thumbnail</MenuItem>
             )}
             <MenuSeparator />
             <MenuItem danger onClick={trash}>Move to trash</MenuItem>

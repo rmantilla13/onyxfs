@@ -39,3 +39,17 @@ test('overscan leans the way the list is moving, keeping the same number of rows
   assert.deepEqual(overscanFor(1, { overscan: 4 }), { before: 1, after: 7 });
   assert.deepEqual(overscanFor(-1, { overscan: 4 }), { before: 7, after: 1 });
 });
+
+test('the first screen: every card of each row at least partly in view, from where the grid starts', async () => {
+  const { firstScreenCount } = await import('../lib/virtual-rows.js');
+  // A laptop: five columns at a 229px pitch, the grid 220px down a 790px window.
+  assert.equal(firstScreenCount({ cols: 5, pitch: 229, top: 220, viewport: 790 }), 15);
+  // A phone: two columns, the grid under the folders.
+  assert.equal(firstScreenCount({ cols: 2, pitch: 192, top: 200, viewport: 844 }), 8);
+  assert.equal(firstScreenCount({ cols: 5, pitch: 229, top: 0, viewport: 229 }), 5, 'a row that just fits');
+  assert.equal(firstScreenCount({ cols: 5, pitch: 229, top: 0, viewport: 230 }), 10, 'and a pixel of the next');
+  assert.equal(firstScreenCount({ cols: 4, pitch: 200, top: 2000, viewport: 800 }), 4, 'below the fold: still the first row');
+  assert.equal(firstScreenCount({ cols: 4, pitch: 200, top: -300, viewport: 800 }), 16, 'above the top is the top');
+  assert.equal(firstScreenCount({ cols: 4, pitch: 0, top: 0, viewport: 800 }), 0, 'not measured yet');
+  assert.equal(firstScreenCount({ cols: 0, pitch: 200, top: 0, viewport: 800 }), 0);
+});
