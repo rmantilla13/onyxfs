@@ -71,6 +71,8 @@ struct FileMoreMenu: View {
                 .frame(width: 40, height: 44)
                 .contentShape(Rectangle())
         }
+        // Monochrome, as all the chrome is: colour is the media's.
+        .tint(.secondary)
         .accessibilityLabel("More for \(file.name)")
     }
 }

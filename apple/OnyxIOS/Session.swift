@@ -45,7 +45,8 @@ final class Session {
     /// What each place holds for this account (Place.id), as the listing
     /// counts it: the Home's cards and storage, the drive list's lines.
     private(set) var usage: [String: PlaceUsage] = [:]
-    private var usageAsked: Date?
+    /// When the places were last counted, and which they were.
+    private var usageAsked: (at: Date, places: Set<String>)?
 
     private(set) var api: OnyxAPI
     private var auth: AuthClient
@@ -232,14 +233,15 @@ final class Session {
     }
 
     /// Who is signed in, and what every place holds: asked together, each
-    /// place at once, at most once a minute unless `refresh`. A place that
-    /// cannot be counted keeps what it last said.
+    /// place at once — at most once a minute for the same places, unless
+    /// `refresh`. A place that cannot be counted keeps what it last said.
     func loadOverview(refresh: Bool = false) async {
-        guard phase == .signedIn else { return }
-        if !refresh, let asked = usageAsked, Date().timeIntervalSince(asked) < 60 { return }
-        usageAsked = Date()
-        let api = api
+        guard phase == .signedIn, placesLoaded else { return }
         let places = drives + [Place.library]
+        let ids = Set(places.map(\.id))
+        if !refresh, let asked = usageAsked, asked.places == ids, Date().timeIntervalSince(asked.at) < 60 { return }
+        usageAsked = (Date(), ids)
+        let api = api
         async let who = try? api.identity()
         let counted = await withTaskGroup(of: (String, PlaceUsage?).self) { group in
             for place in places {

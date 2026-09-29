@@ -41,6 +41,9 @@ struct HomeView: View {
             .toolbar(.hidden, for: .navigationBar)
             .refreshable { await load(refresh: true) }
             .task { await load() }
+            // The drives arrive after Home asks for them, when the app has
+            // just signed in: counted as they come.
+            .onChange(of: session.drives) { Task { await session.loadOverview() } }
             .navigationDestination(isPresented: $showingAll) { RecentFilesView() }
         }
         .fullScreenCover(item: $previewing) { file in
@@ -52,7 +55,7 @@ struct HomeView: View {
     }
 
     private func load(refresh: Bool = false) async {
-        if !session.placesLoaded || refresh { await session.loadPlaces() }
+        if refresh { await session.loadPlaces() }
         async let overview: Void = session.loadOverview(refresh: refresh)
         async let files: Void = loadRecent()
         _ = await (overview, files)
