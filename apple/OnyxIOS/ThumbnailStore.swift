@@ -137,7 +137,8 @@ final class ThumbnailStore: @unchecked Sendable {
             ThumbnailTrace.event("shown", "key=\(source.key) ms=\(ThumbnailTrace.ms(since: started))")
             return image
         } catch {
-            ThumbnailTrace.event("cancel", "key=\(source.key) ms=\(ThumbnailTrace.ms(since: started))")
+            ThumbnailTrace.event(error is CancellationError ? "cancel" : "failed",
+                                 "key=\(source.key) ms=\(ThumbnailTrace.ms(since: started))")
             return nil
         }
     }

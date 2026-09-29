@@ -160,6 +160,9 @@ public actor PictureQueue {
     /// plan replaces the last: a planned download not yet started that the
     /// new plan leaves out is dropped. Keys that failed lately are skipped.
     public func prefetch(_ items: [(key: String, url: URL)]) {
+        // A plan made just before `cancelAll` (signing out) arrives after it:
+        // its planner was cancelled first, and nothing of it is kept.
+        guard !Task.isCancelled else { return }
         let now = Date()
         failed = failed.filter { now.timeIntervalSince($0.value) < Self.failureMemory }
         var wanted: [String: Int] = [:]

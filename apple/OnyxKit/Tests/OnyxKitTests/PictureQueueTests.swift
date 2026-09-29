@@ -299,6 +299,21 @@ struct PictureQueueTests {
         #expect(held.started == ["x", "x"], "a cell on screen tries again")
     }
 
+    /// Signing out cancels the planner, then the queue: a plan the planner
+    /// was still sending must not be taken up after.
+    @Test func aPlanFromACancelledPlannerIsIgnored() async throws {
+        let held = Held()
+        let queue = Self.queue(limit: 2, ahead: 2, held: held)
+        let planner = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await queue.prefetch([("late", Self.url("late"))])
+        }
+        await planner.value
+        await Self.tick()
+        #expect(held.started.isEmpty)
+        #expect(await queue.snapshot == .init())
+    }
+
     @Test func cancellingEverythingKeepsNothingThatArrivesAfter() async throws {
         let held = Held()
         let stored = Stored()

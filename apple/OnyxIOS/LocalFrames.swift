@@ -27,6 +27,10 @@ enum LocalFrames {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var api: OnyxAPI?
     nonisolated(unsafe) private static var playableExtensions: [String: Bool] = [:]
+    /// Videos a frame could not be drawn of, and when: not tried again for
+    /// a while, rather than every time their cell comes into view.
+    nonisolated(unsafe) private static var failed: [String: Date] = [:]
+    static let failureMemory: TimeInterval = 300
 
     /// The session's API, to find a video's streamable copy with.
     static func use(_ api: OnyxAPI?) {
@@ -35,7 +39,19 @@ enum LocalFrames {
     }
 
     static func forget() {
-        lock.withLock { api = nil }
+        lock.withLock {
+            api = nil
+            failed = [:]
+        }
+    }
+
+    private static func failedLately(_ id: String) -> Bool {
+        lock.withLock {
+            guard let at = failed[id] else { return false }
+            if Date().timeIntervalSince(at) < failureMemory { return true }
+            failed[id] = nil
+            return false
+        }
     }
 
     static func isFrame(_ url: URL) -> Bool { url.scheme == scheme }
@@ -43,7 +59,7 @@ enum LocalFrames {
     /// Where a frame of `file` would come from, for a file it can be drawn
     /// of: a video in a container this phone plays, with a stored original.
     static func source(for file: FileItem, maxPixels: Int) -> ThumbnailSource? {
-        guard file.kind == "video", let original = file.url, playable(file.name) else { return nil }
+        guard file.kind == "video", let original = file.url, playable(file.name), !failedLately(file.id) else { return nil }
         var parts = URLComponents()
         parts.scheme = scheme
         parts.host = "frame"
@@ -93,15 +109,20 @@ enum LocalFrames {
         if let api = lock.withLock({ api }), let link = try? await api.contentLink(fileId: id) {
             video = link.proxyUrl ?? link.url
         }
-        return try await withThrowingTaskGroup(of: Data.self) { group in
-            group.addTask { try await frame(of: video, at: at) }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-                throw URLError(.timedOut)
+        do {
+            return try await withThrowingTaskGroup(of: Data.self) { group in
+                group.addTask { try await frame(of: video, at: at) }
+                group.addTask {
+                    try await Task.sleep(for: timeout)
+                    throw URLError(.timedOut)
+                }
+                defer { group.cancelAll() }
+                guard let data = try await group.next() else { throw URLError(.cannotDecodeContentData) }
+                return data
             }
-            defer { group.cancelAll() }
-            guard let data = try await group.next() else { throw URLError(.cannotDecodeContentData) }
-            return data
+        } catch {
+            if !Task.isCancelled { lock.withLock { failed[id] = Date() } }
+            throw error
         }
     }
 
