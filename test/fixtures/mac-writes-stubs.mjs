@@ -217,6 +217,30 @@ export async function softDeleteFile(id, { trashKey = null, deletedBy = null } =
   Object.assign(row, { deletedAt: now(), trashKey, deletedBy, updatedAt: now(), seq: nextSeq() });
   return copy(row);
 }
+// lib/trash-move.js's three, with the real queries' WHERE clauses.
+export async function setTrashKeyIfUnmoved(id, { trashKey, storageKey } = {}) {
+  const row = s().files.get(id);
+  if (!row || !row.deletedAt || row.trashKey || row.storageKey !== storageKey) return false;
+  row.trashKey = trashKey;
+  return true;
+}
+export async function trashedRowAtKey(key) {
+  const rows = [...s().files.values()];
+  if (rows.some((f) => f.storageKey === key && !f.deletedAt)) return null;
+  const hit = rows.filter((f) => f.storageKey === key && f.deletedAt && !f.trashKey)
+    .sort((a, b) => b.deletedAt - a.deletedAt)[0];
+  return copy(hit || null);
+}
+export async function listUnmovedTrash({ limit = 200, maxBytes } = {}) {
+  const rows = [...s().files.values()];
+  return rows
+    .filter((f) => f.deletedAt && !f.trashKey && f.storage === 's3' && f.storageKey
+      && (!(maxBytes > 0) || (f.size || 0) <= maxBytes)
+      && !rows.some((o) => o.id !== f.id && holds(o, f.storageKey)))
+    .sort((a, b) => a.deletedAt - b.deletedAt)
+    .slice(0, limit)
+    .map(copy);
+}
 export async function restoreFile(id, { storageKey = null } = {}) {
   const row = s().files.get(id);
   if (!row || !row.deletedAt) return null;
@@ -233,8 +257,10 @@ export async function deleteFile(id) {
   return { ok: true };
 }
 export async function getTrashedFiles(ids = []) { return ids.map((id) => s().files.get(id)).filter((f) => f?.deletedAt).map(copy); }
+// As the real one: a trashed file whose object has moved no longer holds its old key.
+const holds = (f, key) => (f.storageKey === key && (!f.deletedAt || !f.trashKey)) || f.trashKey === key;
 export async function storageKeyInUse(key, { exceptId = null } = {}) {
-  return [...s().files.values()].some((f) => (f.storageKey === key || f.trashKey === key) && f.id !== (exceptId || ''));
+  return [...s().files.values()].some((f) => holds(f, key) && f.id !== (exceptId || ''));
 }
 export async function unreferencedPreviewKeys({ thumbKeys = [], posterKeys = [] } = {}) {
   const rows = [...s().files.values()];

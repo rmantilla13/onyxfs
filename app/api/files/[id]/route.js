@@ -13,10 +13,13 @@ import { driveHoldingKey } from '@/lib/drive-storage';
 import { normalizeSchema, validateMetadataPatch } from '@/lib/dam';
 import { keyFor, fileNameProblem, nfc } from '@/lib/folder-ops';
 import { ifMatchVersion } from '@/lib/file-record';
+import { moveTrashedObject } from '@/lib/trash-move';
+import { afterResponse } from '@/lib/after-response';
 
 export const runtime = 'nodejs';
-
-export const TRASH_PREFIX = '_trash';
+// A trashed file's object moves to the trash after DELETE answers
+// (lib/after-response.js), within this function's life.
+export const maxDuration = 60;
 
 // Long enough that a video paused mid-watch still seeks when it resumes. The
 // listing signs for an hour, which is right for a thumbnail; a player issues
@@ -343,18 +346,15 @@ export async function DELETE(req, { params }) {
       return NextResponse.json({ ok: true, trashed: false });
     }
 
-    let trashKey = null;
-    if (onS3) {
-      try {
-        trashKey = `${TRASH_PREFIX}/${id}/${file.storageKey}`;
-        await s3MoveObject(cfg, file.storageKey, trashKey);
-      } catch (e) {
-        // Never silently lose the file — a failed move must surface, not
-        // leave a row flagged as trashed while the object stays put.
-        return NextResponse.json({ error: `Could not move file to trash: ${e.message}` }, { status: 500 });
-      }
-    }
-    await softDeleteFile(id, { trashKey, deletedBy: email });
+    // Gone at once: the row is trashed now, so every listing and device loses
+    // it, and its object follows to the trash once this has answered
+    // (lib/trash-move.js). Copying a video of several gigabytes used to keep
+    // the delete waiting — and Finder with it — and past 5 GB failed it. Until
+    // it moves the object waits at its key, which restore and the purge have
+    // always handled; nothing can be written over it meanwhile (s3UniqueKey,
+    // and an upload that wants the key moves it first).
+    await softDeleteFile(id, { trashKey: null, deletedBy: email });
+    if (onS3) afterResponse(`trash ${id}`, () => moveTrashedObject(id, { cfg }));
     return NextResponse.json({ ok: true, trashed: true });
   } catch (e) {
     return NextResponse.json({ error: e.message || 'Delete failed.' }, { status: 500 });

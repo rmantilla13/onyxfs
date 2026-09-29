@@ -9,7 +9,7 @@
 // the desktop guard, getPrincipal and can(), uploadCheck, the routes,
 // lib/replace-content.js, lib/preview-gc.js — is the real code.
 
-import { test, describe, beforeEach } from 'node:test';
+import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import { createHash, randomUUID } from 'node:crypto';
@@ -55,6 +55,8 @@ sdk.S3Client.prototype.send = async function send(cmd) {
     }
     case 'DeleteObjectCommand': b.objects.delete(at(i.Key)); return {};
     case 'CopyObjectCommand': {
+      // A test holding copies (b.copyGate) sees what a slow copy leaves meanwhile.
+      if (b.copyGate) await b.copyGate;
       const o = b.objects.get(decodeURIComponent(String(i.CopySource).replace(/^\//, '')));
       if (!o) throw missing('NoSuchKey');
       b.objects.set(at(i.Key), { ...o });
@@ -117,6 +119,8 @@ const contentRoute = await import('../app/api/files/[id]/content/route.js');
 const thumbnailRoute = await import('../app/api/files/[id]/thumbnail/route.js');
 const foldersRoute = await import('../app/api/files/folders/route.js');
 const restoreRoute = await import('../app/api/admin/trash/restore/route.js');
+// What a route finishes after it answers: a trashed file's object moving to the trash.
+const { afterResponseSettled } = await import('../lib/after-response.js');
 
 // ── the world ──
 const STORAGE = { provider: 's3', bucket: 'onyx', accessKeyId: 'k', secretAccessKey: 's', region: 'us-east-1', endpoint: 'http://s3.test', prefix: 'files' };
@@ -149,6 +153,8 @@ function reset() {
   }
 }
 beforeEach(reset);
+// Nothing one test started in the background lands in the next one's bucket.
+afterEach(afterResponseSettled);
 
 /** A device token, as /api/desktop/token hands one out. The store's clock is globalThis.__mw.now. */
 function tokenFor(email, { expiresAt = globalThis.__mw.now + 86400_000 } = {}) {
@@ -463,9 +469,12 @@ describe('the Mac’s writes', () => {
 
     const trashed = await trashFile(who, f.id);
     assert.deepEqual(trashed.body, { ok: true, trashed: true }, 'the trash flag is read on the server');
-    assert.ok(stored(`_trash/${f.id}/team/Selects/Take 2.mov`), 'moved out of the drive');
+    assert.equal((await getFile(who, f.id)).status, 404, 'gone at once, whether or not its object has moved yet');
+    await afterResponseSettled();
+    assert.ok(stored(`_trash/${f.id}/team/Selects/Take 2.mov`), 'moved out of the drive once the delete has answered');
     assert.ok(!stored('team/Selects/Take 2.mov'));
     const retried = await trashFile(who, f.id);
+    await afterResponseSettled();
     assert.deepEqual([retried.status, retried.body], [200, { ok: true, trashed: true }], 'asked again, the same answer');
     assert.ok(stored(`_trash/${f.id}/team/Selects/Take 2.mov`), 'and the trashed object stays where it is');
     assert.equal((await trashFile(mac(DV), f.id)).status, 403, 'still only for someone who could delete it');
@@ -495,6 +504,7 @@ describe('the Mac’s writes', () => {
   test('with the trash off, a file already in the trash is left to the purge, not stranded', async () => {
     const f = await upload(mac(ED));
     await trashFile(mac(ED), f.id);
+    await afterResponseSettled();
     globalThis.__mw.settings.set('features.flags', { trash: false });
     const out = await trashFile(mac(ED), f.id);
     assert.deepEqual(out.body, { ok: true, trashed: true });
@@ -1174,5 +1184,100 @@ describe('a thumbnail made on the Mac', () => {
     const f = await upload(web(ED));
     assert.equal((await mayRecord(web(ED), f.id)).status, 204);
     assert.equal((await mayRecord(web(DV), f.id)).status, 403);
+  });
+});
+
+// A delete answers once the row is trashed; the object follows to the trash
+// after it (lib/trash-move.js). What that leaves meanwhile, and after.
+describe('a delete answers at once, and its object follows', () => {
+  /** Hold every copy until the returned function is called. */
+  const holdCopies = () => {
+    let release;
+    globalThis.__mw.s3.copyGate = new Promise((r) => { release = r; });
+    return () => { globalThis.__mw.s3.copyGate = null; release(); };
+  };
+
+  test('gone at once, with its object still where it was until the move lands', async () => {
+    const who = mac(ED);
+    const f = await upload(who);
+    const release = holdCopies();
+    const out = await trashFile(who, f.id);
+    assert.deepEqual(out.body, { ok: true, trashed: true });
+    assert.ok(row(f.id).deletedAt, 'trashed before the copy');
+    assert.equal(row(f.id).trashKey, null);
+    assert.equal((await getFile(who, f.id)).status, 404);
+    assert.ok(stored('team/Cuts/Take 1.mov'), 'the object waits at its key meanwhile');
+    release();
+    await afterResponseSettled();
+    assert.equal(row(f.id).trashKey, `_trash/${f.id}/team/Cuts/Take 1.mov`);
+    assert.ok(stored(`_trash/${f.id}/team/Cuts/Take 1.mov`) && !stored('team/Cuts/Take 1.mov'));
+  });
+
+  test('restored before its object moved: it stays where it was, and the copy made meanwhile goes', async () => {
+    const who = mac(ED);
+    const f = await upload(who);
+    const release = holdCopies();
+    await trashFile(who, f.id);
+    const back = await restore(mac(BOSS), [f.id]);
+    assert.equal(back.status, 200);
+    assert.deepEqual(back.body.restored, [{ id: f.id, name: 'Take 1.mov', movedTo: null, restored: true }]);
+    release();
+    await afterResponseSettled();
+    assert.equal(row(f.id).deletedAt, null);
+    assert.equal(row(f.id).trashKey, null);
+    assert.ok(stored('team/Cuts/Take 1.mov'), 'the live file keeps its object');
+    assert.equal(stored(`_trash/${f.id}/team/Cuts/Take 1.mov`), null, 'no copy left in the trash');
+  });
+
+  test('a file put back under the name of one deleted keeps it — it used to be refused', async () => {
+    const who = mac(ED);
+    const f = await upload(who);
+    await trashFile(who, f.id);
+    await afterResponseSettled();
+    const again = await upload(who, { bytes: Buffer.alloc(1000, 2) });
+    assert.equal(again.name, 'Take 1.mov');
+    assert.equal(again.storageKey, 'team/Cuts/Take 1.mov');
+    assert.ok(stored(`_trash/${f.id}/team/Cuts/Take 1.mov`), 'the deleted one waits in the trash');
+  });
+
+  test('…even before the deleted one’s object has moved: it moves first (Finder’s Replace)', async () => {
+    const who = mac(ED);
+    const f = await upload(who);
+    // Trashed, its object not moved: as a delete leaves it until its move
+    // lands, or for good if that move was cut short.
+    Object.assign(row(f.id), { deletedAt: globalThis.__mw.now, trashKey: null });
+    const again = await upload(who, { bytes: Buffer.alloc(1000, 2) });
+    assert.equal(again.name, 'Take 1.mov', 'not “Take 1 (2).mov”');
+    assert.equal(again.storageKey, 'team/Cuts/Take 1.mov');
+    assert.equal(row(f.id).trashKey, `_trash/${f.id}/team/Cuts/Take 1.mov`, 'the old one went to the trash first');
+    assert.ok(stored(`_trash/${f.id}/team/Cuts/Take 1.mov`));
+  });
+
+  test('a restore after that finds its name taken, and comes back beside the new one', async () => {
+    const who = mac(ED);
+    const f = await upload(who);
+    await trashFile(who, f.id);
+    await afterResponseSettled();
+    const again = await upload(who, { bytes: Buffer.alloc(1000, 2) });
+    const back = await restore(mac(BOSS), [f.id]);
+    assert.equal(back.status, 200);
+    assert.equal(back.body.restored[0].movedTo, 'team/Cuts/Take 1 (2).mov');
+    assert.equal(row(again.id).storageKey, 'team/Cuts/Take 1.mov', 'the new file keeps its object');
+    assert.ok(stored('team/Cuts/Take 1.mov') && stored('team/Cuts/Take 1 (2).mov'));
+  });
+
+  test('a folder’s files are trashed at once, and their objects follow', async () => {
+    const who = mac(ED);
+    const a = await upload(who, { name: 'A.mov', folder: 'Wrap' });
+    const b = await upload(who, { name: 'B.mov', folder: 'Wrap' });
+    const release = holdCopies();
+    const gone = await folders.remove(who, 'Wrap');
+    assert.equal(gone.status, 200);
+    assert.equal(gone.body.deleted, 2);
+    assert.ok(row(a.id).deletedAt && row(b.id).deletedAt, 'trashed before any copy');
+    release();
+    await afterResponseSettled();
+    assert.ok(stored(`_trash/${a.id}/team/Wrap/A.mov`) && stored(`_trash/${b.id}/team/Wrap/B.mov`));
+    assert.ok(!stored('team/Wrap/A.mov') && !stored('team/Wrap/B.mov'));
   });
 });

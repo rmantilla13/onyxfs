@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 140
+-- Statements: 141
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -273,6 +273,8 @@ CREATE INDEX IF NOT EXISTS files_live_key_idx ON files (storage_key text_pattern
 CREATE INDEX IF NOT EXISTS files_name_trgm_idx ON files USING GIN (name gin_trgm_ops) WHERE deleted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS files_created_by_size_idx ON files (created_by, size) WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS files_unmoved_trash_idx ON files (storage_key) WHERE deleted_at IS NOT NULL AND trash_key IS NULL;
 
 CREATE TABLE IF NOT EXISTS uploads (
   id           TEXT PRIMARY KEY,

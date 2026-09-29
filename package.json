@@ -22,6 +22,7 @@
     "@aws-sdk/client-sts": "^3.700.0",
     "@aws-sdk/s3-request-presigner": "^3.700.0",
     "@vercel/blob": "^0.27.0",
+    "@vercel/functions": "^2.2.13",
     "drizzle-orm": "^0.36.4",
     "ffmpeg-static": "^5.3.0",
     "next": "^14.2.31",
