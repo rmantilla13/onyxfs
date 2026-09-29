@@ -378,6 +378,7 @@ struct AccountSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             TranscriptionSettings(transcriber: model.transcriber)
+            ThumbnailSettings(thumbnailer: model.thumbnailer)
             ProxySettings(proxies: model.proxies)
             Section("Updates") {
                 LabeledContent("Version") {

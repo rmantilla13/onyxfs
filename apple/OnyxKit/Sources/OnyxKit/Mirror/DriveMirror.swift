@@ -63,6 +63,14 @@ public actor DriveMirror {
     /// cursor file extending a replica on disk that lacks the changes, and a
     /// relaunch would skip them for good.
     private var unsaved = Unsaved.nothing
+    /// When the whole replica was last written (or read): pictures alone
+    /// changing wait for `previewSaveInterval` after it.
+    private var savedAt: Date
+    /// The replica was saved before files' previews were kept, so the
+    /// thumbnail worker cannot tell which files lack one. The drive is
+    /// fetched again from the start, once, beside the tree Finder shows —
+    /// as for a change of access — as soon as the replica is whole.
+    private var previewsUnknown: Bool
     private var links: [String: Link] = [:]
     private var fetching: [String: Fetch] = [:]
     private var fetches = 0
@@ -79,6 +87,12 @@ public actor DriveMirror {
     /// undone. At a sync every 15 s, that is some forty refusals.
     static let refusalsBeforeGone = 3
     static let refusedForBeforeGone: TimeInterval = 10 * 60
+    /// A change to files' pictures alone rewrites the replica at most this
+    /// often. While thumbnails are being made that is one every few seconds,
+    /// and the replica is the whole drive; left unwritten, what the disk
+    /// lacks is fetched again after a relaunch, since the cursor on disk is
+    /// held back with it.
+    static let previewSaveInterval: TimeInterval = 5 * 60
 
     /// Whose replica this is. A replica is only good for the account and
     /// server it was fetched as: another account may see other files, and
@@ -122,6 +136,7 @@ public actor DriveMirror {
         let complete: Bool
         let generation: String?
         let index: MirrorIndex
+        var previewsUnknown = false
     }
 
     private struct Link {
@@ -189,6 +204,8 @@ public actor DriveMirror {
         complete = loaded.complete
         generation = loaded.generation
         index = loaded.index
+        previewsUnknown = loaded.previewsUnknown
+        savedAt = clock()
     }
 
     static func load(_ files: Files, directory: URL, identity: Identity) -> Loaded {
@@ -207,7 +224,8 @@ public actor DriveMirror {
         }
         let complete = saved.complete ?? false
         return Loaded(replica: replica, complete: complete, generation: saved.generation,
-                      index: MirrorIndex(replica, authoritative: complete))
+                      index: MirrorIndex(replica, authoritative: complete),
+                      previewsUnknown: replica.files.values.contains { $0.previews == nil })
     }
 
     /// Forget what is kept on disk for a drive: for one the account has lost
@@ -228,6 +246,16 @@ public actor DriveMirror {
 
     /// The index and the revision it goes with, read together.
     public var snapshot: (revision: UInt64, index: MirrorIndex) { (revision, index) }
+
+    /// The files among `ids` (every file, when nil) that `wanted` picks, as
+    /// the replica has them now: for the thumbnail worker, which asks with
+    /// the ids a pass changed, or for the drive whole with a test cheap
+    /// enough to run here (ThumbnailCandidate.lacksPreviews) — this actor
+    /// also answers Finder.
+    public func files(among ids: [String]? = nil, where wanted: @Sendable (ReplicaFile) -> Bool) -> [ReplicaFile] {
+        if let ids { return ids.compactMap { replica.files[$0] }.filter(wanted) }
+        return replica.files.values.filter(wanted)
+    }
 
     /// Returns once `revision` is past `seen`, or `timeout` has gone by, or
     /// the task is cancelled, whichever is first; the caller reads what it
@@ -286,8 +314,11 @@ public actor DriveMirror {
         return try await task.value
     }
 
+    /// What the disk lacks: nothing; the cursor alone; files' pictures
+    /// (written with the whole replica, but lazily — previewSaveInterval);
+    /// or the replica itself.
     private enum Unsaved: Int, Comparable {
-        case nothing, cursor, everything
+        case nothing, cursor, previews, everything
         static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
     }
 
@@ -297,6 +328,16 @@ public actor DriveMirror {
         var restarted = false
         var reindex = false
         var saveError: String?
+
+        if previewsUnknown, complete, staged == nil, !isWithheld {
+            // Saved before previews were kept: fetched again from the start,
+            // beside the whole tree, which goes on answering meanwhile.
+            previewsUnknown = false
+            var fresh = Replica()
+            fresh.reset(scope: replica.scope)
+            staged = fresh
+            index = index.authoritative(false)
+        }
 
         do {
             while pages < Self.maxPages {
@@ -333,6 +374,7 @@ public actor DriveMirror {
                             // Nothing whole to go on showing.
                             unreported.deleted += Self.ids(in: replica)
                             replica.reset(scope: scope)
+                            previewsUnknown = false
                             unsaved = .everything
                             reindex = true
                         }
@@ -361,10 +403,15 @@ public actor DriveMirror {
                                          folders: page.folders, cursor: page.cursor)
                 unreported.updated += diff.updated
                 unreported.deleted += diff.deleted
+                unreported.previews += diff.previews
                 forgetLinks(for: diff)
+                // Pictures alone change nothing Finder lists: the index
+                // stands, and nothing waiting on the revision is woken.
                 if !diff.isEmpty { reindex = true }
                 if !diff.isEmpty || replica.listedFolders != listed {
                     unsaved = .everything
+                } else if !diff.previews.isEmpty {
+                    unsaved = max(unsaved, .previews)
                 } else if replica.cursor != cursor {
                     unsaved = max(unsaved, .cursor)
                 }
@@ -433,6 +480,7 @@ public actor DriveMirror {
         replica = fresh
         staged = nil
         complete = true
+        previewsUnknown = false
         forgetLinks()
     }
 
@@ -480,6 +528,7 @@ public actor DriveMirror {
         replica = Replica()
         staged = nil
         complete = false
+        previewsUnknown = false
         generation = nil
         unsaved = .nothing
         forgetLinks()
@@ -494,17 +543,24 @@ public actor DriveMirror {
         try? FileManager.default.removeItem(at: files.progress)
     }
 
-    /// The owed changes, net: each id once, as what it is now.
+    /// The owed changes, net: each id once, as what it is now. A file whose
+    /// pictures changed is in `previews` only when it is in neither of the
+    /// others.
     private func settle() -> Replica.Diff {
-        guard !unreported.isEmpty else { return unreported }
+        guard !unreported.isEmpty || !unreported.previews.isEmpty else { return Replica.Diff() }
         let files = replica.files
-        let folders = replica.folders
-        func present(_ id: String) -> Bool {
-            if let path = Replica.folderPath(ofID: id) { return folders.contains(path) }
-            return files[id] != nil
+        var diff = Replica.Diff()
+        if !unreported.isEmpty {
+            let folders = replica.folders
+            func present(_ id: String) -> Bool {
+                if let path = Replica.folderPath(ofID: id) { return folders.contains(path) }
+                return files[id] != nil
+            }
+            diff.updated = Replica.unique(unreported.updated.filter(present))
+            diff.deleted = Replica.unique(unreported.deleted.filter { !present($0) })
         }
-        let diff = Replica.Diff(updated: Replica.unique(unreported.updated.filter(present)),
-                                deleted: Replica.unique(unreported.deleted.filter { !present($0) }))
+        let reported = Set(diff.updated)
+        diff.previews = Replica.unique(unreported.previews.filter { files[$0] != nil && !reported.contains($0) })
         unreported = Replica.Diff()
         return diff
     }
@@ -526,9 +582,15 @@ public actor DriveMirror {
     /// A cursor that moved alone goes in the small cursor file, which names
     /// the replica on disk it extends; anything else rewrites the replica,
     /// under a new name, so an older cursor file no longer applies to it.
+    ///
+    /// Files' pictures alone changing are written with the replica, but
+    /// not more often than `previewSaveInterval`; until then nothing is
+    /// written, not even the cursor, which must not pass what the disk
+    /// lacks.
     private func save() async -> String? {
         let what = unsaved
         guard what != .nothing else { return nil }
+        if what == .previews, clock().timeIntervalSince(savedAt) < Self.previewSaveInterval { return nil }
         do {
             if what == .cursor, let generation {
                 try await Self.write(Progress(generation: generation, cursor: replica.cursor), to: files.progress)
@@ -537,6 +599,7 @@ public actor DriveMirror {
                 try await Self.write(Stored(identity: identity, replica: replica, complete: complete, generation: next),
                                      to: files.store)
                 generation = next
+                savedAt = clock()
                 try? FileManager.default.removeItem(at: files.progress)
             }
             // Only this pass changes `unsaved`, and it waits on this save.
@@ -545,7 +608,7 @@ public actor DriveMirror {
         } catch {
             // The replica on disk lacks what this was to write, so no cursor
             // file may extend it: the next save rewrites it whole.
-            if what == .everything { generation = nil }
+            if what >= .previews { generation = nil }
             return "Could not save \(scope.identifier): \(error.localizedDescription)"
         }
     }

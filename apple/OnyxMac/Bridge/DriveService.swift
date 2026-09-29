@@ -75,6 +75,12 @@ final class DriveService: ObservableObject {
     /// disks' own reports, uploads and offline copies. Kept by adding; read
     /// only while the window is open.
     let transfers = TransferLog()
+    /// Told after each pass that brought a drive's mirror up to date, with
+    /// what it changed, and of each upload the server has now — before the
+    /// queue lets go of its copy: the thumbnail worker's way in
+    /// (ThumbnailService).
+    var onMirrorSynced: ((DriveMirror, Replica.Diff) -> Void)?
+    var onUploadFinished: ((UploadJob) -> Void)?
     private let server = DAVServer()
     private var mirrors: [String: DriveMirror] = [:]
     private var names: [String: String] = [:]
@@ -369,9 +375,12 @@ final class DriveService: ObservableObject {
     /// tick, so the next listing already shows it.
     func syncForWrites(_ scope: SyncDomain) async {
         guard let mirror = mirrors[scope.identifier] else { return }
-        _ = try? await mirror.sync()
+        if let diff = try? await mirror.sync() { onMirrorSynced?(mirror, diff) }
         await writers[scope.identifier]?.mirrorChanged()
     }
+
+    /// The drives' mirrors open now.
+    var openMirrors: [DriveMirror] { Array(mirrors.values) }
 
     func reveal(_ scope: SyncDomain) {
         if diskState(of: scope) != nil { diskReveal(scope) } else { mounts.reveal(scope) }
@@ -511,7 +520,8 @@ final class DriveService: ObservableObject {
         // The first listing waits for a sync, so a new mount does not open empty.
         if await mirror.lastSynced == nil {
             do {
-                _ = try await mirror.sync()
+                let diff = try await mirror.sync()
+                onMirrorSynced?(mirror, diff)
             } catch OnyxError.driveGone {
                 // Not with the thresholds as they are — a first sync is one
                 // refusal (DriveMirror.refusalsBeforeGone) — but should they
@@ -614,7 +624,8 @@ final class DriveService: ObservableObject {
             guard started == generation else { return }
             syncing.insert(id)
             do {
-                _ = try await mirror.sync()
+                let diff = try await mirror.sync()
+                onMirrorSynced?(mirror, diff)
                 // Files this Mac uploaded that the mirror now shows stop
                 // being pending, and their staged copies go.
                 await writers[id]?.mirrorChanged()

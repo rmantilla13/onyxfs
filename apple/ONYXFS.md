@@ -557,3 +557,100 @@ drawn by the same `DriveIcon` the extension puts on the disk.
 - **Not seen:** the rclone NFS mounts in `~/Onyx` (macOS 26 and older, or a
   disk not yet allowed) read storage themselves; the bar shows nothing of
   them.
+
+## Thumbnails
+
+The owner: "Thumbnail generation is not happening fast enough" — seen on the
+iPhone, for videos straight from an action cam: 4K at 60 fps, often HEVC,
+hundreds of megabytes to several gigabytes each.
+
+Only a browser made thumbnails: as it uploaded a file, or later, in the
+background, while someone who may change the file had the web open
+(lib/thumbnail-client.js). A file that came another way — copied onto a
+drive in Finder — waited for that, and a browser drawing a frame of a
+multi-gigabyte 4K HEVC master over a presigned link is slow when it works
+at all. The phone only shows thumbnails that exist. So Onyx for Mac makes
+the ones that are missing, exactly as a browser would have made them.
+
+- **Which files.** The browser's rules (lib/thumbnail-client.js), with what
+  this Mac can decode: a video AVFoundation opens, or an image ImageIO
+  decodes — HEIC, TIFF and camera RAW included, which a browser often cannot
+  draw, so they kept their placeholder. It makes them for
+  - each file it uploads (`UploadQueue`), from the bytes still on this disk,
+    the moment the server has the file — a new file, or new contents for one
+    saved over, whose old pictures the server has dropped;
+  - the files of the drives it syncs (in Finder, or kept offline) that have
+    no thumbnail; and a video whose thumbnail may be one of the old 480px
+    ones: it has no smaller sizes, and a look at it (`Poster.isUndersized`)
+    decides. An image's old thumbnail is left to the browser, which remakes
+    it when someone looks at it: an image is read whole to draw it, and a
+    library's worth of photos would be a download of the library. An image
+    over 50 MB is never decoded, as on the web.
+  Only in a drive this account may change (the drive list's `can.edit`); the
+  server checks each file anyway.
+- **Knowing which lack one.** The feed already carries each row's
+  `thumbnailKey`, `thumbSizes` and `posterKey`. The replica keeps three bits
+  of them per file (`ReplicaFile.previews`, `FilePreviews`), not the keys: a
+  hundred thousand files' keys would be megabytes held for one yes or no. A
+  thumbnail made later moves the row's `seq` and nothing Finder lists, so it
+  comes back as `Replica.Diff.previews`, not `updated`: the index is not
+  rebuilt, the disks' long-polls are not woken, and the replica is written
+  with it at most every five minutes (`previewSaveInterval`) — the cursor on
+  disk waits with it, so a relaunch fetches what was not written. A replica
+  saved before the bits existed is fetched again from the start once,
+  beside the tree Finder shows (as after a change of access), and swapped in
+  whole.
+- **Each file** (`ThumbnailWorker`, OnyxKit):
+  1. `GET /api/files/<id>`: still missing? In the bucket? A thumbnail it has
+     now is looked at: an old small one is made again, a newer one kept.
+  2. `GET /api/files/<id>/thumbnail`: a 204 when this account may record
+     one, asked before anything is downloaded or drawn, as the browser asks.
+  3. The frame: `Poster.posterTimes` (a tenth in, at least a second, then a
+     quarter and halfway, then `laterPosterTimes`), passing over a black,
+     white or flat frame (`Poster.isBlank`, the web's luma test on a copy
+     48 pixels wide). AVFoundation reads a presigned link a range at a time,
+     and each moment is taken at the nearest keyframe within half a second,
+     so a try is one frame read and decoded. All blank: no thumbnail, as on
+     the web, rather than a black one kept for good.
+  4. The pictures, at lib/poster.js's sizes (`Poster`, its tables checked
+     against numbers lib/poster.js computed): the large one (a video's
+     player poster, 1920 on the long edge; an image's preview, 2400), the
+     grid thumbnail, then sm and xs, each drawn from the one before and each
+     step at most halving. The decoder draws the first step itself, so a 4K
+     frame is never held at 4K. For a 4K clip: 1920x1080, 1024x576,
+     683x384, 213x120.
+  5. `POST /api/files/presign` with `{ thumb, sizes }` and `{ poster }`: the
+     server names the keys. The PUTs carry the type and the Cache-Control it
+     asked for. A sibling or a poster that does not land is left out, as on
+     the web.
+  6. `PUT /api/files/<id>/thumbnail` with `thumbnailKey`, `posterKey`,
+     `thumbSizes` and `media` (width, height, duration): the server deletes
+     what it replaces and moves the file's `seq`, so the web, the phone and
+     every Mac pick it up as they would a browser's.
+  A file just uploaded skips the first step: it is new, and its bytes are
+  here (a hard link keeps them after the queue lets go of its copy).
+- **Format.** WebP where this Mac's ImageIO can write it (asked at run time,
+  `CGImageDestinationCopyTypeIdentifiers`); JPEG otherwise — the server's
+  other format, and what Safari sends. macOS 27 reads WebP but cannot write
+  it, so today it is JPEG at the web's JPEG quality. A picture with real
+  transparency is left to a browser that writes WebP: JPEG would put it on
+  black.
+- **Pace.** One file at a time, at utility priority, holding only that file's
+  pictures. No polling: the worker is woken by a drive's pass that brought a
+  change (DriveService hands it the pass's diff; a drive opened afresh is
+  looked at whole once) and by an upload finishing. A job has three minutes.
+  What came of each file is kept per account (`ThumbnailLedger`, in
+  Application Support/Onyx/Thumbnails): a failure waits an hour, then twice
+  as long each time up to a week; a file this account may not change, or
+  that cannot be drawn, a week — the browser's own wait; a thumbnail kept,
+  half a year. While one waits, one timer is set for the soonest; with
+  nothing due, nothing runs. A server that does not take a thumbnail from
+  the Mac (the thumbnail route used to take only a browser's session) is
+  asked once, and nothing more is tried until the next sign-in.
+- **The switch.** Settings › General, beside the transcripts: "Make
+  thumbnails on this Mac", on unless turned off. Sign-out and quit stop it;
+  the file in hand is dropped, never half-recorded.
+- **Measured**, a 752 MB 4K60 HEVC clip (100 Mbps, 60 s, its index at the
+  end, as a camera writes it): 0.03–0.14 s from this disk; over a link 80 ms
+  away at 100 Mbit/s, about 0.55 s in five range requests, some 1.3 MB read.
+  Up: about 235 KB of JPEG (grid 52 KB, sm 28 KB, xs 6 KB, poster 150 KB).

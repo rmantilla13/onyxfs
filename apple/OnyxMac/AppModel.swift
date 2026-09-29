@@ -41,6 +41,8 @@ final class AppModel: ObservableObject {
     let transcriber = TranscriptionService()
     /// Streamable versions of heavy videos, made on this Mac.
     let proxies = ProxyService()
+    /// Thumbnails the web is missing, made on this Mac.
+    let thumbnailer = ThumbnailService()
     /// What redraws the activity graphs, wherever they show (ActivityClock).
     lazy var activity = ActivityClock(transfers: finder.transfers)
     private let settings = SharedSettings()
@@ -56,6 +58,7 @@ final class AppModel: ObservableObject {
         web = WebController()
         web.model = self
         updater.model = self
+        thumbnailer.attach(to: self)
         if phase == .signedIn { startup = Task { await afterSignIn() } }
         // Back to Onyx from the browser, say, where a drive may have changed.
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
@@ -68,10 +71,11 @@ final class AppModel: ObservableObject {
         // Quitting unmounts every drive, so none is left for the system to
         // reap, and takes away downloads cut short.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
-                                               object: nil, queue: .main) { [finder, transcriber, proxies, web] _ in
+                                               object: nil, queue: .main) { [finder, transcriber, proxies, thumbnailer, web] _ in
             MainActor.assumeIsolated {
                 transcriber.stop()
                 proxies.stop()
+                thumbnailer.stop()
                 finder.quit()
                 web.downloads.discardUnfinished()
             }
@@ -139,6 +143,8 @@ final class AppModel: ObservableObject {
         // record it): the drive list usually names it, and if the server
         // could not be asked yet, this does.
         if !knowsAccount, let who = try? await api.me() { adoptAccount(who) }
+        // Before the drives open, so it hears each one's first pass.
+        thumbnailer.start()
         await finder.start(model: self)
         // Finder stops short without an account; refresh() starts it again
         // once one is known.
@@ -179,6 +185,7 @@ final class AppModel: ObservableObject {
         phase = .signedOut
         transcriber.stop()
         proxies.stop()
+        thumbnailer.stop()
         finder.stop()
         await web.signOut()
         // Finder locations stay: removing one deletes its downloaded copies,
@@ -239,6 +246,7 @@ final class AppModel: ObservableObject {
         problem = "Your sign-in on this Mac has expired or was revoked. Sign in again."
         transcriber.stop()
         proxies.stop()
+        thumbnailer.stop()
         finder.stop()
         await web.signOut()
     }
@@ -263,6 +271,7 @@ final class AppModel: ObservableObject {
             libraryCan = listing.library
             if adoptAccount(listing.email), finderWaitingForAccount {
                 finderWaitingForAccount = false
+                thumbnailer.start()
                 await finder.start(model: self)
             }
             drivesLoaded = true
