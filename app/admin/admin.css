@@ -383,6 +383,10 @@ dialog.dialog-sheet > .dialog-foot { flex: none; border-top: 1px solid var(--lin
 .attention-item > .check-glyph { align-self: start; margin-top: 1px; }
 .attention-title { font-weight: 500; overflow-wrap: anywhere; }
 .attention-detail { margin-top: 2px; overflow-wrap: anywhere; }
+/* A fix that can be made on the spot, then the link to look closer. */
+.attention-actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; justify-content: flex-end; }
+/* The drives a confirm will change, by name. */
+.admin-name-list { margin: 0; padding-left: var(--s5); display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
 .attention-clear { margin: 0; display: flex; align-items: center; gap: var(--s2); }
 .attention-foot { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); margin: var(--s3) 0 0; }
 
@@ -437,7 +441,7 @@ dialog.dialog-sheet > .dialog-foot { flex: none; border-top: 1px solid var(--lin
   .stat-value { font-size: var(--t-xl); }
   /* The action goes under its sentence instead of squeezing it. */
   .attention-item { grid-template-columns: 22px minmax(0, 1fr); align-items: start; row-gap: var(--s2); }
-  .attention-item > .btn { grid-column: 2; justify-self: start; }
+  .attention-item > .attention-actions { grid-column: 2; justify-content: flex-start; }
   /* Read the reason before the buttons that answer it. */
   .request-body { order: 2; }
   .request-actions { order: 3; justify-content: flex-start; }

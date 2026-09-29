@@ -59,8 +59,8 @@ export default async function FilesPage({ searchParams }) {
   const [brand, filespaces, rawSchema, savedViews] = await Promise.all([
     loadBrand(),
     // Admins see every filespace (as owner), others their grants. The old
-    // listFilespacesForUser left admins with an empty switcher: env-admins are
-    // never stored as grant rows.
+    // listFilespacesForUser left admins with an empty switcher: an env-admin
+    // holds a grant row only for a drive that is theirs.
     listFilespacesForSpace(email, principal),
     getFileMetadataSchema(),
     // Their own views; one whose drive they can no longer open is left out

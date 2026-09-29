@@ -2452,7 +2452,7 @@ export default function FilesClient({
           onClose={() => setNewDrive(false)}
           onCreated={(d) => {
             setNewDrive(false);
-            toast.success(`Made the drive “${d.name}”. Add its members from its menu.`);
+            toast.success(`Made the drive “${d.name}”, with you as its owner. Add its members from its menu.`);
             openDrive(d.id);
             router.refresh();
           }}

@@ -3,7 +3,7 @@ import { requireAdmin } from '@/lib/admin-guard';
 import { getPersonById, listFilespacesForUser } from '@/lib/db';
 import { isAdmin } from '@/lib/auth-allowlist';
 import { parseGrants, applyGrantDiff } from '@/lib/people';
-import { audit, personSubject } from '@/lib/audit';
+import { audit, auditDriveClaims, personSubject } from '@/lib/audit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,6 +15,9 @@ export const maxDuration = 30;
  * revoked, the rest are left alone (and keep who granted them, and when).
  * The platform role's ceiling still applies on top — a Viewer granted
  * editor here is a viewer everywhere.
+ *
+ * A drive they were the only owner of does not end up with none: the admin
+ * making the change becomes its owner (`claimed`, lib/drive-access.js).
  */
 export async function PUT(req, { params }) {
   const guard = await requireAdmin();
@@ -29,11 +32,12 @@ export async function PUT(req, { params }) {
   const parsed = await parseGrants(body?.grants);
   if (parsed.error) return NextResponse.json({ error: parsed.error }, { status: 400 });
 
-  const current = (await listFilespacesForUser(person.email)).map((f) => ({ filespaceId: f.id, role: f.role }));
+  const current = (await listFilespacesForUser(person.email)).map((f) => ({ filespaceId: f.id, role: f.role, name: f.name }));
   const changes = await applyGrantDiff(person.email, current, parsed.grants, guard.email);
   if (changes.granted.length || changes.revoked.length) {
     await audit(guard.email, 'drive.grant', personSubject(person.email, person.displayName), changes);
   }
+  await auditDriveClaims(guard.email, changes.claimed, { from: person.email });
   const drives = (await listFilespacesForUser(person.email)).map((f) => ({ filespaceId: f.id, name: f.name, role: f.role }));
   return NextResponse.json({ drives, ...changes });
 }

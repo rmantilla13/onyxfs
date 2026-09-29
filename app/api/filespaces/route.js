@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import {
-  createFilespace, grantFilespaceAccess, listFilespaces, filespaceSetupProblem, countFilespacesCreatedBy,
-  prefixHoldsFiles,
+  createFilespace, listFilespaces, filespaceSetupProblem, countFilespacesCreatedBy, prefixHoldsFiles,
 } from '@/lib/db';
 import { requirePrincipal, can, refusal } from '@/lib/authz';
 import { getStorageConfig, storageMode, s3ListObjects } from '@/lib/storage';
@@ -86,10 +85,10 @@ export async function POST(req) {
   const problem = filespaceSetupProblem({ name, bucket: cfg.bucket, prefix }, others);
   if (problem) return NextResponse.json({ error: problem.error }, { status: problem.status });
 
-  const filespace = await createFilespace({ name, bucket: cfg.bucket, prefix, createdBy: email });
-  // Admins reach every drive already; for anyone else the drive is theirs.
-  if (!principal.isAdmin) await grantFilespaceAccess({ filespaceId: filespace.id, email, role: 'owner', grantedBy: email });
-  await audit(email, 'drive.create', { type: 'drive', id: filespace.id, label: filespace.name }, { selfServe: true, prefix });
+  // Theirs, in the same statement — an admin's too: admins reach every drive
+  // without a grant, but a drive always has an owner (lib/drive-access.js).
+  const filespace = await createFilespace({ name, bucket: cfg.bucket, prefix, createdBy: email, owner: email });
+  await audit(email, 'drive.create', { type: 'drive', id: filespace.id, label: filespace.name }, { selfServe: true, prefix, owner: email });
   return NextResponse.json({ filespace });
 }
 

@@ -81,6 +81,10 @@ export async function GET(req) {
  * POST { name, bucket, prefix, region?, roleArn?, accessKeyId?, secretAccessKey?,
  * endpoint? } → create a filespace. Supplying accessKeyId+secretAccessKey makes
  * it a self-contained bucket with its OWN keys (independent of Storage config).
+ *
+ * The admin who makes it is its owner, in the same statement: nobody else is
+ * named here, and a drive always has an owner (lib/drive-access.js). They
+ * hand it on from its members — add the owner, then remove themselves.
  */
 export async function POST(req) {
   const gate = await requireAdmin();
@@ -119,12 +123,13 @@ export async function POST(req) {
     secretAccessKey: body.secretAccessKey ? String(body.secretAccessKey) : null,
     endpoint: body.endpoint ? String(body.endpoint).trim() : null,
     createdBy: gate.email,
+    owner: gate.email,
   });
   if (Object.keys(extra.settings).length) {
     const updated = await updateFilespace(filespace.id, extra.settings);
     if (updated) { const { secretAccessKey, ...safe } = updated; filespace = safe; }
   }
-  await audit(gate.email, 'drive.create', { type: 'drive', id: filespace.id, label: filespace.name }, { bucket, prefix });
+  await audit(gate.email, 'drive.create', { type: 'drive', id: filespace.id, label: filespace.name }, { bucket, prefix, owner: gate.email });
   return NextResponse.json({ filespace });
 }
 

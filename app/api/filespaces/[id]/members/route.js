@@ -5,7 +5,8 @@ import {
   revokeFilespaceAccess, listInviteRequests, filespaceMemberDecision,
 } from '@/lib/db';
 import { requirePrincipal, can, driveRoleOf } from '@/lib/authz';
-import { audit, personSubject } from '@/lib/audit';
+import { ownerOfLastResort, lastOwnerRefusal } from '@/lib/drive-access';
+import { audit, auditDriveClaims, personSubject } from '@/lib/audit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,7 +55,14 @@ export async function GET(_req, { params }) {
   });
 }
 
-/** PATCH { email, role?, grant } → upsert (grant !== false) or revoke one member. */
+/**
+ * PATCH { email, role?, grant } → upsert (grant !== false) or revoke one member.
+ *
+ * Never leaves the drive with no owner (lib/drive-access.js). Removing its
+ * last owner, or making them an editor or a viewer, makes the admin doing
+ * it the owner in the same statement, and says so (`claimedBy`); from anyone
+ * else, or an admin who is that last owner, it is refused (409).
+ */
 export async function PATCH(req, { params }) {
   const g = await gate(params?.id);
   if (g.error) return g.error;
@@ -63,9 +71,10 @@ export async function PATCH(req, { params }) {
   const email = String(body.email || '').trim().toLowerCase();
   const grant = body.grant !== false;
   const role = String(body.role || 'viewer');
+  const actor = { email: g.email, isAdmin: g.admin };
 
   const denied = filespaceMemberDecision({
-    actor: { email: g.email, isAdmin: g.admin },
+    actor,
     actorRole: g.role,
     targetEmail: email,
     targetIsAdmin: isAdmin(email),
@@ -75,12 +84,19 @@ export async function PATCH(req, { params }) {
   });
   if (denied) return NextResponse.json({ error: denied.error }, { status: denied.status });
 
+  const fallbackOwner = ownerOfLastResort({ actor, targetEmail: email });
+  const lastOwner = () => NextResponse.json({ error: lastOwnerRefusal({ actor, targetEmail: email }), code: 'last_owner' }, { status: 409 });
+  const claimed = [{ id: g.fs.id, name: g.fs.name }];
   if (!grant) {
-    await revokeFilespaceAccess({ filespaceId: g.fs.id, email });
+    const r = await revokeFilespaceAccess({ filespaceId: g.fs.id, email, fallbackOwner });
+    if (r.refused) return lastOwner();
     await audit(g.email, 'drive.revoke', { type: 'drive', id: g.fs.id, label: g.fs.name }, { person: email });
-    return NextResponse.json({ ok: true, email, revoked: true });
+    if (r.claimedBy) await auditDriveClaims(g.email, claimed, { from: email });
+    return NextResponse.json({ ok: true, email, revoked: true, claimedBy: r.claimedBy });
   }
-  const member = await grantFilespaceAccess({ filespaceId: g.fs.id, email, role, grantedBy: g.email });
+  const r = await grantFilespaceAccess({ filespaceId: g.fs.id, email, role, grantedBy: g.email, fallbackOwner });
+  if (r.refused) return lastOwner();
   await audit(g.email, 'drive.grant', personSubject(email), { driveId: g.fs.id, drive: g.fs.name, role });
-  return NextResponse.json({ ok: true, member });
+  if (r.claimedBy) await auditDriveClaims(g.email, claimed, { from: email });
+  return NextResponse.json({ ok: true, member: r.member, claimedBy: r.claimedBy });
 }
