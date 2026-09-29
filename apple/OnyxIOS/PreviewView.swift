@@ -6,8 +6,11 @@ import SwiftUI
 /// A folder's files full screen, one at a time, swiped through: a picture
 /// zooms, a video or a song plays (picture in picture, AirPlay), and a
 /// document opens in Quick Look. A tap on a picture hides everything else.
-/// The bottom bar shares the file, or saves it — to Photos or to Files,
-/// and a heavy video's smaller streamable copy beside the original.
+///
+/// Over it, the least that can be: a white rounded-square close, where it
+/// is found at once over any picture, the file's name, and a glass pill to
+/// share it, save it — to Photos or to Files, and a heavy video's smaller
+/// streamable copy beside the original — or see its details.
 struct PreviewView: View {
     let files: [FileItem]
     @Environment(\.dismiss) private var dismiss
@@ -26,61 +29,99 @@ struct PreviewView: View {
     private var file: FileItem? { files.first { $0.id == current } }
 
     var body: some View {
-        NavigationStack {
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: 0) {
-                    ForEach(files) { file in
-                        PreviewPage(file: file, active: current == file.id, chromeHidden: $chromeHidden)
-                            .containerRelativeFrame([.horizontal, .vertical])
-                            .clipped()
-                            .id(file.id)
-                    }
-                }
-                .scrollTargetLayout()
-            }
-            .scrollTargetBehavior(.paging)
-            .scrollPosition(id: $current)
-            .scrollIndicators(.hidden)
-            .background(Theme.paper.ignoresSafeArea())
-            .ignoresSafeArea(edges: .bottom)
-            .safeAreaInset(edge: .bottom, spacing: 0) { DownloadTray() }
-            .navigationTitle(file?.name ?? "")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { dismiss() } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("Close")
-                }
-                ToolbarItemGroup(placement: .bottomBar) {
-                    Button { save(to: .share) } label: { Image(systemName: "square.and.arrow.up") }
-                        .accessibilityLabel("Share")
-                    if let file {
-                        Menu {
-                            SaveMenuContent(file: file, streamable: streamables[file.id])
-                        } label: {
-                            Image(systemName: "arrow.down.circle")
-                        }
-                        .accessibilityLabel("Save")
-                    }
-                    Spacer()
-                    if let index = files.firstIndex(where: { $0.id == current }), files.count > 1 {
-                        Text("\(index + 1) of \(files.count)")
-                            .font(.footnote.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button { inspecting = file } label: { Image(systemName: "info.circle") }
-                        .accessibilityLabel("Info")
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
+                ForEach(files) { file in
+                    PreviewPage(file: file, active: current == file.id, chromeHidden: $chromeHidden)
+                        .containerRelativeFrame([.horizontal, .vertical])
+                        .clipped()
+                        .id(file.id)
                 }
             }
-            .toolbar(chromeHidden ? .hidden : .visible, for: .navigationBar, .bottomBar)
-            .modifier(PreviewBars())
-            .statusBarHidden(chromeHidden)
-            .animation(.easeInOut(duration: 0.2), value: chromeHidden)
+            .scrollTargetLayout()
         }
+        .scrollTargetBehavior(.paging)
+        .scrollPosition(id: $current)
+        .scrollIndicators(.hidden)
+        .background(Theme.page.ignoresSafeArea())
+        .ignoresSafeArea(edges: .bottom)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !chromeHidden {
+                chrome.transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { DownloadTray() }
+        .statusBarHidden(chromeHidden)
+        .animation(.easeInOut(duration: 0.2), value: chromeHidden)
         .preferredColorScheme(.dark)
         .sheet(item: $inspecting) { FileInfoView(file: $0, place: nil) }
         .task(id: current) { await lookUpStreamable() }
+    }
+
+    private var chrome: some View {
+        HStack(spacing: 12) {
+            WhiteSquareButton(systemName: "xmark", label: "Close") { dismiss() }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(file?.name ?? "")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(position)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 6)
+            actions
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
+    }
+
+    /// "2 of 14 · 4.2 MB".
+    private var position: String {
+        var parts: [String] = []
+        if let index = files.firstIndex(where: { $0.id == current }), files.count > 1 {
+            parts.append("\(index + 1) of \(files.count)")
+        }
+        if let file { parts.append(FileFormat.size(file.size)) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Share, Save, Info: one glass pill.
+    private var actions: some View {
+        GlassGroup(spacing: 4) {
+            HStack(spacing: 0) {
+                pillButton("square.and.arrow.up", label: "Share") { save(to: .share) }
+                if let file {
+                    Menu {
+                        SaveMenuContent(file: file, streamable: streamables[file.id])
+                    } label: {
+                        pillIcon("arrow.down.to.line")
+                    }
+                    .accessibilityLabel("Save")
+                }
+                pillButton("info.circle", label: "Info") { inspecting = file }
+            }
+            .padding(.horizontal, 4)
+            .glassSurface(Capsule(), interactive: true)
+        }
+    }
+
+    private func pillButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { pillIcon(symbol) }
+            .buttonStyle(.plain)
+            .accessibilityLabel(label)
+    }
+
+    private func pillIcon(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.primary)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
     }
 
     /// The file itself goes to the share sheet, so it is downloaded first:
@@ -95,20 +136,6 @@ struct PreviewView: View {
         guard let file, streamables[file.id] == nil, StreamableCopy.mayHave(file) else { return }
         if let copy = await StreamableCopy.lookup(file, api: session.api), !Task.isCancelled {
             streamables[file.id] = copy
-        }
-    }
-}
-
-/// The preview's bars: Liquid Glass floats its controls over the picture on
-/// iOS 26; before it, the bars are frosted glass across the edges.
-private struct PreviewBars: ViewModifier {
-    func body(content: Content) -> some View {
-        if Theme.liquidGlass {
-            content
-        } else {
-            content
-                .toolbarBackground(.ultraThinMaterial, for: .navigationBar, .bottomBar)
-                .toolbarBackground(.visible, for: .navigationBar, .bottomBar)
         }
     }
 }

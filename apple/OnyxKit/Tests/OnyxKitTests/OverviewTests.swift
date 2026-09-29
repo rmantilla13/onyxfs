@@ -115,6 +115,20 @@ import Testing
         #expect(asked.query["folder"] == nil)
     }
 
+    @Test func searchingLooksEverywhereByNameAndKind() async throws {
+        let stub = try OverviewStub { _ in (200, #"{"files":[],"cursor":null}"#) }
+        defer { stub.tearDown() }
+        _ = try await stub.api.findFiles(query: "  beach ", kinds: ["image", "video"], sort: .name)
+        let asked = try #require(stub.requests.first)
+        #expect(asked.query["q"] == "beach")
+        #expect(asked.query["kind"] == "image,video")
+        #expect(asked.query["sort"] == "name")
+        #expect(asked.query["folder"] == nil && asked.query["filespace"] == nil)
+        // Only a kind: no query sent at all.
+        _ = try await stub.api.findFiles(query: "   ", kinds: ["audio"])
+        #expect(stub.requests.last?.query["q"] == nil)
+    }
+
     @Test func theGreetingIsAskedOfTheTokensOwnRoute() async throws {
         let stub = try OverviewStub { _ in (200, #"{"email":"ricky.mantilla@x.test","isAdmin":false,"name":"Ricky M"}"#) }
         defer { stub.tearDown() }

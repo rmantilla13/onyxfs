@@ -85,12 +85,24 @@ extension OnyxAPI {
     /// The newest files anywhere in `scope` — every folder of it — a page at
     /// a time.
     public func recentFiles(in scope: SyncDomain = .library, limit: Int = 20, cursor: String? = nil) async throws -> FilePage {
+        try await findFiles(in: scope, sort: .newest, limit: limit, cursor: cursor)
+    }
+
+    /// Files anywhere in `scope` — every folder of it — matching `query`
+    /// (the web's search: names, tags, notes) and of the `kinds` given
+    /// (image, video, audio, doc), in `sort`'s order, a page at a time.
+    public func findFiles(in scope: SyncDomain = .library, query: String? = nil, kinds: [String] = [],
+                          sort: FileSort = .newest, limit: Int = 30, cursor: String? = nil) async throws -> FilePage {
         var items: [URLQueryItem] = [
-            .init(name: "sort", value: FileSort.newest.rawValue),
+            .init(name: "sort", value: sort.rawValue),
             .init(name: "limit", value: String(limit)),
             .init(name: "folders", value: "0"),
         ]
         if case let .drive(id) = scope { items.append(.init(name: "filespace", value: id)) }
+        if let query = query?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty {
+            items.append(.init(name: "q", value: query))
+        }
+        if !kinds.isEmpty { items.append(.init(name: "kind", value: kinds.joined(separator: ","))) }
         if let cursor { items.append(.init(name: "cursor", value: cursor)) }
         return try decode(FilePage.self, from: try await request(config.url("api/files", query: items)))
     }

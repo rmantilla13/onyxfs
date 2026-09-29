@@ -40,6 +40,12 @@ final class Session {
     private(set) var signingIn = false
     /// What went wrong last, in words for the screen it happened on.
     var problem: String?
+    /// The account, with the name it gave itself, for the Home's greeting.
+    private(set) var identity: Identity?
+    /// What each place holds for this account (Place.id), as the listing
+    /// counts it: the Home's cards and storage, the drive list's lines.
+    private(set) var usage: [String: PlaceUsage] = [:]
+    private var usageAsked: Date?
 
     private(set) var api: OnyxAPI
     private var auth: AuthClient
@@ -195,6 +201,9 @@ final class Session {
         drives = []
         isAdmin = false
         trees = [:]
+        identity = nil
+        usage = [:]
+        usageAsked = nil
         placesLoaded = false
         phase = .signedOut
     }
@@ -220,6 +229,28 @@ final class Session {
         } catch {
             failed(error)
         }
+    }
+
+    /// Who is signed in, and what every place holds: asked together, each
+    /// place at once, at most once a minute unless `refresh`. A place that
+    /// cannot be counted keeps what it last said.
+    func loadOverview(refresh: Bool = false) async {
+        guard phase == .signedIn else { return }
+        if !refresh, let asked = usageAsked, Date().timeIntervalSince(asked) < 60 { return }
+        usageAsked = Date()
+        let api = api
+        let places = drives + [Place.library]
+        async let who = try? api.identity()
+        let counted = await withTaskGroup(of: (String, PlaceUsage?).self) { group in
+            for place in places {
+                group.addTask { (place.id, try? await api.usage(of: place.scope)) }
+            }
+            var out: [String: PlaceUsage] = [:]
+            for await (id, usage) in group { if let usage { out[id] = usage } }
+            return out
+        }
+        usage.merge(counted) { _, new in new }
+        if let identity = await who { self.identity = identity }
     }
 
     /// Every folder in `place`, from the first visit on; asked again only

@@ -8,6 +8,9 @@ import SwiftUI
 struct FolderView: View {
     let route: FolderRoute
     @Environment(Session.self) private var session
+    @Environment(AppChrome.self) private var chrome: AppChrome?
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var width
     @State private var listing: FolderListing
     @AppStorage("browser.layout") private var layout: BrowserLayout = .grid
     @AppStorage("browser.sort") private var sort: FileSort = .name
@@ -17,6 +20,8 @@ struct FolderView: View {
     /// Choosing files, and the ones chosen.
     @State private var selecting = false
     @State private var selection: Set<String> = []
+    /// The big title has scrolled away: the bar says the name instead.
+    @State private var titleGone = false
     @Namespace private var zoom
 
     init(route: FolderRoute) {
@@ -42,10 +47,15 @@ struct FolderView: View {
         }
         .animation(.spring(duration: 0.3, bounce: 0.15), value: selecting)
         .navigationTitle(selecting ? selectionTitle : title)
-        .navigationBarTitleDisplayMode(route.folder.isEmpty && !selecting ? .large : .inline)
+        .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(selecting)
-        .searchable(text: $query, prompt: route.folder.isEmpty ? "Search \(route.place.name)" : "Search \(title)")
+        // The back button is a bare chevron; the parent's name is its chip.
+        .toolbarRole(.editor)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic),
+                    prompt: route.folder.isEmpty ? "Search \(route.place.name)" : "Search \(title)")
         .toolbar { toolbar }
+        .onChange(of: selecting) { chrome?.selecting = selecting }
+        .onDisappear { if selecting { chrome?.selecting = false } }
         .onChange(of: listing.files.map(\.id)) { _, ids in
             // What left the listing cannot stay chosen.
             selection.formIntersection(ids)
@@ -74,6 +84,32 @@ struct FolderView: View {
         selection.isEmpty ? "Select Files" : (selection.count == 1 ? "1 Selected" : "\(selection.count) Selected")
     }
 
+    /// The folder this one is in, for the chip beside the back chevron: its
+    /// name, or the drive's at the drive's top level. Nil at the top.
+    private var parentName: String? {
+        guard !route.folder.isEmpty else { return nil }
+        let parent = (route.folder as NSString).deletingLastPathComponent
+        return parent.isEmpty ? route.place.name : (parent as NSString).lastPathComponent
+    }
+
+    /// The page's headline: the folder's name, huge, and what it holds.
+    private var header: some View {
+        EditorialTitle(text: title, subtitle: headerSubtitle)
+    }
+
+    private var headerSubtitle: String? {
+        guard listing.phase == .loaded else { return nil }
+        let count = listing.subfolders.count + listing.files.count
+        let more = listing.hasMore ? "+" : ""
+        if !query.isEmpty { return count == 1 ? "1 result" : "\(count)\(more) results" }
+        return count == 1 ? "1 item" : "\(count)\(more) items"
+    }
+
+    /// Whether the headline has scrolled out from under the bar.
+    private static func titleGone(_ geometry: ScrollGeometry) -> Bool {
+        geometry.contentOffset.y + geometry.contentInsets.top > 64
+    }
+
     /// The chosen files, in the listing's order.
     private var chosenFiles: [FileItem] {
         listing.files.filter { selection.contains($0.id) }
@@ -83,8 +119,13 @@ struct FolderView: View {
 
     private var grid: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 196), spacing: 12, alignment: .top)],
-                      spacing: 18) {
+            header
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 8)
+            // Two big tiles across a phone, more on an iPad.
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 250), spacing: 14, alignment: .top)],
+                      spacing: 22) {
                 ForEach(listing.subfolders) { node in
                     NavigationLink(value: FolderRoute(place: route.place, folder: node.folder)) {
                         FolderTile(node: node, items: listing.itemCounts[node.folder] ?? node.count)
@@ -100,11 +141,16 @@ struct FolderView: View {
             .padding(.vertical, 12)
             if listing.loadingMore { ProgressView().padding(.bottom, 24) }
         }
+        .onScrollGeometryChange(for: Bool.self, of: Self.titleGone) { _, gone in titleGone = gone }
         .background { AuraBackground() }
     }
 
     private var list: some View {
         List {
+            header
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 20, leading: 20, bottom: 12, trailing: 20))
             ForEach(listing.subfolders) { node in
                 NavigationLink(value: FolderRoute(place: route.place, folder: node.folder)) {
                     FolderRow(node: node, items: listing.itemCounts[node.folder] ?? node.count)
@@ -121,6 +167,7 @@ struct FolderView: View {
         }
         .listStyle(.plain)
         .listRowSeparatorTint(Theme.edge)
+        .onScrollGeometryChange(for: Bool.self, of: Self.titleGone) { _, gone in titleGone = gone }
         .auraBackground()
     }
 
@@ -169,6 +216,20 @@ struct FolderView: View {
     // MARK: - Toolbar
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        // The name in the bar only once the headline has scrolled away.
+        ToolbarItem(placement: .principal) {
+            Text(selecting ? selectionTitle : title)
+                .font(.headline)
+                .lineLimit(1)
+                .opacity(selecting || titleGone ? 1 : 0)
+                .animation(.easeOut(duration: 0.15), value: titleGone)
+                .accessibilityHidden(!(selecting || titleGone))
+        }
+        if !selecting, let parentName {
+            ToolbarItem(placement: .topBarLeading) {
+                ParentChip(name: parentName) { dismiss() }
+            }
+        }
         if selecting {
             ToolbarItem(placement: .topBarLeading) {
                 let all = !listing.files.isEmpty && selection.count == listing.files.count
@@ -232,6 +293,29 @@ struct FolderView: View {
                 .onTapGesture { listing.problem = nil }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
         }
+    }
+}
+
+/// The folder this one is in, as a pill beside the back chevron: a tap goes
+/// up to it. Liquid Glass draws the pill on iOS 26; before it, a frosted one.
+private struct ParentChip: View {
+    let name: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(name)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .frame(maxWidth: 180)
+                .padding(.horizontal, Theme.liquidGlass ? 6 : 14)
+                .padding(.vertical, Theme.liquidGlass ? 0 : 7)
+                .background {
+                    if !Theme.liquidGlass { Capsule().fill(Color.white.opacity(0.12)) }
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Up to \(name)")
     }
 }
 

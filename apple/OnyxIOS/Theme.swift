@@ -1,3 +1,4 @@
+import OnyxKit
 import SwiftUI
 
 /// Onyx's look on iPhone and iPad, as the web has it (app/globals.css): a
@@ -69,14 +70,21 @@ enum Theme {
         AngularGradient(colors: [auraBlue, auraMagenta, auraCyan, auraBlue], center: .center)
     }
 
+    // MARK: - The page
+
+    /// Pure black: the media and the aura's accents bring the colour.
+    static let page = Color.black
+    /// A card on it, and a tile with no picture: near-black grey.
+    static var card: Color { surface.opacity(0.82) }
+
     // MARK: - Shape
 
-    /// A tile's picture.
-    static let tileCorner: CGFloat = 14
+    /// A tile's picture: big, continuous corners.
+    static let tileCorner: CGFloat = 24
     /// A row's picture.
-    static let rowCorner: CGFloat = 9
-    /// A card: the download tray, a sheet's header.
-    static let cardCorner: CGFloat = 24
+    static let rowCorner: CGFloat = 14
+    /// A card: the Home's cards, the download tray, a sheet's header.
+    static let cardCorner: CGFloat = 28
 
     // MARK: - Which glass
 
@@ -121,7 +129,7 @@ struct AuraBackground: View {
             ZStack {
                 switch style {
                 case .page:
-                    Theme.paper
+                    Theme.page
                     glow(Theme.auraBlue, 0.26, radii: CGSize(width: 0.60 * w, height: 0.48 * h),
                          at: CGPoint(x: 0.06 * w, y: -0.08 * h), fade: 0.70)
                     glow(Theme.auraMagenta, 0.26, radii: CGSize(width: 0.52 * w, height: 0.44 * h),
@@ -498,26 +506,123 @@ struct CountBadge: View {
 }
 
 extension Color {
-    /// A colour the server sends as "#RRGGBB" — a drive's own — lifted
-    /// toward white until it stands out from the near-black page (3:1, as
-    /// a symbol needs), much as the web lifts its colours for the dark
-    /// scheme. Nil for anything that is not such a colour.
-    init?(hex: String) {
-        var digits = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        if digits.hasPrefix("#") { digits.removeFirst() }
+    /// "#RRGGBB", as DriveTint hands its colours over. Nil for anything else.
+    init?(rgbHex hex: String) {
+        let digits = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
         guard digits.count == 6, let value = UInt32(digits, radix: 16) else { return nil }
-        let rgb = [Double((value >> 16) & 0xFF), Double((value >> 8) & 0xFF), Double(value & 0xFF)].map { $0 / 255 }
-        func luminance(_ c: [Double]) -> Double {
-            let linear = c.map { $0 <= 0.03928 ? $0 / 12.92 : pow(($0 + 0.055) / 1.055, 2.4) }
-            return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+        self.init(.sRGB, red: Double((value >> 16) & 0xFF) / 255, green: Double((value >> 8) & 0xFF) / 255,
+                  blue: Double(value & 0xFF) / 255)
+    }
+}
+
+// MARK: - Editorial
+
+/// A screen's name as the page's headline: huge, bold, left-aligned, set
+/// tight — the folder's own name over its files. Grows with Dynamic Type.
+struct EditorialTitle: View {
+    let text: String
+    var subtitle: String?
+    @ScaledMetric(relativeTo: .largeTitle) private var size: CGFloat = 42
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(text)
+                .font(.system(size: size, weight: .bold))
+                .tracking(-size * 0.028)
+                .lineLimit(3)
+                .minimumScaleFactor(0.7)
+                .multilineTextAlignment(.leading)
+                .accessibilityAddTraits(.isHeader)
+            if let subtitle {
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
         }
-        var lifted = rgb
-        var t = 0.0
-        while luminance(lifted) < 0.12, t < 1 {
-            t += 0.1
-            lifted = rgb.map { $0 + (1 - $0) * t }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// "Recent Files … See All": a section's name, and where to see the rest.
+struct SectionHeading: View {
+    let title: String
+    var action: (title: String, run: () -> Void)?
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.title2.weight(.bold))
+                .tracking(-0.4)
+                .accessibilityAddTraits(.isHeader)
+            Spacer()
+            if let action {
+                Button(action.title, action: action.run)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
         }
-        self.init(.sRGB, red: lifted[0], green: lifted[1], blue: lifted[2])
+    }
+}
+
+/// A round glass button with a symbol: the Home's header, a tray's controls.
+struct RoundIconButton: View {
+    let systemName: String
+    let label: String
+    var size: CGFloat = 46
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: size * 0.4, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: size, height: size)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .glassSurface(Circle(), interactive: true)
+        .accessibilityLabel(label)
+    }
+}
+
+/// The preview's close: a white rounded square, the one bright thing over a
+/// dark picture, found at once.
+struct WhiteSquareButton: View {
+    let systemName: String
+    let label: String
+    let action: () -> Void
+    @ScaledMetric(relativeTo: .body) private var size: CGFloat = 46
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: size * 0.38, weight: .bold))
+                .foregroundStyle(.black)
+                .frame(width: size, height: size)
+                .background(.white, in: RoundedRectangle(cornerRadius: size * 0.32, style: .continuous))
+                .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+                .contentShape(RoundedRectangle(cornerRadius: size * 0.32, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
+extension Place {
+    /// The drive's own colour, made legible (DriveTint): the accent for a
+    /// symbol or a dot on the page, and a card's two stops. All Files is
+    /// the brand's own blue into magenta, as the web's library is its accent.
+    var driveTint: DriveTint? { DriveTint(hex: color) }
+
+    var tint: Color {
+        driveTint.flatMap { Color(rgbHex: $0.accent) } ?? .accentColor
+    }
+
+    var cardFill: LinearGradient {
+        if let tint = driveTint, let top = Color(rgbHex: tint.cardTop), let bottom = Color(rgbHex: tint.cardBottom) {
+            return LinearGradient(colors: [top, bottom], startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+        return Theme.brand
     }
 }
 
