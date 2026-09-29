@@ -18,6 +18,9 @@ public struct APIUploadTransport: UploadTransport {
         configuration.httpCookieStorage = nil
         configuration.timeoutIntervalForRequest = 120
         configuration.timeoutIntervalForResource = 6 * 3600
+        // Four files at once, and two large ones' four parts each
+        // (UploadQueue): past six to a host the system would queue them.
+        configuration.httpMaximumConnectionsPerHost = 8
         return URLSession(configuration: configuration)
     }()
 
