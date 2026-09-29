@@ -10,6 +10,7 @@ import { preloaded } from '@/lib/original-preload';
 import { parseKey } from '@/lib/selection';
 import { modKey } from '@/lib/keys';
 import ProgressiveImage from '@/app/components/media/ProgressiveImage';
+import AudioPlayer from '@/app/components/media/AudioPlayer';
 import useQuickLook from './useQuickLook';
 import useOpenPrefetch from '@/app/files/useOpenPrefetch';
 import '@/app/components/review/review.css';
@@ -29,9 +30,10 @@ function tilePicture(id) {
 
 const FOCUSABLE = 'button:not([disabled]), a[href], video[controls], audio[controls], [tabindex]:not([tabindex="-1"])';
 // A control that answers its own keys: Return and Space press a button or
-// follow a link; a player or a field takes the arrows too.
-const CONTROL = 'button, a[href], input, select, textarea, summary, [role="button"], video[controls], audio[controls]';
-const OWN_ARROWS = 'input, select, textarea, video[controls], audio[controls]';
+// follow a link; a player, a field or a slider (the audio player's waveform)
+// takes the arrows too.
+const CONTROL = 'button, a[href], input, select, textarea, summary, [role="button"], [role="slider"], video[controls], audio[controls]';
+const OWN_ARROWS = 'input, select, textarea, [role="slider"], video[controls], audio[controls]';
 
 /**
  * Make everything but `root` inert (and so out of the accessibility tree
@@ -356,9 +358,9 @@ function VideoItem({ file }) {
 
 function AudioItem({ file }) {
   return (
-    <div className="ql-card">
+    <div className="ql-card ql-audio">
       <p className="ql-card-name">{file.name}</p>
-      <audio src={file.url} controls autoPlay style={{ width: 'min(480px, 100%)' }} />
+      <AudioPlayer key={file.id} file={file} autoPlay bars={140} />
     </div>
   );
 }

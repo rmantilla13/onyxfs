@@ -111,12 +111,14 @@ const stored = (key) => globalThis.__mw.s3.objects.get(`onyx/${key}`) || null;
 const { NextRequest } = await import('next/server');
 const { middleware, config: mwConfig } = await import('../middleware.js');
 const { bearerMayPass, bearerToken } = await import('../lib/bearer-gate.js');
+const { encodeWaveform } = await import('../lib/waveform.js');
 const filesRoute = await import('../app/api/files/route.js');
 const presignRoute = await import('../app/api/files/presign/route.js');
 const multipartRoute = await import('../app/api/files/upload/multipart/route.js');
 const fileRoute = await import('../app/api/files/[id]/route.js');
 const contentRoute = await import('../app/api/files/[id]/content/route.js');
 const thumbnailRoute = await import('../app/api/files/[id]/thumbnail/route.js');
+const waveformRoute = await import('../app/api/files/[id]/waveform/route.js');
 const foldersRoute = await import('../app/api/files/folders/route.js');
 const restoreRoute = await import('../app/api/admin/trash/restore/route.js');
 // What a route finishes after it answers: a trashed file's object moving to the trash.
@@ -213,6 +215,7 @@ describe('the sign-in gate (middleware.js)', () => {
     '/api/files', '/api/files/presign', '/api/files/upload/multipart', '/api/files/folders',
     '/api/files/3f0c7e1a-1111-4222-8333-944455556666', '/api/files/3f0c7e1a-1111-4222-8333-944455556666/content',
     '/api/files/3f0c7e1a-1111-4222-8333-944455556666/thumbnail',
+    '/api/files/3f0c7e1a-1111-4222-8333-944455556666/waveform',
     '/api/admin/trash/restore',
   ];
 
@@ -1184,6 +1187,78 @@ describe('a thumbnail made on the Mac', () => {
     const f = await upload(web(ED));
     assert.equal((await mayRecord(web(ED), f.id)).status, 204);
     assert.equal((await mayRecord(web(DV), f.id)).status, 403);
+  });
+});
+
+describe('a sound’s waveform', () => {
+  const WAVE = encodeWaveform(Uint8Array.from({ length: 256 }, (_, i) => (i * 7) % 256));
+  const mayRecord = (who, id) => call(waveformRoute.GET, `/api/files/${id}/waveform`, { params: { id }, ...who });
+  const recordWave = (who, id, body) => call(waveformRoute.PUT, `/api/files/${id}/waveform`, { method: 'PUT', body, params: { id }, ...who });
+  const sound = (who, extra = {}) => upload(who, { name: 'Interview take 3.m4a', mime: 'audio/mp4', ...extra });
+
+  test('drawn at upload, it is recorded with the file — for a sound, and only as a waveform', async () => {
+    const who = web(ED);
+    const p = await presign(who, { filename: 'Take.m4a', contentType: 'audio/mp4', size: 10, folder: 'Cuts', filespaceId: 'd1' });
+    put(p.body.putUrl, Buffer.alloc(10, 1));
+    const base = { name: p.body.name, url: p.body.publicUrl, size: 10, folder: 'Cuts', storage: 's3', storageKey: p.body.key, filespace: 'd1' };
+    const out = await record(who, { ...base, mime: 'audio/mp4', waveform: WAVE, metadata: { waveform: 'x' } });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.equal(row(out.body.file.id).metadata.waveform, WAVE, 'the checked one, not the metadata’s');
+
+    const v = await presign(who, { filename: 'Take.mov', contentType: 'video/quicktime', size: 10, folder: 'Cuts', filespaceId: 'd1' });
+    put(v.body.putUrl, Buffer.alloc(10, 1));
+    const video = await record(who, { ...base, name: v.body.name, url: v.body.publicUrl, storageKey: v.body.key, mime: 'video/quicktime', waveform: WAVE });
+    assert.equal(row(video.body.file.id).metadata.waveform, undefined, 'a video keeps no waveform');
+
+    const w = await presign(who, { filename: 'Bad.m4a', contentType: 'audio/mp4', size: 10, folder: 'Cuts', filespaceId: 'd1' });
+    put(w.body.putUrl, Buffer.alloc(10, 1));
+    const bad = await record(who, { ...base, name: w.body.name, url: w.body.publicUrl, storageKey: w.body.key, mime: 'audio/mp4', waveform: '1:AAAA' });
+    assert.equal(bad.status, 200, 'a bad waveform never fails the upload');
+    assert.equal(row(bad.body.file.id).metadata.waveform, undefined);
+  });
+
+  test('the Mac asks whether it may, then records one: seq moves, version does not', async () => {
+    const who = mac(ED);
+    const f = await sound(who);
+    const before = structuredClone(row(f.id));
+    assert.equal((await mayRecord(who, f.id)).status, 204);
+    const out = await recordWave(who, f.id, { waveform: WAVE, contentHash: before.contentHash });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.equal(row(f.id).metadata.waveform, WAVE);
+    assert.equal(out.body.file.metadata.waveform, WAVE);
+    assert.ok(row(f.id).seq > before.seq, 'every device picks it up');
+    assert.equal(row(f.id).version, before.version, 'a waveform is not an edit');
+    assert.match(out.body.file.url, /X-Amz-/, 'signed for the answer');
+  });
+
+  test('refused: a viewer, a video, something that is not a waveform, contents that changed', async () => {
+    const f = await sound(mac(ED));
+    assert.equal((await mayRecord(mac(DV), f.id)).status, 403);
+    assert.equal((await recordWave(mac(DV), f.id, { waveform: WAVE })).status, 403);
+    assert.equal(row(f.id).metadata.waveform, undefined);
+
+    const video = await upload(mac(ED), { name: 'Take 9.mov' });
+    assert.equal((await mayRecord(mac(ED), video.id)).status, 400);
+    assert.equal((await recordWave(mac(ED), video.id, { waveform: WAVE })).status, 400);
+
+    for (const waveform of [undefined, '', 'nope', '1:AAAA', `2:${WAVE.slice(2)}`, { bars: [1, 2] }]) {
+      assert.equal((await recordWave(mac(ED), f.id, { waveform })).status, 400, String(waveform));
+    }
+    const moved = await recordWave(mac(ED), f.id, { waveform: WAVE, contentHash: 'not-its-hash' });
+    assert.equal(moved.status, 409);
+    assert.equal(row(f.id).metadata.waveform, undefined);
+    assert.equal((await recordWave(mac(ED), 'nope', { waveform: WAVE })).status, 404);
+    assert.equal((await recordWave({}, f.id, { waveform: WAVE })).status, 401);
+  });
+
+  test('new contents take the old shape with them', async () => {
+    const f = await sound(mac(ED));
+    assert.equal((await recordWave(mac(ED), f.id, { waveform: WAVE })).status, 200);
+    const { MEDIA_KEYS } = await import('../lib/media.js');
+    assert.ok(MEDIA_KEYS.includes('waveform'), 'cleared with the media facts when contents are replaced');
+    const edit = await patchFile(mac(ED), f.id, { metadata: { waveform: '1:zzzz', client: 'Acme' } });
+    assert.equal(edit.status, 200, JSON.stringify(edit.body));
+    assert.equal(row(f.id).metadata.waveform, WAVE, 'nor can a metadata edit write one');
   });
 });
 

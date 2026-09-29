@@ -162,7 +162,7 @@ export async function POST(req) {
       }
     }
 
-    const { filespace, media, filmstrip, ...fields } = record;
+    const { filespace, media, filmstrip, waveform, ...fields } = record;
     const previews = await ownPreviews(uploadFields(record));
     const file = await createFile({
       ...fields,

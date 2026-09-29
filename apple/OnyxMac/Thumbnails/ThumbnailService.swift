@@ -18,6 +18,10 @@ private let log = Logger(subsystem: OnyxIdentifiers.app, category: "thumbnails")
 ///     whose mirror says they have no thumbnail, or (a video) only one of
 ///     the old small ones; and only in a drive this account may change.
 ///
+/// A sound it uploads gets its waveform the same way, from the bytes here
+/// (WaveformMaker, OnyxKit), for the web's tiles and players and the iOS
+/// app's.
+///
 /// It wakes when a mirror's pass brings a change (DriveService tells it,
 /// with the pass's diff) and when an upload finishes; it never polls. Its
 /// worker does one file at a time at utility priority, and remembers what
@@ -39,6 +43,7 @@ final class ThumbnailService: ObservableObject {
     private weak var model: AppModel?
     private let defaults = UserDefaults.standard
     private var worker: ThumbnailWorker?
+    private var waveforms: WaveformMaker?
     /// The mirror each drive was last looked at whole in: one opened afresh
     /// (a drive mounted, the app opened) is looked at whole once, and after
     /// that only what each pass changed. Held weakly: a mirror let go of is
@@ -89,6 +94,14 @@ final class ThumbnailService: ObservableObject {
             }
         }
         Task { await worker.observe(status: shown, reports: { ThumbnailService.note($0) }) }
+        let api = model.api
+        let waveforms = WaveformMaker(record: { fileId, waveform in
+            try await api.recordWaveform(fileId: fileId, waveform: waveform)
+        })
+        self.waveforms = waveforms
+        try? FileManager.default.removeItem(at: Self.soundRoot)
+        try? FileManager.default.createDirectory(at: Self.soundRoot, withIntermediateDirectories: true)
+        Task { await waveforms.observe { ThumbnailService.note($0, $1) } }
         // The drives open already; each opened later is looked at as it syncs.
         for mirror in model.finder.openMirrors { mirrorSynced(mirror, nil) }
         log.info("making thumbnails on this Mac (\(PreviewFormat.best.rawValue, privacy: .public))")
@@ -97,6 +110,10 @@ final class ThumbnailService: ObservableObject {
     /// Sign-out, quit, or turned off: the file in hand is dropped; nothing
     /// is left half-recorded, since a thumbnail is only recorded whole.
     func stop() {
+        if let waveforms {
+            self.waveforms = nil
+            Task { await waveforms.stop() }
+        }
         guard let worker else { return }
         self.worker = nil
         scanned = [:]
@@ -134,8 +151,12 @@ final class ThumbnailService: ObservableObject {
     /// of its copy): its thumbnail is made from the bytes here, the cheapest
     /// they will ever be. A link of the worker's own keeps them until then.
     func uploaded(_ job: UploadJob) {
-        guard let worker, job.state == .done, let fileId = job.fileId,
-              let kind = Poster.Kind.of(name: job.name, mime: job.mime) else { return }
+        guard let worker, job.state == .done, let fileId = job.fileId else { return }
+        if Waveform.isSound(name: job.name, mime: job.mime) {
+            soundUploaded(job, fileId: fileId)
+            return
+        }
+        guard let kind = Poster.Kind.of(name: job.name, mime: job.mime) else { return }
         if kind == .image, job.size > Poster.thumbSourceMaxBytes { return }
         let link = Self.workRoot.appendingPathComponent(UUID().uuidString + ThumbnailWorker.suffix(for: job.name))
         do {
@@ -149,6 +170,21 @@ final class ThumbnailService: ObservableObject {
         let file = ThumbnailWorker.LocalFile(fileId: fileId, scope: job.scope, name: job.name, mime: job.mime,
                                              size: job.size, kind: kind, url: link)
         Task { await worker.offer(file) }
+    }
+
+    /// A sound the server has now: its waveform is drawn from the bytes
+    /// here, through a link of the maker's own, as a picture is.
+    private func soundUploaded(_ job: UploadJob, fileId: String) {
+        guard let waveforms else { return }
+        let link = Self.soundRoot.appendingPathComponent(UUID().uuidString + ThumbnailWorker.suffix(for: job.name))
+        do {
+            try FileManager.default.linkItem(at: URL(fileURLWithPath: job.staged), to: link)
+        } catch {
+            log.debug("no link to \(job.name, privacy: .private): \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        let sound = WaveformMaker.Sound(fileId: fileId, name: job.name, url: link)
+        Task { await waveforms.offer(sound) }
     }
 
     /// Whether this account may change files in the drive, as the drive
@@ -180,12 +216,30 @@ final class ThumbnailService: ObservableObject {
             .appendingPathComponent("Thumbnails", isDirectory: true)
     }
 
+    /// Beside workRoot, for the sounds WaveformMaker has in hand: emptied as
+    /// it starts, and nothing in it outlives its sound.
+    nonisolated static var soundRoot: URL {
+        workRoot.deletingLastPathComponent().appendingPathComponent("Waveforms", isDirectory: true)
+    }
+
     /// ~/Library/Application Support/Onyx/Thumbnails/account-<hash>.json:
     /// what came of each file, for one account on one server.
     nonisolated static func ledger(server: URL, account: String) -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("\(OnyxIdentifiers.folderName)/Thumbnails", isDirectory: true)
             .appendingPathComponent(AccountFolder.name(server: server, account: account) + ".json")
+    }
+
+    /// Each sound's end, in the log.
+    nonisolated static func note(_ sound: WaveformMaker.Sound, _ outcome: WaveformMaker.Outcome) {
+        switch outcome {
+        case .made:
+            log.info("waveform for \(sound.fileId, privacy: .public)")
+        case .none:
+            log.debug("\(sound.fileId, privacy: .public): no sound to draw")
+        case let .failed(why):
+            log.error("waveform for \(sound.fileId, privacy: .public) failed: \(why, privacy: .public)")
+        }
     }
 
     /// Each file's end, in the log.

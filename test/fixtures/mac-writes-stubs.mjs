@@ -153,6 +153,16 @@ export async function setFileThumbnail(id, thumbnailKey, media = {}, posterKey =
   });
   return copy(row);
 }
+// A sound's waveform, as lib/db.js's setFileWaveform records it: merged into
+// the metadata with seq moved, only for a live row — and only for the
+// contents it was drawn from, when it says which.
+export async function setFileWaveform(id, waveform, { contentHash } = {}) {
+  const row = s().files.get(String(id));
+  if (!row || row.deletedAt) return null;
+  if (contentHash != null && row.contentHash !== contentHash) return 'changed';
+  Object.assign(row, { metadata: { ...row.metadata, waveform }, seq: nextSeq() });
+  return copy(row);
+}
 export async function setFilePoster(id, posterKey, media = {}) {
   const row = s().files.get(String(id));
   if (!row) return null;
