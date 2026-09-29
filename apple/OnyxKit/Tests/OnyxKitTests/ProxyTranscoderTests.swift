@@ -68,6 +68,23 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: proxy.path))
     }
 
+    @Test func aMasterKeptOfflineIsReadThroughALinkWithItsExtension() async throws {
+        // An offline copy is named for its file and version, with no
+        // extension, and may be on another disk: the job reads it through a
+        // symbolic link named as a download would be (ProxySources.place).
+        let dir = try Self.folder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let made = dir.appendingPathComponent("made.mov")
+        try await Clip.make(at: made, width: 1280, height: 720, fps: 30, seconds: 1, codec: .h264, audio: true)
+        let kept = dir.appendingPathComponent("Pinned", isDirectory: true).appendingPathComponent("f1-0123456789ab")
+        try FileManager.default.createDirectory(at: kept.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: made, to: kept)
+        let source = dir.appendingPathComponent("source.mov")
+        try FileManager.default.createSymbolicLink(at: source, withDestinationURL: kept)
+        let out = try await ProxyTranscoder.transcode(source, to: dir.appendingPathComponent("proxy.mp4"), spec: Self.spec)
+        #expect(out.width == 1280 && out.height == 720 && abs(out.duration - 1) < 0.1)
+    }
+
     @Test func sizesAreEvenAndTheShortSideIsTheSpecs() {
         #expect(ProxyTranscoder.outputSize(natural: CGSize(width: 3840, height: 2160), shortSide: 1080) == (1920, 1080))
         #expect(ProxyTranscoder.outputSize(natural: CGSize(width: 2704, height: 1520), shortSide: 1080) == (1922, 1080))

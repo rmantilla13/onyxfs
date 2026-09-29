@@ -67,7 +67,13 @@ final class ThumbnailService: ObservableObject {
     func attach(to model: AppModel) {
         self.model = model
         model.finder.onMirrorSynced = { [weak self] mirror, diff in self?.mirrorSynced(mirror, diff) }
-        model.finder.onUploadFinished = { [weak self] job in self?.uploaded(job) }
+        // After whoever heard them before, as ProxyService does: one hook,
+        // shared, so neither depends on which attaches first.
+        let before = model.finder.onUploadFinished
+        model.finder.onUploadFinished = { [weak self] job in
+            before?(job)
+            self?.uploaded(job)
+        }
     }
 
     // MARK: - Life cycle

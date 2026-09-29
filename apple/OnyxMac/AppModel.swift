@@ -59,6 +59,8 @@ final class AppModel: ObservableObject {
         web.model = self
         updater.model = self
         thumbnailer.attach(to: self)
+        // After the thumbnails: each hears this Mac's uploads as they finish.
+        proxies.attach(to: self)
         if phase == .signedIn { startup = Task { await afterSignIn() } }
         // Back to Onyx from the browser, say, where a drive may have changed:
         // the drive list, and the drives' own ticks, catch up.

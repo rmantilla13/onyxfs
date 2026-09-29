@@ -19,6 +19,8 @@ import Testing
         #expect(claim.maxBytes == 5_368_709_120)
         #expect(claim.uploadUrl.absoluteString == "https://s3.example.com/proxy?sig=2")
         #expect(claim.leaseSeconds == 600)
+        #expect(claim.sourceKey == "files/a/GX010042.MP4", "which object the master is")
+        #expect(claim.contentHash == nil, "not sent")
     }
 
     @Test func aClaimWithoutASpecGetsTheServersDefault() throws {
@@ -26,6 +28,42 @@ import Testing
         let claim = try JSONDecoder().decode(ProxyClaim.self, from: Data(json.utf8))
         #expect(claim.spec == ProxySpec(height: 1080, maxrateKbps: 6000, audioKbps: 128))
         #expect(claim.maxBytes == nil)
+        #expect(claim.sourceKey == nil && claim.contentHash == nil)
+    }
+
+    @Test func whatSaysWhichBytesTheMasterIsNeverFailsAClaim() throws {
+        // Only a copy on this Mac is checked against them: odd ones mean a
+        // download, as before, not a job that cannot start.
+        let odd = #"{"fileId":"f1","name":"a.mov","sourceKey":"","contentHash":42,"downloadUrl":"https://s/a","uploadUrl":"https://s/b"}"#
+        let claim = try JSONDecoder().decode(ProxyClaim.self, from: Data(odd.utf8))
+        #expect(claim.sourceKey == nil && claim.contentHash == nil)
+        let hashed = #"{"fileId":"f1","name":"a.mov","contentHash":"9b2cf535f27731c974343645a3985328-4","downloadUrl":"https://s/a","uploadUrl":"https://s/b"}"#
+        #expect(try JSONDecoder().decode(ProxyClaim.self, from: Data(hashed.utf8)).contentHash
+                == "9b2cf535f27731c974343645a3985328-4")
+    }
+
+    /// lib/proxies.js shouldProxy over lib/media.js fileKind, for what this
+    /// Mac uploads: each row as the server decides it.
+    @Test func theServerAsksForAProxyOfALargeVideo() {
+        let big = ProxyRule.minBytes
+        let rows: [(name: String, mime: String?, size: Int64, asked: Bool)] = [
+            ("GX010042.MP4", "video/mp4", big, true),
+            ("A001_C002.mov", "video/quicktime", 40 << 30, true),
+            ("clip.mov", nil, big, true),                           // by its name
+            ("clip", "video/x-matroska", big, true),                // by its type
+            ("clip.webm", "application/octet-stream", big, true),   // the name decides
+            ("clip.m4v", "", big, true),
+            ("clip.ogv", nil, big, true),
+            ("GX010042.MP4", "video/mp4", big - 1, false),          // under PROXY_MIN_BYTES
+            ("still.heic", "video/quicktime", big, false),          // an image's extension wins
+            ("frame.mov", "image/png", big, false),                 // and an image's type
+            ("clip.mkv", nil, big, false),                          // neither says video
+            ("sound.wav", "audio/wav", big, false),
+        ]
+        for row in rows {
+            #expect(ProxyRule.asksForProxy(name: row.name, mime: row.mime, size: row.size) == row.asked,
+                    "\(row.name) \(row.mime ?? "nil") \(row.size)")
+        }
     }
 
     @Test func theQueueListsJobsWithTheSourcesHeightWhenKnown() throws {

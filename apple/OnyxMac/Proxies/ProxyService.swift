@@ -17,9 +17,20 @@ private let log = Logger(subsystem: OnyxIdentifiers.app, category: "proxies")
 ///   claim      the job is this Mac's for 10 minutes; each progress report
 ///              extends that, so a Mac that quits or sleeps loses it
 ///   download   the master, from its presigned link, to this app's caches —
-///              streamed to disk, never held in memory
+///              streamed to disk, never held in memory — unless it is on
+///              this Mac already (below)
 ///   transcode  on the media engine (ProxyTranscoder), to the server's spec
 ///   upload     to the link the claim gave, then say it is done
+///
+/// The master is often here already. The server asks for a proxy as a large
+/// video is uploaded, and the Mac that uploaded it usually takes the job:
+/// so as each upload from this Mac finishes, its bytes are kept for the job
+/// (`uploaded`, ProxySources), the queue is asked at once, and a job whose
+/// master is kept is taken before the others. A claim is checked against
+/// what is kept — the same file, uploaded to the object the claim reads, at
+/// its size — and the transcode reads the bytes where they are, as it does
+/// a copy kept offline at the version the drive's mirror has now. Anything
+/// else is downloaded, as before.
 ///
 /// The queue is asked every 2 minutes, and at once when an upload from this
 /// Mac might have added to it. A job taken back meanwhile (409 `lost`) is
@@ -45,15 +56,52 @@ final class ProxyService: ObservableObject {
     private var pass: Task<Void, Never>?
     private var again = false
     private var generation = 0
+    /// This Mac's own large uploads, kept for their proxies.
+    private let sources = ProxySources(folder: ProxyService.sourcesRoot)
 
     private enum Keys {
         static let enabled = "proxies.enabled"
     }
 
     static let pollInterval: TimeInterval = 120
+    /// lib/proxies.js QUEUE_LIMIT: a queue that answers with fewer jobs than
+    /// this has listed every one there is.
+    static let queuePage = 10
 
     init() {
         enabled = UserDefaults.standard.object(forKey: Keys.enabled) as? Bool ?? true
+    }
+
+    /// Once, as the app starts: hears this Mac's uploads as they finish,
+    /// after whoever heard them before (ThumbnailService, which wants the
+    /// bytes still here too).
+    func attach(to model: AppModel) {
+        self.model = model
+        let before = model.finder.onUploadFinished
+        model.finder.onUploadFinished = { [weak self] job in
+            before?(job)
+            self?.uploaded(job)
+        }
+    }
+
+    /// An upload the server has now (DriveService, before the queue lets go
+    /// of its copy). A large video will have a proxy asked for (ProxyRule),
+    /// and this Mac is likely to be the one to make it: its bytes are kept
+    /// for that — linked now, while the queue's copy is still there — and
+    /// the queue is asked at once. New contents for a file are not kept: the
+    /// server asks for no proxy of those.
+    func uploaded(_ job: UploadJob) {
+        guard enabled, timer != nil, job.state == .done, job.replaceOf == nil,
+              let fileId = job.fileId, let key = job.uploadedKey,
+              ProxyRule.asksForProxy(name: job.name, mime: job.mime, size: job.size),
+              Poster.Kind.of(name: job.name, mime: job.mime) == .video,
+              let link = sources.link(URL(fileURLWithPath: job.staged), name: job.name) else { return }
+        let size = job.size
+        Task {
+            guard await sources.hold(link, fileId: fileId, key: key, size: size) else { return }
+            log.info("keeping \(fileId, privacy: .public) here for its proxy")
+            pollNow()
+        }
     }
 
     // MARK: - Life cycle
@@ -73,7 +121,8 @@ final class ProxyService: ObservableObject {
     }
 
     /// Sign-out, quit, or turned off: stop asking, and stop the job at hand.
-    /// Its lease runs out on the server and the job can be taken again.
+    /// Its lease runs out on the server and the job can be taken again. What
+    /// was kept for jobs to come goes: another Mac will make them.
     func stop() {
         timer?.invalidate()
         timer = nil
@@ -84,6 +133,7 @@ final class ProxyService: ObservableObject {
         busyFileId = nil
         busyName = nil
         progress = 0
+        Task { [sources] in await sources.clear() }
     }
 
     private func turnedOff() {
@@ -114,8 +164,10 @@ final class ProxyService: ObservableObject {
 
     private func drain(generation started: Int) async {
         var passed: Set<String> = []
+        await sources.prune()
         while started == generation, !Task.isCancelled, let api = model?.api {
             let jobs: [ProxyJob]
+            let asked = Date()
             do {
                 jobs = try await api.proxyQueue()
             } catch {
@@ -124,7 +176,15 @@ final class ProxyService: ObservableObject {
                 log.debug("queue: \(error.localizedDescription, privacy: .public)")
                 return
             }
-            guard started == generation, let job = jobs.first(where: { !passed.contains($0.fileId) }) else { return }
+            // The whole queue: a master kept for a job not in it has none
+            // coming. (A server with proxies off answers with none at all.)
+            if jobs.count < Self.queuePage { await sources.queueSeen(Set(jobs.map(\.fileId)), askedAt: asked) }
+            // A job whose master is kept here goes first: there is nothing to
+            // download, and the disk it holds comes back sooner.
+            let kept = Set(await sources.all.keys)
+            let waiting = jobs.filter { !passed.contains($0.fileId) }
+            guard started == generation, let job = waiting.first(where: { kept.contains($0.fileId) }) ?? waiting.first
+            else { return }
             passed.insert(job.fileId)
             let claim: ProxyClaim
             do {
@@ -155,8 +215,10 @@ final class ProxyService: ObservableObject {
             Task { @MainActor in if let self, self.busyFileId == fileId { self.progress = p } }
         }
         let transfers = model?.finder.transfers
+        let master = await localMaster(for: claim)
+        if master != nil { log.info("\(claim.fileId, privacy: .public): its master is on this Mac already") }
         let work = Task(priority: .utility) {
-            try await Self.make(claim, in: folder, transfers: transfers, progress: relay.send)
+            try await Self.make(claim, in: folder, master: master, transfers: transfers, progress: relay.send)
         }
         let lease = ProxyLease()
         let heartbeat = Task { await keepAlive(claim.fileId, api: api, lease: lease, stopping: work) }
@@ -191,6 +253,21 @@ final class ProxyService: ObservableObject {
                 try? await api.reportProxyFailure(fileId: claim.fileId, message: message)
             }
         }
+        // However the job ended, it was the one its master was kept for.
+        await sources.release(claim.fileId)
+    }
+
+    /// The master, when it is on this Mac already and provably the one the
+    /// claim is for: this Mac's own upload of it (ProxySources checks the
+    /// object and the size), or its copy kept offline, at the version the
+    /// drive's mirror has now, at the size the claim says, and of the content
+    /// hash the claim carries, when it carries one. Nil: it is downloaded.
+    private func localMaster(for claim: ProxyClaim) async -> URL? {
+        if let held = await sources.master(for: claim) { return held }
+        guard let size = claim.size, let kept = await model?.finder.keptCopy(fileId: claim.fileId),
+              kept.entry.size == size else { return nil }
+        if let hash = claim.contentHash, kept.entry.contentHash != hash { return nil }
+        return kept.url
     }
 
     /// Progress reports while the job runs — every 5 seconds at most, and at
@@ -232,29 +309,36 @@ final class ProxyService: ObservableObject {
     }
 
     /// The work, off the main actor: download (the first 40%), transcode
-    /// (to 97%), upload. What it moves shows in the Activity graphs.
-    nonisolated private static func make(_ claim: ProxyClaim, in folder: URL, transfers: TransferLog?,
+    /// (to 97%), upload. What it moves shows in the Activity graphs. A
+    /// `master` already here (localMaster) is read where it is, through a
+    /// link in the job's folder, and the transcode is all of the first 97%.
+    nonisolated private static func make(_ claim: ProxyClaim, in folder: URL, master: URL?, transfers: TransferLog?,
                                          progress: @escaping @Sendable (Double) -> Void) async throws -> ProxyResult {
         let fm = FileManager.default
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let size = Double(claim.size ?? 0)
-        try roomFor(size, in: folder)
         let source = folder.appendingPathComponent("source." + TranscriptionService.fileExtension(name: claim.name, mime: claim.mime))
-        do {
-            try await FileDownload.fetch(claim.downloadUrl, to: source, progress: { bytes in
-                if size > 0 { progress(0.40 * min(1, Double(bytes) / size)) }
-            }, received: { transfers?.add(.download, $0) })
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as URLError where error.code == .cancelled {
-            throw CancellationError()
-        } catch {
-            throw Failure.download(error.localizedDescription)
+        var here = false
+        if let master, let bytes = claim.size { here = ProxySources.place(master, at: source, size: bytes) }
+        try roomFor(size, in: folder, downloading: !here)
+        if !here {
+            do {
+                try await FileDownload.fetch(claim.downloadUrl, to: source, progress: { bytes in
+                    if size > 0 { progress(0.40 * min(1, Double(bytes) / size)) }
+                }, received: { transfers?.add(.download, $0) })
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as URLError where error.code == .cancelled {
+                throw CancellationError()
+            } catch {
+                throw Failure.download(error.localizedDescription)
+            }
         }
-        progress(0.40)
+        let transcoding = here ? 0 : 0.40
+        progress(transcoding)
         let proxy = folder.appendingPathComponent("proxy.mp4")
         let out = try await ProxyTranscoder.transcode(source, to: proxy, spec: claim.spec) { p in
-            progress(0.40 + 0.57 * p)
+            progress(transcoding + (0.97 - transcoding) * p)
         }
         // The master is not needed any more, and may be large.
         try? fm.removeItem(at: source)
@@ -284,13 +368,13 @@ final class ProxyService: ObservableObject {
         guard (200..<300).contains(status) else { throw Failure.upload("storage answered \(status)") }
     }
 
-    /// Room for the master and its proxy, with some to spare: a job that
-    /// would fill the disk fails at once, saying so.
-    nonisolated private static func roomFor(_ bytes: Double, in folder: URL) throws {
+    /// Room for the proxy — and for the master, when it is downloaded — with
+    /// some to spare: a job that would fill the disk fails at once, saying so.
+    nonisolated private static func roomFor(_ bytes: Double, in folder: URL, downloading: Bool) throws {
         guard bytes > 0,
               let free = try? folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
                 .volumeAvailableCapacityForImportantUsage else { return }
-        let needed = Int64(bytes * 1.15) + 2_000_000_000
+        let needed = Int64(bytes * (downloading ? 1.15 : 0.15)) + 2_000_000_000
         if free < needed {
             throw Failure.noRoom(ByteCountFormatter.string(fromByteCount: needed, countStyle: .file))
         }
@@ -317,6 +401,15 @@ final class ProxyService: ObservableObject {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(Bundle.main.bundleIdentifier ?? OnyxIdentifiers.app, isDirectory: true)
             .appendingPathComponent("Proxies", isDirectory: true)
+    }
+
+    /// ~/Library/Caches/<bundle id>/Proxy masters: this Mac's own uploads,
+    /// kept for their proxies (ProxySources), on the disk the upload queue
+    /// stages on so a hard link reaches them. Emptied as the app opens.
+    nonisolated static var sourcesRoot: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? OnyxIdentifiers.app, isDirectory: true)
+            .appendingPathComponent("Proxy masters", isDirectory: true)
     }
 }
 

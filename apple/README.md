@@ -29,8 +29,11 @@ One Swift codebase. On the Mac it is **Onyx.app**:
   for a 1080p H.264 copy of each one (lib/proxies.js); this Mac takes the
   jobs from its queue while Onyx runs, downloads the master, re-encodes it on
   the media engine (`ProxyTranscoder`, about 7× real time for 4K60 on Apple
-  silicon) and uploads the copy, which the web and the iPhone then play.
-  Settings › General turns it off.
+  silicon) and uploads the copy, which the web and the iPhone then play. A
+  master this Mac uploaded itself, or keeps offline, is not downloaded
+  again: its own upload is kept for the job for up to a day
+  (`ProxySources`), and that job is taken first. Settings › General turns
+  it off.
 - **Thumbnails the web is missing**, made here: a 4K clip straight from a
   camera, or a HEIC or RAW a browser cannot draw, gets its thumbnail, the
   smaller sizes and the player's poster from this Mac, at the web's sizes,

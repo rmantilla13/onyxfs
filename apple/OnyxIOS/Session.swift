@@ -190,6 +190,7 @@ final class Session {
         try? await api.signOut()
         forget()
         await ThumbnailStore.shared.removeAll()
+        await PreviewLinks.shared.removeAll()
         PreviewFiles.removeAll()
         DownloadCenter.shared.removeAll()
     }
