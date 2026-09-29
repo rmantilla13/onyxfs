@@ -5,6 +5,7 @@ import {
 } from '@/lib/db';
 import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 import { replacementTarget, replacementKey } from '@/lib/replace-content';
+import { vacateTrashedKey } from '@/lib/trash-move';
 import {
   getStorageConfig, storageMode, cfgForFilespace, choosePartSize, partCount, buildObjectKey,
   s3CreateMultipartUpload, s3PresignUploadParts, s3ListParts,
@@ -13,6 +14,9 @@ import {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// Room for moving a just-trashed file out of the key a new one wants
+// (vacateTrashedKey, at most 15 s).
+export const maxDuration = 30;
 
 /**
  * Resumable multipart upload.
@@ -138,6 +142,9 @@ export async function POST(req) {
       });
       if (!d.ok) return refusal(d);
 
+      // A just-trashed file still at the key this one wants moves to the
+      // trash first, so this one keeps its name (lib/trash-move.js).
+      if (!replacing) await vacateTrashedKey(scoped, buildObjectKey(scoped, body.filename, body.folder), { budgetMs: 15_000 });
       const { uploadId, key, name } = await s3CreateMultipartUpload(scoped, {
         filename: replacing ? replacing.file.name : body.filename,
         contentType: body.mime,

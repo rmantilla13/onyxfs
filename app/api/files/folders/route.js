@@ -6,7 +6,7 @@ import {
 } from '@/lib/db';
 import { requirePrincipal, can, refusal } from '@/lib/authz';
 import {
-  getStorageConfig, storageMode, cfgForFilespace, s3CopyObject, s3DeleteObject, s3MoveObject,
+  getStorageConfig, storageMode, cfgForFilespace, s3CopyObject, s3DeleteObject,
   s3ObjectExists, s3PutFolderMarker, s3ListFolderMarkers,
 } from '@/lib/storage';
 import {
@@ -14,6 +14,8 @@ import {
 } from '@/lib/folder-ops';
 import { listFolderTree, storagePrefixFor } from '@/lib/file-listing';
 import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
+import { moveTrashedObject } from '@/lib/trash-move';
+import { afterResponse } from '@/lib/after-response';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -28,7 +30,6 @@ const MAX_RENAME_OBJECTS = 1000;
 const DELETE_BATCH = 400;
 // Parallel S3 requests.
 const S3_CONCURRENCY = 8;
-const TRASH_PREFIX = '_trash';
 
 const forbidden = (msg = 'No access to that folder.') => NextResponse.json({ error: msg }, { status: 403 });
 const bad = (msg, status = 400) => NextResponse.json({ error: msg }, { status });
@@ -283,8 +284,8 @@ export async function PATCH(req) {
  *
  * Delete a folder and everything in it, each file exactly as DELETE
  * /api/files/[id] would: with the `trash` flag on (read here, never from the
- * request), moved to `_trash/<id>/<key>` and soft-deleted; with it off,
- * removed and tombstoned. At most DELETE_BATCH files per call; `more` means
+ * request), soft-deleted at once and its object moved to `_trash/<id>/<key>`
+ * after the answer (lib/trash-move.js); with it off, removed and tombstoned. At most DELETE_BATCH files per call; `more` means
  * call again. The folder rows go once nothing in this scope is left.
  */
 export async function DELETE(req) {
@@ -331,21 +332,24 @@ export async function DELETE(req) {
   }
   const batch = work.slice(0, DELETE_BATCH);
 
+  // Objects to move to the trash once this has answered.
+  const moving = [];
   const results = await settleLimit(batch, S3_CONCURRENCY, async ({ id, key }) => {
     if (flags.trash === false) {
       if (key && scope.s3) await s3DeleteObject(scope.cfg, key);
       await deleteFile(id);
       return;
     }
-    let trashKey = null;
-    if (key && scope.s3) {
-      trashKey = `${TRASH_PREFIX}/${id}/${key}`;
-      // A failed move leaves the file where it was, live — never a row flagged
-      // as trashed while its object stays put.
-      await s3MoveObject(scope.cfg, key, trashKey);
-    }
-    await softDeleteFile(id, { trashKey, deletedBy: email });
+    // Trashed at once, as DELETE /api/files/[id] does it: the objects follow
+    // after the answer (lib/trash-move.js), rather than a copy of every
+    // video in the folder keeping it waiting.
+    await softDeleteFile(id, { trashKey: null, deletedBy: email });
+    if (key && scope.s3) moving.push(id);
   });
+  if (moving.length) {
+    afterResponse(`trash ${moving.length} under ${name}`,
+      () => settleLimit(moving, S3_CONCURRENCY, (id) => moveTrashedObject(id, { cfg: scope.cfg })));
+  }
   const failed = results.filter((r) => !r.ok);
   const deleted = results.length - failed.length;
   const more = work.length > batch.length;

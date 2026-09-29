@@ -1005,10 +1005,16 @@ export default function FilesClient({
       confirmLabel: 'Remove',
     });
     if (!ok) return;
-    // The server decides trash-vs-purge from its own flag state.
-    const results = await Promise.all(ids.map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' })));
-    const failed = results.filter((r) => !r.ok).length;
+    // Gone from the page at once, rather than when the last answer is in: a
+    // large selection on a slow line still takes a moment, and nothing here
+    // needs to wait for it. One that could not be removed is back with the
+    // reload below, and the toast says how many.
+    const gone = new Set(ids);
+    setFiles((prev) => prev.filter((f) => !gone.has(f.id)));
     setSelected((s) => { const next = new Set(s); ids.forEach((id) => next.delete(id)); return next; });
+    // The server decides trash-vs-purge from its own flag state.
+    const results = await Promise.all(ids.map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' }).catch(() => null)));
+    const failed = results.filter((r) => !r?.ok).length;
     load();
     loadFolders();
     if (failed) toast.error(`${failed} of ${n} could not be removed.`);
