@@ -12,6 +12,9 @@ One Swift codebase. On the Mac it is **Onyx.app**:
 - **Offline copies.** Pin a file, a folder or a whole drive from the Onyx
   window, and it is kept on this Mac to open with no connection. The cache
   can live in any folder, including an external disk (Settings → Storage).
+- **Each drive in Finder's sidebar** under Locations, with its own icon —
+  its initial in its colour from the web, which follows the drive when it
+  changes there.
 - **A menu bar item** that keeps Finder in sync while the window is closed.
   It opens a panel: how Onyx is doing, the activity graphs and what is on
   its way, and each drive with the icon its disk has in Finder and a switch

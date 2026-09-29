@@ -470,6 +470,30 @@ letter in the logo's cyan.
   paste) and is never replaced. One that is removed comes back at the next
   mount, as the disk's own. A new drawing, from a new design or a new colour,
   replaces the old one at the next mount.
+- **It follows the drive while mounted.** A drive given a new colour or name
+  on the web gets its new icon at once, not at its disk's next mount: the app
+  sets it as any app sets an icon (`DiskIcons`, `NSWorkspace.setIcon`, which
+  writes `/.VolumeIcon.icns` through the disk and which Finder shows at
+  once). The drive list that brings the change is asked for again when the
+  menu bar panel opens (if older than 10 s), when Onyx comes forward (30 s)
+  and every five minutes (`AppModel.refreshIfOlder`). The same rule holds:
+  only an icon that is the app's is replaced — the extension's, as drawn now,
+  or the last one set this way, whose bytes are remembered in UserDefaults
+  (`diskIcons`, with the drawing they were of) — so the person's own stays.
+  The volume's name is still the one it mounted with; a renamed drive's disk
+  takes its new name at its next mount.
+- **In Finder's sidebar.** Finder lists a volume under Locations by itself
+  when it arrives as a disk or a server does, and never lists an FSKit
+  volume: its record of every volume it has shown (the Locations list,
+  `com.apple.LSSharedFileList.FavoriteVolumes`) held the owner's external
+  disks, installers and Frame.io Drive's shares, and no Onyx disk. So each
+  disk is added to that list as it mounts (`FinderSidebar`, as Frame.io Drive
+  adds its own) and taken off when it is turned off in Onyx or ejected; one
+  that is only unmounted (quitting, signing out) keeps its place and shows
+  again when it is back. LSSharedFileList is deprecated since macOS 10.11 and
+  still how the list is kept; its "last" position is the sentinel `0x2`,
+  which Swift would retain as an object, so an entry goes after the list's
+  last entry instead.
 - **Not on NFS.** Drives mounted the other way, the rclone NFS mounts in
   `~/Onyx`, keep macOS's generic network-volume icon. macOS reads no Finder
   info over NFSv3: a root's `._.` and a file's `._name` are both ignored (tried

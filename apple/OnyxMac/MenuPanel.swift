@@ -31,6 +31,8 @@ struct MenuPanel: View {
             footer
         }
         .frame(width: Self.width)
+        // The drives as the web has them now, their colours and names.
+        .task { await model.refreshIfOlder(than: 10) }
     }
 
     // MARK: Header

@@ -197,6 +197,8 @@ final class DiskMounter: ObservableObject {
             states[id] = .mounted(path)
             lastFailure = nil
             extensionDidNotStart = false
+            // In Finder's sidebar too, which never lists one by itself.
+            FinderSidebar.add(path)
             appLog.info("onyxfs: \(id, privacy: .public) is a disk at \(path.path, privacy: .public)")
             return true
         } catch {
@@ -208,11 +210,13 @@ final class DiskMounter: ObservableObject {
         }
     }
 
+    /// Turned off in Onyx: out of the sidebar as well as off the Desktop.
     func unmount(_ scope: SyncDomain) async {
         let id = scope.identifier
         let state = states[id]
         states[id] = nil
         guard case let .mounted(url)? = state else { return }
+        FinderSidebar.remove(url)
         await Self.eject(url)
     }
 
@@ -294,6 +298,7 @@ final class DiskMounter: ObservableObject {
         for (id, state) in states {
             guard case let .mounted(mounted) = state, mounted.standardizedFileURL == url.standardizedFileURL else { continue }
             states[id] = nil
+            FinderSidebar.remove(mounted)
             if let scope = SyncDomain(identifier: id) { onEjected?(scope) }
         }
     }
