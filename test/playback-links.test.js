@@ -1,7 +1,8 @@
 // What a browser is handed to play or to save a file, run for real with no
 // database and no bucket: the listing's streamable copy of a heavy video
 // (asked for only when a row could have one), a share link's, and download
-// links signed for as long as a player's, so a large download can resume.
+// links signed for as long as a player's, so a large download can resume —
+// and a folder link's, which signs only what the folder holds.
 //
 // lib/db.js resolves to the in-memory store in test/fixtures/mac-writes-stubs.mjs
 // and '@/auth' to whoever the test says is signed in. Everything between —
@@ -38,6 +39,8 @@ const store = await import('../lib/db.js');
 const filesRoute = await import('../app/api/files/route.js');
 const downloadRoute = await import('../app/api/files/[id]/download/route.js');
 const shareDownloadRoute = await import('../app/s/[token]/download/route.js');
+const folderListRoute = await import('../app/s/[token]/list/route.js');
+const folderDownloadRoute = await import('../app/s/[token]/files/[id]/download/route.js');
 const { resolveShareAccess } = await import('../lib/share-access.js');
 const { playableProxies, withProxyKeys } = await import('../lib/file-listing.js');
 const { presignFileUrls, ORIGINAL_URL_TTL } = await import('../lib/storage.js');
@@ -194,5 +197,56 @@ describe('a download link outlives a paused download', () => {
     globalThis.__mw.shares.delete(token);
     const gone = await redirectOf(await call(shareDownloadRoute.GET, `/s/${token}/download`, { params: { token }, as: null }));
     assert.equal(gone.pathname, `/s/${token}`, 'sent to the page, which says why');
+  });
+});
+
+describe('a folder link signs what it reaches, and nothing else', () => {
+  /** A public link to the drive's folder `folder`, as file_shares stores one; its token. */
+  function folderLinkTo(folder) {
+    const token = randomUUID().replace(/-/g, '');
+    globalThis.__mw.shares.set(token, {
+      token, file_id: null, kind: 'folder', folder, storage_prefix: 'team', mode: 'public', created_by: ED,
+      created_at: Date.now(), expires_at: null, password_hash: null, review: null,
+    });
+    return token;
+  }
+  const thumb = () => `_thumbs/${randomUUID()}.webp`;
+
+  test('a page of the folder: its own rows, their pictures signed, an original only where a card draws one', async () => {
+    const cut = await file('Cut.mov', LIGHT, { thumbnailKey: thumb() });
+    const icon = await file('Icon.png', 2000, { kind: 'image', mime: 'image/png' });
+    await file('Else.mov', LIGHT, { folder: 'Other', storageKey: 'team/Other/Else.mov' });
+    const token = folderLinkTo('Cuts');
+    const res = await call(folderListRoute.GET, `/s/${token}/list`, { params: { token }, as: null });
+    assert.equal(res.status, 200);
+    const rows = new Map((await res.json()).files.map((f) => [f.name, f]));
+    assert.deepEqual([...rows.keys()].sort(), ['Cut.mov', 'Icon.png'], 'not the drive’s other folder');
+    const shownCut = rows.get('Cut.mov');
+    assert.match(shownCut.thumbnailUrl, /X-Amz-Signature=/);
+    assert.equal(shownCut.url, undefined, 'a video’s original is not a card’s picture');
+    assert.equal(shownCut.storageKey, undefined);
+    assert.equal(shownCut.id, cut.id);
+    const shownIcon = rows.get('Icon.png');
+    assert.equal(pathOf(shownIcon.url), `/onyx/${icon.storageKey}`, 'a small picture with no preview stands in as itself');
+    assert.match(shownIcon.url, /X-Amz-Signature=/);
+  });
+
+  test('a download: an attachment signed as a file link’s is, and only for a file in the folder', async () => {
+    const cut = await file('Cut.mov', LIGHT);
+    const elsewhere = await file('Else.mov', LIGHT, { folder: 'Other', storageKey: 'team/Other/Else.mov' });
+    const token = folderLinkTo('Cuts');
+    const get = (id) => call(folderDownloadRoute.GET, `/s/${token}/files/${id}/download`, { params: { token, id }, as: null });
+    const res = await get(cut.id);
+    assert.equal(res.status, 307);
+    const url = new URL(res.headers.get('location'));
+    assert.equal(url.searchParams.get('X-Amz-Expires'), String(ORIGINAL_URL_TTL));
+    assert.equal(url.searchParams.get('response-content-disposition'), 'attachment; filename="Cut.mov"');
+    assert.equal(pathOf(url.href), `/onyx/${cut.storageKey}`);
+
+    const out = new URL((await get(elsewhere.id)).headers.get('location'));
+    assert.equal(out.pathname, `/s/${token}/files/${elsewhere.id}`, 'nothing signed for a file outside it');
+    globalThis.__mw.shares.delete(token);
+    const gone = new URL((await get(cut.id)).headers.get('location'));
+    assert.equal(gone.pathname, `/s/${token}`, 'revoked: sent to the page, which says why');
   });
 });

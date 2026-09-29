@@ -199,9 +199,13 @@ async function fetchListing({ filespaceId, folder, query, kinds, sort, flat = fa
  * `initialLocal`, and `initialLegacy` — the grid/list choice kept before
  * there were views); `views` the person's saved views they can still see;
  * `initialQuery` a search from the URL (?q=).
+ *
+ * `folderLinks` says the role may make a folder's links (public and password
+ * links: shares.public); without it the folder Share dialog only lists and
+ * revokes. The route decides again, the folder's drive and grants included.
  */
 export default function FilesClient({
-  flags, canWrite, reviewLinks = false, schema: initialSchema, filespaceId, isAdmin = false,
+  flags, canWrite, reviewLinks = false, folderLinks = false, schema: initialSchema, filespaceId, isAdmin = false,
   drives = [], initial = null, initialFiltersOpen = false, initialSidebarOpen = true,
   view: initialViewDef = null, views: initialViews = [], initialLocal = {}, initialLegacy = null, initialQuery = '',
 }) {
@@ -303,8 +307,9 @@ export default function FilesClient({
   const [managingViews, setManagingViews] = useState(false);
   // What "Get info" is showing, if anything (InfoDialog).
   const [info, setInfo] = useState(null);
-  // The file the Share dialog is open for.
+  // The file the Share dialog is open for — or the folder (its path here).
   const [sharing, setSharing] = useState(null);
+  const [sharingFolder, setSharingFolder] = useState(null);
   // The video whose cover is being changed (CoverDialog).
   const [covering, setCovering] = useState(null);
   // Drives: the New drive dialog, and the drive whose members are open.
@@ -1442,12 +1447,19 @@ export default function FilesClient({
     ];
   };
 
+  // A folder's links: offered where its other changes are (`canWrite`), as a
+  // file's are where it may be changed, with the `shares` flag as this role
+  // sees it. The route decides again — the drive's editors and owners, or a
+  // folder grant, and the link kinds.
+  const folderShareItem = (path) => path && flags.shares && canWrite && { label: 'Share…', onSelect: () => setSharingFolder(path) };
+
   const folderMenu = (path) => [
     { heading: baseName(path) },
     { label: 'Open', hint: 'Return', onSelect: () => navigate(path) },
     itemFolders.some((f) => f.folder === path) && { label: 'Quick Look', hint: 'Space', onSelect: () => quickLook(folderKey(path)) },
     { label: 'Get info', onSelect: () => infoForFolder(path) },
     mac.inApp && folderOfflineItem(path),
+    folderShareItem(path),
     canWrite && '-',
     canWrite && { label: 'New folder inside…', onSelect: () => newFolder(path) },
     canWrite && { label: 'Rename…', onSelect: () => renameFolderUI(path) },
@@ -1466,6 +1478,7 @@ export default function FilesClient({
     canWrite && { label: 'Upload folder…', onSelect: () => folderInputRef.current?.click() },
     canWrite && '-',
     { label: 'Get info', hint: at === folder ? `${modKey()}I` : undefined, onSelect: () => infoForFolder(at) },
+    folderShareItem(at),
     at === folder && at && { label: 'Enclosing folder', hint: `${modKey()}↑`, onSelect: goUp },
     ...LAYOUT_CHOICES.filter((l) => l.key !== layout).map((l) => ({ label: `View as ${l.label}`, onSelect: () => changeDisplay({ layout: l.key }) })),
     flags.metadata && { label: filtersOpen ? 'Hide filters' : 'Show filters', onSelect: () => toggleFilters() },
@@ -2238,6 +2251,7 @@ export default function FilesClient({
             filespaceId={filespaceId}
             onOpenFile={openFile}
             onShowRecent={viewId === 'recent' ? undefined : () => applyView('recent')}
+            onShare={folderShareItem(folder) ? () => setSharingFolder(folder) : null}
             sidebarOpen={sidebarOpen}
             onToggleSidebar={toggleSidebar}
           />
@@ -2499,6 +2513,12 @@ export default function FilesClient({
         open={!!sharing}
         onClose={() => setSharing(null)}
         canReview={reviewLinks && !!sharing && isReviewableKind(effectiveKind(sharing))}
+      />
+      <ShareDialog
+        folder={sharingFolder ? { path: sharingFolder, filespaceId } : null}
+        open={!!sharingFolder}
+        onClose={() => setSharingFolder(null)}
+        canCreate={folderLinks}
       />
       {covering && (
         <CoverDialog
