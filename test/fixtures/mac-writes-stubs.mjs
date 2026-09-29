@@ -179,6 +179,15 @@ export async function setFilePoster(id, posterKey, media = {}) {
   row.metadata = { ...media, ...row.metadata };
   return copy(row);
 }
+// A filmstrip recorded after the fact, as lib/db.js's setFileFilmstrip
+// records it: the key, its geometry as metadata.filmstrip, and seq moved —
+// not version, nor updatedAt.
+export async function setFileFilmstrip(id, filmstripKey, filmstrip) {
+  const row = s().files.get(String(id));
+  if (!row) return null;
+  Object.assign(row, { filmstripKey, metadata: { ...row.metadata, filmstrip }, seq: nextSeq() });
+  return copy(row);
+}
 // The proxy queue, as far as POST /api/files needs it: asking for one is a row
 // keyed by file id, so the test can see WHETHER a heavy upload queued one. The
 // lease and the atomic claim are lib/db.js's, against a real database

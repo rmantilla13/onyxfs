@@ -8,7 +8,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { choosePartSize, partCount, providerLimits } from '../lib/storage.js';
+import { choosePartSize, partSizeFor, partCount, providerLimits } from '../lib/storage.js';
 
 const MiB = 1024 * 1024;
 const GiB = 1024 * MiB;
@@ -150,6 +150,61 @@ describe('choosePartSize across providers', () => {
     for (const size of [MiB, GiB, 40 * GiB, 500 * GiB, TiB]) {
       assert.equal(choosePartSize(size, b2), choosePartSize(size), `${size} differs on B2`);
       assert.equal(choosePartSize(size, r2), choosePartSize(size), `${size} differs on R2`);
+    }
+  });
+});
+
+// ── The part size a client asks for ─────────────────────────────────────────
+// The web asks for parts well above the floor — a slice of a File costs a
+// browser nothing, and every part is a request. What it asks is a request,
+// not an instruction: the server keeps it inside the same limits, and what it
+// settles on is stored with the upload for a resume to cut the file by.
+
+describe('partSizeFor', () => {
+  test('a size within the limits is honoured', () => {
+    assert.equal(partSizeFor(10 * GiB, undefined, 64 * MiB), 64 * MiB);
+    assert.equal(partSizeFor(100 * MiB, undefined, 32 * MiB), 32 * MiB);
+    assert.equal(partSizeFor(10 * GiB, b2, 16 * MiB), 16 * MiB);
+    assert.equal(partSizeFor(40 * MiB, undefined, '48000000'), 45 * MiB, 'a number sent as a string, down to a whole MiB');
+  });
+
+  test('never under the floor: 8 MiB, or what keeps the upload within 9,000 parts', () => {
+    assert.equal(partSizeFor(GiB, undefined, MiB), 8 * MiB);
+    assert.equal(partSizeFor(GiB, undefined, 5 * MiB), 8 * MiB, 'S3 would take 5 MiB; the floor is ours');
+    const big = 500 * GiB;
+    const ps = partSizeFor(big, undefined, 8 * MiB);
+    assert.equal(ps, choosePartSize(big));
+    assert.ok(partCount(big, ps) <= 9000, `${partCount(big, ps)} parts`);
+  });
+
+  test('never over the provider’s largest part', () => {
+    assert.equal(partSizeFor(100 * GiB, undefined, 50 * GiB), 5 * GiB);
+    assert.equal(partSizeFor(100 * GiB, b2, Number.MAX_SAFE_INTEGER), providerLimits(b2).maxPart);
+  });
+
+  test('always a whole number of MiB', () => {
+    for (const want of [8 * MiB + 1, 33 * MiB - 1, 64.5 * MiB, 1e9]) {
+      assert.equal(partSizeFor(20 * GiB, undefined, want) % MiB, 0, `${want}`);
+    }
+  });
+
+  test('nothing, or nonsense, is the server’s own choice', () => {
+    for (const bad of [undefined, null, '', 'abc', NaN, 0, -64 * MiB, Infinity, {}]) {
+      assert.equal(partSizeFor(10 * GiB, undefined, bad), choosePartSize(10 * GiB), String(bad));
+    }
+  });
+
+  test('past the provider’s ceiling it throws, whatever is asked', () => {
+    assert.throws(() => partSizeFor(6 * TiB, undefined, 64 * MiB), /5 TiB/);
+  });
+
+  test('every answer is an upload S3 takes', () => {
+    for (const size of [33 * MiB, GiB, 40 * GiB, 700 * GiB, 4 * TiB]) {
+      for (const want of [undefined, MiB, 64 * MiB, 512 * MiB, 10 * GiB]) {
+        const ps = partSizeFor(size, undefined, want);
+        assert.ok(ps >= 8 * MiB && ps <= 5 * GiB, `${size}/${want} → ${ps}`);
+        assert.ok(partCount(size, ps) <= 9000, `${size}/${want} → ${partCount(size, ps)} parts`);
+      }
     }
   });
 });
