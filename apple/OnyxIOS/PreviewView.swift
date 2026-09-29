@@ -241,6 +241,9 @@ private final class ZoomView: UIScrollView, UIScrollViewDelegate {
 private struct MediaPage: View {
     let file: FileItem
     let active: Bool
+    /// The server's line for a video worth a streamable copy
+    /// (lib/proxies.js PROXY_MIN_BYTES): under it, the original streams fine.
+    static let proxyWorthy: Int64 = 200 * 1024 * 1024
     @Environment(Session.self) private var session
     @State private var player: AVPlayer?
     @State private var problem: String?
@@ -272,7 +275,17 @@ private struct MediaPage: View {
             }
             do {
                 let link = try await session.api.contentLink(fileId: file.id)
-                let item = AVPlayerItem(url: link.url)
+                // The streamable copy when there is one: an action camera's
+                // 4K master runs at 60–120 Mbps, more than a phone's
+                // connection carries, and stalls; its 1080p copy does not.
+                let item = AVPlayerItem(url: link.proxyUrl ?? link.url)
+                // None yet, of a video this large: ask for one, so the next
+                // time it plays, it plays smoothly. Uploads since proxies
+                // came ask for their own; this catches the ones before.
+                if link.proxyUrl == nil, (file.size ?? 0) >= Self.proxyWorthy {
+                    let api = session.api, id = file.id
+                    Task.detached(priority: .utility) { try? await api.requestProxy(fileId: id) }
+                }
                 let next = AVPlayer(playerItem: item)
                 next.allowsExternalPlayback = true
                 player = next

@@ -598,7 +598,10 @@ struct FSBridgeTests {
 
     @Test func aLongPollWhoseDriveIsUnmountedMeanwhileGetsNothing() async throws {
         let rig = try await rig(); defer { rig.remove() }
-        let poll = Task { await ask(rig, "changes", ["since": String(Self.first), "wait": "0.3"]) }
+        // A wait well past the unmount: under load (a 4K encode in another
+        // test) a 100 ms sleep can overrun a short one, and the poll then
+        // ends with its wait instead.
+        let poll = Task { await ask(rig, "changes", ["since": String(Self.first), "wait": "2"]) }
         try await Task.sleep(for: .milliseconds(100))
         rig.bridge.end(scope: Self.scope)
         let answer = await poll.value
