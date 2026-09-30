@@ -1014,6 +1014,21 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 .folder-drop { border-radius: var(--radius-sm); transition: background-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
 .folder-drop.is-over { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
 .folder-link[draggable="true"] { cursor: pointer; }
+/* Starred: the folder's name, and the drive it is in when that is not the
+   one on screen. The remove button shows on hover and on keyboard focus. */
+.starred-row { position: relative; }
+.starred-row > .folder-link { align-items: center; padding-right: 24px; }
+.starred-glyph { flex: none; color: var(--accent); fill: currentColor; }
+.starred-where { min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: auto; }
+.starred-remove {
+  position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0;
+  border: none; border-radius: var(--radius-sm); background: transparent;
+  color: var(--muted); cursor: pointer; opacity: 0;
+}
+.starred-row:hover .starred-remove, .starred-remove:focus-visible { opacity: 1; }
+.starred-remove:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
 
 /* A folder, drawn solid (FolderGlyph): the kit's folder filled for the
    back, a lighter front panel over it, both the accent mixed with the page's
@@ -1637,7 +1652,11 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 
   /* The sidebar becomes a strip of folders as chips. A 220px column beside a
      150px grid was the whole page. */
-  .side-folders h3 { display: none; }
+  .side-folders h3, .side-starred h3 { display: none; }
+  .side-starred { margin-bottom: var(--s2); }
+  .starred-list { overflow-x: auto; }
+  .starred-row > .folder-link { padding-right: var(--s3); }
+  .starred-remove, .starred-where { display: none; }
   .folder-list { display: flex; gap: 6px; padding-bottom: var(--s1); }
   .folder-list .folder-link {
     width: auto;

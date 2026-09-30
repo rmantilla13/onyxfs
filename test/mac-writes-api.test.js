@@ -205,7 +205,7 @@ describe('the sign-in gate (middleware.js)', () => {
   const PATHS = [
     '/api/files', '/api/files/presign', '/api/files/upload/multipart', '/api/files/folders',
     '/api/files/3f0c7e1a-1111-4222-8333-944455556666', '/api/files/3f0c7e1a-1111-4222-8333-944455556666/content',
-    '/api/admin/trash/restore',
+    '/api/admin/trash/restore', '/api/stars',
   ];
 
   test('with no session and no token, the Mac’s paths are redirected to sign in exactly as before', async () => {

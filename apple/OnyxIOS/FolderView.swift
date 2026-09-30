@@ -33,6 +33,15 @@ struct FolderView: View {
         .navigationBarTitleDisplayMode(route.folder.isEmpty ? .large : .inline)
         .searchable(text: $query, prompt: route.folder.isEmpty ? "Search \(route.place.name)" : "Search \(title)")
         .toolbar {
+            if !route.folder.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    let starred = session.isStarred(route)
+                    Button { star(route, !starred) } label: {
+                        Image(systemName: starred ? "star.fill" : "star")
+                    }
+                    .accessibilityLabel(starred ? "Remove from Starred" : "Add to Starred")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) { ViewOptions(layout: $layout, sort: $sort) }
         }
         .task(id: FolderListing.Key(sort: sort, query: query)) {
@@ -66,6 +75,7 @@ struct FolderView: View {
                         FolderTile(node: node, items: listing.itemCounts[node.folder] ?? node.count)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu { starButton(node) }
                 }
                 ForEach(listing.files) { file in
                     fileButton(file) { FileTile(file: file, showsFolder: !query.isEmpty) }
@@ -83,6 +93,7 @@ struct FolderView: View {
                 NavigationLink(value: FolderRoute(place: route.place, folder: node.folder)) {
                     FolderRow(node: node, items: listing.itemCounts[node.folder] ?? node.count)
                 }
+                .contextMenu { starButton(node) }
             }
             ForEach(listing.files) { file in
                 fileButton(file) { FileRow(file: file, showsFolder: !query.isEmpty) }
@@ -92,6 +103,26 @@ struct FolderView: View {
             }
         }
         .listStyle(.plain)
+    }
+
+    // MARK: - Starring
+
+    private func starButton(_ node: FolderNode) -> some View {
+        let sub = FolderRoute(place: route.place, folder: node.folder)
+        let starred = session.isStarred(sub)
+        return Button { star(sub, !starred) } label: {
+            SwiftUI.Label(starred ? "Remove from Starred" : "Add to Starred",
+                          systemImage: starred ? "star.slash" : "star")
+        }
+    }
+
+    /// Star or unstar; a refusal shows in the banner.
+    private func star(_ target: FolderRoute, _ starred: Bool) {
+        Task {
+            if let problem = await session.setStarred(target, starred) {
+                withAnimation { listing.problem = problem }
+            }
+        }
     }
 
     private func fileButton<Label: View>(_ file: FileItem, @ViewBuilder label: () -> Label) -> some View {

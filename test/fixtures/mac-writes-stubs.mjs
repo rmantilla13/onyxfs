@@ -366,3 +366,6 @@ export async function deleteFolderRows(name, { tag = '' } = {}) {
   for (const r of rowsOf()) if (r.tag === tag && under(r.name, name)) s().folders.delete(fkey(tag, r.name));
   return { ok: true, remaining: live().filter((f) => under(f.folder, name)).length };
 }
+// Starred folders follow a rename and go with a delete; nothing here reads them.
+export async function renameFolderStars() {}
+export async function deleteFolderStars() {}

@@ -135,6 +135,46 @@ import Testing
     }
 }
 
+/// Starred folders, as GET and PUT /api/stars (app/api/stars/route.js) send them.
+@Suite struct StarsTests {
+    @Test func starsComeBackWithTheirScope() async throws {
+        let stub = try ListingStub { _ in
+            (200, #"{ "stars": [{ "driveId": "", "folder": "Campaigns" }, { "driveId": "d1", "folder": "Footage/Day 1" }] }"#)
+        }
+        defer { stub.tearDown() }
+        let stars = try await stub.api.stars()
+
+        let asked = try #require(stub.requests.first)
+        #expect(asked.method == "GET" && asked.path == "/api/stars")
+        #expect(asked.authorization == "Bearer test-token")
+        #expect(stars.map(\.scope) == [.library, .drive(id: "d1")])
+        #expect(stars.map(\.name) == ["Campaigns", "Day 1"])
+        #expect(stars[0].id != FolderStar(scope: .drive(id: "d1"), folder: "Campaigns").id,
+                "the same path in another drive is another star")
+    }
+
+    @Test func starringPutsAndReadsTheListBack() async throws {
+        let stub = try ListingStub { _ in (200, #"{ "stars": [{ "driveId": "d1", "folder": "Cuts" }] }"#) }
+        defer { stub.tearDown() }
+        let star = FolderStar(scope: .drive(id: "d1"), folder: "Cuts")
+        #expect(star.driveId == "d1")
+        let now = try await stub.api.setStar(star, starred: true)
+        #expect(stub.requests.first?.method == "PUT" && stub.requests.first?.path == "/api/stars")
+        #expect(now == [star])
+    }
+
+    @Test func aRefusalSaysWhy() async throws {
+        let stub = try ListingStub { _ in (409, #"{ "error": "You have 200 starred folders." }"#) }
+        defer { stub.tearDown() }
+        do {
+            try await stub.api.setStar(FolderStar(scope: .library, folder: "A"), starred: true)
+            Issue.record("a 409 should throw")
+        } catch let OnyxError.http(status, message) {
+            #expect(status == 409 && message == "You have 200 starred folders.")
+        }
+    }
+}
+
 private final class ListingStub: @unchecked Sendable {
     struct Request {
         let method: String

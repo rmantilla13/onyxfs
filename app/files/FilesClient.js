@@ -41,6 +41,7 @@ import useMacApp from '@/app/components/useMacApp';
 import { canFor, canForSome } from './can-for';
 import { fileKey, folderKey, parseKey } from '@/lib/selection';
 import FolderDrop, { DRAG_FILES, DRAG_FOLDER, startFolderDrag } from './FolderDrop';
+import StarredFolders from './StarredFolders';
 import { FolderTiles, FolderRows, MAX_TILES } from './FolderItems';
 import FilesHeader from './FilesHeader';
 import FilesToolbar, { MoreMenu } from './FilesToolbar';
@@ -197,7 +198,7 @@ async function fetchListing({ filespaceId, folder, query, kinds, sort, flat = fa
  */
 export default function FilesClient({
   flags, canWrite, reviewLinks = false, schema: initialSchema, filespaceId, isAdmin = false,
-  drives = [], initial = null, initialFiltersOpen = false, initialSidebarOpen = true,
+  drives = [], initial = null, initialFiltersOpen = false, initialSidebarOpen = true, initialStars = [],
   view: initialViewDef = null, views: initialViews = [], initialLocal = {}, initialLegacy = null, initialQuery = '',
 }) {
   // Back from a file this page opened: the listing as it was left — every
@@ -275,6 +276,8 @@ export default function FilesClient({
   // someone is adjusting them; what is applied shows as chips beside Filters.
   const [filtersOpen, setFiltersOpen] = useState(!!initialFiltersOpen);
   const [sidebarOpen, setSidebarOpen] = useState(!!initialSidebarOpen);
+  // Their starred folders, in any drive (Starred folders, below).
+  const [stars, setStars] = useState(initialStars);
   const [addingField, setAddingField] = useState(false);
   // Save current view…, and Manage views…
   const [savingView, setSavingView] = useState(false);
@@ -1033,8 +1036,16 @@ export default function FilesClient({
     toast.success(`Folder “${created}” created.`);
   };
 
+  // A folder renamed, moved or deleted here takes its stars with it on the
+  // server (app/api/files/folders); the sidebar's copy does the same.
+  const here = filespaceId || '';
+  const followStars = (from, to) => setStars((prev) => prev
+    .map((s) => (s.driveId === here && isWithin(s.folder, from) ? { ...s, folder: to == null ? null : rebase(s.folder, from, to) } : s))
+    .filter((s, i, all) => s.folder != null && all.findIndex((t) => t.driveId === s.driveId && t.folder === s.folder) === i));
+
   // After a folder moves, anything that pointed into it follows.
   const followFolder = (from, to) => {
+    followStars(from, to);
     if (isWithin(folder, from)) navigate(rebase(folder, from, to), { replace: true });
     load();
     loadFolders();
@@ -1129,6 +1140,7 @@ export default function FilesClient({
       lastError = body.error;
       if (!body.more || !body.deleted) break;
     }
+    if (!failed && !lastError) followStars(path, null);
     if (isWithin(folder, path) && !failed && !lastError) navigate(parentOf(path), { replace: true });
     load();
     loadFolders();
@@ -1367,6 +1379,9 @@ export default function FilesClient({
     { label: 'Open', hint: 'Return', onSelect: () => navigate(path) },
     itemFolders.some((f) => f.folder === path) && { label: 'Quick Look', hint: 'Space', onSelect: () => quickLook(folderKey(path)) },
     { label: 'Get info', onSelect: () => infoForFolder(path) },
+    isStarred(path)
+      ? { label: 'Remove from Starred', onSelect: () => setStar({ driveId: filespaceId || '', folder: path }, false) }
+      : { label: 'Add to Starred', onSelect: () => setStar({ driveId: filespaceId || '', folder: path }, true) },
     mac.inApp && (mac.folderPinned(path, filespaceId)
       ? { label: 'Remove offline copies', onSelect: () => mac.pinFolder(path, filespaceId, false) }
       : { label: 'Keep folder offline on this Mac', onSelect: () => mac.pinFolder(path, filespaceId, true) }),
@@ -1420,6 +1435,43 @@ export default function FilesClient({
     startDriveOpen(() => router.push(`/files${qs ? `?${qs}` : ''}`));
   }, [router]);
   const canManageDrive = (d) => isAdmin || d?.role === 'owner';
+
+  // ── Starred folders ───────────────────────────────────────────────────────
+  // Their shortcuts, in any drive, kept on the server (/api/stars) so the
+  // Mac app's window has the same ones. The page renders with them; a change
+  // shows at once and is put back if the server refuses it.
+  const isStarred = (path) => stars.some((s) => s.driveId === (filespaceId || '') && s.folder === path);
+  const setStar = useCallback(async (star, starred) => {
+    const same = (s) => s.driveId === star.driveId && s.folder === star.folder;
+    let before;
+    setStars((prev) => {
+      before = prev;
+      if (starred) return prev.some(same) ? prev : [...prev, star];
+      return prev.filter((s) => !same(s));
+    });
+    try {
+      const res = await fetch('/api/stars', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...star, starred }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Could not change Starred.');
+      setStars(data.stars);
+    } catch (e) {
+      if (before) setStars(before);
+      toast.error(e.message);
+    }
+  }, [toast]);
+  const openStar = useCallback((s) => {
+    if (s.driveId === (filespaceId || '')) { navigate(s.folder); return; }
+    setPendingDrive(s.driveId);
+    const params = new URLSearchParams();
+    if (s.driveId) params.set('filespace', s.driveId);
+    params.set('folder', s.folder);
+    startDriveOpen(() => router.push(`/files?${params}`));
+  }, [filespaceId, navigate, router]);
+  const unstar = useCallback((s) => setStar(s, false), [setStar]);
 
   const infoForDrive = (d) => setInfo({
     type: 'drive', drive: d, usage: driveUsage[d.id] || null, canManage: canManageDrive(d), isAdmin,
@@ -1542,6 +1594,18 @@ export default function FilesClient({
     if (disk) {
       const d = drives.find((x) => x.id === disk.dataset.drive);
       return { el: disk, items: d ? driveMenu(d) : libraryMenu() };
+    }
+    const star = target?.closest?.('[data-star-drive]');
+    if (star) {
+      const s = { driveId: star.dataset.starDrive || '', folder: star.dataset.starFolder };
+      return {
+        el: star,
+        items: [
+          { heading: baseName(s.folder) },
+          { label: 'Open', onSelect: () => openStar(s) },
+          { label: 'Remove from Starred', onSelect: () => setStar(s, false) },
+        ],
+      };
     }
     const dir = target?.closest?.('[data-folder]');
     if (dir) {
@@ -2122,6 +2186,16 @@ export default function FilesClient({
             canCreate={isAdmin}
             onOpen={openDrive}
             onNew={() => setNewDrive(true)}
+          />
+          <StarredFolders
+            stars={stars}
+            drives={drives}
+            driveId={filespaceId || ''}
+            folder={folder}
+            canWrite={canWrite}
+            onOpen={openStar}
+            onUnstar={unstar}
+            onDrop={onItemDrop}
           />
           <div className="side-folders">
             <Section title={activeDrive ? `Folders in ${activeDrive.name}` : 'Folders'}>

@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 136
+-- Statements: 138
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -474,6 +474,16 @@ CREATE TABLE IF NOT EXISTS saved_views (
 );
 
 CREATE INDEX IF NOT EXISTS saved_views_owner_idx ON saved_views (owner_email, created_at);
+
+CREATE TABLE IF NOT EXISTS folder_stars (
+  owner_email TEXT NOT NULL,
+  drive_id    TEXT NOT NULL DEFAULT '',
+  folder      TEXT NOT NULL,
+  created_at  BIGINT NOT NULL,
+  PRIMARY KEY (owner_email, drive_id, folder)
+);
+
+CREATE INDEX IF NOT EXISTS folder_stars_path_idx ON folder_stars (drive_id, folder);
 
 CREATE TABLE IF NOT EXISTS folder_access (
   folder TEXT NOT NULL,

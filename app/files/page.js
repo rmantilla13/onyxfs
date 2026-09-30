@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
 import { loadBrand } from '@/lib/brand-config';
-import { listFilespacesForSpace, getFileMetadataSchema, listSavedViews } from '@/lib/db';
+import { listFilespacesForSpace, getFileMetadataSchema, listSavedViews, listFolderStars } from '@/lib/db';
 import { getSessionUser } from '@/lib/session';
 import { getPrincipal, can } from '@/lib/authz';
 import { listFilesPage, listFolderTree } from '@/lib/file-listing';
@@ -56,7 +56,7 @@ export default async function FilesPage({ searchParams }) {
   // capped by their platform role.
   const principal = await getPrincipal(email, { person: user.person });
   const admin = principal.isAdmin;
-  const [brand, filespaces, rawSchema, savedViews] = await Promise.all([
+  const [brand, filespaces, rawSchema, savedViews, savedStars] = await Promise.all([
     loadBrand(),
     // Admins see every filespace (as owner), others their grants. The old
     // listFilespacesForUser left admins with an empty switcher: env-admins are
@@ -67,9 +67,15 @@ export default async function FilesPage({ searchParams }) {
     // below, as GET /api/views leaves it out. A failed read is no views, not
     // no page.
     listSavedViews(email).catch(() => []),
+    // Their starred folders, left out in the same way (GET /api/stars).
+    listFolderStars(email).catch(() => []),
   ]);
   const { flags } = principal;
   const views = visibleViews(savedViews, filespaces).map(toClientView);
+  const driveIds = new Set(filespaces.map((f) => f.id));
+  const stars = savedStars
+    .filter((s) => !s.driveId || driveIds.has(s.driveId))
+    .map(({ driveId, folder }) => ({ driveId, folder }));
 
   // In a drive, the drive's role decides as well: its viewers see the upload
   // and edit controls go, as the routes behind them now refuse
@@ -147,6 +153,7 @@ export default async function FilesPage({ searchParams }) {
         initial={initial}
         initialFiltersOpen={initialFiltersOpen}
         initialSidebarOpen={initialSidebarOpen}
+        initialStars={stars}
         view={view}
         views={views}
         initialLocal={initialLocal}

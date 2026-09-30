@@ -15,6 +15,7 @@ import Foundation
 ///     /api/files/<id>, /api/files/<id>/content, /api/files/folders
 ///                         writes from a drive mounted as a disk (onyxfs,
 ///                         Writes.swift) — let through only with a bearer
+///     /api/stars          starred folders (Stars.swift), the same way
 ///
 /// Anything else needs a cookie. If a new endpoint is added for this client,
 /// it has to be added to that matcher too, or it will 302 and the JSON decode

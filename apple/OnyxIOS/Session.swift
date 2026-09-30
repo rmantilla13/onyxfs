@@ -31,6 +31,9 @@ final class Session {
     private(set) var server: URL
     private(set) var email: String?
     private(set) var drives: [Place] = []
+    /// Starred folders, oldest first — the sidebar's shortcuts, the web's
+    /// own (/api/stars). Only those in a place listed here show.
+    private(set) var stars: [FolderStar] = []
     private(set) var isAdmin = false
     private(set) var loadingPlaces = false
     private(set) var placesLoaded = false
@@ -189,6 +192,7 @@ final class Session {
         settings.email = nil
         email = nil
         drives = []
+        stars = []
         isAdmin = false
         trees = [:]
         placesLoaded = false
@@ -215,6 +219,37 @@ final class Session {
             problem = nil
         } catch {
             failed(error)
+            return
+        }
+        // Stars are shortcuts: without them the drives still open, so a
+        // failure here keeps the last list rather than saying anything.
+        if let list = try? await api.stars() { stars = list }
+    }
+
+    // MARK: - Starred folders
+
+    /// The place a star opens in, while it is one of this account's.
+    func place(for star: FolderStar) -> Place? {
+        star.scope == .library ? .library : drives.first { $0.scope == star.scope }
+    }
+
+    func isStarred(_ route: FolderRoute) -> Bool {
+        stars.contains(FolderStar(scope: route.place.scope, folder: route.folder))
+    }
+
+    /// Star or unstar a folder. It shows at once, and goes back if the server
+    /// refuses; the refusal comes back in words.
+    func setStarred(_ route: FolderRoute, _ starred: Bool) async -> String? {
+        let star = FolderStar(scope: route.place.scope, folder: route.folder)
+        let before = stars
+        if starred { if !stars.contains(star) { stars.append(star) } }
+        else { stars.removeAll { $0 == star } }
+        do {
+            stars = try await api.setStar(star, starred: starred)
+            return nil
+        } catch {
+            stars = before
+            return explain(error)
         }
     }
 

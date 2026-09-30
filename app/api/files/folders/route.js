@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import {
   getFilespaceForUser, getFilespaceForWrite,
   createFolder, renameFolder, deleteFolderRows, listFolderSubtreeFiles, folderPathInUse, renameSpreadsGrants,
-  canModifyFolder, softDeleteFile, deleteFile, listFolderRowsUnder,
+  canModifyFolder, softDeleteFile, deleteFile, listFolderRowsUnder, renameFolderStars, deleteFolderStars,
 } from '@/lib/db';
 import { requirePrincipal, can, refusal } from '@/lib/authz';
 import {
@@ -252,6 +252,11 @@ export async function PATCH(req) {
   const leftovers = gone.filter((g) => !g.ok).length;
   if (leftovers) console.warn(`[folders rename] ${leftovers} original object(s) under ${from} could not be deleted`);
 
+  // Stars on it follow, everyone's. Best-effort: a star left behind points at
+  // an empty folder, not at anything it should not.
+  await renameFolderStars(scope.scoped ? String(body.filespaceId) : '', from, to)
+    .catch((e) => console.warn('[folders rename] stars did not follow:', e.message));
+
   // Empty-folder markers follow the tree. Best-effort, like creating them.
   if (scope.s3 && scope.prefix) {
     try {
@@ -329,6 +334,8 @@ export async function DELETE(req) {
 
   if (!more && !failed.length) {
     await deleteFolderRows(name, { tag: scope.tag });
+    await deleteFolderStars(scope.scoped ? String(url.searchParams.get('filespace')) : '', name)
+      .catch((e) => console.warn('[folders delete] stars stayed:', e.message));
     if (scope.s3 && scope.prefix) {
       try {
         const markers = await s3ListFolderMarkers(scope.cfg, { prefix: scope.prefix, under: name, keys: true });
