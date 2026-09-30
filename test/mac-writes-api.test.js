@@ -46,7 +46,7 @@ sdk.S3Client.prototype.send = async function send(cmd) {
     case 'HeadObjectCommand': {
       const o = b.objects.get(at(i.Key));
       if (!o) throw missing('NotFound');
-      return { ContentLength: o.size, ETag: `"${o.etag}"` };
+      return { ContentLength: o.size, ETag: `"${o.etag}"`, ...(o.modified != null && { LastModified: new Date(o.modified) }) };
     }
     case 'PutObjectCommand': {
       const body = Buffer.from(i.Body ?? '');
@@ -122,6 +122,7 @@ const waveformRoute = await import('../app/api/files/[id]/waveform/route.js');
 const placeholderRoute = await import('../app/api/files/[id]/placeholder/route.js');
 const filmstripRoute = await import('../app/api/files/[id]/filmstrip/route.js');
 const foldersRoute = await import('../app/api/files/folders/route.js');
+const { _setFolderMoveBudgetMs } = await import('../lib/folder-ops.js');
 const restoreRoute = await import('../app/api/admin/trash/restore/route.js');
 // What a route finishes after it answers: a trashed file's object moving to the trash.
 const { afterResponseSettled } = await import('../lib/after-response.js');
@@ -922,6 +923,163 @@ describe('folder names are per drive', () => {
     await folders.create(who, { name: 'Selects', filespaceId: 'd1' });
     const clash = await folders.move(who, { from: 'Archive/Selects', to: 'Selects', filespaceId: 'd1' });
     assert.deepEqual([clash.status, clash.body], [409, { error: '“Selects” already exists. Choose another name, or move the files into it instead.' }]);
+  });
+
+  // A move cut off by the time limit mid-copy never undid its copies: they
+  // sat at the new keys, and every try after was refused ("Something is
+  // already stored at …") with the folder still where it was. Each copy is
+  // noted before it is made (folder_move_copies), so the next call knows
+  // its own.
+  const copies = () => globalThis.__mw.s3.calls.filter((c) => c === 'CopyObjectCommand').length;
+  const budget = async (ms, run) => {
+    _setFolderMoveBudgetMs(ms);
+    try { return await run(); } finally { _setFolderMoveBudgetMs(); }
+  };
+  const bytes = (s) => Buffer.from(s.repeat(50));
+
+  test('a move that stopped part-way carries on from its copies, even from the Mac', async () => {
+    const who = mac(ED);
+    const a = await upload(who, { name: 'A.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+    const b = await upload(who, { name: 'B.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('b') });
+    const first = await budget(0, () => folders.move(web(ED), { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', resumable: true }));
+    assert.deepEqual([first.status, first.body], [202, { more: true, from: 'Shoot', to: '2026/Shoot', copied: 1, total: 2 }]);
+    assert.equal(row(a.id).folder, 'Shoot', 'nothing has moved yet');
+
+    // Onyx for Mac doesn't come back on a 202, so it moves in one call — past the copy already made.
+    const before = copies();
+    const moved = await folders.move(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1' });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.equal(copies() - before, 1, 'only the file not yet copied');
+    assert.equal(row(a.id).storageKey, 'team/2026/Shoot/A.arw');
+    assert.equal(row(b.id).storageKey, 'team/2026/Shoot/B.arw');
+    assert.equal(stored('team/2026/Shoot/A.arw').etag, md5(bytes('a')));
+    assert.equal(stored('team/2026/Shoot/B.arw').etag, md5(bytes('b')));
+    assert.ok(!stored('team/Shoot/A.arw') && !stored('team/Shoot/B.arw'), 'the originals are gone');
+    assert.deepEqual([...(globalThis.__mw.moveCopies || new Map()).keys()], [], 'and the notes with them');
+  });
+
+  test('a noted copy is used as long as it is still one, and made again when it isn’t', async () => {
+    const who = mac(ED);
+    const a = await upload(who, { name: 'A.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+    const b = await upload(who, { name: 'B.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('b') });
+    const objects = globalThis.__mw.s3.objects;
+    const t = Date.now();
+    // A was uploaded in parts: its copy has another ETag, and was written after it.
+    objects.set('onyx/team/Shoot/A.arw', { size: 100, etag: `${'1'.repeat(32)}-2`, modified: t - 60_000 });
+    objects.set('onyx/team/2026/Shoot/A.arw', { size: 100, etag: '2'.repeat(32), modified: t - 30_000 });
+    // B was written again after its copy was made, at the same length.
+    objects.set('onyx/team/Shoot/B.arw', { size: 100, etag: '3'.repeat(32), modified: t - 10_000 });
+    objects.set('onyx/team/2026/Shoot/B.arw', { size: 100, etag: '4'.repeat(32), modified: t - 30_000 });
+    globalThis.__mw.moveCopies = new Map([
+      ['team/2026/Shoot/A.arw', 'team/Shoot/A.arw'],
+      ['team/2026/Shoot/B.arw', 'team/Shoot/B.arw'],
+    ]);
+
+    const before = copies();
+    const moved = await folders.move(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1' });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.equal(copies() - before, 1, 'B again, not A');
+    assert.equal(stored('team/2026/Shoot/A.arw').etag, '2'.repeat(32));
+    assert.equal(stored('team/2026/Shoot/B.arw').etag, '3'.repeat(32), 'B as it is now');
+    assert.equal(row(a.id).folder, '2026/Shoot');
+    assert.equal(row(b.id).folder, '2026/Shoot');
+  });
+
+  test('a noted copy of another file, from a move of another folder that stopped, is made again', async () => {
+    const who = mac(ED);
+    const a = await upload(who, { name: 'A.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+    await upload(who, { name: 'A.arw', folder: 'Old/Shoot', filespaceId: 'd1', bytes: bytes('z') });
+    globalThis.__mw.s3.objects.set('onyx/team/2026/Shoot/A.arw', { ...stored('team/Old/Shoot/A.arw') });
+    globalThis.__mw.moveCopies = new Map([['team/2026/Shoot/A.arw', 'team/Old/Shoot/A.arw']]);
+
+    const moved = await folders.move(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1' });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.equal(row(a.id).storageKey, 'team/2026/Shoot/A.arw');
+    assert.equal(stored('team/2026/Shoot/A.arw').etag, md5(bytes('a')), 'this A, not the other');
+  });
+
+  test('something the rename didn’t put there is refused — unless the caller says to replace it', async () => {
+    const who = mac(ED);
+    const a = await upload(who, { name: 'A.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+    const other = { size: 7, etag: 'e'.repeat(32) };
+    globalThis.__mw.s3.objects.set('onyx/team/2026/Shoot/A.arw', other);
+    // Even the very same bytes: nothing says who put them there.
+    globalThis.__mw.s3.objects.set('onyx/team/2026/Shoot/B.arw', { ...stored('team/Shoot/A.arw') });
+    await upload(who, { name: 'B.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+
+    const out = await folders.move(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1' });
+    assert.deepEqual([out.status, out.body], [409, {
+      error: '2 files are already stored at “2026/Shoot” but not in the library (team/2026/Shoot/A.arw, …), perhaps left by a move that didn\'t finish. Nothing was renamed.',
+      code: 'occupied', occupied: 2, from: 'Shoot', to: '2026/Shoot',
+    }]);
+    assert.equal(row(a.id).storageKey, 'team/Shoot/A.arw');
+    assert.deepEqual(stored('team/2026/Shoot/A.arw'), other, 'what was there is left alone');
+
+    const replaced = await folders.move(web(ED), { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', resumable: true, replace: true });
+    assert.equal(replaced.status, 200, JSON.stringify(replaced.body));
+    assert.equal(row(a.id).storageKey, 'team/2026/Shoot/A.arw');
+    assert.equal(stored('team/2026/Shoot/A.arw').etag, md5(bytes('a')));
+  });
+
+  test('an object the library keeps at a new key is never replaced', async () => {
+    const who = mac(ED);
+    const a = await upload(who, { name: 'A.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+    // A file in the trash whose object never moved aside still holds its key.
+    const gone = await upload(who, { name: 'A.arw', folder: 'Elsewhere', filespaceId: 'd1', bytes: bytes('g') });
+    Object.assign(row(gone.id), { storageKey: 'team/2026/Shoot/A.arw', deletedAt: Date.now(), trashKey: null });
+    globalThis.__mw.s3.objects.set('onyx/team/2026/Shoot/A.arw', { ...stored('team/Elsewhere/A.arw') });
+
+    for (const replace of [false, true]) {
+      const out = await folders.move(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', replace });
+      assert.deepEqual([out.status, out.body], [409, { error: 'A file the library keeps is already stored at team/2026/Shoot/A.arw. Nothing was renamed.' }]);
+    }
+    assert.equal(row(a.id).folder, 'Shoot');
+    assert.equal(stored('team/2026/Shoot/A.arw').etag, md5(bytes('g')));
+  });
+
+  test('undoing never takes a copy the library has come to point at', async () => {
+    globalThis.__mw.globalNames = true;
+    const who = mac(ED);
+    await folders.create(who, { name: 'Selects', filespaceId: 'd1' });
+    await folders.create(who, { name: 'Picks', filespaceId: 'd2' });
+    await upload(who, { name: 'A.mov', folder: 'Selects', filespaceId: 'd1' });
+    const other = await upload(who, { name: 'Z.mov', folder: 'Other', filespaceId: 'd1' });
+    let release;
+    globalThis.__mw.s3.copyGate = new Promise((r) => { release = r; });
+    const going = folders.move(who, { from: 'Selects', to: 'Picks', filespaceId: 'd1' });
+    for (let i = 0; i < 200 && !copies(); i++) await new Promise((r) => setTimeout(r, 5));
+    assert.equal(copies(), 1, 'the copy is under way');
+    // Meanwhile a row has come to point at the new key (the same rename,
+    // run twice at once, got there first).
+    row(other.id).storageKey = 'team/Picks/A.mov';
+    globalThis.__mw.s3.copyGate = null;
+    release();
+    const out = await going;
+    assert.equal(out.status, 409, 'the one statement still refuses the name, as before');
+    assert.ok(stored('team/Picks/A.mov'), 'the copy the row points at stays');
+  });
+
+  test('a resumable move copies over several calls, then moves; one that is not does it in one', async () => {
+    const who = mac(ED);
+    const ids = [];
+    for (const n of ['1', '2', '3']) ids.push((await upload(who, { name: `${n}.arw`, folder: 'Shoot', filespaceId: 'd1', bytes: bytes(n) })).id);
+    await budget(0, async () => {
+      const seen = [];
+      for (let round = 0; round < 10; round++) {
+        const r = await folders.move(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', resumable: true });
+        seen.push(r.status);
+        if (r.status !== 202) { assert.equal(r.status, 200, JSON.stringify(r.body)); break; }
+        assert.deepEqual(r.body, { more: true, from: 'Shoot', to: '2026/Shoot', copied: round + 1, total: 3 });
+        assert.equal(row(ids[0]).folder, 'Shoot', 'nothing has moved yet');
+      }
+      assert.deepEqual(seen, [202, 202, 200]);
+      for (const id of ids) assert.equal(row(id).folder, '2026/Shoot');
+
+      // Without `resumable` (Onyx for Mac), the budget doesn't apply.
+      const back = await folders.move(who, { from: '2026/Shoot', to: 'Shoot', filespaceId: 'd1' });
+      assert.equal(back.status, 200, JSON.stringify(back.body));
+      for (const id of ids) assert.equal(row(id).folder, 'Shoot');
+    });
   });
 
   test('delete in one drive leaves the other drive’s folder of that name, and its file', async () => {

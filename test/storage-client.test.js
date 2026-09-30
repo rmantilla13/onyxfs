@@ -64,7 +64,7 @@ describe('one S3 client per bucket config', () => {
     const before = a.connections;
     for (let i = 0; i < 5; i++) assert.equal(await s3ObjectExists(cfg, `files/free-${i}`), false);
     assert.equal(await s3ObjectExists(cfg, 'files/there'), true);
-    assert.deepEqual(await s3HeadObject(cfg, 'files/there'), { etag: 'a'.repeat(32), size: 7 });
+    assert.deepEqual(await s3HeadObject(cfg, 'files/there'), { etag: 'a'.repeat(32), size: 7, modified: null });
     assert.equal(await s3DeleteObject(cfg, 'files/gone'), true);
     assert.equal(a.connections - before, 1, 'eight requests, one connection');
   });
