@@ -37,8 +37,32 @@ targets:
         LSUIElement: YES
     dependencies:
       - package: OnyxKit
+      - package: OnyxKit
+        product: OnyxFinderCore
       - target: OnyxFileProvider
         embed: true
+      - target: OnyxFinder
+        embed: true
+
+  # Finder's right-click menu on the drives (Keep Offline, Remove Offline
+  # Copy, Show in Onyx) and the marks on what is kept offline: a Finder Sync
+  # extension, sandboxed, that asks the app over its Mach port
+  # (OnyxFinderCore). Needs no provisioning profile. scripts/build-mac.sh
+  # builds the same sources into Contents/PlugIns/OnyxFinder.appex.
+  OnyxFinder:
+    type: app-extension
+    platform: macOS
+    sources: [OnyxFinder]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.onyxfs.app.findersync
+        INFOPLIST_FILE: OnyxFinder/Info.plist
+        # The bundle keys are generated; the NSExtension keys are the file's.
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_ENTITLEMENTS: OnyxFinder/OnyxFinder.entitlements
+    dependencies:
+      - package: OnyxKit
+        product: OnyxFinderCore
 
   # Native SwiftUI: browse, search and preview the drives. iOS 18 for the
   # zoom transitions and the web sign-in session SwiftUI now has.

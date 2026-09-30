@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- A Finder Sync extension is an app extension, and runs sandboxed. -->
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+  <!-- The one thing it reaches outside its sandbox: the app's Mach port,
+       where it asks what is kept offline and asks for Keep Offline
+       (OnyxFinderCore, FinderWire). No provisioning profile needed, as for
+       any temporary exception under Developer ID. scripts/build-mac.sh
+       writes its own copy with the port's name for the build it makes
+       (io.onyxfs.app.dev.finder for Onyx Dev); this one is Xcode's. -->
+  <key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
+  <array>
+    <string>io.onyxfs.app.finder</string>
+  </array>
+</dict>
+</plist>

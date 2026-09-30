@@ -13,6 +13,8 @@
 # signed build also carries the app group from it. ONYX_FILE_PROVIDER=1 adds
 # the File Provider extension (dormant: Finder uses streaming mounts now) and
 # needs ONYX_EXT_PROFILE (or apple/.signing/OnyxFileProvider.provisionprofile).
+# The Finder extension (Keep Offline in Finder's menus) needs no profile;
+# ONYX_FINDER_SYNC=0 leaves it out.
 #
 # Output: apple/build/Onyx.app.
 set -euo pipefail
@@ -30,6 +32,12 @@ WITH_EXT="${ONYX_FILE_PROVIDER:-0}"
 # ONYX_ONYXFS=0 leaves it out.
 FSX="$APP/Contents/Extensions/OnyxFS.appex"
 WITH_FS="${ONYX_ONYXFS:-1}"
+# Finder's right-click menu on the drives (Keep Offline, Remove Offline Copy)
+# and the marks on what is kept: a Finder Sync extension, an NSExtension, so
+# Contents/PlugIns. Sandboxed, with no provisioning profile: it reaches only
+# the app's Mach port. ONYX_FINDER_SYNC=0 leaves it out.
+FINDER="$APP/Contents/PlugIns/OnyxFinder.appex"
+WITH_FINDER="${ONYX_FINDER_SYNC:-1}"
 # ONYX_DEV=1: "Onyx Dev" (io.onyxfs.app.dev), which keeps its own sign-in and
 # settings, so testing a build never disturbs the real Onyx on this Mac.
 BUNDLE_ID="io.onyxfs.app"; NAME="Onyx"
@@ -48,6 +56,7 @@ FS_PROFILE="${ONYX_FS_PROFILE:-$(profile "${PROFILE_PREFIX}FS")}"
 products=(OnyxMac)
 [[ "$WITH_EXT" == "1" ]] && products+=(OnyxFileProvider)
 [[ "$WITH_FS" == "1" ]] && products+=(OnyxFS)
+[[ "$WITH_FINDER" == "1" ]] && products+=(OnyxFinder)
 
 # ONYX_UNIVERSAL=1: Apple silicon and Intel in one binary (releases do this).
 if [[ "${ONYX_UNIVERSAL:-0}" == "1" ]]; then
@@ -138,6 +147,24 @@ if [[ "$WITH_FS" == "1" ]]; then
   fi
 fi
 
+if [[ "$WITH_FINDER" == "1" ]]; then
+  mkdir -p "$FINDER/Contents/MacOS"
+  cp "$BIN/OnyxFinder" "$FINDER/Contents/MacOS/OnyxFinder"
+  cp OnyxFinder/Info.plist "$FINDER/Contents/Info.plist"
+  P="$FINDER/Contents/Info.plist"
+  # Its app's identifier with ".findersync" after it: the extension finds
+  # its app's port by that (OnyxFinderCore, FinderWire), so Onyx Dev's
+  # never talks to Onyx.
+  set_key "$P" CFBundleIdentifier string "$BUNDLE_ID.findersync"
+  set_key "$P" CFBundleName string "$NAME"
+  set_key "$P" CFBundleDisplayName string "$NAME"
+  set_key "$P" CFBundleShortVersionString string "$VERSION"
+  set_key "$P" CFBundleVersion string "$BUILD_NUMBER"
+  set_key "$P" LSMinimumSystemVersion string 14.0
+  /usr/libexec/PlistBuddy -c "Delete :CFBundleSupportedPlatforms" "$P" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms array" -c "Add :CFBundleSupportedPlatforms:0 string MacOSX" "$P"
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -174,6 +201,19 @@ cat > "$WORK/app.min.entitlements" <<'PLIST'
   <key>com.apple.security.network.client</key><true/>
 </dict></plist>
 PLIST
+# The Finder extension's, signed or not: sandboxed, and allowed to look up one
+# Mach port outside it, its own app's (FinderWire.portName: the bundle id
+# with ".finder"). A temporary exception needs no provisioning profile under
+# Developer ID, and notarization takes it.
+cat > "$WORK/finder.entitlements" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.app-sandbox</key><true/>
+  <key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
+  <array><string>$BUNDLE_ID.finder</string></array>
+</dict></plist>
+PLIST
 
 # Inside out: rclone, then the extension, then the app around them.
 if [[ -n "${ONYX_SIGN_IDENTITY:-}" ]]; then
@@ -194,6 +234,9 @@ if [[ -n "${ONYX_SIGN_IDENTITY:-}" ]]; then
       "${SIGN[@]}" --entitlements "$WORK/ext.min.entitlements" "$FSX"
       echo "No ${PROFILE_PREFIX}FS provisioning profile: drives mount in ~/Onyx, not as disks."
     fi
+  fi
+  if [[ "$WITH_FINDER" == "1" ]]; then
+    "${SIGN[@]}" --entitlements "$WORK/finder.entitlements" "$FINDER"
   fi
   if [[ "$WITH_EXT" == "1" ]]; then
     if [[ -n "$EXT_PROFILE" ]]; then
@@ -226,6 +269,7 @@ else
   codesign --force --sign - "$APP/Contents/MacOS/rclone"
   [[ "$WITH_EXT" == "1" ]] && codesign --force --entitlements "$WORK/ext.min.entitlements" --sign - "$EXT"
   [[ "$WITH_FS" == "1" ]] && codesign --force --entitlements "$WORK/ext.min.entitlements" --sign - "$FSX"
+  [[ "$WITH_FINDER" == "1" ]] && codesign --force --entitlements "$WORK/finder.entitlements" --sign - "$FINDER"
   codesign --force --sign - "$APP"
   echo "Unsigned build: for this Mac."
 fi

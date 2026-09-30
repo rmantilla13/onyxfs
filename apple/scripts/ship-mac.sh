@@ -173,7 +173,7 @@ if [ -z "$NOTES" ]; then
   RANGE="$COMMIT"
   if [ -n "${LAST_COMMIT:-}" ]; then RANGE="$LAST_COMMIT..$COMMIT"; fi
   DRAFT="$(git -C "$ROOT" log --no-merges --format='- %s' "$RANGE" -- \
-    apple/OnyxMac apple/OnyxFS apple/OnyxKit/Sources | head -20)"
+    apple/OnyxMac apple/OnyxFS apple/OnyxFinder apple/OnyxKit/Sources | head -20)"
   [ -n "$DRAFT" ] || DRAFT="- Onyx for Mac $VERSION."
   if [ "$DRY" = 0 ] && [ -t 0 ] && [ -t 1 ]; then
     NOTES_FILE="$(mktemp -t onyx-notes)"

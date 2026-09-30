@@ -429,6 +429,7 @@ struct FinderSettings: View {
                 Spacer()
                 Button("Sync Now") { Task { await model.syncNow() } }
             }
+            FinderMenusRow(service: model.finderSync)
             if let problem = finder.problem ?? model.problem {
                 Text(problem).foregroundStyle(.red).font(.caption)
             }
@@ -475,6 +476,7 @@ struct FinderSettings: View {
 
 /// Where streamed and pinned files are kept, and how much streaming may keep.
 struct StorageSettings: View {
+    @EnvironmentObject var model: AppModel
     @ObservedObject var finder: DriveService
 
     private let limits = [10, 25, 50, 100, 250, 500, 0]
@@ -508,7 +510,7 @@ struct StorageSettings: View {
             }
             Section("Kept offline") {
                 if finder.pinRules.isEmpty {
-                    Text("Nothing yet. In the Onyx window, right-click a file or folder and choose Keep Offline on This Mac, or turn on Offline for a whole drive in Finder settings.")
+                    Text("Nothing yet. Right-click a file or folder in the Onyx window, or on a drive in Finder, and choose to keep it offline. Or turn on Offline for a whole drive in Finder settings.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(finder.pinRules, id: \.self) { rule in
@@ -554,9 +556,13 @@ struct StorageSettings: View {
     }
 
     private func describe(_ rule: PinRule) -> String {
-        let drive = rule.scope == SyncDomain.library.identifier ? "Library" : "Drive"
+        let drive = rule.scope == SyncDomain.library.identifier ? "Library"
+            : model.drives.first { SyncDomain.drive(id: $0.id).identifier == rule.scope }?.name ?? "Drive"
         switch rule.target {
-        case let .file(id): return "\(drive) · file \(id.prefix(8))…"
+        case let .file(id):
+            // Where the file is now, when its drive's mirror is open.
+            if let path = finder.keptPaths[rule.scope]?.files[id] { return "\(drive) · \(path)" }
+            return "\(drive) · file \(id.prefix(8))…"
         case let .folder(path): return path.isEmpty ? "\(drive) · everything" : "\(drive) · \(path)"
         }
     }
