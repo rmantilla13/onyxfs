@@ -69,7 +69,11 @@ final class DriveService: ObservableObject {
     var uploads: UploadQueue?
     /// One per drive with a disk: Finder's changes, made on the server.
     var writers: [String: DriveWriter] = [:]
-    @Published var uploadSummary = UploadSummary()
+    /// Files waiting to upload keep Onyx out of App Nap (WorkActivity), from
+    /// the first one queued until the last is up or given up on.
+    @Published var uploadSummary = UploadSummary() {
+        didSet { WorkActivity.app.set(.uploads, uploadSummary.waiting > 0) }
+    }
     /// Asks the queue for the menu's summary, a few times a second while
     /// anything changes or is on its way (summarizeUploads), and is nil
     /// when nothing is.
@@ -173,7 +177,19 @@ final class DriveService: ObservableObject {
             transfers.add(.write, moved.write)
             if let cache = moved.cache { diskCaches.withLock { $0[scope] = cache } }
         }
+        // Bytes going by — apps reading and writing the disks, and every
+        // transfer counted here — keep Onyx out of App Nap until a few
+        // seconds pass with none. Woken by the first bytes after a quiet
+        // spell, never polled while nothing moves (the Activity graphs hear
+        // the same wake, ActivityClock).
+        let quiet: @Sendable () -> Bool = { [weak transfers] in transfers?.quiet(for: 2) ?? true }
+        transfers.onWake = {
+            WorkActivity.app.poke(.transfers, every: DriveService.transfersLookEvery, quiet: quiet)
+        }
     }
+
+    /// How often bytes going by are looked for while they move.
+    nonisolated static let transfersLookEvery: Duration = .seconds(2)
 
     /// ~/Library/Application Support/Onyx/Offline: not Caches, which macOS
     /// may empty on its own — pinned files are promised to stay.
@@ -406,9 +422,22 @@ final class DriveService: ObservableObject {
     func syncForWrites(_ scope: SyncDomain) async {
         noteActivity()
         guard let mirror = mirrors[scope.identifier] else { return }
-        if let diff = try? await mirror.sync() { onMirrorSynced?(mirror, diff) }
+        if let diff = try? await sync(mirror) { onMirrorSynced?(mirror, diff) }
         await writers[scope.identifier]?.mirrorChanged()
     }
+
+    /// A drive's mirror brought up to the server — held as work in flight
+    /// (WorkActivity) once it has gone on past `syncGrace`, so a pass
+    /// bringing pages goes at full speed with the window closed. A quiet
+    /// pass, a few hundred bytes, is over well before and never touches the
+    /// activity: its timer is called off unfired.
+    private func sync(_ mirror: DriveMirror) async throws -> Replica.Diff {
+        let hold = WorkActivity.app.begin(.sync, grace: Self.syncGrace)
+        defer { hold.end() }
+        return try await mirror.sync()
+    }
+
+    static let syncGrace: Duration = .seconds(2)
 
     /// After an upload finished: the drive's mirror before long, so the file
     /// leaves pending for the server's copy. At once for the first; then at
@@ -577,7 +606,7 @@ final class DriveService: ObservableObject {
         // The first listing waits for a sync, so a new mount does not open empty.
         if await mirror.lastSynced == nil {
             do {
-                let diff = try await mirror.sync()
+                let diff = try await sync(mirror)
                 onMirrorSynced?(mirror, diff)
             } catch OnyxError.driveGone {
                 // Not with the thresholds as they are — a first sync is one
@@ -751,7 +780,7 @@ final class DriveService: ObservableObject {
             guard started == generation else { return }
             syncing.insert(id)
             let result: Result<Replica.Diff, Error>
-            do { result = .success(try await mirror.sync()) } catch { result = .failure(error) }
+            do { result = .success(try await sync(mirror)) } catch { result = .failure(error) }
             // Signed out while it synced: nothing more for that account.
             guard started == generation else { return }
             switch result {
@@ -948,6 +977,10 @@ final class DriveService: ObservableObject {
         let transfers = self.transfers
         let report = await pins.reconcile(scope: scope, index: index) { entry, destination in
             guard let id = entry.fileId else { throw OnyxError.decoding("not a file") }
+            // Work in flight while this copy comes down (WorkActivity): what
+            // is kept offline arrives as fast with the window closed as open.
+            let fetching = WorkActivity.app.begin(.offlineCopies)
+            defer { fetching.end() }
             let url = try await mirror.contentURL(fileId: id)
             // Straight into the store's folder, on the cache's own disk.
             do {

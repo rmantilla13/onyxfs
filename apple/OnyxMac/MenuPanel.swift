@@ -164,10 +164,12 @@ struct MenuPanel: View {
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(",")
+                // ⌥⌘Q, as in the app menu: ⌘Q never quits Onyx
+                // (OnyxCommands), here any more than in its window.
                 Button("Quit") { NSApp.terminate(nil) }
                     .buttonStyle(.plain)
-                    .keyboardShortcut("q")
-                    .help("Quit Onyx. Drives leave Finder until it opens again.")
+                    .keyboardShortcut("q", modifiers: [.command, .option])
+                    .help("Quit Onyx (⌥⌘Q). Drives leave Finder until it opens again.")
             }
             .font(.system(size: 12))
             .foregroundStyle(.secondary)

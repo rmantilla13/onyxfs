@@ -59,7 +59,11 @@ final class WebDownloads: NSObject, ObservableObject {
     var folder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
         ?? FileManager.default.temporaryDirectory
 
-    private var live: [ObjectIdentifier: (id: UUID, download: WKDownload)] = [:]
+    /// Downloads under way keep Onyx out of App Nap (WorkActivity): one
+    /// left running as the window closes goes on at full speed.
+    private var live: [ObjectIdentifier: (id: UUID, download: WKDownload)] = [:] {
+        didSet { WorkActivity.app.set(.downloads, !live.isEmpty) }
+    }
     private var sampler: Task<Void, Never>?
     private var lastSample = Date()
 

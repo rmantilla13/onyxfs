@@ -75,6 +75,12 @@ export default function useMacApp() {
     hasBar: typeof window !== 'undefined' && !!window.onyxMac?.setBar,
     /** Look at the transcription queue now, not at the next poll. A no-op in builds without it. */
     transcribe: (fileId) => mac()?.transcribe?.(fileId),
+    /**
+     * Say whether this page's uploads are under way: the app keeps itself
+     * out of App Nap meanwhile, so they keep their speed with its window
+     * closed. A no-op in builds without it.
+     */
+    uploading: (on) => mac()?.uploading?.(!!on),
     folderPinned: (path, driveId) => state.pinnedFolders.some((f) =>
       f.scope === (driveId ? `drive.${driveId}` : 'library') && f.path === path),
   };

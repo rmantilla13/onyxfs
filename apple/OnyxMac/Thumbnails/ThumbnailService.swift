@@ -37,8 +37,14 @@ final class ThumbnailService: ObservableObject {
             if enabled { start() } else { stop() }
         }
     }
-    /// What the worker is doing, for Settings.
-    @Published private(set) var status = ThumbnailWorker.Status()
+    /// What the worker is doing, for Settings. Files due keep Onyx out of
+    /// App Nap (WorkActivity) until the last is made or put off.
+    @Published private(set) var status = ThumbnailWorker.Status() {
+        didSet { WorkActivity.app.set(.thumbnails, status.working != nil || status.waiting > 0) }
+    }
+    /// A hold per sound being drawn into a waveform, from its offer until
+    /// the maker says how it went (or is stopped): work in flight too.
+    private var drawing: [String: WorkActivity.Hold] = [:]
 
     private weak var model: AppModel?
     private let defaults = UserDefaults.standard
@@ -107,7 +113,11 @@ final class ThumbnailService: ObservableObject {
         self.waveforms = waveforms
         try? FileManager.default.removeItem(at: Self.soundRoot)
         try? FileManager.default.createDirectory(at: Self.soundRoot, withIntermediateDirectories: true)
-        Task { await waveforms.observe { ThumbnailService.note($0, $1) } }
+        let heard: @Sendable (WaveformMaker.Sound, WaveformMaker.Outcome) -> Void = { [weak self] sound, outcome in
+            ThumbnailService.note(sound, outcome)
+            Task { @MainActor [weak self] in self?.drawn(sound.fileId, by: waveforms) }
+        }
+        Task { await waveforms.observe(heard) }
         // The drives open already; each opened later is looked at as it syncs.
         for mirror in model.finder.openMirrors { mirrorSynced(mirror, nil) }
         log.info("making thumbnails on this Mac (\(PreviewFormat.best.rawValue, privacy: .public))")
@@ -120,6 +130,8 @@ final class ThumbnailService: ObservableObject {
             self.waveforms = nil
             Task { await waveforms.stop() }
         }
+        for hold in drawing.values { hold.end() }
+        drawing = [:]
         guard let worker else { return }
         self.worker = nil
         scanned = [:]
@@ -190,7 +202,16 @@ final class ThumbnailService: ObservableObject {
             return
         }
         let sound = WaveformMaker.Sound(fileId: fileId, name: job.name, url: link)
+        drawing[fileId]?.end()
+        drawing[fileId] = WorkActivity.app.begin(.waveforms)
         Task { await waveforms.offer(sound) }
+    }
+
+    /// The maker is done with a sound, however it went.
+    private func drawn(_ fileId: String, by maker: WaveformMaker) {
+        // Not a late word from a maker already stopped: its holds went then.
+        guard maker === waveforms else { return }
+        drawing.removeValue(forKey: fileId)?.end()
     }
 
     /// Whether this account may change files in the drive, as the drive

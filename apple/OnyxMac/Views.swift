@@ -374,7 +374,8 @@ struct AccountSettings: View {
                     Text("Allow Onyx in System Settings → General → Login Items.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Text("Onyx keeps running in the menu bar when its window is closed, so your drives stay in Finder and offline files stay current. Quit it from the menu bar icon.")
+                Toggle("Show Onyx in the Dock when its window is closed", isOn: $background.keepsDockIcon)
+                Text("Onyx keeps running in the menu bar when you close its window or press ⌘Q, so your drives stay in Finder and offline files stay current. To quit it, press ⌥⌘Q, or choose Quit from the menu bar icon.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             TranscriptionSettings(transcriber: model.transcriber)

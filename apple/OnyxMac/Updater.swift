@@ -31,7 +31,16 @@ final class Updater: ObservableObject {
         case failed(String)
     }
 
-    @Published private(set) var state: State = .idle
+    @Published private(set) var state: State = .idle {
+        // Downloading or installing an update is work in flight
+        // (WorkActivity), should the window close meanwhile.
+        didSet {
+            switch state {
+            case .downloading, .installing: WorkActivity.app.set(.update, true)
+            default: WorkActivity.app.set(.update, false)
+            }
+        }
+    }
     /// Whether the window should show the update sheet.
     @Published var showSheet = false
     @Published var automatic: Bool {

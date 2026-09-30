@@ -57,7 +57,8 @@ struct ActivityBar: View {
 /// wakes it (TransferLog.onWake), it stops itself once the log has been
 /// quiet for as long as a graph shows, and it stops when the last view
 /// showing it goes. One for the app (AppModel.activity): the log has one
-/// hook, and one tick redraws every view at once.
+/// hook (shared, in turn, with DriveService's watch on App Nap), and one
+/// tick redraws every view at once.
 @MainActor
 final class ActivityClock: ObservableObject {
     @Published private(set) var tick = 0
@@ -67,7 +68,11 @@ final class ActivityClock: ObservableObject {
 
     init(transfers: TransferLog) {
         self.transfers = transfers
+        // After whoever heard it before: DriveService, which keeps Onyx out
+        // of App Nap while bytes move (WorkActivity).
+        let before = transfers.onWake
         transfers.onWake = { [weak self] in
+            before?()
             Task { @MainActor in self?.run() }
         }
     }
