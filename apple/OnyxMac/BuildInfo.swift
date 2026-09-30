@@ -11,6 +11,10 @@ enum BuildInfo {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
     }
 
+    /// "0.5.18 (202609292031)": this copy, told apart from the one before it
+    /// even when a rebuilt release keeps the version.
+    static var fullVersion: String { "\(version) (\(build ?? "-"))" }
+
     /// The Apple Developer team this copy is signed by, or nil for an unsigned
     /// (ad-hoc) development build.
     ///

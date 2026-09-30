@@ -434,7 +434,12 @@ struct FinderSettings: View {
             }
         }
         .padding(20)
-        .task { await model.refresh() }
+        .task {
+            // Switched on in System Settings since Onyx last asked: said
+            // here at once, and the drives in ~/Onyx become disks.
+            await finder.checkFileSystemSwitch(always: true)
+            await model.refresh()
+        }
     }
 
     private func row(_ scope: SyncDomain, name: String, icon: NSImage) -> some View {
@@ -578,20 +583,27 @@ struct DiskModeNote: View {
                 .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
             }
         case .needsEnabling:
-            // Turn On asks macOS from Onyx itself; System Settings' own switch
-            // is the way round when that is refused (DiskMounter.enableExtension).
+            // System Settings' switch is the way macOS lets people switch it
+            // on (FileSystemSwitch); Onyx's own Turn On only where macOS may
+            // allow that (offersTurnOn, DiskMounter.enableExtension).
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Image(lucide: "hard-drive").foregroundStyle(.secondary)
-                    Text("Each drive can be a disk of its own, under Locations and on the Desktop. Turn on the Onyx file system to have them there.")
+                    Text("Each drive can be a disk of its own, under Locations and on the Desktop. Switch Onyx on in System Settings › General › Login Items & Extensions › File System Extensions to have them there.")
                         .font(.caption)
                     Spacer()
-                    Button(finder.turningOnDisks ? "Turning On…" : "Turn On") {
-                        Task { await finder.turnOnDisks() }
-                    }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(finder.turningOnDisks)
                     Button("System Settings…") { finder.openFileSystemSettings() }
+                        .keyboardShortcut(.defaultAction)
+                    if finder.offersTurnOn {
+                        Button(finder.turningOnDisks ? "Turning On…" : "Turn On") {
+                            Task { await finder.turnOnDisks() }
+                        }
+                        .disabled(finder.turningOnDisks)
+                    }
+                }
+                if finder.switchDidNotTake {
+                    Text("If Onyx won't stay switched on there, restart your Mac, then switch it on.")
+                        .font(.caption)
                 }
                 if let problem = finder.turnOnProblem {
                     Text(problem).font(.caption).foregroundStyle(.red)
@@ -619,20 +631,27 @@ struct DiskModeNote: View {
 
 /// Settings › Finder: whether Onyx has Full Disk Access, and the way to the
 /// pane that grants it. Only the person can grant it; Onyx only says where.
+/// When Onyx cannot tell (FullDiskAccessProbe found nothing to ask with), it
+/// says nothing rather than "off".
 struct FullDiskAccessRow: View {
     @StateObject private var access = FullDiskAccess()
 
     var body: some View {
-        let granted = access.granted
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(lucide: granted ? "shield-check" : "shield").foregroundStyle(.secondary) /* icons: shield-check shield */
-            Text(granted
-                 ? "Full Disk Access is on: Onyx can reach files anywhere on this Mac you point it to."
-                 : "Full Disk Access is off. Turn it on for Onyx to reach files in every folder on this Mac.")
-                .font(.caption)
-            Spacer()
-            if !granted {
-                Button("Privacy & Security…") { FullDiskAccess.openSettings() }
+        // A stack even when empty, so it still hears Onyx come forward.
+        VStack(alignment: .leading, spacing: 0) {
+            if access.answer != .unknown {
+                let granted = access.answer == .granted
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(lucide: granted ? "shield-check" : "shield").foregroundStyle(.secondary) /* icons: shield-check shield */
+                    Text(granted
+                         ? "Full Disk Access is on: Onyx can reach files anywhere on this Mac you point it to."
+                         : "Full Disk Access is off. Turn it on for Onyx to reach files in every folder on this Mac.")
+                        .font(.caption)
+                    Spacer()
+                    if !granted {
+                        Button("Privacy & Security…") { FullDiskAccess.openSettings() }
+                    }
+                }
             }
         }
         // Back from System Settings, it may be on now.
@@ -644,17 +663,16 @@ struct FullDiskAccessRow: View {
 
 @MainActor
 final class FullDiskAccess: ObservableObject {
-    @Published private(set) var granted = FullDiskAccess.probe()
+    @Published private(set) var answer = FullDiskAccess.probe()
 
-    func check() { granted = Self.probe() }
+    func check() { answer = Self.probe() }
 
-    /// Whether this app may open a file only Full Disk Access opens: the
-    /// privacy database itself, opened and closed, nothing read.
-    nonisolated static func probe() -> Bool {
-        let fd = open(NSHomeDirectory() + "/Library/Application Support/com.apple.TCC/TCC.db", O_RDONLY)
-        guard fd >= 0 else { return false }
-        close(fd)
-        return true
+    /// Whether this app may open a file only Full Disk Access opens
+    /// (FullDiskAccessProbe: the Mac's privacy database, the account's, then
+    /// Safari's folder — each opened and closed, nothing read). Onyx is not
+    /// sandboxed, so the home folder is the person's own.
+    nonisolated static func probe() -> FullDiskAccessProbe.Answer {
+        FullDiskAccessProbe.answer(home: NSHomeDirectory())
     }
 
     static func openSettings() {

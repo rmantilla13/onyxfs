@@ -31,8 +31,13 @@ struct MenuPanel: View {
             footer
         }
         .frame(width: Self.width)
-        // The drives as the web has them now, their colours and names.
-        .task { await model.refreshIfOlder(than: 10) }
+        // The drives as the web has them now, their colours and names; and,
+        // while they are in ~/Onyx because the file system is off, whether
+        // it has been switched on since.
+        .task {
+            await finder.checkFileSystemSwitch()
+            await model.refreshIfOlder(than: 10)
+        }
     }
 
     // MARK: Header
@@ -88,6 +93,11 @@ struct MenuPanel: View {
                 PanelTitle("Drives")
                 Spacer()
                 PanelTitle("In Finder")
+            }
+            // In ~/Onyx rather than disks of their own: said here, not only
+            // in Settings, with the way to put it right.
+            if let note = finder.fileSystemNote {
+                FileSystemNoteRow(finder: finder, note: note)
             }
             // A long list scrolls rather than running off the screen.
             if rows > 9 {
@@ -190,6 +200,69 @@ private struct PanelTitle: View {
 
     var body: some View {
         Text(text).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+    }
+}
+
+/// Why drives are in the Onyx folder rather than disks of their own
+/// (DriveService.fileSystemNote), and the way to put it right. Switched off:
+/// System Settings' switch, the one macOS lets people use — Onyx's own Turn
+/// On beside it only where macOS may allow that (offersTurnOn); sent there
+/// and still off, a restart is what it takes, and it says so. Not taken in by
+/// macOS, or a disk that would not mount: what macOS said, and the restart.
+private struct FileSystemNoteRow: View {
+    @ObservedObject var finder: DriveService
+    let note: DriveService.FileSystemNote
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(lucide: "hard-drive", size: 12).foregroundStyle(.orange)
+                Text(title).font(.system(size: 12, weight: .semibold))
+            }
+            Text(detail)
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if note == .switchedOff {
+                HStack(spacing: 8) {
+                    Button("System Settings…") { finder.openFileSystemSettings() }
+                    if finder.offersTurnOn {
+                        Button(finder.turningOnDisks ? "Turning On…" : "Turn On") {
+                            Task { await finder.turnOnDisks() }
+                        }
+                        .disabled(finder.turningOnDisks)
+                    }
+                }
+                .controlSize(.small)
+                if let problem = finder.turnOnProblem {
+                    Text(problem).font(.system(size: 11)).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var title: String {
+        switch note {
+        case .switchedOff: return "Your drives aren't disks right now"
+        case .needsRestart: return "Restart to make your drives disks again"
+        case .failed: return "A drive is in the Onyx folder, not a disk"
+        }
+    }
+
+    private var detail: String {
+        switch note {
+        case .needsRestart:
+            return "macOS is still using an earlier copy of the Onyx file system, so your drives are in the Onyx folder until you restart your Mac."
+        case .switchedOff where finder.switchDidNotTake:
+            return "The Onyx file system is off, so your drives are in the Onyx folder. If Onyx won't stay switched on in System Settings, restart your Mac, then switch it on."
+        case .switchedOff:
+            return "The Onyx file system is off, so your drives are in the Onyx folder. Switch Onyx on in System Settings to make each one a disk again."
+        case let .failed(why):
+            return why
+        }
     }
 }
 

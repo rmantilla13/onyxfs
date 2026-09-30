@@ -36,6 +36,19 @@ final class DriveService: ObservableObject {
     /// when it did not.
     @Published var turningOnDisks = false
     @Published var turnOnProblem: String?
+    /// Sent to System Settings to switch the Onyx file system on, and it is
+    /// still off: the note says a restart may be what it takes.
+    @Published var switchDidNotTake = false
+    /// What Onyx remembers of its file system's switch across launches: was
+    /// it on, what was said (FileSystemSwitch). The first time, a disk that
+    /// had its icon says it was on.
+    var switchMemory = FileSystemSwitch.Memory.load(disksSeen: DiskIcons.anyRecorded)
+    /// This run's look at the switch as the drives come back: once a run.
+    var switchDecided = false
+    /// When the person was last sent to System Settings for the switch, and
+    /// the watch for it coming on (watchForSwitch).
+    var settingsOpenedAt: ContinuousClock.Instant?
+    var switchWatch: Task<Void, Never>?
     @Published private(set) var pinnedFiles: Set<String> = []
     @Published private(set) var pinRules: [PinRule] = []
     /// Folder rules naming no folder in their drive now: renamed or deleted
@@ -270,6 +283,10 @@ final class DriveService: ObservableObject {
         active = started
         await mountWanted()
         guard started == generation else { return }
+        // Is the Onyx file system as the person left it? If not, they hear
+        // why their drives are in ~/Onyx (FileSystemSwitch).
+        await decideFileSystemSwitch()
+        guard started == generation else { return }
         // A mounted drive is to show what the web shows: every 5 s while
         // anything is happening, and less often when nothing is (tickPace).
         lastActivity = .now
@@ -361,22 +378,39 @@ final class DriveService: ObservableObject {
         }
     }
 
-    /// The file system extension just came on (Settings › Turn On): each
-    /// drive in ~/Onyx moves to a disk of its own. One whose folder mount
-    /// will not let go (a file open on it) stays where it is until the next
-    /// launch; one whose disk does not mount comes back to ~/Onyx, as always.
+    /// The file system extension just came on — switched on in System
+    /// Settings while Onyx runs, or by Turn On: each drive in ~/Onyx moves to
+    /// a disk of its own, and with the last of them "localhost" leaves
+    /// Finder's sidebar. One whose folder mount will not let go (a file open
+    /// on it) stays where it is until the next launch; one whose disk does not
+    /// mount comes back to ~/Onyx, as always.
+    ///
+    /// One pass at a time: asked again while one runs (the switch's news and
+    /// Turn On's own answer can arrive together), one more pass follows it.
     func remountAsDisks() async {
-        guard let model else { return }
-        let started = generation
-        var drives: [(SyncDomain, String)] = model.finderDrives.map { (.drive(id: $0.id), $0.name) }
-        drives.append((.library, MountFolder.library))
-        for (scope, name) in drives where wantMounted.contains(scope.identifier) && mounts.state(of: scope) != nil {
-            await mounts.unmount(scope)
-            guard started == generation else { return }
-            guard mounts.state(of: scope) == nil else { continue }
-            await mount(scope, name: name)
+        if remounting {
+            remountAgain = true
+            return
         }
+        remounting = true
+        defer { remounting = false }
+        repeat {
+            remountAgain = false
+            guard let model else { return }
+            let started = generation
+            var drives: [(SyncDomain, String)] = model.finderDrives.map { (.drive(id: $0.id), $0.name) }
+            drives.append((.library, MountFolder.library))
+            for (scope, name) in drives where wantMounted.contains(scope.identifier) && mounts.state(of: scope) != nil {
+                await mounts.unmount(scope)
+                guard started == generation else { return }
+                guard mounts.state(of: scope) == nil else { continue }
+                await mount(scope, name: name)
+            }
+        } while remountAgain
     }
+
+    private var remounting = false
+    private var remountAgain = false
 
     private func mount(_ scope: SyncDomain, name: String) async {
         let started = generation
@@ -756,6 +790,11 @@ final class DriveService: ObservableObject {
         // And every five minutes once it has: a colour or name changed on
         // the web reaches the drive's disk icon (drivesChanged).
         await model?.refreshIfOlder(than: 300)
+        guard started == generation else { return }
+        // Drives in ~/Onyx because the Onyx file system is off: switched on
+        // in System Settings since, they become disks now, not at the next
+        // launch. Asked only while that is so.
+        await checkFileSystemSwitch()
         guard started == generation else { return }
         // A cache disk plugged back in: its store opens now, and every
         // pinned drive is owed a pass on it.
