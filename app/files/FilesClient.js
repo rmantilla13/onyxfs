@@ -46,6 +46,7 @@ import { offlineMarks, keptWith } from '@/lib/offline-marks';
 import { canFor, canForSome } from './can-for';
 import { fileKey, folderKey, parseKey } from '@/lib/selection';
 import FolderDrop, { DRAG_FILES, DRAG_FOLDER, startFolderDrag } from './FolderDrop';
+import DragLayer, { beginDrag, paneDrop } from './DragPreview';
 import { FolderTiles, FolderRows, MAX_TILES } from './FolderItems';
 import FilesHeader from './FilesHeader';
 import FilesToolbar, { MoreMenu } from './FilesToolbar';
@@ -109,6 +110,8 @@ const LAYOUT_CHOICES = [
 
 // What a view filtered to kinds of file calls them, for its empty state.
 const KIND_WORDS = { image: 'images', video: 'videos', audio: 'audio files', doc: 'documents', other: 'other files' };
+// A file's type as its card says it where there is no picture ("PDF").
+const kindLabel = (f) => deriveAuto(f).format || f.kind;
 
 // What a drag-to-select may not start on: anything with a press of its own.
 const MARQUEE_SKIP = [
@@ -1006,6 +1009,11 @@ export default function FilesClient({
     e.preventDefault();
     dragDepth.current = 0;
     setDragging(false);
+    // A move let go on the page of a folder it sprang open, anywhere but
+    // on a folder of its own, goes into that folder — as a drop in a Finder
+    // window does (DragPreview).
+    const into = paneDrop();
+    if (into != null) { onTreeDrop(into, e); return; }
     if (!e.dataTransfer?.files?.length) return;
     if (!canWrite) { toast.error('Your role can view files here but not upload them.'); return; }
     // Taken synchronously: the DataTransfer is emptied once this returns.
@@ -1295,14 +1303,16 @@ export default function FilesClient({
 
   // A card drag carries the whole selection when the card is part of it, and
   // says so: dragging a hundred files under the image of one reads as
-  // dragging one. A card outside the selection is selected on its own and
-  // dragged alone, as in Finder. Stable, reading the selection through a
+  // dragging one — the picture that follows the pointer is a stack with a
+  // count (DragPreview). A card outside the selection is selected on its own
+  // and dragged alone, as in Finder. Stable, reading the selection through a
   // ref, so the memoized cards are not re-rendered for it.
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const onDragFile = useCallback((e, key) => {
     const id = parseKey(key)?.id;
-    const f = filesRef.current.find((x) => String(x.id) === id);
+    const all = filesRef.current;
+    const f = all.find((x) => String(x.id) === id);
     if (!f) return;
     const cur = selectedRef.current;
     const ids = cur.has(f.id) ? [...cur] : [f.id];
@@ -1310,15 +1320,8 @@ export default function FilesClient({
     e.dataTransfer.setData(DRAG_FILES, JSON.stringify(ids));
     e.dataTransfer.setData('text/plain', ids.length === 1 ? f.name : `${ids.length} files`);
     e.dataTransfer.effectAllowed = 'move';
-    if (ids.length > 1 && e.dataTransfer.setDragImage) {
-      const badge = document.createElement('div');
-      badge.className = 'drag-badge';
-      badge.textContent = `Moving ${ids.length.toLocaleString()} files`;
-      document.body.appendChild(badge);
-      e.dataTransfer.setDragImage(badge, 18, 18);
-      // The browser snapshots it during this event; it can go right after.
-      setTimeout(() => badge.remove(), 0);
-    }
+    const moving = new Set(ids);
+    beginDrag(e, { kind: 'files', ids, rows: all.filter((x) => moving.has(x.id)), label: kindLabel });
   }, []);
 
   // Something dropped on a folder in the tree: files or a folder from inside
@@ -2046,7 +2049,7 @@ export default function FilesClient({
   // Everything here is stable across renders unless what it describes
   // changes, so a memoized card or row re-renders only for its own file,
   // selection or tab stop — not for a click on its neighbour.
-  const labelFor = useCallback((f) => deriveAuto(f).format || f.kind, []);
+  const labelFor = kindLabel;
   const badgesFor = useCallback((f) => {
     const e = flags.usageRights ? expiryState(f, schema) : null;
     const expiry = e === 'expired' ? <span className="tag tag-danger">Expired</span>
@@ -2103,6 +2106,15 @@ export default function FilesClient({
   const treeDrop = useRef(null);
   treeDrop.current = (target, e) => onTreeDrop(target, e);
   const onItemDrop = useCallback((target, e) => treeDrop.current(target, e), []);
+  // A move held over a folder opens it (DragPreview): the first folder it
+  // opens is a step in history and the next replace it, and a move let go of
+  // nowhere steps back to the folder it began in.
+  const springOpen = useCallback((path, { replace = false } = {}) => navigate(path, { replace }), [navigate]);
+  const springBack = useCallback(() => window.history.back(), []);
+  // Once a move has sprung a folder open, anywhere on the page that is not a
+  // folder of its own takes it into that folder, as a Finder window does —
+  // not in the Column layout, whose columns are other folders.
+  const paneDropTarget = canWrite && layout !== 'column';
 
   // The phone bar's More: the selection's own menu, as a right-click on it
   // would open.
@@ -2185,6 +2197,8 @@ export default function FilesClient({
       ref={mainRef}
       className={`shell files-main${anySelected ? ' is-selecting' : ''}${sel.selectionMode ? ' is-selection-mode' : ''}${opening && viewersReady && viewers.FileOpening ? ' is-opening' : ''}`}
       style={{ paddingBottom: 'var(--files-pad-b, 64px)' }}
+      data-drop-target={paneDropTarget ? folder : undefined}
+      data-drop-pane={paneDropTarget ? '' : undefined}
       onDragOver={(e) => e.preventDefault()}
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
@@ -2215,7 +2229,8 @@ export default function FilesClient({
       )}
 
       <div className={`files-layout${sidebarOpen ? '' : ' is-collapsed'}`}>
-        <aside id="files-sidebar" className="files-sidebar" aria-label="Drives and folders">
+        {/* data-drop-lane: a dragged picture hangs beside the tree, not over its folders (DragPreview). */}
+        <aside id="files-sidebar" className="files-sidebar" aria-label="Drives and folders" data-drop-lane="">
           <DriveList
             drives={drives}
             usage={driveUsage}
@@ -2479,6 +2494,7 @@ export default function FilesClient({
         </div>
       )}
       <MarqueeRect store={marquee.store} />
+      <DragLayer folder={folder} onSpring={springOpen} onBack={springBack} onPrefetch={prefetch} />
       {viewersReady && viewers.QuickLook && (
         <viewers.QuickLook
           apiRef={quickLookApi}

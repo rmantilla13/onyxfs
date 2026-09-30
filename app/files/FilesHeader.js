@@ -14,7 +14,8 @@ import { crumbsFor } from '@/lib/folder-ops';
  * to the open one. Every crumb above the open folder is a way back up and a
  * drop target, so files can be dragged to a folder above without the
  * sidebar; each carries data-folder, so the page's context menu treats it as
- * that folder.
+ * that folder. A crumb held under a drag does not spring open (DragPreview):
+ * opening it would take away the crumb being aimed at.
  *
  * Right: Upload (files, a folder, a new folder — for someone who may add
  * here), Share (a link to the open folder, when there is one and this person
@@ -49,7 +50,7 @@ export default function FilesHeader({
         <ol>
           {crumbs.slice(0, -1).map((c) => (
             <li key={c.path || '/'} className="crumb-item">
-              <FolderDrop target={c.path} enabled={canWrite} onDrop={onDrop} className="crumb-drop">
+              <FolderDrop target={c.path} enabled={canWrite} onDrop={onDrop} spring={false} className="crumb-drop">
                 <button type="button" className="crumb" data-folder={c.path} title={c.path || c.name} onClick={() => onOpen(c.path)}>
                   {c.name}
                 </button>
