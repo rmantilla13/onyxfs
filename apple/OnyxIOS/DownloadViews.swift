@@ -24,8 +24,10 @@ struct SaveActions: View {
             Text("Save to Files")
             Image(systemName: "folder")
         }
+        // A copy of the file, through the share sheet — not Share Link…,
+        // which sends a link to it.
         Button { save(.share) } label: {
-            Text("Share…")
+            Text("Send a Copy…")
             Image(systemName: "square.and.arrow.up")
         }
     }

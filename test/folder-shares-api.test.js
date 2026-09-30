@@ -264,7 +264,8 @@ describe('making, listing and revoking a folder’s links', { skip }, () => {
     assert.equal(listed.status, 200);
     assert.deepEqual(listed.body.shares.map((s) => s.token), [links.week, links.pw, links.pub], 'newest first');
     for (const s of listed.body.shares) {
-      assert.deepEqual(Object.keys(s).sort(), ['createdAt', 'createdBy', 'expiresAt', 'kind', 'review', 'token', 'viewCount']);
+      assert.deepEqual(Object.keys(s).sort(), ['createdAt', 'createdBy', 'expiresAt', 'kind', 'path', 'review', 'token', 'viewCount']);
+      assert.equal(s.path, `/s/${s.token}`, 'where it opens, on whichever name this server is reached by');
     }
     // Someone else asking for the same open link is given one of their own:
     // a folder link speaks for whoever made it.

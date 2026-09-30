@@ -15,6 +15,9 @@ import Foundation
 ///     /api/files/<id>, /api/files/<id>/content, /api/files/folders
 ///                         writes from a drive mounted as a disk (onyxfs,
 ///                         Writes.swift) — let through only with a bearer
+///     /api/files/<id>/shares[/<token>], /api/files/folders/shares[/<token>]
+///                         links to a file or a folder (Links.swift),
+///                         likewise
 ///
 /// Anything else needs a cookie. If a new endpoint is added for this client,
 /// it has to be added to that matcher too, or it will 302 and the JSON decode
@@ -129,13 +132,18 @@ public actor OnyxAPI {
     /// The drives this account may open, whether it is an admin, the
     /// account itself as the server knows it — the token's owner, which is
     /// what an app that never recorded it (0.2.0 did not) learns it from —
-    /// and what it may do in the library (nil from an older server).
-    public func drives() async throws -> (drives: [Filespace], isAdmin: Bool, email: String?, library: WriteCaps?) {
+    /// what it may do in the library (nil from an older server), and whether
+    /// it may share by link at all (the `shares` flag as the web's menus read
+    /// it for this account; false from an older server, whose link routes
+    /// take no token).
+    public func drives() async throws -> (drives: [Filespace], isAdmin: Bool, email: String?, library: WriteCaps?, shares: Bool) {
         struct Library: Decodable { let can: WriteCaps? }
-        struct Wrapper: Decodable { let filespaces: [Filespace]; let isAdmin: Bool?; let email: String?; let library: Library? }
+        struct Wrapper: Decodable {
+            let filespaces: [Filespace]; let isAdmin: Bool?; let email: String?; let library: Library?; let shares: Bool?
+        }
         let data = try await request(config.url("api/space/filespaces"))
         let w = try decode(Wrapper.self, from: data)
-        return (w.filespaces, w.isAdmin ?? false, w.email, w.library?.can)
+        return (w.filespaces, w.isAdmin ?? false, w.email, w.library?.can, w.shares ?? false)
     }
 
     public func credentials(filespaceId: String) async throws -> SpaceCredentials {

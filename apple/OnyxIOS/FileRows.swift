@@ -12,6 +12,8 @@ struct FileListRow: View {
     var showsFolder = false
     let open: () -> Void
     var info: (() -> Void)?
+    /// Share Link… for it, when that is offered (Session.mayLink).
+    var share: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 4) {
@@ -40,7 +42,7 @@ struct FileListRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint("Opens it full screen")
-            FileMoreMenu(file: file, info: info)
+            FileMoreMenu(file: file, info: info, share: share)
         }
     }
 
@@ -53,14 +55,21 @@ struct FileListRow: View {
     }
 }
 
-/// ⋯: the ways to save a file, and its details.
+/// ⋯: the ways to save a file, a link to it where one is theirs to make or
+/// manage, and its details.
 struct FileMoreMenu: View {
     let file: FileItem
     var info: (() -> Void)?
+    var share: (() -> Void)?
 
     var body: some View {
         Menu {
             SaveMenuContent(file: file)
+            if let share {
+                Section {
+                    Button(action: share) { Label("Share Link…", systemImage: "link") }
+                }
+            }
             if let info {
                 Button(action: info) { Label("Get Info", systemImage: "info.circle") }
             }

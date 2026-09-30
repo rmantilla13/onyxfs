@@ -62,6 +62,8 @@ struct FileTile: View {
 struct FileRow: View {
     let file: FileItem
     var showsFolder = false
+    /// Share Link… for it, when that is offered.
+    var share: (() -> Void)?
     @Environment(\.fileSelection) private var selection
 
     var body: some View {
@@ -86,7 +88,7 @@ struct FileRow: View {
             }
             Spacer(minLength: 0)
             ReviewBadge(file: file)
-            if selection == nil { FileMoreMenu(file: file) }
+            if selection == nil { FileMoreMenu(file: file, share: share) }
         }
         .contentShape(Rectangle())
         .listRowBackground(chosen ? AnyView(Rectangle().fill(Theme.selection)) : AnyView(Color.clear))

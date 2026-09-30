@@ -52,7 +52,16 @@ On iPhone and iPad it is **Onyx** (`OnyxIOS/`), native SwiftUI:
   softened, until the thumbnail comes (`PlaceholderImages`).
 - **A file full screen.** Photos zoom, video and sound stream from storage
   (picture in picture, AirPlay), documents open in Quick Look; swipe
-  through a folder, share a file, see its details.
+  through a folder, send a copy of a file, see its details.
+- **Links, as the web makes them.** Share Link… on a file (its menu, the
+  preview's Share, Get Info) or a folder (its menu, the folder's ⋯): public,
+  password or private, an expiry, and comments or approvals on a photo or a
+  video — only what the server says this account may make (`LinkChoices`),
+  with anything it still refuses said in its words. The links there are,
+  to copy, send, change and revoke. It is offered only where the server
+  marks the file (`can.share`) or folder (`share`) as this account's to
+  manage, and the account may share at all (`/api/space/filespaces`
+  `shares`). The web's own routes, with the device token (`Links.swift`).
 - **Sign-in as on the Mac.** The web's own sign-in in a sheet (the magic
   link opened from Mail finishes it through `onyxfs://`), or a pairing code
   from `/space/pair`.
@@ -338,7 +347,14 @@ excludes them so a bearer request gets a clean 401 instead of a redirect:
 /api/files/delta    sync enumeration
 ```
 
-A new endpoint for these clients goes under one of them. Otherwise the JSON
+The web's own routes the apps call with their token — the Mac's writes,
+the iPhone's links to a file or a folder (`/api/files/<id>/shares`,
+`/api/files/folders/shares`) — stay behind the gate for a browser, and are
+let past it only with `Authorization: Bearer …` (`lib/bearer-gate.js`,
+whose handlers check the token themselves: `requirePrincipal(req)`).
+
+A new endpoint for these clients goes under one of them, or into that list
+with a handler that takes the token in every method. Otherwise the JSON
 decode fails on HTML, with a complaint about the character `<`.
 
 ## What is verified, and how

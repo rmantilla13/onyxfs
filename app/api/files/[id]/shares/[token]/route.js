@@ -2,9 +2,11 @@ import { NextResponse } from 'next/server';
 import {
   getFileById, canModifyFile, getShareTarget, deleteShare, setShareReview, listSharesForFile, refreshReviewStatus,
 } from '@/lib/db';
-import { requirePrincipal, can, refusal, shareCapFor, shareKindsForKey } from '@/lib/authz';
+import { requirePrincipal, can, refusal, shareKindsForKey } from '@/lib/authz';
 import { parseShareReview, shareKind } from '@/lib/share-kinds';
-import { presentShare, reviewLinkRefusal } from '@/lib/share-guard';
+import { presentFileShare, linkLevelDecision } from '@/lib/share-guard';
+import { effectiveKind } from '@/lib/media';
+import { isReviewableKind } from '@/lib/review';
 import { audit } from '@/lib/audit';
 
 export const runtime = 'nodejs';
@@ -21,13 +23,17 @@ const rank = (review) => LEVEL[review] || 0;
  * Opening it up — comments where there were none, approvals where there were
  * only comments — is making a review link, and takes everything making that
  * link would: the link kind's capability and the drive allowing it, then the
- * review link's own checks (reviewLinkRefusal), all against the link's
- * remaining lifetime. Closing it down only narrows exposure, so it takes what
- * revoking takes: the link's creator, or anyone who can change the file.
- * Comments already written stay on the file either way.
+ * review link's own checks, all against the link's remaining lifetime.
+ * Closing it down only narrows exposure, so it takes what revoking takes: the
+ * link's creator, or anyone who can change the file. Comments already written
+ * stay on the file either way. The rule is lib/share-guard.js
+ * linkLevelDecision, which the file's list also offers the levels by.
+ *
+ * Both methods here take the browser's session or the iPhone's device token
+ * (requirePrincipal(req)), and hold either to the same rules after it.
  */
 export async function PATCH(req, { params }) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   let body;
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
@@ -43,23 +49,14 @@ export async function PATCH(req, { params }) {
   if (parsed.error) return NextResponse.json({ error: parsed.error }, { status: 400 });
   const canModify = await canModifyFile(file, g.principal, { action: null });
 
-  if (rank(parsed.review) > rank(target.review)) {
-    const left = target.expiresAt == null ? null : target.expiresAt - Date.now();
-    if (left != null && left <= 0) return NextResponse.json({ error: 'This link has expired. Make a new one.' }, { status: 400 });
-    const expiresInDays = left == null ? null : Math.ceil(left / 86400000);
-    const allowed = can(g.principal, shareCapFor(kind), {
-      canModify,
-      kind,
-      driveShareKinds: await shareKindsForKey(g.principal, file.storageKey),
-      expiresInDays,
-    });
-    if (!allowed.ok) return refusal(allowed);
-    const no = await reviewLinkRefusal({ principal: g.principal, canModify }, file, { kind, expiresInDays });
-    if (no) return no;
-  } else {
-    const allowed = can(g.principal, 'shares.revoke', { createdBy: target.createdBy, canModify });
-    if (!allowed.ok) return refusal(allowed);
-  }
+  const ctx = {
+    canModify,
+    // The drives the file is in, which only opening a link up is held to.
+    driveShareKinds: rank(parsed.review) > rank(target.review) ? await shareKindsForKey(g.principal, file.storageKey) : null,
+    reviewable: isReviewableKind(effectiveKind(file)),
+  };
+  const allowed = linkLevelDecision(g.principal, target, parsed.review, ctx);
+  if (!allowed.ok) return refusal(allowed);
 
   const stored = await setShareReview(params.token, parsed.review);
   if (stored === undefined) return NextResponse.json({ error: 'Link not found' }, { status: 404 });
@@ -70,7 +67,10 @@ export async function PATCH(req, { params }) {
     });
   }
   const share = (await listSharesForFile(file.id)).find((s) => s.token === params.token);
-  return NextResponse.json({ share: share ? presentShare(share) : null });
+  if (!share) return NextResponse.json({ share: null });
+  // The levels it may go to from here: the drives are read now if they were not.
+  if (ctx.driveShareKinds == null) ctx.driveShareKinds = await shareKindsForKey(g.principal, file.storageKey);
+  return NextResponse.json({ share: presentFileShare(g.principal, share, ctx) });
 }
 
 /**
@@ -88,8 +88,8 @@ export async function PATCH(req, { params }) {
  * The token must belong to this file, so a link cannot be revoked through a
  * file the caller does happen to be able to edit.
  */
-export async function DELETE(_req, { params }) {
-  const g = await requirePrincipal();
+export async function DELETE(req, { params }) {
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
 
   const target = await getShareTarget(params.token);

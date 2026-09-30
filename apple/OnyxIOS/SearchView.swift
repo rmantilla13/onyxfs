@@ -14,6 +14,7 @@ struct SearchView: View {
     @State private var loadingMore = false
     @State private var previewing: FileItem?
     @State private var inspecting: FileItem?
+    @State private var linking: LinkSubject?
     @FocusState private var typing: Bool
     @Namespace private var zoom
 
@@ -77,6 +78,7 @@ struct SearchView: View {
                 .navigationTransition(.zoom(sourceID: file.id, in: zoom))
         }
         .sheet(item: $inspecting) { FileInfoView(file: $0, place: nil) }
+        .sheet(item: $linking) { ShareLinkSheet(subject: $0) }
     }
 
     // MARK: - Asking
@@ -184,7 +186,8 @@ struct SearchView: View {
             SectionHeading(title: ask.kind?.title ?? "Files")
                 .padding(.top, 6)
             ForEach(results) { file in
-                FileListRow(file: file, showsFolder: true, open: { previewing = file }, info: { inspecting = file })
+                FileListRow(file: file, showsFolder: true, open: { previewing = file }, info: { inspecting = file },
+                            share: session.mayLink(file) ? { linking = .file(file) } : nil)
                     .matchedTransitionSource(id: file.id, in: zoom)
                     .onAppear { if file.id == results.last?.id { Task { await more() } } }
             }

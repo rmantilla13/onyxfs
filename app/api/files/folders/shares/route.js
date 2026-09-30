@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createFolderShare, listSharesForFolder, folderPathInUse } from '@/lib/db';
-import { requirePrincipal, can, refusal, shareCapFor, shareKindsForKey } from '@/lib/authz';
+import { requirePrincipal, can, refusal, shareCapFor } from '@/lib/authz';
 import { parseShareRequest } from '@/lib/share-kinds';
-import { presentShare, folderLinkGate, folderLinkSubject } from '@/lib/share-guard';
+import {
+  presentShare, folderLinkGate, folderLinkSubject, folderShareKinds, linkChoices,
+} from '@/lib/share-guard';
 import { audit } from '@/lib/audit';
 
 export const runtime = 'nodejs';
@@ -20,11 +22,20 @@ export const dynamic = 'force-dynamic';
  * folder grant), as for a file's links. Listing and revoking stop there:
  * they only narrow exposure, so they are not gated on the role's link
  * capabilities or the `shares` flag. Making one takes those too (POST).
+ *
+ * Signed in is the browser's session or the iPhone's device token
+ * (requirePrincipal(req)), in every method, and either is held to the same
+ * rules after it.
  */
 
-/** GET /api/files/folders/shares?folder=&filespace= → { shares } — the folder's links, newest first. */
+/**
+ * GET /api/files/folders/shares?folder=&filespace= → { shares, can } — the
+ * folder's links, newest first, and what this person may make here
+ * (lib/share-guard.js linkChoices, for a folder: public or password, the
+ * expiries POST would accept, and why not when none).
+ */
 export async function GET(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const url = new URL(req.url);
   const gate = await folderLinkGate(g.principal, {
@@ -32,7 +43,10 @@ export async function GET(req) {
     folder: url.searchParams.get('folder') ?? '',
   });
   if (gate.error) return gate.error;
-  return NextResponse.json({ shares: (await listSharesForFolder(gate.name, gate.storagePrefix)).map(presentShare) });
+  return NextResponse.json({
+    shares: (await listSharesForFolder(gate.name, gate.storagePrefix)).map(presentShare),
+    can: linkChoices(g.principal, { folder: true, canModify: true, driveShareKinds: await folderShareKinds(g.principal, gate) }),
+  });
 }
 
 /**
@@ -52,7 +66,7 @@ export async function GET(req) {
  * to be there: a link to nothing is not made.
  */
 export async function POST(req) {
-  const g = await requirePrincipal();
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
@@ -74,7 +88,7 @@ export async function POST(req) {
     kind,
     // The drives the folder is in — a drive inside another is held to both.
     // The library's folders are in none: its links never reach into a drive.
-    driveShareKinds: gate.storagePrefix ? await shareKindsForKey(g.principal, `${gate.storagePrefix}/${gate.name}/`) : null,
+    driveShareKinds: await folderShareKinds(g.principal, gate),
     expiresInDays: parsed.expiresInDays,
   });
   if (!allowed.ok) return refusal(allowed);

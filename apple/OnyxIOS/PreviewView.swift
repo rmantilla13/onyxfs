@@ -9,8 +9,9 @@ import SwiftUI
 ///
 /// Over it, the least that can be: a white rounded-square close, where it
 /// is found at once over any picture, the file's name, and a glass pill to
-/// share it, save it — to Photos or to Files, and a heavy video's smaller
-/// streamable copy beside the original — or see its details.
+/// share it — a copy, or a link — save it — to Photos or to Files, and a
+/// heavy video's smaller streamable copy beside the original — or see its
+/// details.
 struct PreviewView: View {
     let files: [FileItem]
     @Environment(\.dismiss) private var dismiss
@@ -19,6 +20,7 @@ struct PreviewView: View {
     @State private var current: String?
     @State private var chromeHidden = false
     @State private var inspecting: FileItem?
+    @State private var linking: LinkSubject?
     /// Each video's streamable copy, once asked about (StreamableCopy.lookup).
     @State private var streamables: [String: StreamableCopy] = [:]
 
@@ -82,6 +84,7 @@ struct PreviewView: View {
         .animation(.easeInOut(duration: 0.25), value: immersive)
         .preferredColorScheme(.dark)
         .sheet(item: $inspecting) { FileInfoView(file: $0, place: nil) }
+        .sheet(item: $linking) { ShareLinkSheet(subject: $0) }
         .task(id: current) { await lookUpStreamable() }
         // The pages beside this one: their links fetched now, so a swipe plays at once.
         .task(id: current) { await PreviewLinks.prefetch(around: current, in: files, api: session.api) }
@@ -120,10 +123,27 @@ struct PreviewView: View {
     }
 
     /// Share, Save, Info: one glass pill.
+    ///
+    /// Share is a menu where the file may be shared by link — Send a Copy
+    /// (the file itself, through the share sheet) or Share Link… — rather
+    /// than a fourth button: two ways of sharing one file under the one
+    /// symbol, and a pill that leaves the file's name its room on a phone.
+    /// Where no link is theirs to make or manage it stays the one tap it
+    /// always was, since a menu of one would only be in the way.
     private var actions: some View {
         GlassGroup(spacing: 4) {
             HStack(spacing: 0) {
-                pillButton("square.and.arrow.up", label: "Share") { save(to: .share) }
+                if let file, session.mayLink(file) {
+                    Menu {
+                        Button { save(to: .share) } label: { Label("Send a Copy", systemImage: "doc.on.doc") }
+                        Button { linking = .file(file) } label: { Label("Share Link…", systemImage: "link") }
+                    } label: {
+                        pillIcon("square.and.arrow.up")
+                    }
+                    .accessibilityLabel("Share")
+                } else {
+                    pillButton("square.and.arrow.up", label: "Send a Copy") { save(to: .share) }
+                }
                 if let file {
                     Menu {
                         SaveMenuContent(file: file, streamable: streamables[file.id])

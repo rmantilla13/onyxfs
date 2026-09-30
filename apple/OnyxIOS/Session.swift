@@ -35,6 +35,10 @@ final class Session {
     private(set) var email: String?
     private(set) var drives: [Place] = []
     private(set) var isAdmin = false
+    /// Whether this account may share by link at all: the `shares` flag as
+    /// the web's menus read it for them (/api/space/filespaces). The other
+    /// half is each file's or folder's own (mayLink).
+    private(set) var sharing = false
     private(set) var loadingPlaces = false
     private(set) var placesLoaded = false
     private(set) var signingIn = false
@@ -202,6 +206,7 @@ final class Session {
         email = nil
         drives = []
         isAdmin = false
+        sharing = false
         trees = [:]
         identity = nil
         usage = [:]
@@ -217,11 +222,12 @@ final class Session {
         loadingPlaces = true
         defer { loadingPlaces = false }
         do {
-            let (list, admin, address, _) = try await api.drives()
+            let (list, admin, address, _, shares) = try await api.drives()
             drives = list.filter(\.isMember)
                 .map { Place(scope: .drive(id: $0.id), name: $0.name, role: $0.role, color: $0.color) }
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             isAdmin = admin
+            sharing = shares
             if let address {
                 email = address
                 settings.email = address
@@ -255,6 +261,15 @@ final class Session {
         usage.merge(counted) { _, new in new }
         if let identity = await who { self.identity = identity }
     }
+
+    /// Whether to offer Share Link… for a file: this account may share at
+    /// all, and the file's links are theirs to manage (the listing's
+    /// `can.share` — write access to it, as the link routes require). What
+    /// kind of link, if any, may then be made is the sheet's to ask.
+    func mayLink(_ file: FileItem) -> Bool { sharing && file.can?.share == true }
+
+    /// The same for a folder, whose half is the tree's (`share`).
+    func mayLink(_ folder: FolderNode) -> Bool { sharing && folder.share == true }
 
     /// Every folder in `place`, from the first visit on; asked again only
     /// when `refresh`.
