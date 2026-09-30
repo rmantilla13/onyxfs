@@ -57,6 +57,9 @@
 .dl-option input { flex: none; margin: 0; accent-color: var(--accent); }
 .dl-option-label { flex: 1; min-width: 0; font-weight: 500; }
 .dl-option-detail { color: var(--muted); font-size: var(--t-sm); font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+/* A video's copy still being checked, or too large to make here: shown, not pickable. */
+.dl-option.is-off { cursor: not-allowed; background: var(--surface-sunken); }
+.dl-option.is-off .dl-option-label { color: var(--muted); }
 .dl-group:disabled .dl-segments,
 .dl-group:disabled .dl-options { opacity: 0.55; }
 .dl-group:disabled .dl-segment,
@@ -65,6 +68,9 @@
 .dl-name { margin: 0; overflow-wrap: anywhere; }
 .dl-name-value { color: var(--ink); font-weight: 500; }
 .dl-note { margin: 0; }
+/* A long job: said before it starts. */
+.dl-warn { color: var(--warning); }
+.dl-done { margin: 0; overflow-wrap: anywhere; }
 .dl-error { margin: 0; color: var(--danger); overflow-wrap: anywhere; }
 
 /* Preparing: how much of the original has arrived, then a bar that moves. */

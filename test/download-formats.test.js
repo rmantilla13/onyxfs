@@ -121,19 +121,21 @@ describe('which choices a file gets', () => {
     assert.equal(offersDownloadAs(big, { maxPixels: 1000 }), false);
   });
 
-  test('a video: its proxy when it has one, and a still — from the player’s frame or the cover', () => {
+  test('a video: its proxy as the 1080p copy when it has one, and a still — from the player’s frame or the cover', () => {
     const c = downloadChoices(clip(), { proxy: { available: true, size: 312 * MB }, still: { from: 'frame' } });
     assert.equal(c.kind, 'video');
-    assert.deepEqual(c.proxy, { label: '1080p MP4 (H.264)', detail: '312 MB' });
+    // Where this browser makes no copies, the proxy is still the 1080p one.
+    assert.deepEqual(c.sizes.map((r) => [r.id, r.label, r.via, r.state, r.bytes]), [['1080p', '1080p MP4 (H.264)', 'proxy', 'ready', 312 * MB]]);
+    assert.equal(c.proxy, null, 'offered as the 1080p copy, not besides it');
     assert.deepEqual(c.still, { from: 'frame', formats: [formatById('jpeg'), formatById('png')] });
     assert.deepEqual(c.formats, []);
-    assert.deepEqual(c.sizes, []);
     assert.equal(c.original.detail, 'MOV · 3.7 GB');
 
     const plain = downloadChoices(clip(), { still: { from: 'cover' } });
-    assert.equal(plain.proxy, null, 'no proxy: not offered');
+    assert.deepEqual(plain.sizes, [], 'no proxy and no WebCodecs: no copies');
+    assert.equal(plain.proxy, null);
     assert.equal(plain.still.from, 'cover');
-    assert.equal(downloadChoices(clip(), { proxy: { available: false } }).proxy, null);
+    assert.deepEqual(downloadChoices(clip(), { proxy: { available: false } }).sizes, []);
   });
 
   test('a video with no proxy and nothing to take a still from gets the original alone', () => {
@@ -145,13 +147,23 @@ describe('which choices a file gets', () => {
     assert.equal(offersDownloadAs(clip(), { still: { from: 'elsewhere' } }), false);
   });
 
-  test('a proxy is named for the lines it has: 1080 at most, the master’s own below that', () => {
+  test('a proxy is named for the lines on its short side: 1080 at most, the master’s own below that', () => {
     assert.equal(proxyHeight(clip()), 1080);
     assert.equal(proxyHeight(clip({ metadata: { width: 1280, height: 720 } })), 720);
     assert.equal(proxyHeight(clip({ metadata: { width: 1279, height: 719 } })), 718, 'even, as H.264 needs');
     assert.equal(proxyHeight(clip({ metadata: {} })), 1080);
-    assert.equal(downloadChoices(clip({ metadata: { height: 720 } }), { proxy: { available: true } }).proxy.label, '720p MP4 (H.264)');
-    assert.equal(downloadChoices(clip(), { proxy: { available: true } }).proxy.detail, 'Made for streaming', 'size unknown');
+    // Upright phone clips: the Mac makes the short side 1080 (or the clip's own).
+    assert.equal(proxyHeight(clip({ metadata: { width: 1080, height: 1920 } })), 1080);
+    assert.equal(proxyHeight(clip({ metadata: { width: 720, height: 1280 } })), 720, 'not "1080p" for a 720-wide clip');
+    assert.equal(proxyHeight(clip({ metadata: { height: 720 } })), 720, 'the height alone when that is all on record');
+    // A 720p master's proxy is its 720p copy.
+    const small = downloadChoices(clip({ metadata: { width: 1280, height: 720 } }), { proxy: { available: true } });
+    assert.deepEqual(small.sizes.map((r) => [r.id, r.via, r.bytes]), [['720p', 'proxy', null]]);
+    // A 900p master's proxy is no copy's size: offered as itself, as before.
+    const odd = downloadChoices(clip({ metadata: { width: 1600, height: 900 } }), { proxy: { available: true }, video: { convert: true } });
+    assert.equal(odd.proxy.label, '900p MP4 (H.264)');
+    assert.equal(odd.proxy.detail, 'Made for streaming', 'size unknown');
+    assert.deepEqual(odd.sizes.map((r) => [r.id, r.via]), [['720p', 'convert']]);
   });
 
   test('a clip stored as "other" before kinds were worked out is still a video', () => {
