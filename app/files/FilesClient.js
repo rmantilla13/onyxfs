@@ -59,6 +59,8 @@ import {
   folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, folderStats, folderSummaries,
 } from '@/lib/folder-ops';
 import Icon from '@/app/components/ui/Icon';
+import { startActivity, countOf } from '@/lib/activity';
+import { readNdjson, isNdjson } from '@/lib/ndjson';
 
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
@@ -1045,7 +1047,17 @@ export default function FilesClient({
     setFiles((prev) => prev.filter((f) => !gone.has(f.id)));
     setSelected((s) => { const next = new Set(s); ids.forEach((id) => next.delete(id)); return next; });
     // The server decides trash-vs-purge from its own flag state.
-    const results = await Promise.all(ids.map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' }).catch(() => null)));
+    const task = startActivity({
+      title: `Removing ${one ? `“${one.name}”` : `${n.toLocaleString()} files`}`,
+      done: 0, total: n, detail: countOf(0, n, 'files'),
+    });
+    let finished = 0;
+    const results = await Promise.all(ids.map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' }).catch(() => null).then((r) => {
+      finished++;
+      task.update({ done: finished, detail: countOf(finished, n, 'files') });
+      return r;
+    })));
+    task.end();
     const failed = results.filter((r) => !r?.ok).length;
     load();
     loadFolders();
@@ -1107,31 +1119,65 @@ export default function FilesClient({
   // A folder rename or move, in as many calls as it takes: for a big folder
   // the route copies what it can in one call and answers 202 `more`, and the
   // next call carries on from the copies already made (app/api/files/folders
-  // PATCH, `resumable`). `onProgress(copied, total)` between calls. Resolves
-  // { ok, status, body } for the last answer.
+  // PATCH, `resumable`). Each call streams its steps as it goes (`progress`,
+  // lib/ndjson.js) to onProgress({ phase, done, total }). A call cut off
+  // part-way is made again — its copies were noted, so none is made twice —
+  // unless it had got as far as the rename itself: then only tidying was
+  // left, and the move is done. Resolves { ok, status, body } for the answer.
   const patchFolder = async (payload, onProgress) => {
+    let cuts = 0;
     for (let round = 0; round < 200; round++) {
-      const r = await fetch('/api/files/folders', {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...payload, filespaceId: fsBody, resumable: true }),
+      if (cuts) await new Promise((wake) => setTimeout(wake, 1000 * cuts));
+      let r;
+      try {
+        r = await fetch('/api/files/folders', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ...payload, filespaceId: fsBody, resumable: true, progress: true }),
+        });
+      } catch {
+        if (++cuts <= 3) continue;
+        return { ok: false, status: 0, body: { error: 'Could not reach Onyx. Check the connection, then try again: the move carries on where it stopped.' } };
+      }
+      if (!isNdjson(r)) {
+        const body = await r.json().catch(() => ({}));
+        return { ok: r.ok, status: r.status, body };
+      }
+      let renamed = false;
+      const answer = await readNdjson(r, (line) => {
+        if (line.phase === 'tidy') renamed = true;
+        onProgress?.(line);
       });
-      const body = await r.json().catch(() => ({}));
-      if (r.status === 202 && body.more) { onProgress?.(body.copied, body.total); continue; }
-      return { ok: r.ok, status: r.status, body };
+      if (!answer) {
+        if (renamed) return { ok: true, status: 200, body: { from: payload.from, to: payload.to } };
+        if (++cuts <= 3) continue;
+        return { ok: false, status: 504, body: { error: 'The move keeps being cut off. Try again: it carries on where it stopped.' } };
+      }
+      const { status, body = {} } = answer;
+      if (status === 202 && body.more) {
+        cuts = 0;
+        onProgress?.({ phase: 'copy', done: body.copied, total: body.total });
+        continue;
+      }
+      return { ok: status >= 200 && status < 300, status, body };
     }
     return { ok: false, status: 504, body: { error: 'The folder is taking too long to move. Try again: it carries on where it stopped.' } };
   };
 
-  // A toast that follows a folder rename's rounds (patchFolder's onProgress).
-  const roundsToast = (label) => {
-    let id = null;
+  // A folder move or rename in the activity panel (lib/activity.js): the
+  // step it is on, and how far the copying — the part that takes the time —
+  // has got. `step` is patchFolder's onProgress.
+  const folderTask = (title) => {
+    const task = startActivity({ title, detail: 'Starting…' });
+    let copying = null;
     return {
-      update: (copied, total) => {
-        if (id) toast.dismiss(id);
-        id = toast.push(`${label}… ${copied.toLocaleString()} of ${total.toLocaleString()} files`, { duration: 0 });
+      step: ({ phase, done, total }) => {
+        if (phase === 'check') task.update({ detail: `Checking ${countOf(done, total, 'files')}`, done: copying?.done ?? null, total: copying?.total ?? null });
+        else if (phase === 'copy') { copying = { done, total }; task.update({ detail: `Copying ${countOf(done, total, 'files')}`, done, total }); }
+        else if (phase === 'catalog') task.update({ detail: 'Updating the library…', done: 1, total: 1 });
+        else if (phase === 'tidy') task.update({ detail: `Removing the originals · ${countOf(done, total)}`, done: 1, total: 1 });
       },
-      done: () => { if (id) toast.dismiss(id); id = null; },
+      end: () => task.end(),
     };
   };
 
@@ -1147,7 +1193,6 @@ export default function FilesClient({
   const renameFolderUI = async (path) => {
     let result = null;
     let occupied = null;
-    const rounds = roundsToast(`Renaming “${baseName(path)}”`);
     const name = await prompt({
       title: 'Rename folder',
       label: 'Name',
@@ -1156,8 +1201,8 @@ export default function FilesClient({
       validate: folderNameProblem,
       submit: async (next) => {
         if (next === baseName(path)) return null;
-        const { ok, status, body } = await patchFolder({ from: path, to: joinFolder(parentOf(path), next) }, rounds.update);
-        rounds.done();
+        const task = folderTask(`Renaming “${baseName(path)}” to “${next}”`);
+        const { ok, status, body } = await patchFolder({ from: path, to: joinFolder(parentOf(path), next) }, task.step).finally(task.end);
         // Asked once this dialog has closed.
         if (body.code === 'occupied') { occupied = body; return null; }
         if (!ok) return body.error || `Could not rename the folder (HTTP ${status}).`;
@@ -1168,8 +1213,8 @@ export default function FilesClient({
     if (name == null) return;
     if (occupied) {
       if (!(await replaceOccupied(occupied))) return;
-      const { ok, status, body } = await patchFolder({ from: path, to: occupied.to, replace: true }, rounds.update);
-      rounds.done();
+      const task = folderTask(`Renaming “${baseName(path)}” to “${name}”`);
+      const { ok, status, body } = await patchFolder({ from: path, to: occupied.to, replace: true }, task.step).finally(task.end);
       if (!ok) { toast.error(body.error || `Could not rename the folder (HTTP ${status}).`); return; }
       result = body;
     }
@@ -1182,18 +1227,19 @@ export default function FilesClient({
   const moveFolderTo = async (path, dest) => {
     const to = joinFolder(dest, baseName(path));
     if (to === path || isWithin(dest, path)) return;
-    const rounds = roundsToast(`Moving “${baseName(path)}”`);
-    let { ok, status, body } = await patchFolder({ from: path, to }, rounds.update);
-    rounds.done();
+    const where = dest || rootName;
+    const run = (extra) => {
+      const task = folderTask(`Moving “${baseName(path)}” to ${where}`);
+      return patchFolder({ from: path, to, ...extra }, task.step).finally(task.end);
+    };
+    let { ok, status, body } = await run();
     if (body.code === 'occupied') {
       if (!(await replaceOccupied(body))) return;
-      ({ ok, status, body } = await patchFolder({ from: path, to, replace: true }, rounds.update));
-      rounds.done();
+      ({ ok, status, body } = await run({ replace: true }));
     }
     if (!ok) { toast.error(body.error || `Could not move the folder (HTTP ${status}).`); return; }
     followFolder(path, to);
     const note = describeRename(body);
-    const where = dest || 'All files';
     note ? toast.error(`Moved “${baseName(path)}” to ${where}. ${note}`) : toast.success(`Moved “${baseName(path)}” to ${where}.`);
   };
 
@@ -1226,15 +1272,26 @@ export default function FilesClient({
     let deleted = 0;
     let failed = 0;
     let lastError = null;
+    const total = sum.files || 0;
+    const task = startActivity({
+      title: `Deleting “${baseName(path)}”`,
+      ...(total ? { done: 0, total, detail: countOf(0, total, 'files') } : {}),
+    });
     // The server trashes a batch per call and says whether there is more.
-    for (let round = 0; round < 1000; round++) {
-      const d = await fetch(`/api/files/folders?name=${encodeURIComponent(path)}${fsQuery}`, { method: 'DELETE' });
-      const body = await d.json().catch(() => ({}));
-      if (!d.ok) { lastError = body.error || `HTTP ${d.status}`; break; }
-      deleted += body.deleted || 0;
-      failed = body.failed || 0;
-      lastError = body.error;
-      if (!body.more || !body.deleted) break;
+    try {
+      for (let round = 0; round < 1000; round++) {
+        const d = await fetch(`/api/files/folders?name=${encodeURIComponent(path)}${fsQuery}`, { method: 'DELETE' }).catch(() => null);
+        if (!d) { lastError = 'Could not reach Onyx.'; break; }
+        const body = await d.json().catch(() => ({}));
+        if (!d.ok) { lastError = body.error || `HTTP ${d.status}`; break; }
+        deleted += body.deleted || 0;
+        failed = body.failed || 0;
+        lastError = body.error;
+        if (total) task.update({ done: Math.min(deleted, total), detail: countOf(Math.min(deleted, total), total, 'files') });
+        if (!body.more || !body.deleted) break;
+      }
+    } finally {
+      task.end();
     }
     if (isWithin(folder, path) && !failed && !lastError) navigate(parentOf(path), { replace: true });
     load();
@@ -1252,21 +1309,33 @@ export default function FilesClient({
     let catalogOnly = 0;
     let firstError = null;
     // A big move takes a while — each file is a copy and a delete in the
-    // bucket — so it says it is happening rather than looking stuck.
-    const note = list.length > 20
-      ? toast.push(`Moving ${list.length.toLocaleString()} files to ${dest || rootName}…`, { duration: 0 })
-      : null;
-    await mapLimit(list, MOVE_PARALLEL, async (id) => {
-      const r = await fetch(`/api/files/${id}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ folder: dest, filespaceId: fsBody }),
-      });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) { failed++; firstError ||= body.error || `HTTP ${r.status}`; }
-      else if (body.objectMoved === false) catalogOnly++;
+    // bucket — so it shows how far along it is (lib/activity.js).
+    const one = list.length === 1 ? files.find((f) => f.id === list[0]) : null;
+    const task = startActivity({
+      title: `Moving ${one ? `“${one.name}”` : `${list.length.toLocaleString()} files`} to ${dest || rootName}`,
+      done: 0, total: list.length, detail: countOf(0, list.length, 'files'),
     });
-    if (note) toast.dismiss(note);
+    let finished = 0;
+    try {
+      await mapLimit(list, MOVE_PARALLEL, async (id) => {
+        try {
+          const r = await fetch(`/api/files/${id}`, {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ folder: dest, filespaceId: fsBody }),
+          }).catch(() => null);
+          if (!r) { failed++; firstError ||= 'Could not reach Onyx.'; return; }
+          const body = await r.json().catch(() => ({}));
+          if (!r.ok) { failed++; firstError ||= body.error || `HTTP ${r.status}`; }
+          else if (body.objectMoved === false) catalogOnly++;
+        } finally {
+          finished++;
+          task.update({ done: finished, detail: countOf(finished, list.length, 'files') });
+        }
+      });
+    } finally {
+      task.end();
+    }
     setSelected(new Set());
     load();
     loadFolders();
@@ -1336,7 +1405,7 @@ export default function FilesClient({
   const regenerateThumbnail = async (f) => {
     if (redrawingRef.current.has(f.id)) return;
     redrawingRef.current.add(f.id);
-    const note = toast.push(`Redrawing the thumbnail of “${f.name}”…`, { duration: 0 });
+    const task = startActivity({ title: `Redrawing the thumbnail of “${f.name}”` });
     try {
       const { redrawThumbnail, mergeRedrawn } = await import('@/lib/thumbnail-regen');
       const row = await redrawThumbnail(f);
@@ -1346,7 +1415,7 @@ export default function FilesClient({
     } catch (e) {
       toast.error(e?.message || 'Could not redraw the thumbnail.');
     } finally {
-      toast.dismiss(note);
+      task.end();
       redrawingRef.current.delete(f.id);
     }
   };
@@ -2190,7 +2259,18 @@ export default function FilesClient({
       });
       if (!ok) return;
     }
-    ids.forEach((id, i) => setTimeout(() => downloadFile({ id }), i * DOWNLOAD_GAP_MS));
+    // Started a few hundred milliseconds apart, which for a long selection is
+    // a while: the activity panel counts them off.
+    const task = ids.length > 1
+      ? startActivity({ title: `Starting ${ids.length.toLocaleString()} downloads`, done: 0, total: ids.length, detail: countOf(0, ids.length) })
+      : null;
+    let started = 0;
+    ids.forEach((id, i) => setTimeout(() => {
+      downloadFile({ id });
+      started++;
+      task?.update({ done: started, detail: countOf(started, ids.length) });
+      if (started === ids.length) task?.end();
+    }, i * DOWNLOAD_GAP_MS));
     if (sel.selectedFolders.size) toast.success(`Downloading ${ids.length} file${ids.length === 1 ? '' : 's'}. Folders are not downloaded: open one and select its files.`);
   };
 

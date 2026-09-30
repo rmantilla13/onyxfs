@@ -187,6 +187,19 @@ const patchFile = (who, id, body, headers) => call(fileRoute.PATCH, `/api/files/
 const trashFile = (who, id) => call(fileRoute.DELETE, `/api/files/${id}`, { method: 'DELETE', params: { id }, ...who });
 const swap = (who, id, body, headers) => call(contentRoute.POST, `/api/files/${id}/content`, { method: 'POST', body, params: { id }, headers, ...who });
 const restore = (who, ids) => call(restoreRoute.POST, '/api/admin/trash/restore', { method: 'POST', body: { ids }, ...who });
+/** PATCH with `progress`: the HTTP status, and the NDJSON lines read to the end — progress, then the answer. */
+async function moveStreamed({ token, cookie } = {}, body) {
+  globalThis.__mw.session = cookie ? { user: { email: cookie } } : null;
+  const h = { 'content-type': 'application/json' };
+  if (token) h.authorization = `Bearer ${token}`;
+  const res = await foldersRoute.PATCH(new Request('http://app.test/api/files/folders', {
+    method: 'PATCH', headers: h, body: JSON.stringify({ ...body, progress: true }),
+  }), { params: {} });
+  const type = res.headers.get('content-type') || '';
+  if (!type.includes('ndjson')) return { status: res.status, type, lines: [], answer: null, body: await res.json().catch(() => null) };
+  const lines = (await res.text()).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  return { status: res.status, type, lines: lines.slice(0, -1), answer: lines.at(-1) };
+}
 const folders = {
   create: (who, body) => call(foldersRoute.POST, '/api/files/folders', { method: 'POST', body, ...who }),
   move: (who, body) => call(foldersRoute.PATCH, '/api/files/folders', { method: 'PATCH', body, ...who }),
@@ -1057,6 +1070,45 @@ describe('folder names are per drive', () => {
     const out = await going;
     assert.equal(out.status, 409, 'the one statement still refuses the name, as before');
     assert.ok(stored('team/Picks/A.mov'), 'the copy the row points at stays');
+  });
+
+  // What the web's move shows while it runs: each step as it goes, then the
+  // answer the plain response would have been.
+  test('with progress, a move streams its steps and then its answer', async () => {
+    const who = web(ED);
+    for (const n of ['1', '2', '3']) await upload(mac(ED), { name: `${n}.arw`, folder: 'Shoot', filespaceId: 'd1', bytes: bytes(n) });
+    const out = await moveStreamed(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', resumable: true });
+    assert.equal(out.status, 200);
+    assert.match(out.type, /application\/x-ndjson/);
+    const phases = [...new Set(out.lines.map((l) => l.phase))];
+    assert.deepEqual(phases, ['check', 'copy', 'catalog', 'tidy']);
+    for (const phase of ['check', 'copy', 'tidy']) {
+      const last = out.lines.filter((l) => l.phase === phase).at(-1);
+      assert.deepEqual([last.done, last.total], [3, 3], `${phase} reaches the end`);
+    }
+    assert.equal(out.answer.status, 200);
+    assert.equal(out.answer.body.files, 3);
+    assert.equal(out.answer.body.to, '2026/Shoot');
+  });
+
+  test('with progress, a round that runs out of time answers 202 last, and nothing moves', async () => {
+    const who = web(ED);
+    for (const n of ['1', '2']) await upload(mac(ED), { name: `${n}.arw`, folder: 'Shoot', filespaceId: 'd1', bytes: bytes(n) });
+    const out = await budget(0, () => moveStreamed(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', resumable: true }));
+    assert.deepEqual([...new Set(out.lines.map((l) => l.phase))], ['check', 'copy']);
+    assert.deepEqual(out.answer, { status: 202, body: { more: true, from: 'Shoot', to: '2026/Shoot', copied: 1, total: 2 } });
+  });
+
+  test('with progress, a refusal found while checking is the answer; one found before is a plain response', async () => {
+    const who = web(ED);
+    await upload(mac(ED), { name: 'A.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+    globalThis.__mw.s3.objects.set('onyx/team/2026/Shoot/A.arw', { size: 7, etag: 'e'.repeat(32) });
+    const occupied = await moveStreamed(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', resumable: true });
+    assert.equal(occupied.answer.status, 409);
+    assert.equal(occupied.answer.body.code, 'occupied');
+
+    const missing = await moveStreamed(who, { from: 'Nowhere', to: 'Elsewhere', filespaceId: 'd1', resumable: true });
+    assert.deepEqual([missing.status, missing.type.includes('json'), missing.body], [404, true, { error: 'There is no folder “Nowhere” here.' }]);
   });
 
   test('a resumable move copies over several calls, then moves; one that is not does it in one', async () => {

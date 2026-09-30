@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { fmtSize } from '@/lib/media';
 import { batchComplete } from '@/lib/upload-queue';
 import Icon from '@/app/components/ui/Icon';
@@ -18,6 +19,10 @@ import Icon from '@/app/components/ui/Icon';
  * itself three seconds later, which is what `onClear` does when someone presses
  * the ×. Anything else stays: a failure holds its message and its Retry, and so
  * does a row someone canceled.
+ *
+ * It sits in the dock at the bottom left, under the activity panel
+ * (app/components/ui/Activity.js), so the two never cover each other; on its
+ * own only where there is no dock.
  */
 
 // A long drop renders its first rows and a count, not a thousand-row list.
@@ -50,6 +55,8 @@ function meta(item) {
 
 export default function UploadPanel({ snapshot, onCancel, onRetry, onRetryFailed, onClear }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [dock, setDock] = useState(null);
+  useEffect(() => { setDock(document.getElementById('onyx-dock')); }, []);
   const listRef = useRef(null);
   const touched = useRef(0);
   // Pointer over the tray, or focus inside it: someone is reading the list of
@@ -101,9 +108,9 @@ export default function UploadPanel({ snapshot, onCancel, onRetry, onRetryFailed
     : `${fmtSize(total)}`;
   const status = running ? 'uploading' : counts.error ? 'error' : 'done';
 
-  return (
+  const panel = (
     <section
-      className="upload-panel"
+      className={`upload-panel${dock ? '' : ' is-floating'}`}
       aria-label="Uploads"
       onPointerEnter={() => setHeld(true)}
       onPointerLeave={() => setHeld(false)}
@@ -173,4 +180,5 @@ export default function UploadPanel({ snapshot, onCancel, onRetry, onRetryFailed
       )}
     </section>
   );
+  return dock ? createPortal(panel, dock) : panel;
 }

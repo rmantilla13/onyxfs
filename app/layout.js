@@ -3,6 +3,7 @@ import { loadBrand, brandCssVars, brandDarkCssVars, darkPalette } from '@/lib/br
 import { THEME_SCRIPT } from '@/lib/theme';
 import { ToastProvider } from '@/app/components/ui/Toast';
 import PreviewWorker from '@/app/components/PreviewWorker';
+import { ActivityDock } from '@/app/components/ui/Activity';
 
 export const dynamic = 'force-dynamic';
 
@@ -75,6 +76,7 @@ export default async function RootLayout({ children }) {
         {/* One provider for the whole app. children stays a server component
             — it is passed as a prop, not rendered inside the client boundary. */}
         <ToastProvider>{children}</ToastProvider>
+        <ActivityDock />
         <PreviewWorker />
       </body>
     </html>

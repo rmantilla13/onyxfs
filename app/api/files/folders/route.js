@@ -18,6 +18,7 @@ import { markFolderLinks } from '@/lib/share-guard';
 import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
 import { moveTrashedObject } from '@/lib/trash-move';
 import { afterResponse } from '@/lib/after-response';
+import { ndjsonResponse } from '@/lib/ndjson';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -41,6 +42,10 @@ function isCopyOf(copy, orig) {
 const DELETE_BATCH = 400;
 // Parallel S3 requests.
 const S3_CONCURRENCY = 8;
+// Parallel HEADs and DELETEs of a rename: small requests with nothing to
+// carry, so more at a time — a big folder's check and tidy take a quarter
+// as long as at S3_CONCURRENCY.
+const S3_LOOKUPS = 32;
 
 const forbidden = (msg = 'No access to that folder.') => NextResponse.json({ error: msg }, { status: 403 });
 const bad = (msg, status = 400) => NextResponse.json({ error: msg }, { status });
@@ -174,7 +179,7 @@ export async function POST(req) {
 }
 
 /**
- * PATCH /api/files/folders  { from, to, filespaceId?, resumable?, replace? }
+ * PATCH /api/files/folders  { from, to, filespaceId?, resumable?, replace?, progress? }
  *
  * Rename or move a folder subtree. Object keys encode the folder
  * (`<prefix>/<folder>/<name>`, see storage.buildObjectKey), so this moves
@@ -192,6 +197,11 @@ export async function POST(req) {
  *      delete the copies and stop — nothing has changed
  *   3. delete the originals. A failure here leaves a stray copy at the old
  *      key, which nothing points to; it is counted in `leftovers`.
+ *
+ * With `progress` (the web), once the request has passed its checks the
+ * response is a stream of NDJSON (lib/ndjson.js): { phase, done, total } as
+ * each step goes — check, copy, catalog, tidy — then { status, body }, the
+ * answer the plain response would have been.
  *
  * Both ends are authorized: taking the subtree out of `from` and putting it
  * at `to`, or a rename becomes a way into a folder you do not control. Both
@@ -241,130 +251,154 @@ export async function PATCH(req) {
   }
   if (plan.moves.length && !scope.s3) return bad('Storage is not configured for S3, so the stored files cannot be moved.', 409);
 
-  const resumable = body.resumable === true;
-  const budget = folderMoveBudgetMs();
-  const began = Date.now();
+  // The rest is the work, as one function of what to tell the caller as it
+  // goes: with `progress` (the web's move and rename), each step is streamed
+  // as a line — checking what is already at the new keys, copying, updating
+  // the library, removing the originals — and the answer comes last
+  // (lib/ndjson.js); without, the answer is the response, as it always was.
+  const answer = (status, out) => ({ status, body: out });
+  const carryOn = async (report) => {
+    const resumable = body.resumable === true;
+    const budget = folderMoveBudgetMs();
+    const began = Date.now();
 
-  // What is already at the new keys. Nothing in the catalog lists the new
-  // path, so an object there is one of these:
-  //   - a file the catalog keeps all the same (one in the trash that never
-  //     moved aside): never touched, so refused;
-  //   - a copy an earlier call of this rename made and noted
-  //     (folder_move_copies) — cut off by the time limit, a call never gets
-  //     to undo its copies: kept, not made again, while it is still a copy
-  //     of the original; made again (over itself) otherwise;
-  //   - something else — a move that didn't finish before copies were
-  //     noted, a mounted drive, another tool: refused, unless the caller
-  //     says to `replace` it (the web asks first).
-  const heads = await settleLimit(plan.moves, S3_CONCURRENCY, (m) => s3HeadObject(scope.cfg, m.toKey));
-  const there = new Map(plan.moves.map((m, i) => [m.toKey, heads[i].ok ? heads[i].value : null]));
-  const found = plan.moves.filter((m) => there.get(m.toKey));
-  const todo = plan.moves.filter((m) => !there.get(m.toKey));
-  const reused = [];
-  if (found.length) {
-    const keys = found.map((m) => m.toKey);
-    const [held, noted] = await Promise.all([storageKeysInUse(keys), folderMoveCopiesAt(keys)]);
-    const kept = found.find((m) => held.has(m.toKey));
-    if (kept) return bad(`A file the library keeps is already stored at ${kept.toKey}. Nothing was renamed.`, 409);
-    const strangers = found.filter((m) => !noted.has(m.toKey));
-    if (strangers.length && body.replace !== true) {
-      const n = strangers.length;
-      return NextResponse.json({
-        error: `${n.toLocaleString('en-US')} file${n === 1 ? ' is' : 's are'} already stored at “${to}” but not in the library (${strangers[0].toKey}${n > 1 ? ', …' : ''}), perhaps left by a move that didn't finish. Nothing was renamed.`,
-        code: 'occupied', occupied: n, from, to,
-      }, { status: 409 });
-    }
-    const mine = found.filter((m) => noted.get(m.toKey) === m.fromKey);
-    const origs = await settleLimit(mine, S3_CONCURRENCY, (m) => s3HeadObject(scope.cfg, m.fromKey));
-    const still = new Set(mine.filter((m, i) => isCopyOf(there.get(m.toKey), origs[i].ok ? origs[i].value : null)).map((m) => m.toKey));
-    for (const m of found) (still.has(m.toKey) ? reused.push(m.toKey) : todo.push(m));
-  }
-
-  // The copies, each noted first. A caller that can come back (`resumable`)
-  // is answered 202 `more` once the budget has gone, and the next call finds
-  // these copies above; one that can't (Onyx for Mac, which takes any 2xx as
-  // done) gets the whole rename in one call, as before. Every call starts at
-  // least one copy, so each gets somewhere.
-  let started = 0;
-  const deferred = [];
-  const copied = [];
-  const sizes = new Map(files.map((f) => [f.id, f.size]));
-  const allKeys = plan.moves.map((m) => m.toKey);
-  // Undo takes every copy at the new keys, this call's and an earlier one's:
-  // each is a copy of an original still in place. But never one a row has
-  // come to point at — this rename, running twice at once, done by the other
-  // call — and none when that can't be checked: kept, and noted, they are
-  // used next time.
-  const undo = async () => {
-    const keys = [...reused, ...copied];
-    let held;
-    try { held = await storageKeysInUse(keys); } catch { return; }
-    const drop = keys.filter((k) => !held.has(k));
-    const gone = await settleLimit(drop, S3_CONCURRENCY, (k) => s3DeleteObject(scope.cfg, k));
-    const stuck = new Set(drop.filter((k, i) => !gone[i].ok || gone[i].value === false));
-    await forgetFolderMoveCopies(allKeys.filter((k) => !stuck.has(k))).catch(() => {});
-  };
-  if (todo.length) await noteFolderMoveCopies(todo);
-  // A long video past 5 GiB is copied in parts (lib/storage.js copyObjectWithin).
-  try {
-    await mapLimit(todo, S3_CONCURRENCY, async (m) => {
-      if (resumable && started > 0 && Date.now() - began >= budget) { deferred.push(m); return; }
-      started++;
-      await s3CopyObject(scope.cfg, m.fromKey, m.toKey, { size: sizes.get(m.id) });
-      copied.push(m.toKey);
+    // What is already at the new keys. Nothing in the catalog lists the new
+    // path, so an object there is one of these:
+    //   - a file the catalog keeps all the same (one in the trash that never
+    //     moved aside): never touched, so refused;
+    //   - a copy an earlier call of this rename made and noted
+    //     (folder_move_copies) — cut off by the time limit, a call never gets
+    //     to undo its copies: kept, not made again, while it is still a copy
+    //     of the original; made again (over itself) otherwise;
+    //   - something else — a move that didn't finish before copies were
+    //     noted, a mounted drive, another tool: refused, unless the caller
+    //     says to `replace` it (the web asks first).
+    let looked = 0;
+    report('check', 0, plan.moves.length);
+    const heads = await settleLimit(plan.moves, S3_LOOKUPS, async (m) => {
+      try { return await s3HeadObject(scope.cfg, m.toKey); } finally { report('check', ++looked, plan.moves.length); }
     });
-  } catch (e) {
-    // A resumable rename keeps its copies for the next call to carry on
-    // from. One that isn't leaves nothing behind.
-    if (!resumable) await undo();
-    return bad(`Could not copy a stored file (${e.message}). Nothing was renamed.`, 502);
-  }
-  if (deferred.length) {
-    return NextResponse.json({
-      more: true, from, to,
-      copied: plan.moves.length - deferred.length,
-      total: plan.moves.length,
-    }, { status: 202 });
-  }
-
-  let result;
-  try {
-    result = await renameFolder(from, to, {
-      tag: scope.tag,
-      moves: plan.moves,
-      catalog: plan.catalog,
-      moveGrants: plan.outside.length === 0,
-      createdBy: principal.email,
-    });
-  } catch (e) {
-    await undo();
-    // A row landed on: this scope's own, made since the check above, or —
-    // while the old primary key on folder names alone stands — another's.
-    const clash = /duplicate key|unique/i.test(e.message || '');
-    const here = clash && (await folderPathInUse(to, inScope).catch(() => true));
-    const clashMsg = !clash ? (e.message || 'Rename failed.')
-      : here ? `A folder at “${to}” already exists here.`
-      : `A folder at “${to}” already exists in another filespace, and folder names are not yet per-filespace.`;
-    return bad(`${clashMsg} Nothing was renamed.`, clash ? 409 : 500);
-  }
-
-  await forgetFolderMoveCopies(allKeys).catch(() => {});
-  const gone = await settleLimit(plan.moves, S3_CONCURRENCY, (m) => s3DeleteObject(scope.cfg, m.fromKey));
-  const leftovers = gone.filter((g) => !g.ok).length;
-  if (leftovers) console.warn(`[folders rename] ${leftovers} original object(s) under ${from} could not be deleted`);
-
-  // Empty-folder markers follow the tree. Best-effort, like creating them.
-  if (scope.s3 && scope.prefix) {
-    try {
-      const markers = await s3ListFolderMarkers(scope.cfg, { prefix: scope.prefix, under: from, keys: true });
-      for (const k of markers) {
-        const rel = k.slice(scope.prefix.length + 1).replace(/\/+$/, '');
-        try { await s3PutFolderMarker(scope.cfg, rebase(rel, from, to)); await s3DeleteObject(scope.cfg, k); } catch {}
+    const there = new Map(plan.moves.map((m, i) => [m.toKey, heads[i].ok ? heads[i].value : null]));
+    const found = plan.moves.filter((m) => there.get(m.toKey));
+    const todo = plan.moves.filter((m) => !there.get(m.toKey));
+    const reused = [];
+    if (found.length) {
+      const keys = found.map((m) => m.toKey);
+      const [held, noted] = await Promise.all([storageKeysInUse(keys), folderMoveCopiesAt(keys)]);
+      const kept = found.find((m) => held.has(m.toKey));
+      if (kept) return answer(409, { error: `A file the library keeps is already stored at ${kept.toKey}. Nothing was renamed.` });
+      const strangers = found.filter((m) => !noted.has(m.toKey));
+      if (strangers.length && body.replace !== true) {
+        const n = strangers.length;
+        return answer(409, {
+          error: `${n.toLocaleString('en-US')} file${n === 1 ? ' is' : 's are'} already stored at “${to}” but not in the library (${strangers[0].toKey}${n > 1 ? ', …' : ''}), perhaps left by a move that didn't finish. Nothing was renamed.`,
+          code: 'occupied', occupied: n, from, to,
+        });
       }
-    } catch {}
-  }
+      const mine = found.filter((m) => noted.get(m.toKey) === m.fromKey);
+      const origs = await settleLimit(mine, S3_LOOKUPS, (m) => s3HeadObject(scope.cfg, m.fromKey));
+      const still = new Set(mine.filter((m, i) => isCopyOf(there.get(m.toKey), origs[i].ok ? origs[i].value : null)).map((m) => m.toKey));
+      for (const m of found) (still.has(m.toKey) ? reused.push(m.toKey) : todo.push(m));
+    }
 
-  return NextResponse.json({ ...result, outside: plan.outside.length, leftovers });
+    // The copies, each noted first. A caller that can come back (`resumable`)
+    // is answered 202 `more` once the budget has gone, and the next call finds
+    // these copies above; one that can't (Onyx for Mac, which takes any 2xx as
+    // done) gets the whole rename in one call, as before. Every call starts at
+    // least one copy, so each gets somewhere.
+    let started = 0;
+    const deferred = [];
+    const copied = [];
+    const sizes = new Map(files.map((f) => [f.id, f.size]));
+    const allKeys = plan.moves.map((m) => m.toKey);
+    // Undo takes every copy at the new keys, this call's and an earlier one's:
+    // each is a copy of an original still in place. But never one a row has
+    // come to point at — this rename, running twice at once, done by the other
+    // call — and none when that can't be checked: kept, and noted, they are
+    // used next time.
+    const undo = async () => {
+      const keys = [...reused, ...copied];
+      let held;
+      try { held = await storageKeysInUse(keys); } catch { return; }
+      const drop = keys.filter((k) => !held.has(k));
+      const gone = await settleLimit(drop, S3_LOOKUPS, (k) => s3DeleteObject(scope.cfg, k));
+      const stuck = new Set(drop.filter((k, i) => !gone[i].ok || gone[i].value === false));
+      await forgetFolderMoveCopies(allKeys.filter((k) => !stuck.has(k))).catch(() => {});
+    };
+    if (todo.length) await noteFolderMoveCopies(todo);
+    const inPlace = () => reused.length + copied.length;
+    report('copy', inPlace(), plan.moves.length);
+    // A long video past 5 GiB is copied in parts (lib/storage.js copyObjectWithin).
+    try {
+      await mapLimit(todo, S3_CONCURRENCY, async (m) => {
+        if (resumable && started > 0 && Date.now() - began >= budget) { deferred.push(m); return; }
+        started++;
+        await s3CopyObject(scope.cfg, m.fromKey, m.toKey, { size: sizes.get(m.id) });
+        copied.push(m.toKey);
+        report('copy', inPlace(), plan.moves.length);
+      });
+    } catch (e) {
+      // A resumable rename keeps its copies for the next call to carry on
+      // from. One that isn't leaves nothing behind.
+      if (!resumable) await undo();
+      return answer(502, { error: `Could not copy a stored file (${e.message}). Nothing was renamed.` });
+    }
+    if (deferred.length) {
+      return answer(202, {
+        more: true, from, to,
+        copied: plan.moves.length - deferred.length,
+        total: plan.moves.length,
+      });
+    }
+
+    report('catalog');
+    let result;
+    try {
+      result = await renameFolder(from, to, {
+        tag: scope.tag,
+        moves: plan.moves,
+        catalog: plan.catalog,
+        moveGrants: plan.outside.length === 0,
+        createdBy: principal.email,
+      });
+    } catch (e) {
+      await undo();
+      // A row landed on: this scope's own, made since the check above, or —
+      // while the old primary key on folder names alone stands — another's.
+      const clash = /duplicate key|unique/i.test(e.message || '');
+      const here = clash && (await folderPathInUse(to, inScope).catch(() => true));
+      const clashMsg = !clash ? (e.message || 'Rename failed.')
+        : here ? `A folder at “${to}” already exists here.`
+        : `A folder at “${to}” already exists in another filespace, and folder names are not yet per-filespace.`;
+      return answer(clash ? 409 : 500, { error: `${clashMsg} Nothing was renamed.` });
+    }
+
+    // Renamed: from here on the answer is a 200 whatever the tidying does.
+    await forgetFolderMoveCopies(allKeys).catch(() => {});
+    let tidied = 0;
+    report('tidy', 0, plan.moves.length);
+    const gone = await settleLimit(plan.moves, S3_LOOKUPS, async (m) => {
+      try { return await s3DeleteObject(scope.cfg, m.fromKey); } finally { report('tidy', ++tidied, plan.moves.length); }
+    });
+    const leftovers = gone.filter((g) => !g.ok).length;
+    if (leftovers) console.warn(`[folders rename] ${leftovers} original object(s) under ${from} could not be deleted`);
+
+    // Empty-folder markers follow the tree. Best-effort, like creating them.
+    if (scope.s3 && scope.prefix) {
+      try {
+        const markers = await s3ListFolderMarkers(scope.cfg, { prefix: scope.prefix, under: from, keys: true });
+        for (const k of markers) {
+          const rel = k.slice(scope.prefix.length + 1).replace(/\/+$/, '');
+          try { await s3PutFolderMarker(scope.cfg, rebase(rel, from, to)); await s3DeleteObject(scope.cfg, k); } catch {}
+        }
+      } catch {}
+    }
+
+    return answer(200, { ...result, outside: plan.outside.length, leftovers });
+  };
+  if (body.progress === true) return ndjsonResponse(carryOn);
+  const out = await carryOn(() => {});
+  return NextResponse.json(out.body, { status: out.status });
 }
 
 /**
