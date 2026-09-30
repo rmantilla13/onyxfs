@@ -3,14 +3,15 @@ import {
   getFilespaceForUser, getFilespaceForWrite,
   createFolder, renameFolder, deleteFolderRows, listFolderSubtreeFiles, folderPathInUse, renameSpreadsGrants,
   canModifyFolder, softDeleteFile, deleteFile, listFolderRowsUnder, listFilespaces, visibleFileIds, canonicalFolder,
+  storageKeysInUse, noteFolderMoveCopies, folderMoveCopiesAt, forgetFolderMoveCopies,
 } from '@/lib/db';
 import { requirePrincipal, can, refusal } from '@/lib/authz';
 import {
   getStorageConfig, storageMode, cfgForFilespace, s3CopyObject, s3DeleteObject,
-  s3ObjectExists, s3PutFolderMarker, s3ListFolderMarkers,
+  s3HeadObject, s3PutFolderMarker, s3ListFolderMarkers,
 } from '@/lib/storage';
 import {
-  cleanFolder, folderPathProblem, isWithin, planRename, planFolderDelete, rebase, mapLimit, settleLimit,
+  cleanFolder, folderPathProblem, isWithin, planRename, planFolderDelete, rebase, mapLimit, settleLimit, folderMoveBudgetMs,
 } from '@/lib/folder-ops';
 import { listFolderTree, storagePrefixFor } from '@/lib/file-listing';
 import { markFolderLinks } from '@/lib/share-guard';
@@ -22,10 +23,19 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-// Objects a rename copies in one request. Each is a HEAD, a copy and a delete;
-// at this many the request stays well inside maxDuration on a slow bucket.
-// Past it the rename is refused up front rather than timing out half-way.
+// Objects one rename may move. Past it the rename is refused up front.
 const MAX_RENAME_OBJECTS = 1000;
+
+// Whether a copy noted as `orig`'s (both HEADs, lib/storage.js
+// s3HeadObject) still is one: the same length, and the same ETag or — a
+// multipart original's copy gets a single-part one — written no earlier than
+// the original last was. An original rewritten since fails that.
+function isCopyOf(copy, orig) {
+  if (!copy || !orig || copy.size == null || copy.size !== orig.size) return false;
+  if (copy.etag && copy.etag === orig.etag) return true;
+  return copy.modified != null && orig.modified != null && copy.modified >= orig.modified;
+}
+
 // Files a delete trashes per request. Unlike a rename, a delete can stop and
 // be continued: the client calls again while `more` is true.
 const DELETE_BATCH = 400;
@@ -164,14 +174,20 @@ export async function POST(req) {
 }
 
 /**
- * PATCH /api/files/folders  { from, to, filespaceId? }
+ * PATCH /api/files/folders  { from, to, filespaceId?, resumable?, replace? }
  *
  * Rename or move a folder subtree. Object keys encode the folder
  * (`<prefix>/<folder>/<name>`, see storage.buildObjectKey), so this moves
  * bytes as well as rows, and it does so without a half-renamed middle:
  *
- *   1. copy every object to its new key; on any failure, delete the copies
- *      and stop — nothing has changed
+ *   1. copy every object to its new key, noting each copy first. A copy an
+ *      earlier call made and noted is kept, not made again. Anything else
+ *      already at a new key is refused — 409 `occupied`, unless `replace`
+ *      (the web asks first) — and one a file in the library holds, always.
+ *      On any failure, delete the copies and stop — nothing has changed.
+ *      With `resumable` (the web), a big folder is copied over several
+ *      calls: 202 { more, copied, total } until every copy is in place, and
+ *      a failure keeps the copies for the next call
  *   2. move files, folder rows and grants in one SQL statement; on failure,
  *      delete the copies and stop — nothing has changed
  *   3. delete the originals. A failure here leaves a stray copy at the old
@@ -225,25 +241,90 @@ export async function PATCH(req) {
   }
   if (plan.moves.length && !scope.s3) return bad('Storage is not configured for S3, so the stored files cannot be moved.', 409);
 
-  // An object already at a destination key would be overwritten by the copy.
-  // Nothing in the catalog points there (the path is unused), but a mounted
-  // drive or another tool may have put it there.
-  const taken = await settleLimit(plan.moves, S3_CONCURRENCY, (m) => s3ObjectExists(scope.cfg, m.toKey));
-  const clash = plan.moves.find((m, i) => taken[i].ok && taken[i].value);
-  if (clash) return bad(`Something is already stored at ${clash.toKey}. Nothing was renamed.`, 409);
+  const resumable = body.resumable === true;
+  const budget = folderMoveBudgetMs();
+  const began = Date.now();
 
+  // What is already at the new keys. Nothing in the catalog lists the new
+  // path, so an object there is one of these:
+  //   - a file the catalog keeps all the same (one in the trash that never
+  //     moved aside): never touched, so refused;
+  //   - a copy an earlier call of this rename made and noted
+  //     (folder_move_copies) — cut off by the time limit, a call never gets
+  //     to undo its copies: kept, not made again, while it is still a copy
+  //     of the original; made again (over itself) otherwise;
+  //   - something else — a move that didn't finish before copies were
+  //     noted, a mounted drive, another tool: refused, unless the caller
+  //     says to `replace` it (the web asks first).
+  const heads = await settleLimit(plan.moves, S3_CONCURRENCY, (m) => s3HeadObject(scope.cfg, m.toKey));
+  const there = new Map(plan.moves.map((m, i) => [m.toKey, heads[i].ok ? heads[i].value : null]));
+  const found = plan.moves.filter((m) => there.get(m.toKey));
+  const todo = plan.moves.filter((m) => !there.get(m.toKey));
+  const reused = [];
+  if (found.length) {
+    const keys = found.map((m) => m.toKey);
+    const [held, noted] = await Promise.all([storageKeysInUse(keys), folderMoveCopiesAt(keys)]);
+    const kept = found.find((m) => held.has(m.toKey));
+    if (kept) return bad(`A file the library keeps is already stored at ${kept.toKey}. Nothing was renamed.`, 409);
+    const strangers = found.filter((m) => !noted.has(m.toKey));
+    if (strangers.length && body.replace !== true) {
+      const n = strangers.length;
+      return NextResponse.json({
+        error: `${n.toLocaleString('en-US')} file${n === 1 ? ' is' : 's are'} already stored at “${to}” but not in the library (${strangers[0].toKey}${n > 1 ? ', …' : ''}), perhaps left by a move that didn't finish. Nothing was renamed.`,
+        code: 'occupied', occupied: n, from, to,
+      }, { status: 409 });
+    }
+    const mine = found.filter((m) => noted.get(m.toKey) === m.fromKey);
+    const origs = await settleLimit(mine, S3_CONCURRENCY, (m) => s3HeadObject(scope.cfg, m.fromKey));
+    const still = new Set(mine.filter((m, i) => isCopyOf(there.get(m.toKey), origs[i].ok ? origs[i].value : null)).map((m) => m.toKey));
+    for (const m of found) (still.has(m.toKey) ? reused.push(m.toKey) : todo.push(m));
+  }
+
+  // The copies, each noted first. A caller that can come back (`resumable`)
+  // is answered 202 `more` once the budget has gone, and the next call finds
+  // these copies above; one that can't (Onyx for Mac, which takes any 2xx as
+  // done) gets the whole rename in one call, as before. Every call starts at
+  // least one copy, so each gets somewhere.
+  let started = 0;
+  const deferred = [];
   const copied = [];
-  const undo = () => settleLimit(copied, S3_CONCURRENCY, (k) => s3DeleteObject(scope.cfg, k));
-  // A long video past 5 GiB is copied in parts (lib/storage.js copyObjectWithin).
   const sizes = new Map(files.map((f) => [f.id, f.size]));
+  const allKeys = plan.moves.map((m) => m.toKey);
+  // Undo takes every copy at the new keys, this call's and an earlier one's:
+  // each is a copy of an original still in place. But never one a row has
+  // come to point at — this rename, running twice at once, done by the other
+  // call — and none when that can't be checked: kept, and noted, they are
+  // used next time.
+  const undo = async () => {
+    const keys = [...reused, ...copied];
+    let held;
+    try { held = await storageKeysInUse(keys); } catch { return; }
+    const drop = keys.filter((k) => !held.has(k));
+    const gone = await settleLimit(drop, S3_CONCURRENCY, (k) => s3DeleteObject(scope.cfg, k));
+    const stuck = new Set(drop.filter((k, i) => !gone[i].ok || gone[i].value === false));
+    await forgetFolderMoveCopies(allKeys.filter((k) => !stuck.has(k))).catch(() => {});
+  };
+  if (todo.length) await noteFolderMoveCopies(todo);
+  // A long video past 5 GiB is copied in parts (lib/storage.js copyObjectWithin).
   try {
-    await mapLimit(plan.moves, S3_CONCURRENCY, async (m) => {
+    await mapLimit(todo, S3_CONCURRENCY, async (m) => {
+      if (resumable && started > 0 && Date.now() - began >= budget) { deferred.push(m); return; }
+      started++;
       await s3CopyObject(scope.cfg, m.fromKey, m.toKey, { size: sizes.get(m.id) });
       copied.push(m.toKey);
     });
   } catch (e) {
-    await undo();
+    // A resumable rename keeps its copies for the next call to carry on
+    // from. One that isn't leaves nothing behind.
+    if (!resumable) await undo();
     return bad(`Could not copy a stored file (${e.message}). Nothing was renamed.`, 502);
+  }
+  if (deferred.length) {
+    return NextResponse.json({
+      more: true, from, to,
+      copied: plan.moves.length - deferred.length,
+      total: plan.moves.length,
+    }, { status: 202 });
   }
 
   let result;
@@ -267,6 +348,7 @@ export async function PATCH(req) {
     return bad(`${clashMsg} Nothing was renamed.`, clash ? 409 : 500);
   }
 
+  await forgetFolderMoveCopies(allKeys).catch(() => {});
   const gone = await settleLimit(plan.moves, S3_CONCURRENCY, (m) => s3DeleteObject(scope.cfg, m.fromKey));
   const leftovers = gone.filter((g) => !g.ok).length;
   if (leftovers) console.warn(`[folders rename] ${leftovers} original object(s) under ${from} could not be deleted`);

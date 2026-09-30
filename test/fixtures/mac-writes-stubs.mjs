@@ -324,6 +324,20 @@ const holds = (f, key) => (f.storageKey === key && (!f.deletedAt || !f.trashKey)
 export async function storageKeyInUse(key, { exceptId = null } = {}) {
   return [...s().files.values()].some((f) => holds(f, key) && f.id !== (exceptId || ''));
 }
+export async function storageKeysInUse(keys = []) {
+  const rows = [...s().files.values()];
+  return new Set(keys.filter((k) => k && rows.some((f) => holds(f, k))));
+}
+const moveCopies = () => (s().moveCopies ||= new Map());
+export async function noteFolderMoveCopies(moves = []) {
+  for (const m of moves) if (m?.fromKey && m?.toKey) moveCopies().set(m.toKey, m.fromKey);
+}
+export async function folderMoveCopiesAt(toKeys = []) {
+  return new Map(toKeys.filter((k) => moveCopies().has(k)).map((k) => [k, moveCopies().get(k)]));
+}
+export async function forgetFolderMoveCopies(toKeys = []) {
+  for (const k of toKeys) moveCopies().delete(k);
+}
 export async function unreferencedPreviewKeys({ thumbKeys = [], posterKeys = [] } = {}) {
   const rows = [...s().files.values()];
   return [

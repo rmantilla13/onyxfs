@@ -1104,8 +1104,50 @@ export default function FilesClient({
     return notes.join(' ');
   };
 
+  // A folder rename or move, in as many calls as it takes: for a big folder
+  // the route copies what it can in one call and answers 202 `more`, and the
+  // next call carries on from the copies already made (app/api/files/folders
+  // PATCH, `resumable`). `onProgress(copied, total)` between calls. Resolves
+  // { ok, status, body } for the last answer.
+  const patchFolder = async (payload, onProgress) => {
+    for (let round = 0; round < 200; round++) {
+      const r = await fetch('/api/files/folders', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...payload, filespaceId: fsBody, resumable: true }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (r.status === 202 && body.more) { onProgress?.(body.copied, body.total); continue; }
+      return { ok: r.ok, status: r.status, body };
+    }
+    return { ok: false, status: 504, body: { error: 'The folder is taking too long to move. Try again: it carries on where it stopped.' } };
+  };
+
+  // A toast that follows a folder rename's rounds (patchFolder's onProgress).
+  const roundsToast = (label) => {
+    let id = null;
+    return {
+      update: (copied, total) => {
+        if (id) toast.dismiss(id);
+        id = toast.push(`${label}… ${copied.toLocaleString()} of ${total.toLocaleString()} files`, { duration: 0 });
+      },
+      done: () => { if (id) toast.dismiss(id); id = null; },
+    };
+  };
+
+  // Files the library doesn't list are already where the folder is going
+  // (409 `occupied`) — most likely left by an earlier move of it that
+  // stopped before it finished. Whether to replace them is the person's call.
+  const replaceOccupied = (body) => confirm({
+    title: `Replace ${body.occupied === 1 ? 'a file' : `${body.occupied.toLocaleString()} files`} already in “${baseName(body.to)}”?`,
+    body: `${body.occupied === 1 ? 'A file is' : `${body.occupied.toLocaleString()} files are`} already stored at “${body.to}” but not in the library — most likely left there by an earlier move of this folder that didn't finish. Replacing ${body.occupied === 1 ? 'it' : 'them'} with the files being moved finishes the move.`,
+    confirmLabel: 'Replace and move',
+  });
+
   const renameFolderUI = async (path) => {
     let result = null;
+    let occupied = null;
+    const rounds = roundsToast(`Renaming “${baseName(path)}”`);
     const name = await prompt({
       title: 'Rename folder',
       label: 'Name',
@@ -1114,18 +1156,24 @@ export default function FilesClient({
       validate: folderNameProblem,
       submit: async (next) => {
         if (next === baseName(path)) return null;
-        const r = await fetch('/api/files/folders', {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ from: path, to: joinFolder(parentOf(path), next), filespaceId: fsBody }),
-        });
-        const body = await r.json().catch(() => ({}));
-        if (!r.ok) return body.error || `Could not rename the folder (HTTP ${r.status}).`;
+        const { ok, status, body } = await patchFolder({ from: path, to: joinFolder(parentOf(path), next) }, rounds.update);
+        rounds.done();
+        // Asked once this dialog has closed.
+        if (body.code === 'occupied') { occupied = body; return null; }
+        if (!ok) return body.error || `Could not rename the folder (HTTP ${status}).`;
         result = body;
         return null;
       },
     });
-    if (name == null || !result) return;
+    if (name == null) return;
+    if (occupied) {
+      if (!(await replaceOccupied(occupied))) return;
+      const { ok, status, body } = await patchFolder({ from: path, to: occupied.to, replace: true }, rounds.update);
+      rounds.done();
+      if (!ok) { toast.error(body.error || `Could not rename the folder (HTTP ${status}).`); return; }
+      result = body;
+    }
+    if (!result) return;
     followFolder(path, result.to);
     const note = describeRename(result);
     note ? toast.error(`Renamed to “${name}”. ${note}`) : toast.success(`Renamed to “${name}”.`);
@@ -1134,13 +1182,15 @@ export default function FilesClient({
   const moveFolderTo = async (path, dest) => {
     const to = joinFolder(dest, baseName(path));
     if (to === path || isWithin(dest, path)) return;
-    const r = await fetch('/api/files/folders', {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ from: path, to, filespaceId: fsBody }),
-    });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) { toast.error(body.error || `Could not move the folder (HTTP ${r.status}).`); return; }
+    const rounds = roundsToast(`Moving “${baseName(path)}”`);
+    let { ok, status, body } = await patchFolder({ from: path, to }, rounds.update);
+    rounds.done();
+    if (body.code === 'occupied') {
+      if (!(await replaceOccupied(body))) return;
+      ({ ok, status, body } = await patchFolder({ from: path, to, replace: true }, rounds.update));
+      rounds.done();
+    }
+    if (!ok) { toast.error(body.error || `Could not move the folder (HTTP ${status}).`); return; }
     followFolder(path, to);
     const note = describeRename(body);
     const where = dest || 'All files';
