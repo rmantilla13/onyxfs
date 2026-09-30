@@ -761,17 +761,50 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 
 /* ── Upload tray ────────────────────────────────────────────────────────── */
 
-.upload-panel {
+/* Work in progress, bottom left (app/components/ui/Activity.js): the
+   activity panel, and under it the upload tray — one column, so neither
+   covers the other. The dock itself takes no clicks, only what is in it. */
+.dock {
   position: fixed;
   z-index: var(--z-menu);
   left: var(--s5); bottom: var(--s5);
   width: min(380px, calc(100vw - var(--s5) * 2));
+  display: flex; flex-direction: column; gap: var(--s2);
+  pointer-events: none;
+}
+.dock > * { pointer-events: auto; }
+.upload-panel, .work-panel {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow-2);
   overflow: hidden;
   animation: upload-in var(--dur-2) var(--ease);
+}
+.work-panel { order: 0; }
+.upload-panel { order: 1; }
+/* The upload tray on its own, where there is no dock to sit in. */
+.upload-panel.is-floating {
+  position: fixed;
+  z-index: var(--z-menu);
+  left: var(--s5); bottom: var(--s5);
+  width: min(380px, calc(100vw - var(--s5) * 2));
+}
+.work-list { list-style: none; margin: 0; padding: var(--s1) 0; max-height: 240px; overflow-y: auto; }
+.work-row { display: grid; gap: 3px; padding: var(--s2) var(--s4); }
+.work-row + .work-row { border-top: 1px solid var(--line); }
+.work-title { font-weight: 600; }
+.work-detail { font-variant-numeric: tabular-nums; }
+.work-row .upbar { border-radius: var(--radius-pill); margin-top: 3px; }
+/* Work that can't be counted: a segment that keeps crossing the bar. */
+.upbar-indeterminate .upbar-fill {
+  right: auto; width: 35%;
+  transition: none;
+  animation: activity-slide 1.3s var(--ease) infinite;
+}
+@keyframes activity-slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+@media (prefers-reduced-motion: reduce) {
+  .upbar-indeterminate .upbar-fill { animation: none; width: 100%; opacity: 0.45; transform: none; }
 }
 .upload-head { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s4) var(--s2); }
 .upload-list { list-style: none; margin: 0; padding: var(--s1) 0; max-height: 320px; overflow-y: auto; border-top: 1px solid var(--line); }
@@ -1774,7 +1807,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   .dialog-foot { padding: var(--s3) var(--s4) var(--s4); }
 
   .toast-stack { left: var(--s4); right: var(--s4); bottom: calc(var(--s4) + env(safe-area-inset-bottom)); max-width: none; }
-  .upload-panel { left: var(--s3); right: var(--s3); width: auto; bottom: calc(var(--s3) + env(safe-area-inset-bottom)); }
+  .dock, .upload-panel.is-floating { left: var(--s3); right: var(--s3); width: auto; bottom: calc(var(--s3) + env(safe-area-inset-bottom)); }
 
   .files-selbar {
     display: flex;

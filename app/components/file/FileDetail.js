@@ -32,6 +32,7 @@ import { createMediaClock } from '@/app/components/transcript/mediaClock';
 import useMacApp from '@/app/components/useMacApp';
 import { DownloadButtons } from '@/app/components/download/DownloadAs';
 import { toVTT } from '@/lib/transcripts';
+import { startActivity } from '@/lib/activity';
 
 /**
  * The file detail view: preview on the left, inspector on the right.
@@ -242,7 +243,7 @@ export default function FileDetail({
   const regenerate = async () => {
     if (redrawing) return;
     setRedrawing(true);
-    const note = toast.push('Redrawing the thumbnail…', { duration: 0 });
+    const task = startActivity({ title: `Redrawing the thumbnail of “${file.name}”` });
     try {
       const { redrawThumbnail, mergeRedrawn } = await import('@/lib/thumbnail-regen');
       const row = await redrawThumbnail(file);
@@ -254,7 +255,7 @@ export default function FileDetail({
     } catch (e) {
       toast.error(e?.message || 'Could not redraw the thumbnail.');
     } finally {
-      toast.dismiss(note);
+      task.end();
       setRedrawing(false);
     }
   };
