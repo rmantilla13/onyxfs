@@ -61,12 +61,14 @@ Finder / Premiere / Resolve
   record for appex"), SIGTRAP — which FSKit reports to the app as
   NSCocoaErrorDomain 4099, "Couldn't communicate with a helper
   application". Every drive went to `~/Onyx`, read-only, after the updates
-  to 0.5.5 and 0.5.6. Since 0.5.7 the updater unregisters the old copy and
-  registers the new one (`lsregister -u`, `-f -R -trusted`) before opening
-  it; the app registers itself (`LSRegisterURL`) before its first disk
-  mounts, for a copy an older updater installed; and a mount that fails
-  that way is tried once more after registering again, then Settings ›
-  Finder says to restart the Mac. By hand:
+  to 0.5.5 and 0.5.6. Since 0.5.7 the updater registers the new copy and
+  unregisters the old one (`lsregister -f -R -trusted`, `-u`) before opening
+  it — now in that order, the new one first, or macOS forgets the file
+  system was switched on ("Kept on across updates", below); the app
+  registers itself (`LSRegisterURL`) before its first disk mounts, for a
+  copy an older updater installed; and a mount that fails that way is tried
+  once more after registering again, then Settings › Finder says to restart
+  the Mac. By hand:
   `lsregister -f -R -trusted /Applications/Onyx.app; killall -9 fskit_agent`
   (lsregister is in LaunchServices.framework/Support).
 - Each drive mounts at `/Volumes/<Drive name>` through
@@ -76,7 +78,8 @@ Finder / Premiere / Resolve
   root, appears in Finder's sidebar under Locations and on the Desktop.
 - macOS 26 and older, or when the extension is not enabled/entitled (or not
   yet taken in by macOS, above): the existing rclone NFS mount in `~/Onyx`
-  stays as the fallback. Nothing is removed.
+  stays as the fallback. Nothing is removed. When it is the switch being
+  off, the fallback is not silent ("Kept on across updates").
 
 **Read and write, in this build.** The owner: "make sure we have permission
 to read and write when copying files in Finder. Both Finder and web should
@@ -251,12 +254,97 @@ logic is testable with `swift test`.
   goes in under half a second), then unmounts at once.
 - Settings → Finder: which way drives mount; when the module is not enabled,
   a button that opens System Settings' File System Extensions pane
-  (`FSClient.shared.openFileSystemExtensionsSettings()`).
+  (`FSClient.shared.openFileSystemExtensionsSettings()`). The menu bar's
+  panel says it too, while drives are in `~/Onyx` because of it ("Kept on
+  across updates").
 - `scripts/build-mac.sh`: builds `OnyxFS`, assembles
   `Contents/Extensions/OnyxFS.appex`, signs it with its entitlements and
   profile; adds `com.apple.developer.fskit.mount` to the app's entitlements
   only when the app's profile grants it (a restricted entitlement a profile
   does not grant stops the app from launching).
+
+## Kept on across updates
+
+The owner, on 0.5.18: "we lost our custom drive icons when mounted. also
+localhost network still showing up on sidebar. these drives should be
+mounted individually." Every drive was an NFS mount in `~/Onyx` again,
+under "localhost" in Finder's sidebar, and nothing said so outside
+Settings › Finder. The Onyx file system had been switched off.
+
+**Where macOS keeps the switch.** Not with pluginkit: `pluginkit -m` shows
+no election for any FSKit module. fskit_agent keeps the identifiers of the
+modules switched on in
+`~/Library/Group Containers/group.com.apple.fskit.settings/enabledModules.plist`
+(`probeOrder.plist` beside it). It works its list of modules out again
+whenever the LaunchServices database changes, and drops the identifier of
+a module no copy is registered for — "Removed 1 identifiers" in its log;
+`removeBundleFromEnabledModules:` in the binary — and the switch with it.
+Once a copy is registered again the identifier comes back as a new module
+("Added 1 identifiers"): first in `probeOrder.plist`, switched off.
+
+**What switched it off.** Disks mounted until 14:41:22 on 29 September. At
+14:41:49 Finder (DesktopServicesHelper) replaced 0.5.14 with 0.5.15, a
+copy dragged from the disk image: it unregistered the old copy, copied the
+new one in for five seconds, then registered it. fskit_agent looked in
+between. 0.5.15 cleared the last run's disks at 14:42:00 and mounted none
+after it: every drive went to `~/Onyx`. The same happened when 0.5.16 was
+dragged in at 15:07, the last write of `enabledModules.plist` (which kept
+Onyx Dev's `io.onyxfs.app.dev.fs`, and not `io.onyxfs.app.fs`). The in-app
+updates to 0.5.17 and 0.5.18 unregistered the old copy first too, but
+registered the new one 60 ms later, before fskit_agent looked (some 0.3 s
+after a change): they kept a switch that was already off, and could as
+easily have lost one that was on. The stale records of old builds
+unregistered that evening dropped nothing: `/Applications/Onyx.app` was
+registered throughout.
+
+**The updater** now registers the new copy before it lets the old one go
+(`UpdateSwap`, OnyxKit: its tests run the script with stand-ins for
+lsregister and open), so the identifier is registered throughout. Finder's
+own replace cannot be changed; that is what the rest is for.
+
+**Only the person can switch it back on.** On macOS 27.0.1 fskitd sets a
+module's switch only for a caller holding Apple's private
+`com.apple.private.LiveFS.connection` entitlement. System Settings' File
+System Extensions sheet (FSKitModuleManagement) has it — "Incomming
+connection, entitled 1" in fskitd's log, then "Call fskit_agent to set
+enabled state" — and Onyx, "entitled 0", is refused with EPERM whatever it
+does: its Turn On (the undeclared `setEnabledStateForIdentifier` call,
+0.5.1) was refused four times with a freshly started fskitd, moments
+before the sheet's switch went through. `Received error '(null)', errno 2,
+retrieving team ID`, over and over while the Login Items & Extensions pane
+is open, is fskitd looking up the team of the pane itself, which has none
+— the same from a fresh fskitd — not a sign of anything of Onyx's. On this
+Mac the sheet's switch would not take until fskitd was restarted
+(`sudo killall -9 fskitd`, which a restart of the Mac also does); then it
+did at once.
+
+So Onyx (`FileSystemSwitch`, OnyxKit, and DriveService):
+
+- remembers the switch was on (`onyxfs.switch` in UserDefaults);
+- finding it off as it opens, with drives to be in Finder, says so, once
+  for each time it is lost: a notice in Notification Center (macOS asks the
+  person the first time) with Open System Settings, and a row in the menu
+  bar's panel, which stays for as long as drives are in `~/Onyx` because of
+  it. Onyx's own Turn On is offered, and tried once by itself after Onyx
+  was replaced, only on macOS 27.0, and never again on a build that
+  refused it;
+- sent to System Settings (the row, the notice, Settings › Finder), asks
+  FSKit every 2 s for three minutes whether it is on. The moment it is, the
+  drives in `~/Onyx` are unmounted and mounted as disks, each with its icon,
+  and "localhost" leaves the sidebar. Still off when the person comes back
+  a while later, or at the end, the row adds: restart your Mac, then switch
+  it on;
+- asks again with each tick, and as the panel, Settings › Finder or Onyx
+  comes forward, while drives are in `~/Onyx` because it is off: switched
+  on by any way, they are disks within a tick. Nothing is asked while they
+  are disks;
+- takes a switch turned off while Onyx runs as the person's (Onyx cannot be
+  replaced while it runs): it is neither switched back on nor told about;
+- says in the same row when the switch is on but a disk would not mount
+  (DiskMounter.lastFailure), which Settings › Finder alone said before.
+
+`ship-mac.sh` also unregisters its throwaway build before deleting it:
+eleven records of deleted builds were on the owner's Mac.
 
 
 ## Writes (the owner asked for read-write; this is part of this build)

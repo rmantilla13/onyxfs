@@ -13,7 +13,13 @@ import OnyxKit
 /// launches, as the bytes it left on the disk and the drawing they were of.
 @MainActor
 enum DiskIcons {
-    private static let defaultsKey = "diskIcons"
+    nonisolated private static let defaultsKey = "diskIcons"
+
+    /// Some disk has had its icon here: drives have been disks on this Mac,
+    /// so the Onyx file system was on (FileSystemSwitch's first memory).
+    nonisolated static var anyRecorded: Bool {
+        !(UserDefaults.standard.dictionary(forKey: defaultsKey) ?? [:]).isEmpty
+    }
 
     /// Bring the disk at `volume` to `drive`'s icon, if its icon is still
     /// this app's to change.

@@ -33,7 +33,10 @@ final class DiskMounter: ObservableObject {
         /// This copy of Onyx was built without the extension (or without
         /// the entitlement to mount it).
         case notInstalled
-        /// Installed, but switched off in System Settings.
+        /// Installed, but switched off in System Settings — by the person, or
+        /// by macOS forgetting it was on: Onyx replaced with no copy of it
+        /// registered for a moment, as Finder's replace of a copy dragged
+        /// from the disk image leaves it (UpdateSwap).
         case disabled
         /// This copy carries its extension, signed to run, but FSKit does not
         /// list it: macOS is still holding on to an earlier one. Seen after
@@ -43,7 +46,13 @@ final class DiskMounter: ObservableObject {
         case notLoaded
     }
 
-    @Published private(set) var availability: Availability = .unknown
+    @Published private(set) var availability: Availability = .unknown {
+        didSet { if availability != oldValue { onAvailabilityChange?(oldValue, availability) } }
+    }
+    /// FSKit answered differently: switched on or off in System Settings,
+    /// say. DriveService moves the drives in ~/Onyx to disks the moment it is
+    /// on (FileSystemSwitch).
+    var onAvailabilityChange: ((Availability, Availability) -> Void)?
     @Published private(set) var states: [String: MountManager.State] = [:]
     /// Why the last disk that failed to mount did (that drive went to
     /// ~/Onyx instead), for Settings; nil once a disk mounts.
@@ -80,8 +89,10 @@ final class DiskMounter: ObservableObject {
 
     func state(of scope: SyncDomain) -> MountManager.State? { states[scope.identifier] }
 
-    /// Is the extension here and switched on? Asked again whenever Settings
-    /// opens or a mount is about to happen: the person may have just enabled it.
+    /// Is the extension here and switched on? Asked again whenever a mount is
+    /// about to happen, and while drives are in ~/Onyx because it is off
+    /// (DriveService.checkFileSystemSwitch): the person may have just
+    /// switched it on. One message to FSKit, a millisecond or two.
     func refreshAvailability() async {
         do {
             let modules = try await FSClient.shared.installedExtensions
@@ -101,22 +112,33 @@ final class DiskMounter: ObservableObject {
         _ = FSClient.shared.openFileSystemExtensionsSettings()
     }
 
-    /// Settings' Turn On: switches the extension on from Onyx itself, through
-    /// the call System Settings' own switch makes (FSClient's
+    /// What Onyx's own Turn On came to.
+    enum TurnOn: Equatable {
+        case on
+        /// macOS said no (EPERM): it will say no again on this macOS
+        /// (FileSystemSwitch remembers).
+        case refused(String)
+        /// Anything else, in words for the person.
+        case failed(String)
+    }
+
+    /// Turn On: switches the extension on from Onyx itself, through the call
+    /// System Settings' own switch makes (FSClient's
     /// setEnabledStateForIdentifier:newState:replyHandler:, declared in FSKit's
     /// FSClientXPC protocol but not in its headers — so looked up at run time).
     ///
-    /// On macOS 27.0 that switch refuses every extension not Apple's: fskitd
-    /// counts the Settings pane as an unentitled caller with no team, and
-    /// answers EPERM before the extension is looked at. Onyx holds FSKit's
-    /// mount entitlement and signs its extension with its own team.
-    ///
-    /// Nil when the extension is on; else why not, in words for Settings.
-    func enableExtension() async -> String? {
+    /// Made for macOS 27.0, where System Settings' switch was refusing. On
+    /// 27.0.1 it is Onyx that is refused, always: fskitd sets a module's
+    /// switch only for a caller holding Apple's private LiveFS entitlement
+    /// ("entitled 1" in its log — the File System Extensions sheet has it;
+    /// Onyx, "entitled 0", is answered EPERM however fresh fskitd is). So it
+    /// is offered, and tried, only where FileSystemSwitch.offersTurnOn says;
+    /// System Settings is the way everywhere else.
+    func enableExtension() async -> TurnOn {
         let client = FSClient.shared
         let selector = NSSelectorFromString("setEnabledStateForIdentifier:newState:replyHandler:")
         guard client.responds(to: selector) else {
-            return "This version of macOS gives Onyx no way to switch it on. Use System Settings instead."
+            return .refused("This version of macOS gives Onyx no way to switch it on. Use System Settings instead.")
         }
         typealias Call = @convention(c) (AnyObject, Selector, NSString, ObjCBool,
                                          @escaping @convention(block) (NSError?) -> Void) -> Void
@@ -137,20 +159,20 @@ final class DiskMounter: ObservableObject {
         await refreshAvailability()
         if availability == .ready {
             appLog.info("onyxfs: the file system extension is on (Turn On)")
-            return nil
+            return .on
         }
         switch answer {
         case .none:
-            return "macOS did not answer. Try again, or switch Onyx on in System Settings."
+            return .failed("macOS did not answer. Switch Onyx on in System Settings instead.")
         case let .some(error?):
             appLog.error("onyxfs: switching the extension on failed: \(error.localizedDescription, privacy: .public)")
             let ns = error as NSError
             if ns.domain == NSPOSIXErrorDomain, ns.code == Int(EPERM) || ns.code == Int(EACCES) {
-                return "macOS did not let Onyx switch its file system on. Your drives stay in the Onyx folder, where they stream as before."
+                return .refused("macOS doesn't let Onyx switch its file system on by itself. Switch Onyx on in System Settings instead.")
             }
-            return "macOS could not switch the file system on: \(error.localizedDescription)"
+            return .failed("macOS could not switch the file system on: \(error.localizedDescription)")
         case .some(nil):
-            return "macOS accepted, but the file system is still off. Try again in a moment."
+            return .failed("macOS accepted, but the file system is still off. Switch Onyx on in System Settings instead.")
         }
     }
 

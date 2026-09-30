@@ -282,6 +282,13 @@ Before anything is installed:
 
 A compromised feed or a swapped file therefore cannot install something
 else. The swap happens after the app quits, and then the new version opens.
+The new copy is registered with macOS before the old one is let go: with
+no copy registered, even for a moment, macOS forgets that the Onyx file
+system was switched on, and every drive falls back to `~/Onyx` (ONYXFS.md,
+"Kept on across updates"). Finder replacing the app with a copy dragged
+from the disk image can still do that; Onyx then says so, in a notice and
+in its menu bar panel, and moves the drives back to disks the moment the
+switch in System Settings is on again.
 
 An unsigned copy cannot vouch for anything, so it only offers to open the
 download. A debug build (`CONFIG=debug scripts/build-mac.sh`) may replace
@@ -372,7 +379,7 @@ decode fails on HTML, with a complaint about the character `<`.
 
 ## What is verified, and how
 
-- **OnyxKit:** 472 tests (`swift test`: OnyxKit, OnyxFSCore, and the two
+- **OnyxKit:** 649 tests (`swift test`: OnyxKit, OnyxFSCore, and the two
   together), among them:
   - The tree built from delta pages: folders derived from paths, renames, empty folders, deletions.
   - Each id is reported once, as what it is now.
@@ -380,6 +387,14 @@ decode fails on HTML, with a complaint about the character `<`.
   - Domain identifiers, and server-address parsing.
   - The handoff cookie's scope and lifetime (`__Host-` over https).
   - Update version arithmetic, and the release shape.
+  - The update swap, run as the updater runs it with stand-ins for
+    lsregister and open: the new copy registered before the old one is let
+    go, the old one put back when a rename fails, nothing done before Onyx
+    has exited.
+  - The Onyx file system's switch: when Onyx says it is off, when it
+    switches it on itself (only on macOS 27.0, once), and when it leaves the
+    person's own choice alone (`FileSystemSwitch`); and whether Onyx has
+    Full Disk Access, on macOS 27.0.1 and before.
   - SigV4, pinned against the AWS SDK's own presigner.
   - PKCE, pinned against the server's `pkceChallenge` and RFC 7636.
   - Thumbnails: every size and poster time against a table lib/poster.js

@@ -62,13 +62,18 @@ final class AppModel: ObservableObject {
         // After the thumbnails: each hears this Mac's uploads as they finish.
         proxies.attach(to: self)
         if phase == .signedIn { startup = Task { await afterSignIn() } }
+        // A notice's Open System Settings: the Onyx file system's switch,
+        // watched for coming on.
+        SystemNotices.shared.openFileSystemSettings = { [weak finder = self.finder] in finder?.openFileSystemSettings() }
         // Back to Onyx from the browser, say, where a drive may have changed:
-        // the drive list, and the drives' own ticks, catch up.
+        // the drive list, and the drives' own ticks, catch up. Or from System
+        // Settings, where the Onyx file system may have been switched on.
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.finder.noteActivity()
+                self.finder.cameForward()
                 Task { await self.refreshIfOlder(than: 30) }
             }
         }

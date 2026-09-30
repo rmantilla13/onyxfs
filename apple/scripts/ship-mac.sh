@@ -241,10 +241,19 @@ if feed.get("notes") != notes:
 PY
 else
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/onyx-ship.XXXXXX")"
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 cleanup() {
   # The link first, on its own: nothing that removes the worktree may reach
   # through it to the profiles it points at.
   rm -f "$WORK/src/apple/.signing"
+  # LaunchServices keeps its records of these builds long after they are
+  # deleted: eleven were on the owner's Mac. So the build goes from its
+  # records first — this build, by its own path, and nothing else.
+  if [ -d "$WORK/src/apple/build" ]; then
+    find "$WORK/src/apple/build" -name '*.app' -type d -prune 2>/dev/null | while IFS= read -r app; do
+      "$LSREGISTER" -u "$app" >/dev/null 2>&1 || true
+    done || true
+  fi
   git -C "$ROOT" worktree remove --force "$WORK/src" >/dev/null 2>&1 || true
   git -C "$ROOT" worktree prune >/dev/null 2>&1 || true
   rm -rf "$WORK"

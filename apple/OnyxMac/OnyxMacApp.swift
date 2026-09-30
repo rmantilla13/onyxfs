@@ -72,6 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         source.resume()
         sigterm = source
         MainActor.assumeIsolated {
+            // Here, as launching finishes: a click on a notice that opened
+            // Onyx is heard only if the notices' delegate is set by then.
+            SystemNotices.shared.start()
             let background = Background.shared
             background.registerOnFirstRun()
             // Opened at login: no window — just the menu bar, and the Dock
