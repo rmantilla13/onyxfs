@@ -219,6 +219,10 @@ describe('the sign-in gate (middleware.js)', () => {
     '/api/files/3f0c7e1a-1111-4222-8333-944455556666/thumbnail',
     '/api/files/3f0c7e1a-1111-4222-8333-944455556666/waveform',
     '/api/admin/trash/restore',
+    // The iPhone's links: a file's, and one of them; a folder's, and one of them.
+    '/api/files/3f0c7e1a-1111-4222-8333-944455556666/shares',
+    '/api/files/3f0c7e1a-1111-4222-8333-944455556666/shares/Zk3_q9Lx0aB7cD2eF4gH6i',
+    '/api/files/folders/shares', '/api/files/folders/shares/Zk3_q9Lx0aB7cD2eF4gH6i',
   ];
 
   test('with no session and no token, the Mac’s paths are redirected to sign in exactly as before', async () => {
@@ -230,6 +234,8 @@ describe('the sign-in gate (middleware.js)', () => {
     for (const p of [
       '/api/files/abc/comments', '/api/files/abc/thumbnail/sizes', '/api/files/abc/filmstrip', '/api/files/abc/download', '/api/files/upload',
       '/api/files/config', '/api/admin/people', '/api/admin/trash', '/api/filespaces', '/files/abc', '/admin',
+      '/api/files/abc/shares/t/x', '/api/files/folders/shares/t/x', '/api/files/config/shares', '/api/files/presign/shares',
+      '/api/files/upload/shares/t', '/api/admin/shares',
     ]) {
       assert.ok(redirected(await run(p, { authorization: 'Bearer dt_live_x' })), p);
     }

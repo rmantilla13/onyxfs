@@ -123,6 +123,14 @@ export async function canModifyFolder(folder, p = {}, { driveRole = null, tag = 
   const fromDrive = DRIVE_WRITE_ROLES.has(driveRole) && tag ? driveRole : null;
   return folderRoleAllows(strongestFolderRole([fromDrive]), 'modify');
 }
+// As lib/db.js: canModifyFolder for each library path. This store holds no
+// folder grants, so it is every path for an admin and none for anyone else.
+export async function modifiableLibraryFolders(folders = [], p = {}) {
+  const paths = [...new Set((folders || []).filter((f) => typeof f === 'string' && f))];
+  const mine = [];
+  for (const f of paths) if (await canModifyFolder(f, p, { tag: '' })) mine.push(f);
+  return new Set(mine);
+}
 
 // ── files ──
 export async function getFileById(id) { return copy(s().files.get(String(id)) || null); }

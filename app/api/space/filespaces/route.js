@@ -28,6 +28,13 @@ export const dynamic = 'force-dynamic';
  * `color` is the drive's own colour, the dot beside its name on the web, as
  * #RRGGBB from the brand's palette: the Mac paints the drive's disk icon in
  * it (apple/ONYXFS.md, "The drive's icon").
+ *
+ * `shares` is whether this account may share by link at all: the `shares`
+ * flag as the web's menus read it for them (lib/authz.js principalFlags —
+ * off for everyone while sharing is off, and for a role that may make no
+ * kind of link). The iPhone offers Share Link… only with it, and then only
+ * on a file or folder whose links are theirs to manage (a listing's
+ * `can.share`, a folder tree's `share`); the link routes decide again.
  */
 /**
  * The writes a platform role allows, as a disk needs them: `upload` new
@@ -83,5 +90,7 @@ export async function GET(req) {
   // The library: files in no drive. Anyone whose role may upload may add to
   // it, as on the web; changing or removing a file already there is still
   // the file's own question (its creator, a grant), asked by the server.
-  return NextResponse.json({ filespaces, library: { can: role }, email: gate.email, isAdmin: principal.isAdmin });
+  return NextResponse.json({
+    filespaces, library: { can: role }, email: gate.email, isAdmin: principal.isAdmin, shares: !!principal.flags?.shares,
+  });
 }

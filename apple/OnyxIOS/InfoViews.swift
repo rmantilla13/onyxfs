@@ -1,7 +1,8 @@
 import OnyxKit
 import SwiftUI
 
-/// A file's facts, as the web's info panel has them, and the ways to save it.
+/// A file's facts, as the web's info panel has them, the ways to save it,
+/// and its links.
 struct FileInfoView: View {
     let file: FileItem
     /// Where it was opened from, when that is known.
@@ -38,7 +39,7 @@ struct FileInfoView: View {
                             .disabled(!photos.isSupported)
                             .accessibilityHint(photos.reason ?? "")
                         saveButton("Files", systemImage: "folder", to: .files)
-                        saveButton("Share", systemImage: "square.and.arrow.up", to: .share)
+                        saveButton("Send", systemImage: "square.and.arrow.up", to: .share)
                     }
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
@@ -47,6 +48,20 @@ struct FileInfoView: View {
                        file.kind == "image" || file.kind == "video" {
                         Text(reason)
                     }
+                }
+                // A link, where one is theirs to make or manage: pushed
+                // here, so Info's own Done still closes the sheet.
+                if session.mayLink(file) {
+                    Section {
+                        NavigationLink {
+                            ShareLinkView(subject: .file(file))
+                        } label: {
+                            Label("Share Link…", systemImage: "link")
+                        }
+                    } footer: {
+                        Text("Make a link to this file, or copy, send or revoke the links it has.")
+                    }
+                    .glassRow()
                 }
                 Section {
                     LabeledContent("Size", value: FileFormat.size(file.size))
@@ -114,7 +129,7 @@ struct FileInfoView: View {
         .buttonStyle(.plain)
         .foregroundStyle(.tint)
         .glassSurface(RoundedRectangle(cornerRadius: 18, style: .continuous), interactive: true)
-        .accessibilityLabel(destination == .share ? "Share" : "Save to \(title)")
+        .accessibilityLabel(destination == .share ? "Send a Copy" : "Save to \(title)")
     }
 }
 

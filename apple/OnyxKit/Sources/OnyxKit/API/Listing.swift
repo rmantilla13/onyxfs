@@ -25,11 +25,16 @@ public struct FolderNode: Codable, Sendable, Hashable, Identifiable {
     public let depth: Int
     /// The files directly in it.
     public let count: Int
+    /// Whether its links are this account's to manage (the server's
+    /// markFolderLinks): the folder's half of whether to offer Share Link…,
+    /// as a file's `can.share` is. Nil, from an older server, is no.
+    public let share: Bool?
 
     public var id: String { folder }
 
-    public init(folder: String, name: String, parent: String, depth: Int, count: Int) {
+    public init(folder: String, name: String, parent: String, depth: Int, count: Int, share: Bool? = nil) {
         self.folder = folder; self.name = name; self.parent = parent; self.depth = depth; self.count = count
+        self.share = share
     }
 }
 

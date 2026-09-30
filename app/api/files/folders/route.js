@@ -13,6 +13,7 @@ import {
   cleanFolder, folderPathProblem, isWithin, planRename, planFolderDelete, rebase, mapLimit, settleLimit,
 } from '@/lib/folder-ops';
 import { listFolderTree, storagePrefixFor } from '@/lib/file-listing';
+import { markFolderLinks } from '@/lib/share-guard';
 import { previewKeysOf, dropUnusedPreviews } from '@/lib/preview-gc';
 import { moveTrashedObject } from '@/lib/trash-move';
 import { afterResponse } from '@/lib/after-response';
@@ -71,7 +72,8 @@ function canonicalIn(scope, path) {
  * The sidebar tree on its own. It counts every file in scope and runs to a
  * couple of hundred kilobytes at 100k files, so the library loads it once per
  * filespace and again only after something changes a folder's contents —
- * rather than with every filter change and search keystroke.
+ * rather than with every filter change and search keystroke. A folder whose
+ * links the caller may manage carries `share: true` (markFolderLinks).
  *
  * `summary` is what the delete confirmation states: how many files and
  * folders a delete of that folder would take with it.
@@ -108,7 +110,9 @@ export async function GET(req) {
   const storagePrefix = await storagePrefixFor(email, filespaceId, principal);
   if (storagePrefix === null) return forbidden('No access to that filespace.');
   const folders = await listFolderTree({ principal, storagePrefix });
-  return NextResponse.json({ folders });
+  // `share: true` on the folders whose links are theirs to manage, for the
+  // iPhone's Share Link… (lib/share-guard.js markFolderLinks).
+  return NextResponse.json({ folders: await markFolderLinks(folders, principal, { filespaceId: filespaceId || null }) });
 }
 
 /**

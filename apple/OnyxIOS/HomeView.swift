@@ -19,6 +19,7 @@ struct HomeView: View {
     @State private var recentProblem: String?
     @State private var previewing: FileItem?
     @State private var inspecting: FileItem?
+    @State private var linking: LinkSubject?
     @State private var showingAccount = false
     @State private var showingAll = false
     @Namespace private var zoom
@@ -51,6 +52,7 @@ struct HomeView: View {
                 .navigationTransition(.zoom(sourceID: file.id, in: zoom))
         }
         .sheet(item: $inspecting) { FileInfoView(file: $0, place: nil) }
+        .sheet(item: $linking) { ShareLinkSheet(subject: $0) }
         .sheet(isPresented: $showingAccount) { AccountView() }
     }
 
@@ -154,7 +156,8 @@ struct HomeView: View {
             } else {
                 VStack(spacing: 12) {
                     ForEach(recent.prefix(6)) { file in
-                        FileListRow(file: file, open: { previewing = file }, info: { inspecting = file })
+                        FileListRow(file: file, open: { previewing = file }, info: { inspecting = file },
+                                    share: session.mayLink(file) ? { linking = .file(file) } : nil)
                             .matchedTransitionSource(id: file.id, in: zoom)
                     }
                 }
@@ -428,6 +431,7 @@ struct RecentFilesView: View {
     @State private var problem: String?
     @State private var previewing: FileItem?
     @State private var inspecting: FileItem?
+    @State private var linking: LinkSubject?
     @Namespace private var zoom
 
     var body: some View {
@@ -436,7 +440,8 @@ struct RecentFilesView: View {
                 EditorialTitle(text: "Recent", subtitle: "Every drive, newest first")
                     .padding(.bottom, 12)
                 ForEach(files) { file in
-                    FileListRow(file: file, showsFolder: true, open: { previewing = file }, info: { inspecting = file })
+                    FileListRow(file: file, showsFolder: true, open: { previewing = file }, info: { inspecting = file },
+                                share: session.mayLink(file) ? { linking = .file(file) } : nil)
                         .matchedTransitionSource(id: file.id, in: zoom)
                         .onAppear { if file.id == files.last?.id { Task { await more() } } }
                 }
@@ -469,6 +474,7 @@ struct RecentFilesView: View {
                 .navigationTransition(.zoom(sourceID: file.id, in: zoom))
         }
         .sheet(item: $inspecting) { FileInfoView(file: $0, place: nil) }
+        .sheet(item: $linking) { ShareLinkSheet(subject: $0) }
     }
 
     private func more() async {

@@ -25,9 +25,12 @@ export const dynamic = 'force-dynamic';
  * the link's own, so it cannot be revoked by way of some other folder the
  * caller does happen to manage. A token that is not a folder link is not
  * found here — a file's links are revoked through the file.
+ *
+ * The browser's session or the iPhone's device token (requirePrincipal(req)),
+ * held to the same rules after it.
  */
-export async function DELETE(_req, { params }) {
-  const g = await requirePrincipal();
+export async function DELETE(req, { params }) {
+  const g = await requirePrincipal(req);
   if (g.error) return g.error;
   const token = params?.token;
   if (!isShareToken(token)) return NextResponse.json({ error: 'Link not found' }, { status: 404 });

@@ -17,6 +17,8 @@ struct FolderView: View {
     @State private var query = ""
     @State private var previewing: FileItem?
     @State private var inspecting: FileItem?
+    /// The file or folder a Share Link sheet is open for.
+    @State private var linking: LinkSubject?
     /// Choosing files, and the ones chosen.
     @State private var selecting = false
     @State private var selection: Set<String> = []
@@ -74,6 +76,7 @@ struct FolderView: View {
                 .navigationTransition(.zoom(sourceID: file.id, in: zoom))
         }
         .sheet(item: $inspecting) { FileInfoView(file: $0, place: route.place) }
+        .sheet(item: $linking) { ShareLinkSheet(subject: $0) }
     }
 
     private var title: String {
@@ -132,6 +135,7 @@ struct FolderView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(selecting)
+                    .contextMenu { folderMenu(node) }
                 }
                 ForEach(listing.files) { file in
                     fileButton(file) { FileTile(file: file, showsFolder: !query.isEmpty) }
@@ -157,9 +161,10 @@ struct FolderView: View {
                 }
                 .disabled(selecting)
                 .listRowBackground(Color.clear)
+                .contextMenu { folderMenu(node) }
             }
             ForEach(listing.files) { file in
-                fileButton(file) { FileRow(file: file, showsFolder: !query.isEmpty) }
+                fileButton(file) { FileRow(file: file, showsFolder: !query.isEmpty, share: shareAction(file)) }
             }
             if listing.loadingMore {
                 ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden)
@@ -193,11 +198,16 @@ struct FolderView: View {
     }
 
     /// A file's long-press menu: open it, its details, the ways to save it,
-    /// and choosing it with others.
+    /// a link to it, and choosing it with others.
     @ViewBuilder private func fileMenu(_ file: FileItem) -> some View {
         Button { previewing = file } label: { Label("Open", systemImage: "eye") }
         Button { inspecting = file } label: { Label("Get Info", systemImage: "info.circle") }
         Section { SaveActions(file: file) }
+        if let share = shareAction(file) {
+            Section {
+                Button(action: share) { Label("Share Link…", systemImage: "link") }
+            }
+        }
         if !selecting {
             Button {
                 selection = [file.id]
@@ -211,6 +221,28 @@ struct FolderView: View {
     private func endSelecting() {
         selecting = false
         selection = []
+    }
+
+    // MARK: - Links
+
+    /// Share Link… for a file, where the server says its links are this
+    /// account's to manage; nil where they are not, and nothing is offered.
+    private func shareAction(_ file: FileItem) -> (() -> Void)? {
+        session.mayLink(file) ? { linking = .file(file) } : nil
+    }
+
+    /// Share Link… for a folder, likewise (the tree's `share`).
+    private func shareAction(_ node: FolderNode) -> (() -> Void)? {
+        guard session.mayLink(node), !selecting else { return nil }
+        return { linking = .folder(path: node.folder, place: route.place) }
+    }
+
+    /// A folder's long-press menu: a link to it, where one is theirs to
+    /// make or manage. With nothing to offer, no menu at all.
+    @ViewBuilder private func folderMenu(_ node: FolderNode) -> some View {
+        if let share = shareAction(node) {
+            Button(action: share) { Label("Share Link…", systemImage: "link") }
+        }
     }
 
     // MARK: - Toolbar
@@ -247,7 +279,9 @@ struct FolderView: View {
                 Button("Select") { selecting = true }
                     .disabled(listing.files.isEmpty)
             }
-            ToolbarItem(placement: .topBarTrailing) { ViewOptions(layout: $layout, sort: $sort) }
+            ToolbarItem(placement: .topBarTrailing) {
+                ViewOptions(layout: $layout, sort: $sort, share: listing.current.flatMap { shareAction($0) })
+            }
         }
     }
 
@@ -324,13 +358,20 @@ private struct ParentChip: View {
     }
 }
 
-/// Icons or a list, and the order: the folder's ⋯ menu.
+/// Icons or a list, and the order: the folder's ⋯ menu — and, where the
+/// folder's links are this account's, Share Link… for the folder itself.
 private struct ViewOptions: View {
     @Binding var layout: BrowserLayout
     @Binding var sort: FileSort
+    var share: (() -> Void)?
 
     var body: some View {
         Menu {
+            if let share {
+                Section {
+                    Button(action: share) { Label("Share Link…", systemImage: "link") }
+                }
+            }
             Picker("View", selection: $layout) {
                 Label("Icons", systemImage: "square.grid.2x2").tag(BrowserLayout.grid)
                 Label("List", systemImage: "list.bullet").tag(BrowserLayout.list)
@@ -353,7 +394,7 @@ private struct ViewOptions: View {
         } label: {
             // Liquid Glass draws the circle itself.
             Image(systemName: Theme.liquidGlass ? "ellipsis" : "ellipsis.circle")
-                .accessibilityLabel("View Options")
+                .accessibilityLabel(share == nil ? "View Options" : "More")
         }
     }
 }

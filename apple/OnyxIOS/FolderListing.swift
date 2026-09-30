@@ -14,6 +14,9 @@ final class FolderListing {
     }
 
     let route: FolderRoute
+    /// This folder's own node in the place's tree (nil at the top): what
+    /// the server says of it, such as whether its links are this account's.
+    private(set) var current: FolderNode?
     private(set) var subfolders: [FolderNode] = []
     /// What each subfolder holds, as the Files app counts it: its files and
     /// its folders.
@@ -71,6 +74,7 @@ final class FolderListing {
             let (nodes, first) = try await (tree, page)
             ThumbnailTrace.event("listing", "files=\(first.files.count) ms=\(ThumbnailTrace.ms(since: asked))")
             guard mine == generation else { return }
+            current = route.folder.isEmpty ? nil : nodes.first { $0.folder == route.folder }
             subfolders = Self.subfolders(of: route.folder, in: nodes, matching: key.query)
             itemCounts = Self.itemCounts(subfolders, in: nodes)
             files = first.files
