@@ -21,6 +21,9 @@ final class AppModel: ObservableObject {
     /// Whether the server treats this account as an admin; only decides
     /// which menu items are offered — the server enforces it either way.
     @Published private(set) var isAdmin = false
+    /// What this account may do in the library, as the server says (nil
+    /// from an older server): whether its disk is writable.
+    @Published private(set) var libraryCan: WriteCaps?
     /// Drives being mounted or unmounted right now.
     @Published private(set) var busy: Set<String> = []
     /// The last thing that went wrong, for the window to say.
@@ -36,6 +39,15 @@ final class AppModel: ObservableObject {
     let finder = DriveService()
     /// Transcripts requested on the web, made on this Mac.
     let transcriber = TranscriptionService()
+    /// Streamable versions of heavy videos, made on this Mac.
+    let proxies = ProxyService()
+    /// Thumbnails the web is missing, made on this Mac.
+    let thumbnailer = ThumbnailService()
+    /// Keep Offline in Finder's own right-click menu, and the marks on what
+    /// is kept (the OnyxFinder extension asks here).
+    let finderSync = FinderSyncService()
+    /// What redraws the activity graphs, wherever they show (ActivityClock).
+    lazy var activity = ActivityClock(transfers: finder.transfers)
     private let settings = SharedSettings()
     /// Signed in as the app opened: bringing the drives back, in the
     /// background. Launch arguments that need the drives wait for it.
@@ -49,13 +61,37 @@ final class AppModel: ObservableObject {
         web = WebController()
         web.model = self
         updater.model = self
+        thumbnailer.attach(to: self)
+        // After the thumbnails: each hears this Mac's uploads as they finish.
+        proxies.attach(to: self)
+        // Before the drives open: it hears what each keeps from the first.
+        finderSync.attach(to: self)
         if phase == .signedIn { startup = Task { await afterSignIn() } }
-        // Quitting unmounts every drive, so none is left for the system to reap.
+        // A notice's Open System Settings: the Onyx file system's switch,
+        // watched for coming on.
+        SystemNotices.shared.openFileSystemSettings = { [weak finder = self.finder] in finder?.openFileSystemSettings() }
+        // Back to Onyx from the browser, say, where a drive may have changed:
+        // the drive list, and the drives' own ticks, catch up. Or from System
+        // Settings, where the Onyx file system may have been switched on.
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.finder.noteActivity()
+                self.finder.cameForward()
+                Task { await self.refreshIfOlder(than: 30) }
+            }
+        }
+        // Quitting unmounts every drive, so none is left for the system to
+        // reap, and takes away downloads cut short.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
-                                               object: nil, queue: .main) { [finder, transcriber] _ in
+                                               object: nil, queue: .main) { [finder, transcriber, proxies, thumbnailer, web] _ in
             MainActor.assumeIsolated {
                 transcriber.stop()
+                proxies.stop()
+                thumbnailer.stop()
                 finder.quit()
+                web.downloads.discardUnfinished()
             }
         }
     }
@@ -116,10 +152,13 @@ final class AppModel: ObservableObject {
         // so there is no one to put drives in Finder for.
         guard phase == .signedIn else { return }
         transcriber.start(model: self)
+        proxies.start(model: self)
         // A sign-in kept from before the account was recorded (0.2.0 did not
         // record it): the drive list usually names it, and if the server
         // could not be asked yet, this does.
         if !knowsAccount, let who = try? await api.me() { adoptAccount(who) }
+        // Before the drives open, so it hears each one's first pass.
+        thumbnailer.start()
         await finder.start(model: self)
         // Finder stops short without an account; refresh() starts it again
         // once one is known.
@@ -156,8 +195,11 @@ final class AppModel: ObservableObject {
         drives = []
         drivesLoaded = false
         isAdmin = false
+        libraryCan = nil
         phase = .signedOut
         transcriber.stop()
+        proxies.stop()
+        thumbnailer.stop()
         finder.stop()
         await web.signOut()
         // Finder locations stay: removing one deletes its downloaded copies,
@@ -217,11 +259,19 @@ final class AppModel: ObservableObject {
         phase = .signedOut
         problem = "Your sign-in on this Mac has expired or was revoked. Sign in again."
         transcriber.stop()
+        proxies.stop()
+        thumbnailer.stop()
         finder.stop()
         await web.signOut()
     }
 
     // MARK: - Drives and Finder
+
+    /// Whether the library's disk is offered writable: when the server says
+    /// what this account may do there, whether it may do anything; an older
+    /// server does not, and then only an admin's is (as before). The server
+    /// checks every write whatever this says.
+    var libraryWritable: Bool { libraryCan?.anyWrite ?? isAdmin }
 
     func refresh() async {
         guard phase == .signedIn else { return }
@@ -232,11 +282,14 @@ final class AppModel: ObservableObject {
             guard phase == .signedIn, email == account else { return }
             drives = listing.drives.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             isAdmin = listing.isAdmin
+            libraryCan = listing.library
             if adoptAccount(listing.email), finderWaitingForAccount {
                 finderWaitingForAccount = false
+                thumbnailer.start()
                 await finder.start(model: self)
             }
             drivesLoaded = true
+            drivesRefreshedAt = Date()
             if problem == listingProblem { problem = nil }
             listingProblem = nil
         } catch OnyxError.notAuthenticated {
@@ -251,6 +304,8 @@ final class AppModel: ObservableObject {
             listingProblem = problem
             return
         }
+        // A drive with a new colour or name: its disk's icon follows.
+        finder.drivesChanged()
         // The drives wanted in Finder that are not there yet — all of them,
         // when this is the first list since the server came within reach.
         await finder.mountWanted()
@@ -258,6 +313,18 @@ final class AppModel: ObservableObject {
 
     /// The drives Finder can show: the ones whose files are yours to see.
     var finderDrives: [Filespace] { drives.filter(\.isMember) }
+
+    /// When the drive list last came.
+    private(set) var drivesRefreshedAt = Date.distantPast
+
+    /// The drive list again, if it is older than `age` seconds: a drive
+    /// given a new colour or name on the web shows here, and on its disk in
+    /// Finder, without a request each time the panel opens or Onyx comes
+    /// forward.
+    func refreshIfOlder(than age: TimeInterval) async {
+        guard phase == .signedIn, drivesLoaded, Date().timeIntervalSince(drivesRefreshedAt) > age else { return }
+        await refresh()
+    }
 
     func isMounted(_ scope: SyncDomain) -> Bool { finder.isMounted(scope) }
 
@@ -314,5 +381,21 @@ final class AppModel: ObservableObject {
         // Where to look for updates, instead of the server — for trying the
         // updater against a local feed. What it installs is verified the same.
         updater.start(feed: value("--update-feed").flatMap(URL.init(string:)))
+        #if DEBUG
+        // `--demo-activity`: pretend traffic and downloads in the Activity
+        // bar, for looking at it without disks (a debug build has none
+        // unsigned).
+        if args.contains("--demo-activity") {
+            ActivityDemo.start(finder.transfers)
+            web.downloads.demo()
+        }
+        // `--demo-work <seconds>`: work in flight for that long, then none —
+        // for watching Onyx leave App Nap and go back (WorkActivity) with
+        // nobody signed in.
+        if let seconds = value("--demo-work").flatMap(Double.init) {
+            let hold = WorkActivity.app.begin(.transfers)
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { hold.end() }
+        }
+        #endif
     }
 }

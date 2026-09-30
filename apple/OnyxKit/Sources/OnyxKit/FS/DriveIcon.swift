@@ -28,21 +28,25 @@ public enum DriveIcon {
     /// the bare tile without one. Nil only if the images could not be
     /// encoded. Each colour and initial is drawn once.
     public static func icns(color: String?, name: String?, mark: CGImage? = nil) -> Data? {
-        let key: String
-        let face: Face
-        if let name {
-            let rgb = legible(color.flatMap(RGB.init(hex:)) ?? cyan)
-            let letter = initial(of: name)
-            key = "\(rgb.hex)/\(letter ?? "")"
-            face = .letter(letter, rgb)
-        } else {
-            key = mark == nil ? "tile" : "mark"
-            face = .mark(mark)
-        }
+        let (key, face) = appearance(color: color, name: name, mark: mark)
         if let made = lock.withLock({ cache[key] }) { return made }
         guard let data = make(face) else { return nil }
         lock.withLock { cache[key] = data }
         return data
+    }
+
+    /// One size of the same icon, `pixels` square: a drive beside its name
+    /// in the app — the menu bar's panel, Settings — as Finder shows its
+    /// disk, without drawing every size an .icns holds.
+    public static func image(color: String?, name: String?, mark: CGImage? = nil, pixels: Int) -> CGImage? {
+        draw(appearance(color: color, name: name, mark: mark).face, pixels: pixels)
+    }
+
+    private static func appearance(color: String?, name: String?, mark: CGImage?) -> (key: String, face: Face) {
+        guard let name else { return (mark == nil ? "tile" : "mark", .mark(mark)) }
+        let rgb = legible(color.flatMap(RGB.init(hex:)) ?? cyan)
+        let letter = initial(of: name)
+        return ("\(rgb.hex)/\(letter ?? "")", .letter(letter, rgb))
     }
 
     enum Face {

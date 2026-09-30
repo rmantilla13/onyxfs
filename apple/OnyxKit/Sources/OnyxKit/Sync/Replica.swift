@@ -22,6 +22,10 @@ public struct Replica: Codable, Sendable, Equatable {
     public private(set) var files: [String: ReplicaFile] = [:]
     /// The scope's folders as the server last listed them (`folders=1`).
     public private(set) var listedFolders: Set<String> = []
+    /// The server's tag for that list (DeltaPage.foldersTag), sent back with
+    /// the next request so an unchanged list is not sent again. Nil when the
+    /// server gave none, or the list held may not be the one it named.
+    public private(set) var foldersTag: String?
     /// Where the next delta request starts.
     public var cursor: Int64 = 0
     /// The access fingerprint the replica was built under (DeltaPage.scope).
@@ -37,15 +41,17 @@ public struct Replica: Codable, Sendable, Equatable {
     public init() {}
 
     private enum CodingKeys: String, CodingKey {
-        case files, listedFolders, cursor, scope, folderSeen
+        case files, listedFolders, foldersTag, cursor, scope, folderSeen
     }
 
     /// By hand only so a replica saved before `folderSeen` existed still
-    /// loads: its folders count as there from the start.
+    /// loads: its folders count as there from the start. One saved before
+    /// `foldersTag` has none, and asks for the list whole once.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         files = try c.decode([String: ReplicaFile].self, forKey: .files)
         listedFolders = try c.decode(Set<String>.self, forKey: .listedFolders)
+        foldersTag = try c.decodeIfPresent(String.self, forKey: .foldersTag)
         cursor = try c.decode(Int64.self, forKey: .cursor)
         scope = try c.decodeIfPresent(String.self, forKey: .scope)
         folderSeen = try c.decodeIfPresent([String: Int64].self, forKey: .folderSeen) ?? [:]
@@ -134,9 +140,13 @@ public struct Replica: Codable, Sendable, Equatable {
     public struct Diff: Equatable, Sendable {
         public var updated: [String] = []
         public var deleted: [String] = []
+        /// Files whose pictures alone changed (a thumbnail made since): not
+        /// a change to anything Finder lists, so neither in `updated` nor
+        /// counted by `isEmpty`. For the thumbnail worker.
+        public var previews: [String] = []
         public var isEmpty: Bool { updated.isEmpty && deleted.isEmpty }
-        public init(updated: [String] = [], deleted: [String] = []) {
-            self.updated = updated; self.deleted = deleted
+        public init(updated: [String] = [], deleted: [String] = [], previews: [String] = []) {
+            self.updated = updated; self.deleted = deleted; self.previews = previews
         }
     }
 
@@ -146,10 +156,13 @@ public struct Replica: Codable, Sendable, Equatable {
     /// the changes (the current one does not; an older one did), so trash
     /// never shows in Finder. `folders`, when present, replaces the listed
     /// folders wholesale — the server sends the complete list, because an
-    /// empty folder can come or go without any file row changing.
+    /// empty folder can come or go without any file row changing — and
+    /// `foldersTag` is kept with it. Absent under the tag already held, the
+    /// list held stands; under any other, it stands but is asked for whole
+    /// next time.
     @discardableResult
     public mutating func apply(changed: [FileItem], deleted: [String], folders listed: [String]? = nil,
-                               cursor newCursor: Int64? = nil) -> Diff {
+                               foldersTag tag: String? = nil, cursor newCursor: Int64? = nil) -> Diff {
         let before = folders
         var diff = Diff()
 
@@ -158,14 +171,23 @@ public struct Replica: Codable, Sendable, Equatable {
                 if files.removeValue(forKey: item.id) != nil { diff.deleted.append(item.id) }
             } else {
                 let file = ReplicaFile(item)
-                if files[file.id] != file { diff.updated.append(file.id) }
+                if let before = files[file.id], before.listsAlike(file) {
+                    if before.previews != file.previews { diff.previews.append(file.id) }
+                } else {
+                    diff.updated.append(file.id)
+                }
                 files[file.id] = file
             }
         }
         for id in deleted where files.removeValue(forKey: id) != nil {
             diff.deleted.append(id)
         }
-        if let listed { listedFolders = Set(listed.map(Self.clean).filter { !$0.isEmpty }) }
+        if let listed {
+            listedFolders = Set(listed.map(Self.clean).filter { !$0.isEmpty })
+            foldersTag = tag
+        } else if tag != foldersTag {
+            foldersTag = nil
+        }
 
         let after = folders
         let appeared = after.subtracting(before), vanished = before.subtracting(after)
@@ -194,6 +216,10 @@ public struct Replica: Codable, Sendable, Equatable {
         }
         diff.updated = Self.unique(diff.updated.filter(present))
         diff.deleted = Self.unique(diff.deleted.filter { !present($0) })
+        if !diff.previews.isEmpty {
+            let reported = Set(diff.updated)
+            diff.previews = Self.unique(diff.previews.filter { kept[$0] != nil && !reported.contains($0) })
+        }
         return diff
     }
 
@@ -201,6 +227,7 @@ public struct Replica: Codable, Sendable, Equatable {
     public mutating func reset(scope: String? = nil) {
         files = [:]
         listedFolders = []
+        foldersTag = nil
         cursor = 0
         self.scope = scope
         folderSeen = [:]
@@ -238,6 +265,11 @@ public struct ReplicaFile: Codable, Sendable, Equatable, Identifiable {
     /// they were kept: nil, and the row's shown instead.
     public var fileCreatedAt: EpochMillis? = nil
     public var fileModifiedAt: EpochMillis? = nil
+    /// Which of the web's pictures of it exist (FilePreviews): what the
+    /// thumbnail worker finds the files that need one by. Nil in a replica
+    /// saved before they were kept, which the mirror fetches again once
+    /// (DriveMirror.previewsUnknown).
+    public var previews: FilePreviews? = nil
 
     public init(_ item: FileItem) {
         id = item.id
@@ -251,5 +283,17 @@ public struct ReplicaFile: Codable, Sendable, Equatable, Identifiable {
         updatedAt = item.updatedAt
         fileCreatedAt = item.fileCreatedAt
         fileModifiedAt = item.fileModifiedAt
+        previews = FilePreviews(item)
+    }
+
+    /// Whether Finder would list the two alike: all but their pictures,
+    /// which change with no change to the file's bytes, name or place — a
+    /// thumbnail made later moves the row's `seq` and nothing else.
+    func listsAlike(_ other: ReplicaFile) -> Bool {
+        var a = self
+        var b = other
+        a.previews = nil
+        b.previews = nil
+        return a == b
     }
 }

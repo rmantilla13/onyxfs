@@ -7,6 +7,7 @@ import { THEME_KEY, readThemePref, setThemePref } from '@/lib/theme';
 import { initialsFor } from '@/lib/account';
 import AvatarDialog from '@/app/components/AvatarDialog';
 import Icon from '@/app/components/ui/Icon';
+import { clearPreviewCaches } from '@/lib/preview-cache';
 
 // A picture changed in this tab, until the page is loaded afresh. Another
 // page's TopNav may be rendered from the router's cached payload, older than
@@ -20,6 +21,19 @@ const THEMES = [
   { key: 'dark', label: 'Dark', icon: 'moon' },
   { key: 'system', label: 'System', icon: 'sun-moon' },
 ];
+
+/**
+ * Signing out takes the pictures this browser kept of the library with it
+ * (lib/preview-cache.js): they are cleared before the sign-out page opens.
+ * A click that opens it in another tab is left alone — the sign-in page
+ * clears them as well.
+ */
+function signOut(e) {
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  const href = e.currentTarget.href;
+  clearPreviewCaches().then(() => { window.location.assign(href); });
+}
 
 /**
  * The account menu at the top right: who is signed in, Admin and Storage for
@@ -95,7 +109,7 @@ export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts
         </button>
       ))}
       <MenuSeparator />
-      <a href="/api/auth/signout" role="menuitem" className="menu-item">Sign out</a>
+      <a href="/api/auth/signout" role="menuitem" className="menu-item" onClick={signOut}>Sign out</a>
       {/* Which build is serving this page. The first question when something
           looks wrong in production is whether the fix is even live yet. */}
       {build && <div className="menu-foot mono" title={build.detail || build.label}>{build.label}</div>}

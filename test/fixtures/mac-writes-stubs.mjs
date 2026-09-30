@@ -4,6 +4,8 @@
 // lib/replace-content.js — and only the database is replaced, by an
 // in-memory store in globalThis.__mw that the test arranges. (The bucket is
 // replaced one level further down, at the S3 client's send(); see the test.)
+// test/playback-links.test.js runs the listing and the download routes
+// against the same store.
 //
 // The access answers are computed, not configured: canModifyFile is the real
 // fileWriteDecision over the real driveAccess, getFilespaceForWrite the real
@@ -20,6 +22,7 @@
 import { fileWriteDecision, folderRoleAllows, strongestFolderRole } from '../../lib/db.js';
 import { driveAccess, canWriteDrive, DRIVE_WRITE_ROLES } from '../../lib/drive-access.js';
 import { MEDIA_KEYS } from '../../lib/media.js';
+import { fileInLink } from '../../lib/folder-links.js';
 
 export const UPLOAD_KEY_TTL_MS = 24 * 60 * 60 * 1000;
 const s = () => globalThis.__mw;
@@ -52,6 +55,13 @@ export async function getDesktopTokenByRaw(raw) {
 }
 export async function touchDesktopToken() {}
 export async function insertAuditEvent(e) { s().audit.push(e); return { id: String(s().audit.length), at: now() }; }
+// A share link's row as stored (snake_case, as lib/db.js getShareRow returns
+// it), for lib/share-access.js to decide from as it does from the real one.
+export async function getShareRow(token) { return copy(s().shares?.get(token) || null); }
+export async function isLinkCreatorPaused(email) {
+  const p = s().people.get(norm(email));
+  return p?.status === 'suspended' && p.pauseLinks !== false;
+}
 export async function getFileMetadataSchema() { return null; }
 
 // ── drives and access ──
@@ -113,6 +123,14 @@ export async function canModifyFolder(folder, p = {}, { driveRole = null, tag = 
   const fromDrive = DRIVE_WRITE_ROLES.has(driveRole) && tag ? driveRole : null;
   return folderRoleAllows(strongestFolderRole([fromDrive]), 'modify');
 }
+// As lib/db.js: canModifyFolder for each library path. This store holds no
+// folder grants, so it is every path for an admin and none for anyone else.
+export async function modifiableLibraryFolders(folders = [], p = {}) {
+  const paths = [...new Set((folders || []).filter((f) => typeof f === 'string' && f))];
+  const mine = [];
+  for (const f of paths) if (await canModifyFolder(f, p, { tag: '' })) mine.push(f);
+  return new Set(mine);
+}
 
 // ── files ──
 export async function getFileById(id) { return copy(s().files.get(String(id)) || null); }
@@ -141,6 +159,54 @@ export async function updateFile(id, fields = {}) {
   touch(row);
   return copy(row);
 }
+// A thumbnail recorded after the fact, as lib/db.js's setFileThumbnail
+// records it: the siblings and the poster that came with it or none, the
+// media facts merged in, and seq moved — not version, nor updatedAt.
+export async function setFileThumbnail(id, thumbnailKey, media = {}, posterKey = null, thumbSizes = null, { placeholder = null } = {}) {
+  const row = s().files.get(String(id));
+  if (!row) return null;
+  const { placeholder: _old, ...kept } = row.metadata || {};
+  Object.assign(row, {
+    thumbnailKey, thumbnailUrl: null, posterKey: posterKey || null, thumbSizes: thumbSizes || [],
+    metadata: { ...kept, ...media, ...(placeholder ? { placeholder } : {}) }, seq: nextSeq(),
+  });
+  return copy(row);
+}
+// A thumbnail's placeholder, as setFilePlaceholder records it: for a live row
+// whose thumbnail is still the one it was drawn from.
+export async function setFilePlaceholder(id, placeholder, { thumbnailKey } = {}) {
+  const row = s().files.get(String(id));
+  if (!row || row.deletedAt) return null;
+  if (row.thumbnailKey !== thumbnailKey) return 'changed';
+  Object.assign(row, { metadata: { ...row.metadata, placeholder }, seq: nextSeq() });
+  return copy(row);
+}
+// A sound's waveform, as lib/db.js's setFileWaveform records it: merged into
+// the metadata with seq moved, only for a live row — and only for the
+// contents it was drawn from, when it says which.
+export async function setFileWaveform(id, waveform, { contentHash } = {}) {
+  const row = s().files.get(String(id));
+  if (!row || row.deletedAt) return null;
+  if (contentHash != null && row.contentHash !== contentHash) return 'changed';
+  Object.assign(row, { metadata: { ...row.metadata, waveform }, seq: nextSeq() });
+  return copy(row);
+}
+export async function setFilePoster(id, posterKey, media = {}) {
+  const row = s().files.get(String(id));
+  if (!row) return null;
+  row.posterKey = posterKey;
+  row.metadata = { ...media, ...row.metadata };
+  return copy(row);
+}
+// A filmstrip recorded after the fact, as lib/db.js's setFileFilmstrip
+// records it: the key, its geometry as metadata.filmstrip, and seq moved —
+// not version, nor updatedAt.
+export async function setFileFilmstrip(id, filmstripKey, filmstrip) {
+  const row = s().files.get(String(id));
+  if (!row) return null;
+  Object.assign(row, { filmstripKey, metadata: { ...row.metadata, filmstrip }, seq: nextSeq() });
+  return copy(row);
+}
 // The proxy queue, as far as POST /api/files needs it: asking for one is a row
 // keyed by file id, so the test can see WHETHER a heavy upload queued one. The
 // lease and the atomic claim are lib/db.js's, against a real database
@@ -157,6 +223,21 @@ export async function getProxies(ids = []) {
   return m;
 }
 export async function attachProxies(files = []) { return files; }
+// What a listing plays (lib/file-listing.js playableProxies), by the SQL's
+// rule: a finished job's key, unless the file's contents changed since. Each
+// call is kept in `proxyLookups`, so a test sees which rows were asked about
+// — and that a page with nothing worth a proxy asks about none.
+export async function finishedProxyKeys(files = []) {
+  const list = (files || []).filter((f) => f?.id);
+  (s().proxyLookups ||= []).push(list.map((f) => f.id));
+  const out = new Map();
+  for (const f of list) {
+    const r = s().proxies?.get(String(f.id));
+    const stale = !!r?.sourceKey && !!f.storageKey && r.sourceKey !== f.storageKey;
+    if (r?.status === 'done' && r.proxyKey && !stale) out.set(f.id, r.proxyKey);
+  }
+  return out;
+}
 export async function proxyKeysFor(ids = []) {
   const list = Array.isArray(ids) ? ids : [ids];
   return list.map((id) => s().proxies?.get(String(id))?.proxyKey).filter(Boolean);
@@ -198,6 +279,30 @@ export async function softDeleteFile(id, { trashKey = null, deletedBy = null } =
   Object.assign(row, { deletedAt: now(), trashKey, deletedBy, updatedAt: now(), seq: nextSeq() });
   return copy(row);
 }
+// lib/trash-move.js's three, with the real queries' WHERE clauses.
+export async function setTrashKeyIfUnmoved(id, { trashKey, storageKey } = {}) {
+  const row = s().files.get(id);
+  if (!row || !row.deletedAt || row.trashKey || row.storageKey !== storageKey) return false;
+  row.trashKey = trashKey;
+  return true;
+}
+export async function trashedRowAtKey(key) {
+  const rows = [...s().files.values()];
+  if (rows.some((f) => f.storageKey === key && !f.deletedAt)) return null;
+  const hit = rows.filter((f) => f.storageKey === key && f.deletedAt && !f.trashKey)
+    .sort((a, b) => b.deletedAt - a.deletedAt)[0];
+  return copy(hit || null);
+}
+export async function listUnmovedTrash({ limit = 200, maxBytes } = {}) {
+  const rows = [...s().files.values()];
+  return rows
+    .filter((f) => f.deletedAt && !f.trashKey && f.storage === 's3' && f.storageKey
+      && (!(maxBytes > 0) || (f.size || 0) <= maxBytes)
+      && !rows.some((o) => o.id !== f.id && holds(o, f.storageKey)))
+    .sort((a, b) => a.deletedAt - b.deletedAt)
+    .slice(0, limit)
+    .map(copy);
+}
 export async function restoreFile(id, { storageKey = null } = {}) {
   const row = s().files.get(id);
   if (!row || !row.deletedAt) return null;
@@ -214,8 +319,24 @@ export async function deleteFile(id) {
   return { ok: true };
 }
 export async function getTrashedFiles(ids = []) { return ids.map((id) => s().files.get(id)).filter((f) => f?.deletedAt).map(copy); }
+// As the real one: a trashed file whose object has moved no longer holds its old key.
+const holds = (f, key) => (f.storageKey === key && (!f.deletedAt || !f.trashKey)) || f.trashKey === key;
 export async function storageKeyInUse(key, { exceptId = null } = {}) {
-  return [...s().files.values()].some((f) => (f.storageKey === key || f.trashKey === key) && f.id !== (exceptId || ''));
+  return [...s().files.values()].some((f) => holds(f, key) && f.id !== (exceptId || ''));
+}
+export async function storageKeysInUse(keys = []) {
+  const rows = [...s().files.values()];
+  return new Set(keys.filter((k) => k && rows.some((f) => holds(f, k))));
+}
+const moveCopies = () => (s().moveCopies ||= new Map());
+export async function noteFolderMoveCopies(moves = []) {
+  for (const m of moves) if (m?.fromKey && m?.toKey) moveCopies().set(m.toKey, m.fromKey);
+}
+export async function folderMoveCopiesAt(toKeys = []) {
+  return new Map(toKeys.filter((k) => moveCopies().has(k)).map((k) => [k, moveCopies().get(k)]));
+}
+export async function forgetFolderMoveCopies(toKeys = []) {
+  for (const k of toKeys) moveCopies().delete(k);
 }
 export async function unreferencedPreviewKeys({ thumbKeys = [], posterKeys = [] } = {}) {
   const rows = [...s().files.values()];
@@ -369,3 +490,69 @@ export async function deleteFolderRows(name, { tag = '' } = {}) {
 // Starred folders follow a rename and go with a delete; nothing here reads them.
 export async function renameFolderStars() {}
 export async function deleteFolderStars() {}
+
+// ── what the storage layer and the write routes read besides ──
+// Every drive, as the storage layer reads them (listDriveStorage: with
+// their secrets; these have none, so every one is the base bucket's).
+export async function listDriveStorage() { return s().drives.map((d) => copy(d)); }
+export async function listFilespaces() { return s().drives.map((d) => copy(d)); }
+// The stored spellings (non-ASCII paths) of a scope, and the canonical path:
+// the same composition as lib/db.js, over the store.
+export async function folderSpellings({ tag = '', prefix = null } = {}) {
+  const within = prefix ? `${clean(prefix)}/` : null;
+  const nonAscii = (p) => /[^\x00-\x7f]/.test(p);
+  return [...new Set([
+    ...live().filter((f) => nonAscii(f.folder || '') && (!within || String(f.storageKey || '').startsWith(within))).map((f) => f.folder),
+    ...rowsOf().filter((r) => r.tag === clean(tag) && nonAscii(r.name)).map((r) => r.name),
+  ])];
+}
+export async function canonicalFolder(path, { tag = '', prefix = null } = {}) {
+  const { cleanFolder, nfc, isAscii, respellPath } = await import('../../lib/folder-ops.js');
+  const c = nfc(cleanFolder(path));
+  if (!c || isAscii(c)) return c;
+  return respellPath(c, await folderSpellings({ tag, prefix }));
+}
+// ── folder links ──
+// What lib/folder-links.js's queries answer, from its own pure rule
+// (fileInLink) over the store: a page of a folder's files by name then id,
+// its subfolders with what they hold, one file. The SQL is
+// test/folder-shares-api.test.js's, against a real database.
+const linked = (scope) => live().filter((f) => fileInLink(f, scope));
+const byNameThenId = (a, b) => (a.name === b.name ? (a.id < b.id ? -1 : 1) : (a.name < b.name ? -1 : 1));
+export async function listFolderLinkFiles(scope, { at, cursor = null, limit = 100 } = {}) {
+  const after = (f) => !cursor || f.name > cursor.value || (f.name === cursor.value && f.id > cursor.id);
+  const page = linked(scope).filter((f) => f.folder === at).sort(byNameThenId).filter(after).slice(0, limit);
+  const last = page.length === limit ? page[page.length - 1] : null;
+  return { files: page.map(copy), cursor: last ? { value: last.name, id: last.id } : null };
+}
+export async function countFolderLinkFiles(scope, { at } = {}) {
+  return linked(scope).filter((f) => f.folder === at).length;
+}
+export async function listFolderLinkFolders(scope, { at } = {}) {
+  const counts = new Map();
+  for (const f of linked(scope)) {
+    if (!f.folder.startsWith(`${at}/`)) continue;
+    const name = f.folder.slice(at.length + 1).split('/')[0];
+    if (name) counts.set(name, (counts.get(name) || 0) + 1);
+  }
+  return [...counts].sort(([a], [b]) => (a < b ? -1 : 1)).map(([name, count]) => ({ name, count }));
+}
+export async function getFolderLinkFile(scope, id) {
+  const f = s().files.get(String(id));
+  return f && fileInLink(f, scope) ? copy(f) : null;
+}
+export async function folderLinkRootExists(scope) {
+  return linked(scope).length > 0 || s().folders.has(fkey(scope.tag, scope.root));
+}
+
+// Who sees which files: the listing's rule, as far as this store keeps it —
+// an admin every one; anyone else a file they made, or one visible to all.
+export async function visibleFileIds(ids, principal = {}) {
+  const list = (ids || []).map(String);
+  if (principal.isAdmin) return new Set(list);
+  const me = norm(principal.email);
+  return new Set(list.filter((id) => {
+    const f = s().files.get(id);
+    return f && ((f.visibility ?? 'org') === 'org' || norm(f.createdBy) === me);
+  }));
+}

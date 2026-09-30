@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { samePinnedFolders, sameSet } from '@/lib/offline-marks';
 
 /**
  * The Mac app's bridge, when this page is running inside it.
@@ -12,7 +13,9 @@ import { useEffect, useState } from 'react';
  * menus offer none of it.
  *
  * `pinned` holds the ids of files kept offline (directly, or through a
- * pinned folder or drive); `mounted` the drives in Finder, as the app names
+ * pinned folder or drive); `pinnedFolders` the folders and whole drives kept,
+ * as { scope, path } — lib/offline-marks.js turns the two into the marks the
+ * page shows; `mounted` the drives in Finder, as the app names
  * them ("drive.<id>", "library"). `nav` is the window's back and forward;
  * `finder` the drives Finder can show, with how each mount is doing (the
  * bar's Finder menu); `transcriber` is { enabled, busy } — busy is the id of
@@ -21,17 +24,23 @@ import { useEffect, useState } from 'react';
  */
 const NONE = { inApp: false, pinned: new Set(), mounted: new Set(), pinnedFolders: [], nav: { canGoBack: false, canGoForward: false }, finder: { drives: [], states: {}, busy: [] }, transcriber: null };
 
+/** `prev` when it says the same as `next`, else `next`. */
+const keep = (prev, next, same) => (same(prev, next) ? prev : next);
+
 export default function useMacApp() {
   const [state, setState] = useState(NONE);
 
   useEffect(() => {
     const mac = typeof window !== 'undefined' ? window.onyxMac : null;
     if (!mac) return undefined;
-    const apply = (s) => setState({
+    // The app says everything each time anything changes — a mount, a page
+    // back — so what did not change keeps its identity: every card's offline
+    // mark hangs off `pinned`, and a new Set of the same ids would redraw them all.
+    const apply = (s) => setState((prev) => ({
       inApp: true,
-      pinned: new Set(s?.pinned || []),
-      mounted: new Set(s?.mounted || []),
-      pinnedFolders: Array.isArray(s?.pinnedFolders) ? s.pinnedFolders : [],
+      pinned: keep(prev.pinned, new Set(s?.pinned || []), sameSet),
+      mounted: keep(prev.mounted, new Set(s?.mounted || []), sameSet),
+      pinnedFolders: keep(prev.pinnedFolders, Array.isArray(s?.pinnedFolders) ? s.pinnedFolders : [], samePinnedFolders),
       nav: { ...NONE.nav, ...(s?.nav || {}) },
       finder: {
         drives: Array.isArray(s?.finder?.drives) ? s.finder.drives : [],
@@ -41,7 +50,7 @@ export default function useMacApp() {
       transcriber: s?.transcriber && typeof s.transcriber === 'object'
         ? { enabled: s.transcriber.enabled !== false, busy: s.transcriber.busy || null }
         : null,
-    });
+    }));
     apply(mac.state);
     const on = (e) => apply(e.detail);
     window.addEventListener('onyxmac:state', on);
@@ -66,6 +75,12 @@ export default function useMacApp() {
     hasBar: typeof window !== 'undefined' && !!window.onyxMac?.setBar,
     /** Look at the transcription queue now, not at the next poll. A no-op in builds without it. */
     transcribe: (fileId) => mac()?.transcribe?.(fileId),
+    /**
+     * Say whether this page's uploads are under way: the app keeps itself
+     * out of App Nap meanwhile, so they keep their speed with its window
+     * closed. A no-op in builds without it.
+     */
+    uploading: (on) => mac()?.uploading?.(!!on),
     folderPinned: (path, driveId) => state.pinnedFolders.some((f) =>
       f.scope === (driveId ? `drive.${driveId}` : 'library') && f.path === path),
   };

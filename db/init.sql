@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 138
+-- Statements: 146
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -274,6 +274,12 @@ CREATE INDEX IF NOT EXISTS files_name_trgm_idx ON files USING GIN (name gin_trgm
 
 CREATE INDEX IF NOT EXISTS files_created_by_size_idx ON files (created_by, size) WHERE deleted_at IS NULL;
 
+CREATE INDEX IF NOT EXISTS files_unmoved_trash_idx ON files (storage_key) WHERE deleted_at IS NOT NULL AND trash_key IS NULL;
+
+CREATE INDEX IF NOT EXISTS files_trash_key_idx ON files (trash_key) WHERE trash_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS files_filmstrip_key_idx ON files (filmstrip_key) WHERE filmstrip_key IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS uploads (
   id           TEXT PRIMARY KEY,
   upload_id    TEXT NOT NULL,
@@ -315,6 +321,14 @@ CREATE TABLE IF NOT EXISTS file_tombstones (
 
 CREATE INDEX IF NOT EXISTS file_tombstones_seq_idx ON file_tombstones (seq);
 
+CREATE TABLE IF NOT EXISTS change_marks (
+  at   TIMESTAMPTZ NOT NULL,
+  seq  BIGINT NOT NULL,
+  next_xid BIGINT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS change_marks_at_idx ON change_marks (at);
+
 CREATE TABLE IF NOT EXISTS folders (name TEXT PRIMARY KEY, created_at BIGINT NOT NULL);
 
 ALTER TABLE folders ADD COLUMN IF NOT EXISTS parent TEXT DEFAULT '';
@@ -334,6 +348,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS folders_scope_name_idx ON folders ((COALESCE(f
 ALTER TABLE folders DROP CONSTRAINT IF EXISTS folders_pkey;
 
 ALTER TABLE folders ALTER COLUMN name SET NOT NULL;
+
+CREATE TABLE IF NOT EXISTS folder_move_copies (
+  to_key   TEXT PRIMARY KEY,
+  from_key TEXT NOT NULL,
+  noted_at BIGINT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS file_shares (
   token TEXT PRIMARY KEY,
@@ -569,6 +589,28 @@ CREATE TABLE IF NOT EXISTS proxies (
 );
 
 CREATE INDEX IF NOT EXISTS proxies_queue_idx ON proxies (requested_at) WHERE status IN ('queued', 'working');
+
+CREATE TABLE IF NOT EXISTS storage_prices (
+  account        TEXT PRIMARY KEY,
+  rate           NUMERIC NOT NULL,
+  unit           TEXT NOT NULL,
+  base           INT NOT NULL,
+  free_bytes     BIGINT NOT NULL DEFAULT 0,
+  minimum_bytes  BIGINT NOT NULL DEFAULT 0,
+  fee            NUMERIC NOT NULL DEFAULT 0,
+  note           TEXT,
+  set_at         BIGINT NOT NULL,
+  set_by         TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sign_in_passwords (
+  email         TEXT PRIMARY KEY,
+  password_hash TEXT NOT NULL,
+  set_at        BIGINT NOT NULL,
+  set_by        TEXT,
+  failures      INT NOT NULL DEFAULT 0,
+  locked_until  BIGINT
+);
 
 CREATE TABLE IF NOT EXISTS desktop_auth_codes (
   code TEXT PRIMARY KEY,

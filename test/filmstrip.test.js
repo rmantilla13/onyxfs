@@ -242,3 +242,34 @@ describe('layoutFromMetadata', () => {
     assert.equal(layoutFromMetadata({ filmstrip: null }), null);
   });
 });
+
+// A hidden tab gets no frame callbacks and timers at a second or more: forty
+// seeks there took most of the 45-second limit and mostly came to nothing.
+// None is started (lib/filmstrip-client.js).
+describe('filmstripForUpload in a hidden tab', () => {
+  test('makes nothing, not even an object URL for the file; a visible tab starts one', async (t) => {
+    // makeFilmstrip's 45-second limit is a timer; a mocked one keeps no process alive.
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const { filmstripForUpload } = await import('../lib/filmstrip-client.js');
+    const saved = { document: globalThis.document, create: URL.createObjectURL, revoke: URL.revokeObjectURL };
+    const opened = [];
+    URL.createObjectURL = (f) => { opened.push(f); return 'blob:test'; };
+    URL.revokeObjectURL = () => {};
+    try {
+      const clip = new File([new Uint8Array(16)], 'take.mp4', { type: 'video/mp4' });
+      globalThis.document = { hidden: true };
+      assert.equal(await filmstripForUpload(clip), null);
+      assert.deepEqual(opened, []);
+      // Visible, it is started — and here, with no <video> to decode with,
+      // comes to nothing, which an upload takes as no strip.
+      globalThis.document = { hidden: false, createElement: () => { throw new Error('no DOM'); } };
+      assert.equal(await filmstripForUpload(clip), null);
+      assert.deepEqual(opened, [clip]);
+    } finally {
+      if (saved.document === undefined) delete globalThis.document;
+      else globalThis.document = saved.document;
+      URL.createObjectURL = saved.create;
+      URL.revokeObjectURL = saved.revoke;
+    }
+  });
+});

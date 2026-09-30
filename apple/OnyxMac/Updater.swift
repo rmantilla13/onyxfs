@@ -31,7 +31,16 @@ final class Updater: ObservableObject {
         case failed(String)
     }
 
-    @Published private(set) var state: State = .idle
+    @Published private(set) var state: State = .idle {
+        // Downloading or installing an update is work in flight
+        // (WorkActivity), should the window close meanwhile.
+        didSet {
+            switch state {
+            case .downloading, .installing: WorkActivity.app.set(.update, true)
+            default: WorkActivity.app.set(.update, false)
+            }
+        }
+    }
     /// Whether the window should show the update sheet.
     @Published var showSheet = false
     @Published var automatic: Bool {
@@ -164,7 +173,8 @@ final class Updater: ObservableObject {
     }
 
     /// Swap the bundles once this process has exited, then open the new one.
-    /// A detached shell does it: an app cannot replace itself while running.
+    /// A detached shell does it (UpdateSwap, OnyxKit, where it is tested): an
+    /// app cannot replace itself while running.
     ///
     /// The swap is a rename, and nothing tells LaunchServices: its record of
     /// the app, and of the file system extension inside it, can go on
@@ -172,28 +182,18 @@ final class Updater: ObservableObject {
     /// as it starts, and with such a record stops at once ("Invalid bundle
     /// record for current process"), which FSKit reports as "Couldn't
     /// communicate with a helper application" — every drive stayed in
-    /// ~/Onyx, read-only, after the updates to 0.5.5 and 0.5.6. So the copy
-    /// going away is unregistered and the new one registered, with what is
-    /// inside it, before it opens. (DiskMounter.register does the same from
-    /// the new copy, for an update an older updater installed.)
+    /// ~/Onyx, read-only, after the updates to 0.5.5 and 0.5.6. So the new
+    /// copy is registered, with what is inside it, and then the copy going
+    /// away is unregistered, before the new one opens. In that order: with no
+    /// copy registered at all, even for a moment, macOS forgets that Onyx's
+    /// file system was switched on (UpdateSwap). (DiskMounter.register makes
+    /// the record again from the new copy, for an update an older updater
+    /// installed.)
     private func relaunch(replacing current: URL, with fresh: URL) throws {
-        let script = """
-        pid="$1"; current="$2"; fresh="$3"
-        lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-        while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
-        old="$(dirname "$fresh")/previous.app"
-        if mv "$current" "$old" && mv "$fresh" "$current"; then
-          "$lsregister" -u "$old" >/dev/null 2>&1
-          rm -rf "$old"
-        fi
-        [ -d "$current" ] || mv "$old" "$current"
-        "$lsregister" -f -R -trusted "$current" >/dev/null 2>&1
-        open "$current"
-        """
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
-        p.arguments = ["-c", script, "onyx-update", String(ProcessInfo.processInfo.processIdentifier),
-                       current.path, fresh.path]
+        p.arguments = UpdateSwap.arguments(pid: ProcessInfo.processInfo.processIdentifier,
+                                           current: current.path, fresh: fresh.path)
         try p.run()
         appLog.info("update: relaunching into the new version")
         // AppKit will not terminate while a sheet is up, so it goes first.

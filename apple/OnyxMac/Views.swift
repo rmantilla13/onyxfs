@@ -203,21 +203,28 @@ struct SignInView: View {
 struct WorkspaceView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject var web: WebController
+    @AppStorage(ActivityBar.setting) private var showsActivity = true
 
     var body: some View {
-        WebViewHost(webView: web.webView)
-            .overlay {
-                if let failure = web.failure {
-                    VStack(spacing: 14) {
-                        Image(lucide: "wifi-off", size: 34, strokeWidth: 1.5).foregroundStyle(.secondary)
-                        Text(failure).multilineTextAlignment(.center).frame(maxWidth: 440)
-                        Button("Try Again") { web.reload() }.keyboardShortcut(.defaultAction)
+        VStack(spacing: 0) {
+            WebViewHost(webView: web.webView)
+                .overlay {
+                    if let failure = web.failure {
+                        VStack(spacing: 14) {
+                            Image(lucide: "wifi-off", size: 34, strokeWidth: 1.5).foregroundStyle(.secondary)
+                            Text(failure).multilineTextAlignment(.center).frame(maxWidth: 440)
+                            Button("Try Again") { web.reload() }.keyboardShortcut(.defaultAction)
+                        }
+                        .padding(28)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
                     }
-                    .padding(28)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
                 }
+            // What the drives and the window are moving, and the downloads.
+            if showsActivity {
+                ActivityBar(clock: model.activity, downloads: web.downloads)
             }
-            .task { if web.webView.url == nil { web.signIn() } }
+        }
+        .task { if web.webView.url == nil { web.signIn() } }
     }
 }
 
@@ -227,59 +234,6 @@ struct WebViewHost: NSViewRepresentable {
     let webView: WKWebView
     func makeNSView(context: Context) -> WKWebView { webView }
     func updateNSView(_ view: WKWebView, context: Context) {}
-}
-
-// MARK: - Finder
-
-/// One entry per drive, and one for the library, in the menu bar item. (The
-/// window's bar has the same menu, drawn by the page: FinderMenu.js.)
-struct FinderItems: View {
-    @EnvironmentObject var model: AppModel
-    @EnvironmentObject var finder: DriveService
-
-    var body: some View {
-        Section("Show in Finder") {
-            if model.finderDrives.isEmpty {
-                Text("No drives yet")
-            }
-            ForEach(model.finderDrives) { drive in
-                toggle(.drive(id: drive.id), name: drive.name, detail: roleWord(drive.role))
-            }
-            toggle(.library, name: "Library", detail: "files in no drive")
-        }
-        let open = model.finderDrives.filter { model.isMounted(.drive(id: $0.id)) }
-        if !open.isEmpty || model.isMounted(.library) {
-            Section("Open in Finder") {
-                ForEach(open) { drive in
-                    Button(drive.name) { model.reveal(.drive(id: drive.id)) }
-                }
-                if model.isMounted(.library) {
-                    Button("Library") { model.reveal(.library) }
-                }
-            }
-        }
-        Divider()
-        Button("Sync Now") { Task { await model.syncNow() } }
-    }
-
-    private func toggle(_ scope: SyncDomain, name: String, detail: String?) -> some View {
-        Toggle(isOn: Binding(
-            get: { finder.wantMounted.contains(scope.identifier) },
-            set: { on in Task { await model.setMounted(scope, name: name, on) } }
-        )) {
-            Text(name) + Text(detail.map { "  \($0)" } ?? "").foregroundColor(.secondary)
-        }
-        .disabled(model.busy.contains(scope.identifier))
-    }
-
-    private func roleWord(_ role: String?) -> String? {
-        switch role {
-        case "owner": return "owner"
-        case "editor": return "can edit"
-        case "viewer": return "can view"
-        default: return nil
-        }
-    }
 }
 
 // MARK: - Menu bar
@@ -295,6 +249,17 @@ enum MenuBarStatus: Equatable {
         case .syncing: return "refresh-cw"
         case .offline: return "cloud-off"
         case .attention: return "triangle-alert"
+        }
+    }
+
+    /// The panel's dot beside the line: green when all is well, the accent
+    /// while syncing, orange when something needs a look.
+    var tint: Color {
+        switch self {
+        case .idle, .mounted: return .green
+        case .syncing: return .accentColor
+        case .signedOut, .offline: return .secondary
+        case .attention: return .orange
         }
     }
 
@@ -346,54 +311,6 @@ struct MenuBarIcon: View {
     }
 }
 
-struct MenuBarContent: View {
-    @EnvironmentObject var model: AppModel
-    @EnvironmentObject var updater: Updater
-    @EnvironmentObject var finder: DriveService
-    @ObservedObject private var background = Background.shared
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        let status = MenuBarStatus.of(model, finder)
-        if model.phase == .signedIn {
-            Text(model.email ?? "Signed in")
-            Text(status.line)
-            TranscriptionMenuLine(transcriber: model.transcriber)
-            UploadsMenuLines(summary: finder.uploadSummary) { id in finder.retryUpload(id) }
-            if finder.pinnedBytes > 0 {
-                Text("Kept offline: \(ByteCountFormatter.string(fromByteCount: finder.pinnedBytes, countStyle: .file))")
-            }
-            Divider()
-            Button("Open Onyx") { open() }.keyboardShortcut("o")
-            FinderItems()
-        } else {
-            Text("Not signed in")
-            Button("Sign In…") { open() }
-        }
-        Divider()
-        if let release = updater.available {
-            Button("Update to Onyx \(release.version)…") { open(); updater.showSheet = true }
-        } else {
-            Button("Check for Updates…") {
-                open()
-                Task { await updater.check(userInitiated: true) }
-            }
-        }
-        Toggle("Open at Login", isOn: Binding(
-            get: { background.opensAtLogin },
-            set: { background.setOpensAtLogin($0) }
-        ))
-        SettingsLink { Text("Settings…") }.keyboardShortcut(",")
-        Divider()
-        Button("Quit Onyx") { NSApp.terminate(nil) }.keyboardShortcut("q")
-    }
-
-    private func open() {
-        Background.shared.comeForward()
-        openWindow(id: "main")
-    }
-}
-
 // MARK: - Settings
 
 struct SettingsView: View {
@@ -401,7 +318,7 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
-            AccountSettings().tabItem { Label { Text("Account") } icon: { Image(lucide: "circle-user") } }
+            AccountSettings().tabItem { Label { Text("General") } icon: { Image(lucide: "circle-user") } }
             FinderSettings(finder: model.finder).tabItem { Label { Text("Finder") } icon: { Image(lucide: "hard-drive") } }
             StorageSettings(finder: model.finder).tabItem { Label { Text("Storage") } icon: { Image(lucide: "database") } }
         }
@@ -414,6 +331,7 @@ struct AccountSettings: View {
     @EnvironmentObject var updater: Updater
     @ObservedObject private var background = Background.shared
     @StateObject private var form = FormState()
+    @AppStorage(ActivityBar.setting) private var showsActivity = true
 
     var body: some View {
         Form {
@@ -442,6 +360,11 @@ struct AccountSettings: View {
                 Text("Changing servers signs you out: a sign-in belongs to the server that issued it.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Window") {
+                Toggle("Show activity at the bottom of the window", isOn: $showsActivity)
+                Text("Downloads, uploads and what apps read from and write to your drives, live, with each download as it arrives. The menu bar item shows the same.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("In the background") {
                 Toggle("Open at login", isOn: Binding(
                     get: { background.opensAtLogin },
@@ -451,10 +374,13 @@ struct AccountSettings: View {
                     Text("Allow Onyx in System Settings → General → Login Items.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Text("Onyx keeps running in the menu bar when its window is closed, so your drives stay in Finder and offline files stay current. Quit it from the menu bar icon.")
+                Toggle("Show Onyx in the Dock when its window is closed", isOn: $background.keepsDockIcon)
+                Text("Onyx keeps running in the menu bar when you close its window or press ⌘Q, so your drives stay in Finder and offline files stay current. To quit it, press ⌥⌘Q, or choose Quit from the menu bar icon.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             TranscriptionSettings(transcriber: model.transcriber)
+            ThumbnailSettings(thumbnailer: model.thumbnailer)
+            ProxySettings(proxies: model.proxies)
             Section("Updates") {
                 LabeledContent("Version") {
                     Text(BuildInfo.build.map { "\(BuildInfo.version) (\($0))" } ?? BuildInfo.version)
@@ -491,9 +417,9 @@ struct FinderSettings: View {
             FullDiskAccessRow()
             List {
                 ForEach(model.finderDrives) { drive in
-                    row(.drive(id: drive.id), name: drive.name)
+                    row(.drive(id: drive.id), name: drive.name, icon: DriveIcons.image(for: drive))
                 }
-                row(.library, name: "Library")
+                row(.library, name: "Library", icon: DriveIcons.library)
             }
             HStack {
                 Text(finder.drivesAreDisks
@@ -503,17 +429,24 @@ struct FinderSettings: View {
                 Spacer()
                 Button("Sync Now") { Task { await model.syncNow() } }
             }
+            FinderMenusRow(service: model.finderSync)
             if let problem = finder.problem ?? model.problem {
                 Text(problem).foregroundStyle(.red).font(.caption)
             }
         }
         .padding(20)
-        .task { await model.refresh() }
+        .task {
+            // Switched on in System Settings since Onyx last asked: said
+            // here at once, and the drives in ~/Onyx become disks.
+            await finder.checkFileSystemSwitch(always: true)
+            await model.refresh()
+        }
     }
 
-    private func row(_ scope: SyncDomain, name: String) -> some View {
+    private func row(_ scope: SyncDomain, name: String, icon: NSImage) -> some View {
         let pinnedDrive = PinRule(scope: scope.identifier, target: .folder(path: ""))
         return HStack(spacing: 12) {
+            Image(nsImage: icon).resizable().interpolation(.high).frame(width: 18, height: 18)
             Toggle(name, isOn: Binding(
                 get: { finder.wantMounted.contains(scope.identifier) },
                 set: { on in Task { await model.setMounted(scope, name: name, on) } }
@@ -543,6 +476,7 @@ struct FinderSettings: View {
 
 /// Where streamed and pinned files are kept, and how much streaming may keep.
 struct StorageSettings: View {
+    @EnvironmentObject var model: AppModel
     @ObservedObject var finder: DriveService
 
     private let limits = [10, 25, 50, 100, 250, 500, 0]
@@ -576,7 +510,7 @@ struct StorageSettings: View {
             }
             Section("Kept offline") {
                 if finder.pinRules.isEmpty {
-                    Text("Nothing yet. In the Onyx window, right-click a file or folder and choose Keep Offline on This Mac, or turn on Offline for a whole drive in Finder settings.")
+                    Text("Nothing yet. Right-click a file or folder in the Onyx window, or on a drive in Finder, and choose to keep it offline. Or turn on Offline for a whole drive in Finder settings.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(finder.pinRules, id: \.self) { rule in
@@ -601,6 +535,9 @@ struct StorageSettings: View {
             }
         }
         .formStyle(.grouped)
+        // "In use" is worked out only while it is on screen.
+        .onAppear { finder.showUsage(true) }
+        .onDisappear { finder.showUsage(false) }
     }
 
     private func choose() {
@@ -619,9 +556,13 @@ struct StorageSettings: View {
     }
 
     private func describe(_ rule: PinRule) -> String {
-        let drive = rule.scope == SyncDomain.library.identifier ? "Library" : "Drive"
+        let drive = rule.scope == SyncDomain.library.identifier ? "Library"
+            : model.drives.first { SyncDomain.drive(id: $0.id).identifier == rule.scope }?.name ?? "Drive"
         switch rule.target {
-        case let .file(id): return "\(drive) · file \(id.prefix(8))…"
+        case let .file(id):
+            // Where the file is now, when its drive's mirror is open.
+            if let path = finder.keptPaths[rule.scope]?.files[id] { return "\(drive) · \(path)" }
+            return "\(drive) · file \(id.prefix(8))…"
         case let .folder(path): return path.isEmpty ? "\(drive) · everything" : "\(drive) · \(path)"
         }
     }
@@ -648,20 +589,27 @@ struct DiskModeNote: View {
                 .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
             }
         case .needsEnabling:
-            // Turn On asks macOS from Onyx itself; System Settings' own switch
-            // is the way round when that is refused (DiskMounter.enableExtension).
+            // System Settings' switch is the way macOS lets people switch it
+            // on (FileSystemSwitch); Onyx's own Turn On only where macOS may
+            // allow that (offersTurnOn, DiskMounter.enableExtension).
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Image(lucide: "hard-drive").foregroundStyle(.secondary)
-                    Text("Each drive can be a disk of its own, under Locations and on the Desktop. Turn on the Onyx file system to have them there.")
+                    Text("Each drive can be a disk of its own, under Locations and on the Desktop. Switch Onyx on in System Settings › General › Login Items & Extensions › File System Extensions to have them there.")
                         .font(.caption)
                     Spacer()
-                    Button(finder.turningOnDisks ? "Turning On…" : "Turn On") {
-                        Task { await finder.turnOnDisks() }
-                    }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(finder.turningOnDisks)
                     Button("System Settings…") { finder.openFileSystemSettings() }
+                        .keyboardShortcut(.defaultAction)
+                    if finder.offersTurnOn {
+                        Button(finder.turningOnDisks ? "Turning On…" : "Turn On") {
+                            Task { await finder.turnOnDisks() }
+                        }
+                        .disabled(finder.turningOnDisks)
+                    }
+                }
+                if finder.switchDidNotTake {
+                    Text("If Onyx won't stay switched on there, restart your Mac, then switch it on.")
+                        .font(.caption)
                 }
                 if let problem = finder.turnOnProblem {
                     Text(problem).font(.caption).foregroundStyle(.red)
@@ -689,20 +637,27 @@ struct DiskModeNote: View {
 
 /// Settings › Finder: whether Onyx has Full Disk Access, and the way to the
 /// pane that grants it. Only the person can grant it; Onyx only says where.
+/// When Onyx cannot tell (FullDiskAccessProbe found nothing to ask with), it
+/// says nothing rather than "off".
 struct FullDiskAccessRow: View {
     @StateObject private var access = FullDiskAccess()
 
     var body: some View {
-        let granted = access.granted
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(lucide: granted ? "shield-check" : "shield").foregroundStyle(.secondary) /* icons: shield-check shield */
-            Text(granted
-                 ? "Full Disk Access is on: Onyx can reach files anywhere on this Mac you point it to."
-                 : "Full Disk Access is off. Turn it on for Onyx to reach files in every folder on this Mac.")
-                .font(.caption)
-            Spacer()
-            if !granted {
-                Button("Privacy & Security…") { FullDiskAccess.openSettings() }
+        // A stack even when empty, so it still hears Onyx come forward.
+        VStack(alignment: .leading, spacing: 0) {
+            if access.answer != .unknown {
+                let granted = access.answer == .granted
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(lucide: granted ? "shield-check" : "shield").foregroundStyle(.secondary) /* icons: shield-check shield */
+                    Text(granted
+                         ? "Full Disk Access is on: Onyx can reach files anywhere on this Mac you point it to."
+                         : "Full Disk Access is off. Turn it on for Onyx to reach files in every folder on this Mac.")
+                        .font(.caption)
+                    Spacer()
+                    if !granted {
+                        Button("Privacy & Security…") { FullDiskAccess.openSettings() }
+                    }
+                }
             }
         }
         // Back from System Settings, it may be on now.
@@ -714,39 +669,20 @@ struct FullDiskAccessRow: View {
 
 @MainActor
 final class FullDiskAccess: ObservableObject {
-    @Published private(set) var granted = FullDiskAccess.probe()
+    @Published private(set) var answer = FullDiskAccess.probe()
 
-    func check() { granted = Self.probe() }
+    func check() { answer = Self.probe() }
 
-    /// Whether this app may open a file only Full Disk Access opens: the
-    /// privacy database itself, opened and closed, nothing read.
-    nonisolated static func probe() -> Bool {
-        let fd = open(NSHomeDirectory() + "/Library/Application Support/com.apple.TCC/TCC.db", O_RDONLY)
-        guard fd >= 0 else { return false }
-        close(fd)
-        return true
+    /// Whether this app may open a file only Full Disk Access opens
+    /// (FullDiskAccessProbe: the Mac's privacy database, the account's, then
+    /// Safari's folder — each opened and closed, nothing read). Onyx is not
+    /// sandboxed, so the home folder is the person's own.
+    nonisolated static func probe() -> FullDiskAccessProbe.Answer {
+        FullDiskAccessProbe.answer(home: NSHomeDirectory())
     }
 
     static func openSettings() {
         let pane = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_AllFiles")!
         NSWorkspace.shared.open(pane)
-    }
-}
-
-/// The menu bar's lines for files on their way to Onyx.
-struct UploadsMenuLines: View {
-    let summary: UploadSummary
-    let retry: (UUID) -> Void
-
-    var body: some View {
-        if summary.waiting > 0 {
-            let percent = Int((summary.fraction * 100).rounded())
-            Text(summary.waiting == 1
-                 ? "Uploading \(summary.current ?? "a file") — \(percent)%"
-                 : "Uploading \(summary.waiting) files — \(percent)%")
-        }
-        ForEach(summary.failed) { job in
-            Button("Retry “\(job.name)”: \(job.lastError ?? "did not upload")") { retry(job.id) }
-        }
     }
 }

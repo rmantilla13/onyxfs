@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useRef } from 'react';
+import { useCallback, useEffect, useId, useRef } from 'react';
 import { effectiveKind, drawableKind, fmtSize, fmtDuration } from '@/lib/media';
 import { thumbSources } from '@/lib/renditions';
 import { probedNow, decodeProbe } from '@/lib/decode-probe';
@@ -10,6 +10,8 @@ import { preloaded } from '@/lib/original-preload';
 import { parseKey } from '@/lib/selection';
 import { modKey } from '@/lib/keys';
 import ProgressiveImage from '@/app/components/media/ProgressiveImage';
+import AudioPlayer from '@/app/components/media/AudioPlayer';
+import { DownloadButtons } from '@/app/components/download/DownloadAs';
 import useQuickLook from './useQuickLook';
 import useOpenPrefetch from '@/app/files/useOpenPrefetch';
 import '@/app/components/review/review.css';
@@ -29,9 +31,10 @@ function tilePicture(id) {
 
 const FOCUSABLE = 'button:not([disabled]), a[href], video[controls], audio[controls], [tabindex]:not([tabindex="-1"])';
 // A control that answers its own keys: Return and Space press a button or
-// follow a link; a player or a field takes the arrows too.
-const CONTROL = 'button, a[href], input, select, textarea, summary, [role="button"], video[controls], audio[controls]';
-const OWN_ARROWS = 'input, select, textarea, video[controls], audio[controls]';
+// follow a link; a player, a field or a slider (the audio player's waveform)
+// takes the arrows too.
+const CONTROL = 'button, a[href], input, select, textarea, summary, [role="button"], [role="slider"], video[controls], audio[controls]';
+const OWN_ARROWS = 'input, select, textarea, [role="slider"], video[controls], audio[controls]';
 
 /**
  * Make everything but `root` inert (and so out of the accessibility tree
@@ -115,6 +118,8 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
   const live = useRef(null);
   live.current = { ql, key, file, folder, onOpen, onInfo };
   const hadOriginal = useRef({ id: null, yes: false });
+  // The video on screen, for a still of its frame (Download as…).
+  const qlVideo = useCallback(() => root.current?.querySelector('video.ql-video') || null, []);
 
   // Focus into the dialog on open; the page puts it back on close (onClose).
   // While it is open the page behind is inert: out of reach of Tab and of a
@@ -222,7 +227,8 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
           </div>
           <div className="spacer" />
           <button type="button" className="btn btn-sm" onClick={() => onOpen?.(key)} title="Open (Return)">Open</button>
-          {file && <a className="btn btn-sm" href={`/api/files/${file.id}/download`}>Download</a>}
+          {/* Download as… opens a <dialog>, whose keys are its own (see onKey). */}
+          {file && <DownloadButtons file={file} small frame={qlVideo} />}
           <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={() => ql.close()} aria-label="Close" title="Close (Space)">
             <Icon name="x" />
           </button>
@@ -304,6 +310,9 @@ function ImageItem({ file, layers, onSharp, onOriginalBlob }) {
  * A plain <video>, not the file page's player: its keys are Quick Look's.
  * It plays at once (Space or Return was the gesture); refused, it tries
  * muted. Stepping away or closing drops its source, so the download stops.
+ * A heavy video plays its streamable copy when the listing found one
+ * (lib/file-listing.js), as the file page's player does: a glance at a 4K
+ * master is otherwise range requests into gigabytes.
  */
 function VideoItem({ file }) {
   const ref = useRef(null);
@@ -342,7 +351,7 @@ function VideoItem({ file }) {
         key={file.id}
         ref={ref}
         className="ql-video"
-        src={file.url}
+        src={file.proxyUrl || file.url}
         poster={poster}
         controls
         playsInline
@@ -356,9 +365,9 @@ function VideoItem({ file }) {
 
 function AudioItem({ file }) {
   return (
-    <div className="ql-card">
+    <div className="ql-card ql-audio">
       <p className="ql-card-name">{file.name}</p>
-      <audio src={file.url} controls autoPlay style={{ width: 'min(480px, 100%)' }} />
+      <AudioPlayer key={file.id} file={file} autoPlay bars={140} />
     </div>
   );
 }

@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Thumb } from './FileCard';
 import { FieldLine } from './FieldValue';
-import { justifyRows, rowsInView, tileHits, tileStep, aspectOf, MIN_ASPECT, MAX_ASPECT } from '@/lib/justify';
+import { justifyRows, rowsInView, firstScreenTiles, tileHits, tileStep, aspectOf, MIN_ASPECT, MAX_ASPECT } from '@/lib/justify';
 import { fileKey } from '@/lib/selection';
 import { rowsPerViewport } from '@/lib/nav-geometry';
 
@@ -30,6 +30,9 @@ const CAPTION = { one: 32, two: 50 };
 // Pixels drawn beyond the viewport each way, so a flick does not outrun it.
 const OVERSCAN_PX = 900;
 const FIRST_PAINT_TILES = 30;
+// Tiles whose pictures are asked for at once, first: until the width is
+// known, a phone's first screen; then every tile in the rows the top of the
+// set shows on this screen (lib/justify.js firstScreenTiles).
 const EAGER_TILES = 8;
 // The top nav, which a tile scrolled up to must clear.
 const NAV_CLEARANCE = 72;
@@ -88,6 +91,7 @@ function TileGrid({
   const outer = useRef(null);
   const [width, setWidth] = useState(0);
   const [range, setRange] = useState({ start: 0, end: 0 });
+  const [eagerCount, setEagerCount] = useState(0);
   const [active, setActive] = useState(0);
   const pendingFocus = useRef(null);
   const filesRef = useRef(files);
@@ -128,6 +132,9 @@ function TileGrid({
     const top = el.getBoundingClientRect().top;
     const r = rowsInView(L, -top - OVERSCAN_PX, -top + window.innerHeight + OVERSCAN_PX, { caption });
     setRange((prev) => (prev.start === r.start && prev.end === r.end ? prev : r));
+    // From where the set starts on the page, so a scroll leaves it alone.
+    const eager = firstScreenTiles(L, { top: top + window.scrollY, viewport: window.innerHeight, caption });
+    setEagerCount((n) => (n === eager ? n : eager));
   }, [caption]);
   useLayoutEffect(() => { updateRange(); }, [updateRange, layout]);
   useEffect(() => {
@@ -237,7 +244,7 @@ function TileGrid({
             style={{ '--tile-h': `${target}px`, '--tile-a': aspects[i] }}
             selected={selected?.has(f.id) || false}
             tabbable={i === active}
-            eager={i < EAGER_TILES}
+            eager={i < (eagerCount || EAGER_TILES)}
           />
         ))}
       </div>
@@ -272,7 +279,7 @@ function TileGrid({
               {...common}
               selected={selected?.has(f.id) || false}
               tabbable={i === tabbable}
-              eager={i < EAGER_TILES}
+              eager={i < (eagerCount || EAGER_TILES)}
             />,
           );
         }

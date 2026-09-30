@@ -14,6 +14,8 @@ import {
 import { normalizeSchema } from '@/lib/dam';
 import { canWriteDrive } from '@/lib/drive-access';
 import TopNav from '@/app/components/TopNav';
+import PreviewPreconnect from '@/app/components/PreviewPreconnect';
+import { thumbSources } from '@/lib/renditions';
 import FilesClient from './FilesClient';
 import { buildLabel, buildDetail } from '@/lib/version';
 
@@ -59,8 +61,8 @@ export default async function FilesPage({ searchParams }) {
   const [brand, filespaces, rawSchema, savedViews, savedStars] = await Promise.all([
     loadBrand(),
     // Admins see every filespace (as owner), others their grants. The old
-    // listFilespacesForUser left admins with an empty switcher: env-admins are
-    // never stored as grant rows.
+    // listFilespacesForUser left admins with an empty switcher: an env-admin
+    // holds a grant row only for a drive that is theirs.
     listFilespacesForSpace(email, principal),
     getFileMetadataSchema(),
     // Their own views; one whose drive they can no longer open is left out
@@ -88,6 +90,10 @@ export default async function FilesPage({ searchParams }) {
   // photos and videos; the route checks it, the file and its drive again.
   const reviewLinks = ['shares.public', 'review.links']
     .every((cap) => can(principal, cap, { canModify: true, expiresInDays: principal.limits.shareMaxExpiryDays }).ok);
+  // Whether their role may make a folder's links, which are public or
+  // password links (shares.public). The folder's Share dialog lists and
+  // revokes either way; the route checks this, the folder and its drive again.
+  const folderLinks = can(principal, 'shares.public', { canModify: true, expiresInDays: principal.limits.shareMaxExpiryDays }).ok;
 
   // The view in the URL (?view=): a built-in, or one of their own. A view
   // kept for one drive opens in that drive, so a link to it lands there; an
@@ -110,8 +116,9 @@ export default async function FilesPage({ searchParams }) {
   // it. The same code and the same checks as GET /api/files
   // (lib/file-listing.js), and the same listing the client would ask for
   // (lib/views.js listingOpts); the list of drives above is the viewer's
-  // own, so a drive not in it is not theirs and the scope falls back to the
-  // library, as the API's does. The client takes this as the answer to its
+  // own, so a drive not in it is not theirs and the page falls back to the
+  // library (the API refuses such a drive outright; the client is handed
+  // no drive, so it never asks for one). The client takes this as the answer to its
   // first request (listingKey) and asks for nothing until something changes.
   // Drive usage is not here: it is a sum over whole drives, asked for after
   // the page is on screen (/api/filespaces/usage).
@@ -133,6 +140,10 @@ export default async function FilesPage({ searchParams }) {
 
   return (
     <>
+      {/* The bucket the first page's pictures come from — and a drive's own,
+          for a small original standing in for a missing thumbnail —
+          connected to before the grid asks for any of them. */}
+      <PreviewPreconnect urls={initial?.files?.map((f) => thumbSources(f).src)} />
       <TopNav
         build={{ label: buildLabel(), detail: buildDetail() }}
         brandName={brand.name}
@@ -146,8 +157,9 @@ export default async function FilesPage({ searchParams }) {
         flags={flags}
         canWrite={canWrite}
         reviewLinks={reviewLinks}
+        folderLinks={folderLinks}
         schema={normalizeSchema(rawSchema)}
-        filespaceId={filespaceId}
+        filespaceId={activeDrive ? filespaceId : ''}
         isAdmin={admin}
         drives={filespaces}
         initial={initial}

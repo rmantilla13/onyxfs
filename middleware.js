@@ -20,9 +20,10 @@ const { auth } = NextAuth(authConfig);
  * section itself, and returns there.
  *
  * And one way past it: Onyx for Mac's writes (upload, rename, move, trash,
- * folders, new contents, restore) carry its device token, not a session.
- * Such a request, to exactly those paths, goes on to a handler that checks
- * the token itself and answers in JSON (lib/bearer-gate.js). The same path
+ * folders, new contents, restore, thumbnails) and the iPhone's links to a
+ * file or a folder carry the app's device token, not a session. Such a
+ * request, to exactly those paths, goes on to a handler that checks the
+ * token itself and answers in JSON (lib/bearer-gate.js). The same path
  * without `Authorization: Bearer …` meets the gate as before.
  */
 export function middleware(req, ev) {
@@ -77,11 +78,15 @@ export const config = {
   //                analytics script to /signin and nothing is ever recorded.
   // file extensions Anything in /public with an extension, so the mark in the
   //                magic-link email loads without being redirected to /signin.
+  // thumb-sw.js    The preview worker's script (public/thumb-sw.js). A share
+  //                link registers it for a visitor with no account, and a
+  //                browser that installed it has to be able to fetch its
+  //                replacement — the kill switch — signed in or not.
   //
   // Note that the /space/authorize PAGE (no api/ prefix) stays matched: an
   // unauthenticated user opening the desktop hand-off link SHOULD be sent to
   // sign in and bounced back afterwards.
   matcher: [
-    '/((?!api/auth|api/desktop|api/space|api/files/delta|api/files/[^/]+/transcript|api/transcripts|api/files/[^/]+/proxy|api/proxies|api/health|api/cron|signin|verify|download|s/|_next/static|_next/image|_vercel|favicon.ico|icon.png|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
+    '/((?!api/auth|api/desktop|api/space|api/files/delta|api/files/[^/]+/transcript|api/transcripts|api/files/[^/]+/proxy|api/proxies|api/health|api/cron|signin|verify|download|s/|_next/static|_next/image|_vercel|favicon.ico|icon.png|thumb-sw\\.js$|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
   ],
 };

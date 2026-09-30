@@ -14,27 +14,58 @@ enum PreviewFiles {
             .appendingPathComponent("Previews", isDirectory: true)
     }
 
-    /// The file on this device, downloaded first if need be, through a link
-    /// signed now (the listing's may have expired).
+    /// The file on this device, downloaded first if need be: through a link
+    /// that is here already when one will do — the listing's, good for
+    /// hours, or one kept (PreviewLinks) — else one signed now. A link
+    /// storage refuses (expired, or the file moved) gives way to one signed
+    /// now.
     static func local(for file: FileItem, api: OnyxAPI,
                       progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> URL {
         let versions = folder.appendingPathComponent(file.id, isDirectory: true)
-        let target = versions.appendingPathComponent("v\(file.version)", isDirectory: true)
-            .appendingPathComponent(safeName(file.name))
+        let target = location(of: file)
         if FileManager.default.fileExists(atPath: target.path) { return target }
 
-        let link = try await api.contentLink(fileId: file.id)
-        let (downloaded, response) = try await URLSession.shared.download(from: link.url, delegate: Progress(progress))
-        guard let status = (response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status) else {
-            try? FileManager.default.removeItem(at: downloaded)
-            throw OnyxError.http(status: (response as? HTTPURLResponse)?.statusCode ?? 0,
-                                 message: "Storage did not send the file.")
+        // A download needs its link only as it starts.
+        var source = await PreviewLinks.ready(for: file, needed: 60)?.url
+        var fresh = false
+        while true {
+            let url: URL
+            if let source {
+                url = source
+            } else {
+                url = try await PreviewLinks.link(for: file, api: api).url
+                fresh = true
+            }
+            let (downloaded, response) = try await URLSession.shared.download(from: url, delegate: Progress(progress))
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200..<300).contains(status) else {
+                try? FileManager.default.removeItem(at: downloaded)
+                if !fresh, [400, 403, 404].contains(status) {
+                    await PreviewLinks.refused(file)
+                    source = nil
+                    continue
+                }
+                throw OnyxError.http(status: status, message: "Storage did not send the file.")
+            }
+            // Only this version is kept: an older one's bytes are not this file's any more.
+            try? FileManager.default.removeItem(at: versions)
+            try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: downloaded, to: target)
+            return target
         }
-        // Only this version is kept: an older one's bytes are not this file's any more.
-        try? FileManager.default.removeItem(at: versions)
-        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try FileManager.default.moveItem(at: downloaded, to: target)
-        return target
+    }
+
+    /// This version of the file, if it is on this device already — for a
+    /// save, which then need not download it again.
+    static func cached(for file: FileItem) -> URL? {
+        let target = location(of: file)
+        return FileManager.default.fileExists(atPath: target.path) ? target : nil
+    }
+
+    private static func location(of file: FileItem) -> URL {
+        folder.appendingPathComponent(file.id, isDirectory: true)
+            .appendingPathComponent("v\(file.version)", isDirectory: true)
+            .appendingPathComponent(safeName(file.name))
     }
 
     static func removeAll() {
@@ -44,9 +75,7 @@ enum PreviewFiles {
     /// The name as a file on this device may have it: no path separators,
     /// never empty.
     static func safeName(_ name: String) -> String {
-        let cleaned = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.isEmpty || cleaned == "." || cleaned == ".." ? "file" : cleaned
+        SavePlan.fileName(name)
     }
 
     /// Reports a download's progress as it goes.

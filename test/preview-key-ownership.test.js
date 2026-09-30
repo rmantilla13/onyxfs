@@ -45,6 +45,7 @@ const gc = await import('../lib/preview-gc.js');
 const { previewKeysOf, previewObjects, withoutTakenPreviews } = gc;
 const thumbRoute = await import('../app/api/files/[id]/thumbnail/route.js');
 const sizesRoute = await import('../app/api/files/[id]/thumbnail/sizes/route.js');
+const stripRoute = await import('../app/api/files/[id]/filmstrip/route.js');
 const filesRoute = await import('../app/api/files/route.js');
 
 const src = (p) => readFile(new URL(`../${p}`, import.meta.url), 'utf8');
@@ -82,6 +83,17 @@ test('the thumbnail PUT refuses a key another file uses, before it writes, and f
   assert.ok(check > 0, 'PUT checks the keys');
   assert.ok(check < put.indexOf('setFileThumbnail('), 'checked before the write');
   assert.match(put, /previewKeysInUse\(\[body\.thumbnailKey, body\.posterKey\], \{ exceptId: existing\.id \}\)/);
+  assert.match(put, /status: 409/);
+  assert.match(put, /status: 503/, 'a check that cannot be made fails closed');
+});
+
+test('the filmstrip PUT refuses a key another file uses, before it writes, and fails closed', async () => {
+  const route = await src('app/api/files/[id]/filmstrip/route.js');
+  const put = route.slice(route.indexOf('export async function PUT'));
+  const check = put.indexOf('previewKeysInUse(');
+  assert.ok(check > 0 && check < put.indexOf('setFileFilmstrip('), 'checked before the write');
+  assert.match(put, /previewKeysInUse\(\[body\.filmstripKey\], \{ exceptId: existing\.id \}\)/);
+  assert.ok(put.indexOf('canModifyFile(') < check, 'who may, before whose key');
   assert.match(put, /status: 409/);
   assert.match(put, /status: 503/, 'a check that cannot be made fails closed');
 });
@@ -265,6 +277,43 @@ describe('the thumbnail PUT with a preview alone', { skip }, () => {
     assert.equal((await call(thumbRoute.PUT, { id: mine.id }, 'PUT', { posterKey: PK })).status, 409);
     assert.equal((await call(thumbRoute.PUT, { id: mine.id }, 'PUT', { posterKey: thumb() })).status, 400);
     assert.equal((await db.getFileById(mine.id)).posterKey, null);
+  });
+});
+
+// A browser attaches a video's hover-scrub sheet after the upload is
+// recorded (lib/upload-client.js): the same ownership rule as a thumbnail.
+describe('the filmstrip PUT', { skip }, () => {
+  const LAYOUT = { frames: 40, columns: 8, tileWidth: 160, tileHeight: 90 };
+
+  test('records the sheet and its layout on a file of one’s own, moving seq and nothing else', async () => {
+    const f = await file({ createdBy: MEMBER, storageKey: `library/${MEMBER}/s-${randomUUID()}.mov`, kind: 'video', metadata: { width: 1920 } });
+    const before = await db.getFileById(f.id);
+    as(MEMBER);
+    const S = strip();
+    const r = await call(stripRoute.PUT, { id: f.id }, 'PUT', { filmstripKey: S, filmstrip: { ...LAYOUT, extra: 'dropped' } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const after = await db.getFileById(f.id);
+    assert.equal(after.filmstripKey, S);
+    assert.deepEqual(after.metadata.filmstrip, LAYOUT, 'only the geometry filmstripFacts keeps');
+    assert.equal(after.metadata.width, 1920, 'the rest of the metadata stands');
+    assert.ok(Number(after.seq) > Number(before.seq), 'devices pick it up');
+    assert.equal(after.version, before.version);
+    assert.equal(after.updatedAt, before.updatedAt);
+    assert.equal((await db.previewKeysInUse([S], { exceptId: randomUUID() })).has(S), true, 'held now');
+  });
+
+  test('refuses another file’s sheet, and a drive file for someone who may only view it', async () => {
+    const S = strip();
+    const clip = { kind: 'video', mime: 'video/quicktime', name: `pk-${randomUUID()}.mov` };
+    await file({ ...clip, filmstripKey: S });
+    const mine = await file({ ...clip, createdBy: MEMBER, storageKey: `library/${MEMBER}/t-${randomUUID()}.mov` });
+    as(MEMBER);
+    const adopt = await call(stripRoute.PUT, { id: mine.id }, 'PUT', { filmstripKey: S, filmstrip: LAYOUT });
+    assert.equal(adopt.status, 409, JSON.stringify(adopt.body));
+    assert.equal((await db.getFileById(mine.id)).filmstripKey, null);
+    const driveFile = await file({ ...clip, storageKey: `${PREFIX}/d-${randomUUID()}.mov` });
+    assert.equal((await call(stripRoute.PUT, { id: driveFile.id }, 'PUT', { filmstripKey: strip(), filmstrip: LAYOUT })).status, 403, 'a viewer of the drive');
+    assert.equal((await db.getFileById(driveFile.id)).filmstripKey, null);
   });
 });
 

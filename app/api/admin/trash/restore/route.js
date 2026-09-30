@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
 import { getTrashedFiles, restoreFile, storageKeyInUse } from '@/lib/db';
-import { getStorageConfig, storageMode, s3MoveObject, s3ObjectExists, s3UniqueKey } from '@/lib/storage';
+import { getStorageConfig, storageMode, s3MoveObject, s3ObjectExists, s3UniqueKey, storageForKey } from '@/lib/storage';
 import { settleLimit } from '@/lib/folder-ops';
 import { audit } from '@/lib/audit';
 
@@ -42,9 +42,12 @@ export async function POST(req) {
     if (f.trashKey && f.storage === 's3') {
       if (!s3) throw new Error('Storage is not configured for S3, so the stored file cannot be moved back.');
       let target = f.storageKey;
-      const taken = await storageKeyInUse(target, { exceptId: f.id }) || await s3ObjectExists(cfg, target).catch(() => false);
-      if (taken) target = await s3UniqueKey(cfg, target);
-      await s3MoveObject(cfg, f.trashKey, target);
+      // Back where it was trashed: a drive in a bucket of its own keeps its
+      // trash there too.
+      const own = await storageForKey(cfg, f.storageKey);
+      const taken = await storageKeyInUse(target, { exceptId: f.id }) || await s3ObjectExists(own, target).catch(() => false);
+      if (taken) target = await s3UniqueKey(own, target);
+      await s3MoveObject(own, f.trashKey, target, { size: f.size });
       storageKey = target;
     }
     const restored = await restoreFile(f.id, { storageKey });

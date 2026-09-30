@@ -24,6 +24,23 @@ public protocol DriveTree: Sendable {
     /// Bring the mirror up to date now, after a change made here, so the
     /// next listing already shows it.
     func refresh() async
+    /// Bring the mirror up to date before long: after an upload finishes,
+    /// whose file is listed meanwhile (pending, read from this Mac's copy).
+    /// The app's syncs at most once a second, however many finish, and
+    /// tells the writer when the mirror has moved (`mirrorChanged`).
+    func refreshSoon() async
+    /// The folder at `path` as the server names it, where the mirror shows
+    /// it under a name of its own (MirrorEntry.serverPath); "" for the drive
+    /// itself, nil when there is no folder there.
+    func serverPath(at path: String) async -> String?
+}
+
+extension DriveTree {
+    /// A tree whose names are the server's own.
+    public func serverPath(at path: String) async -> String? { nil }
+    /// A tree that can only be brought up to date now. Whoever keeps it
+    /// tells the writer when it has moved, as the app does (`mirrorChanged`).
+    public func refreshSoon() async { await refresh() }
 }
 
 public enum DriveItem: Sendable, Equatable {
@@ -81,6 +98,9 @@ public actor DriveWriter {
     private var pending: [String: Pending] = [:] {
         didSet { revision &+= 1 }
     }
+    /// Each pending file's path, by its job: the queue's news names the job,
+    /// and a thousand files on their way are not searched for each.
+    private var jobPaths: [UUID: String] = [:]
     /// Uploads recorded, not yet in the mirror, by path.
     private var arrived: [String: Arrival] = [:]
     /// Moves whenever the pending files change, so the bridge's view of the
@@ -126,12 +146,13 @@ public actor DriveWriter {
     /// `modified` and `created` are the dates the file had where it was
     /// written — Finder's copy keeps a file's — and go to the server with it.
     public func putFile(path: String, from file: URL, modified: Date? = nil, created: Date? = nil) async throws -> Pending {
-        let (folder, name) = try Self.split(path)
+        let (shown, name) = try Self.split(path)
+        let folder = await serverFolder(shown)
         let existing = await tree.item(at: path)
         if existing == .folder { throw Failure.posix(EISDIR, nil) }
         var replaceOf: String?
         if case let .file(id)? = existing { replaceOf = id }
-        if let waiting = pending.removeValue(forKey: path) {
+        if let waiting = unlist(path) {
             // Written again before the first copy arrived: only the latest
             // goes — as new contents for the file the first became, if it has.
             if let id = await arrivedFile(waiting) {
@@ -153,7 +174,7 @@ public actor DriveWriter {
         }
         let entry = Pending(job: job.id, path: path, size: job.size, staged: job.staged,
                             modified: modified ?? Date(), created: created, failed: nil, replaceOf: replaceOf)
-        pending[path] = entry
+        list(entry)
         return entry
     }
 
@@ -163,7 +184,8 @@ public actor DriveWriter {
         case .file?: throw Failure.posix(EEXIST, nil)
         case nil: break
         }
-        try await server { try await self.api.createFolder(path: Self.relative(path), filespaceId: self.filespaceId) }
+        let made = await serverFolder(path)
+        try await server { try await self.api.createFolder(path: made, filespaceId: self.filespaceId) }
         // The bridge answers a new folder with its entry, read from the
         // mirror: without this it is not there yet, and Finder is told the
         // folder it just made does not exist.
@@ -181,7 +203,7 @@ public actor DriveWriter {
 
         if let moving = pending[from], let id = await arrivedFile(moving) {
             // Uploaded a moment ago: it is a file on the server now.
-            pending[from] = nil
+            unlist(from)
             arrived[from] = nil
             try await renameFile(id, from: from, to: to, over: target)
             await tree.refresh()
@@ -193,7 +215,7 @@ public actor DriveWriter {
             // a file, it becomes that file's new contents (an app's save).
             var over: String?
             if case let .file(id)? = await tree.item(at: to) { over = id }
-            if let other = pending.removeValue(forKey: to) {
+            if let other = unlist(to) {
                 if let id = await arrivedFile(other) {
                     over = id
                     await uploads.release(other.job)
@@ -210,12 +232,13 @@ public actor DriveWriter {
                 try await renameFile(replaced, from: from, to: to, over: over.map { .file(id: $0) })
                 replacing = replaced
             }
-            await uploads.retarget(moving.job, folder: newFolder, name: newName, replacing: replacing)
+            let landing = await serverFolder(newFolder)
+            await uploads.retarget(moving.job, folder: landing, name: newName, replacing: replacing)
             var moved = moving
             moved.path = to
             moved.replaceOf = replacing
-            pending[from] = nil
-            pending[to] = moved
+            unlist(from)
+            list(moved)
             if moving.replaceOf != nil { await tree.refresh() }
             return
         }
@@ -225,7 +248,9 @@ public actor DriveWriter {
             throw Failure.posix(ENOENT, nil)
         case .folder?:
             if target != nil { throw Failure.posix(EEXIST, "A folder cannot replace another item.") }
-            try await server { try await self.api.moveFolder(from: Self.relative(from), to: Self.relative(to), filespaceId: self.filespaceId) }
+            let source = await serverFolder(from)
+            let destination = await serverFolder(to)
+            try await server { try await self.api.moveFolder(from: source, to: destination, filespaceId: self.filespaceId) }
         case let .file(id)?:
             if target == .folder { throw Failure.posix(EISDIR, nil) }
             try await renameFile(id, from: from, to: to, over: target)
@@ -242,7 +267,8 @@ public actor DriveWriter {
         // One call when only the name or only the folder changes; the
         // server's move keeps the name, so a move-and-rename is two.
         if oldFolder != newFolder {
-            try await server { try await self.api.updateFile(id: id, name: nil, folder: newFolder, filespaceId: self.filespaceId) }
+            let folder = await serverFolder(newFolder)
+            try await server { try await self.api.updateFile(id: id, name: nil, folder: folder, filespaceId: self.filespaceId) }
         }
         if oldName != newName {
             try await server { try await self.api.updateFile(id: id, name: newName, folder: nil, filespaceId: self.filespaceId) }
@@ -252,7 +278,7 @@ public actor DriveWriter {
     public func delete(path: String) async throws {
         if let waiting = pending[path] {
             let uploaded = await arrivedFile(waiting)
-            pending[path] = nil
+            unlist(path)
             arrived[path] = nil
             if let id = uploaded {
                 // Uploaded a moment ago: delete the file it became.
@@ -273,7 +299,14 @@ public actor DriveWriter {
         case nil:
             throw Failure.posix(ENOENT, nil)
         case .folder?:
-            try await server { try await self.api.deleteFolder(path: Self.relative(path), filespaceId: self.filespaceId) }
+            let folder = await serverFolder(path)
+            do {
+                try await server { try await self.api.deleteFolder(path: folder, filespaceId: self.filespaceId) }
+            } catch let Failure.posix(code, message) where code == EEXIST {
+                // The server's 409: the folder holds files this account was
+                // never shown, and nothing was deleted. Finder says "not empty".
+                throw Failure.posix(ENOTEMPTY, message)
+            }
         case let .file(id)?:
             try await server { try await self.api.deleteFile(id: id) }
         }
@@ -282,18 +315,22 @@ public actor DriveWriter {
 
     // MARK: - Uploads finishing
 
-    /// The upload queue's news about one of this drive's jobs.
+    /// The upload queue's news about one of this drive's jobs. Only what
+    /// changes the listing moves `revision`: a job going from waiting to
+    /// sending, a thousand times over, is not news to Finder.
     public func uploadChanged(_ job: UploadJob) async {
-        guard job.scope == scope, let path = pending.first(where: { $0.value.job == job.id })?.key else { return }
+        guard job.scope == scope, let path = jobPaths[job.id], let entry = pending[path] else { return }
         switch job.state {
         case .done:
-            arrived[path] = Arrival(id: job.fileId ?? pending[path]?.replaceOf, changedAt: job.changedAt)
-            await tree.refresh()
-            await mirrorChanged()
+            arrived[path] = Arrival(id: job.fileId ?? entry.replaceOf, changedAt: job.changedAt)
+            // Before long, however many finish at once (DriveTree.refreshSoon).
+            // The file stays listed meanwhile, read from its copy here, and
+            // leaves pending once the mirror shows it (mirrorChanged).
+            await tree.refreshSoon()
         case .failed:
-            pending[path]?.failed = job.lastError
+            if entry.failed != job.lastError { pending[path]?.failed = job.lastError }
         default:
-            pending[path]?.failed = nil
+            if entry.failed != nil { pending[path]?.failed = nil }
         }
     }
 
@@ -308,8 +345,24 @@ public actor DriveWriter {
             arrived[path] = nil
             // The mirror shows the server's copy now: Finder reads that,
             // and the staged one can go.
-            if let job = pending.removeValue(forKey: path)?.job { await uploads.release(job) }
+            if let job = unlist(path)?.job { await uploads.release(job) }
         }
+    }
+
+    /// A file on its way, listed at its path.
+    private func list(_ entry: Pending) {
+        if let other = pending.updateValue(entry, forKey: entry.path), other.job != entry.job {
+            jobPaths[other.job] = nil
+        }
+        jobPaths[entry.job] = entry.path
+    }
+
+    /// No longer listed at `path`: arrived, cancelled or moved.
+    @discardableResult
+    private func unlist(_ path: String) -> Pending? {
+        guard let entry = pending.removeValue(forKey: path) else { return nil }
+        if jobPaths[entry.job] == path { jobPaths[entry.job] = nil }
+        return entry
     }
 
     /// The file a pending upload became, once the server has it.
@@ -330,6 +383,9 @@ public actor DriveWriter {
             try await call()
         } catch let OnyxError.http(status, message) {
             switch status {
+            // Refused as asked: most often a name the server will not take
+            // (lib/folder-ops.js), which Finder says is a name it cannot use.
+            case 400: throw Failure.posix(EINVAL, message)
             case 401, 403: throw Failure.posix(EACCES, message)
             case 404: throw Failure.posix(ENOENT, message)
             case 409: throw Failure.posix(EEXIST, message)
@@ -355,6 +411,25 @@ public actor DriveWriter {
     /// The server names folders without the leading slash.
     static func relative(_ path: String) -> String {
         path.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
+    }
+
+    /// A folder path as Finder has it, as the server names it: the deepest
+    /// folder along it that the mirror has, by its server path
+    /// (DriveTree.serverPath) — a folder shown as "photos (2)" beside
+    /// "Photos" is "photos" on the server — then the rest as given, for a
+    /// folder not there yet (one being made, a move's new name). Without
+    /// this a change to a folder shown under a name of its own reached a
+    /// folder the server does not have.
+    func serverFolder(_ path: String) async -> String {
+        var known = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        var rest: [String] = []
+        while !known.isEmpty {
+            if let base = await tree.serverPath(at: known.joined(separator: "/")) {
+                return ([base] + rest).filter { !$0.isEmpty }.joined(separator: "/")
+            }
+            rest.insert(known.removeLast(), at: 0)
+        }
+        return rest.joined(separator: "/")
     }
 }
 

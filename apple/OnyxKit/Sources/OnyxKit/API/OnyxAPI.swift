@@ -15,6 +15,9 @@ import Foundation
 ///     /api/files/<id>, /api/files/<id>/content, /api/files/folders
 ///                         writes from a drive mounted as a disk (onyxfs,
 ///                         Writes.swift) — let through only with a bearer
+///     /api/files/<id>/shares[/<token>], /api/files/folders/shares[/<token>]
+///                         links to a file or a folder (Links.swift),
+///                         likewise
 ///     /api/stars          starred folders (Stars.swift), the same way
 ///
 /// Anything else needs a cookie. If a new endpoint is added for this client,
@@ -78,14 +81,21 @@ public actor OnyxAPI {
     /// One page of changes since `cursor`, within one Finder location's scope
     /// (nil: everything this account may see). Cursor 0 means everything, so
     /// first sync and incremental catch-up are the same code path.
+    ///
+    /// `foldersTag`, with `folders`: the tag of the folder list held
+    /// already (DeltaPage.foldersTag). While it still matches, the page
+    /// leaves the list out.
     public func delta(cursor: Int64, limit: Int = 500, domain: SyncDomain? = nil,
-                      folders: Bool = false) async throws -> DeltaPage {
+                      folders: Bool = false, foldersTag: String? = nil) async throws -> DeltaPage {
         var query: [URLQueryItem] = [
             .init(name: "cursor", value: String(cursor)),
             .init(name: "limit", value: String(limit)),
         ]
         if let domain { query.append(.init(name: "drive", value: domain.deltaParameter)) }
-        if folders { query.append(.init(name: "folders", value: "1")) }
+        if folders {
+            query.append(.init(name: "folders", value: "1"))
+            if let foldersTag { query.append(.init(name: "foldersTag", value: foldersTag)) }
+        }
         return try decode(DeltaPage.self, from: try await request(config.url("api/files/delta", query: query)))
     }
 
@@ -120,14 +130,21 @@ public actor OnyxAPI {
         try await drives().drives
     }
 
-    /// The drives this account may open, whether it is an admin, and the
+    /// The drives this account may open, whether it is an admin, the
     /// account itself as the server knows it — the token's owner, which is
-    /// what an app that never recorded it (0.2.0 did not) learns it from.
-    public func drives() async throws -> (drives: [Filespace], isAdmin: Bool, email: String?) {
-        struct Wrapper: Decodable { let filespaces: [Filespace]; let isAdmin: Bool?; let email: String? }
+    /// what an app that never recorded it (0.2.0 did not) learns it from —
+    /// what it may do in the library (nil from an older server), and whether
+    /// it may share by link at all (the `shares` flag as the web's menus read
+    /// it for this account; false from an older server, whose link routes
+    /// take no token).
+    public func drives() async throws -> (drives: [Filespace], isAdmin: Bool, email: String?, library: WriteCaps?, shares: Bool) {
+        struct Library: Decodable { let can: WriteCaps? }
+        struct Wrapper: Decodable {
+            let filespaces: [Filespace]; let isAdmin: Bool?; let email: String?; let library: Library?; let shares: Bool?
+        }
         let data = try await request(config.url("api/space/filespaces"))
         let w = try decode(Wrapper.self, from: data)
-        return (w.filespaces, w.isAdmin ?? false, w.email)
+        return (w.filespaces, w.isAdmin ?? false, w.email, w.library?.can, w.shares ?? false)
     }
 
     public func credentials(filespaceId: String) async throws -> SpaceCredentials {
@@ -190,6 +207,65 @@ public actor OnyxAPI {
     private func transcriptRequest(_ url: URL, method: String, body: Data? = nil) async throws -> Data {
         let (data, status) = try await send(url, method: method, body: body)
         if let conflict = TranscriptionConflict.from(status: status, data: data) { throw conflict }
+        try Self.check(status, data)
+        return data
+    }
+
+    // MARK: - Proxies
+
+    /// Ask for a video's streamable copy (the web's own request, from a
+    /// device): a Mac running Onyx makes it within minutes. Refused (403)
+    /// for someone who may only view the file, which is nothing to report.
+    public func requestProxy(fileId: String) async throws {
+        _ = try await proxyRequest(proxyURL(fileId), method: "POST")
+    }
+
+    /// Videos waiting for a streamable copy that this account may make:
+    /// queued, or left by a Mac whose lease ran out. Oldest first.
+    public func proxyQueue() async throws -> [ProxyJob] {
+        struct Wrapper: Decodable { let jobs: [ProxyJob] }
+        let data = try await proxyRequest(config.url("api/proxies/queue"), method: "GET")
+        return try decode(Wrapper.self, from: data).jobs
+    }
+
+    /// Take a job, for ten minutes that every progress report extends.
+    /// Throws `ProxyConflict.taken` when another Mac got there first.
+    public func claimProxy(fileId: String, device: String) async throws -> ProxyClaim {
+        let body = try JSONSerialization.data(withJSONObject: ["device": String(device.prefix(80))])
+        return try decode(ProxyClaim.self, from: try await proxyRequest(proxyURL(fileId, "claim"), method: "POST", body: body))
+    }
+
+    /// How far along, 0…1; also keeps the lease. Throws `ProxyConflict.lost`
+    /// when the job is no longer this Mac's.
+    public func reportProxyProgress(fileId: String, progress: Double) async throws {
+        let rounded = (min(max(progress, 0), 1) * 1000).rounded() / 1000
+        let body = try JSONSerialization.data(withJSONObject: ["progress": rounded])
+        _ = try await proxyRequest(proxyURL(fileId), method: "PATCH", body: body)
+    }
+
+    /// Give the job up as failed, saying why in a sentence someone can read.
+    public func reportProxyFailure(fileId: String, message: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["status": "failed", "error": String(message.prefix(500))])
+        _ = try await proxyRequest(proxyURL(fileId), method: "PATCH", body: body)
+    }
+
+    /// The copy is in the bucket, where the claim said. Throws
+    /// `ProxyConflict.lost` when the job was taken away meanwhile.
+    public func finishProxy(fileId: String, _ result: ProxyResult) async throws {
+        _ = try await proxyRequest(proxyURL(fileId), method: "PUT", body: try JSONEncoder().encode(result))
+    }
+
+    /// `api/files/<id>/proxy[/<tail>]`, the id escaped as one path component.
+    private func proxyURL(_ fileId: String, _ tail: String? = nil) -> URL {
+        var url = config.url("api/files").appending(component: fileId).appending(path: "proxy")
+        if let tail { url.append(path: tail) }
+        return url
+    }
+
+    /// As `request`, with a 409 told apart by its code (`taken`, `lost`).
+    private func proxyRequest(_ url: URL, method: String, body: Data? = nil) async throws -> Data {
+        let (data, status) = try await send(url, method: method, body: body)
+        if let conflict = ProxyConflict.from(status: status, data: data) { throw conflict }
         try Self.check(status, data)
         return data
     }

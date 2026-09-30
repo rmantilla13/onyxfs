@@ -158,6 +158,10 @@ final class DAVServer: @unchecked Sendable {
         /// An upload's body on its way to disk (FSBridge.Admission.acceptFile):
         /// never held in memory, however large the file.
         var spool: Spool?
+        /// While one comes in — a file copied onto a drive in Finder — Onyx
+        /// is kept out of App Nap (WorkActivity): App Nap would throttle
+        /// the writing of it to disk, and so Finder's copy.
+        var spooling: WorkActivity.Hold?
         /// Moved on by every deadline set or cleared, so only the latest one
         /// set can close the connection.
         var deadline = 0
@@ -328,13 +332,17 @@ final class DAVServer: @unchecked Sendable {
             buffer = Data(buffer[(bodyStart + take)...])
             spool = Spool(url: url, handle: handle, remaining: length - Int64(take), method: method,
                           target: target, headers: headers, keepAlive: keepAlive)
+            spooling = WorkActivity.app.begin(.uploads)
             return finishSpoolIfDone() ?? .needMore
         }
 
-        /// The request, once the whole body is on disk.
+        /// The request, once the whole body is on disk. From here the upload
+        /// queue has the file, and its own summary holds Onyx awake.
         private func finishSpoolIfDone() -> Parsed? {
             guard let done = spool, done.remaining == 0 else { return nil }
             spool = nil
+            spooling?.end()
+            spooling = nil
             try? done.handle.close()
             let request = DAVRequest(method: done.method, target: done.target, headers: done.headers, bodyFile: done.url)
             return .request(request, keepAlive: done.keepAlive)
@@ -376,6 +384,8 @@ final class DAVServer: @unchecked Sendable {
         private func abandonSpool() {
             guard let gone = spool else { return }
             spool = nil
+            spooling?.end()
+            spooling = nil
             try? gone.handle.close()
             try? FileManager.default.removeItem(at: gone.url)
         }

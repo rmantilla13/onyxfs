@@ -1,6 +1,7 @@
 import NextAuth from 'next-auth';
 import Resend from 'next-auth/providers/resend';
 import Okta from 'next-auth/providers/okta';
+import Credentials from 'next-auth/providers/credentials';
 import { DrizzleAdapter } from '@auth/drizzle-adapter';
 import { Resend as ResendClient } from 'resend';
 import { getDb, isDbConfigured, ensureAuthTables, createMagicLinkRedirect, upsertPerson } from '@/lib/db';
@@ -8,6 +9,7 @@ import { unconfiguredAdapter, wrapAdapter } from '@/lib/auth-adapter';
 import { isEmailGrantedAccess } from '@/lib/auth-allowlist';
 import { loadBrand } from '@/lib/brand-config';
 import { signInEmail, printsSignInLinks } from '@/lib/signin-email';
+import { authorizePassword } from '@/lib/password-signin';
 import { authConfig } from '@/auth.config';
 
 /**
@@ -127,6 +129,16 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         }
       },
     }),
+    // A password, for the few accounts an admin gave one — App Review's,
+    // whose inbox nobody reads. Never an admin's. lib/password-signin.js
+    // checks it; the signIn callback below then holds it to the same gate
+    // as an emailed link.
+    Credentials({
+      id: 'password',
+      name: 'Password',
+      credentials: { email: {}, password: {} },
+      authorize: authorizePassword,
+    }),
     ...(oktaConfigured
       ? [
           Okta({
@@ -150,7 +162,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       // The same check applies to Okta. Okta says WHO is signing in; the
       // allowlist decides WHETHER they may. Neither alone is sufficient, so a
       // compromised Okta tenant cannot mint access to an unapproved address
-      // and a leaked allowlist cannot bypass the identity check.
+      // and a leaked allowlist cannot bypass the identity check. A password
+      // is held to it the same way: suspending or removing its account shuts
+      // it out, whatever the password.
       const provider = account?.provider || 'unknown';
       const ok = await isEmailGrantedAccess(user.email);
       if (!ok) {

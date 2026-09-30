@@ -366,6 +366,31 @@ describe('the player and the queue agree on the words', () => {
     assert.match(player, /const proxy = \(row && !row\.stale \? row\.url : null\) \|\| file\?\.proxyUrl \|\| null;/);
     assert.match(player, /const proxyStatus = row\?\.status \|\| file\?\.proxyStatus \|\| null;/);
   });
+
+  test('a clip light enough to stream loads its metadata at once; a heavy master waits for play', async () => {
+    const player = await src('app/components/video/VideoPlayer.js');
+    assert.match(player, /const heavy = !proxy && Number\(file\?\.size\) > HEAVY_BYTES;/);
+    assert.match(player, /preload=\{started \|\| !heavy \? 'metadata' : 'none'\}/);
+  });
+});
+
+// Where the server-rendered and listed rows are played: what signs the
+// rendition is test/playback-links.test.js's (and its SQL proxies-db's); these
+// are the two places a browser is handed it that no test can render.
+describe('every player a row reaches prefers the rendition', () => {
+  test('Quick Look plays the streamable copy the listing found', async () => {
+    const ql = await src('app/components/quicklook/QuickLook.js');
+    assert.match(ql, /className="ql-video"\s+src=\{file\.proxyUrl \|\| file\.url\}/);
+  });
+
+  test('the share page looks it up before it signs, under the flags the link was let in by', async () => {
+    const page = await src('app/s/[token]/page.js');
+    const lookup = page.indexOf('await playableProxies([access.file], access.flags)');
+    const sign = page.indexOf('await presignFileUrls(withProxyKeys([access.file], proxies)');
+    assert.ok(lookup > 0, 'the page no longer looks up the proxy');
+    assert.ok(sign > lookup, 'signed before the key is there to sign');
+    assert.ok(page.indexOf('sharedFile(signed)') > sign);
+  });
 });
 
 describe('a heavy upload is queued without being able to fail the upload', () => {
@@ -389,15 +414,18 @@ describe('the bearer paths are outside the cookie gate', () => {
 
 describe('a rendition is never left in the bucket by accident', () => {
   test('both purge paths read the key before the row goes', async () => {
-    for (const [p, before] of [
-      ['lib/maintenance.js', 'await deleteFile(row.id)'],
-      ['app/api/files/[id]/route.js', 'await deleteFile(id)'],
+    // Renditions are the app's own, like previews: in the base bucket, whatever
+    // drive the file is in. The route's `cfg` is the file's own drive
+    // (storageForKey), so it hands the GC `base`; maintenance's `cfg` is the base.
+    for (const [p, before, gc] of [
+      ['lib/maintenance.js', 'await deleteFile(row.id)', /proxyKeys \}, \{ cfg \}\)/],
+      ['app/api/files/[id]/route.js', 'await deleteFile(id)', /proxyKeys \}, \{ cfg: base \}\)/],
     ]) {
       const code = await src(p);
       const read = code.indexOf('proxyKeysFor(');
       assert.ok(read > 0, `${p} never asks for the proxy key`);
       assert.ok(read < code.indexOf(before), `${p} asks after the row is gone, when the key no longer exists`);
-      assert.match(code, /proxyKeys \}, \{ cfg \}\)/, `${p} does not hand them to the GC`);
+      assert.match(code, gc, `${p} does not hand them to the GC, in the base bucket`);
     }
   });
 
@@ -437,5 +465,68 @@ describe('the shared job primitives keep this queue’s own words', () => {
   test('and the transcript queue keeps its own', async () => {
     const { failureMessage } = await import('../lib/transcripts.js');
     assert.equal(failureMessage(''), 'Transcription failed.');
+  });
+});
+
+// Every large video is meant to have a streamable version, not only the ones
+// uploaded since proxies were asked for at upload. The queue offers the rest
+// once nothing someone asked for is waiting, and the claim makes their job.
+describe('large videos with no job are offered, after everything asked for', () => {
+  test('the candidates query: large, video, in storage, no job of any kind, through the access clause', async () => {
+    const { buildProxyCandidateQuery } = await import('../lib/file-query.js');
+    const { principalFrom } = await import('../lib/authz.js');
+    const { DEFAULT_FLAGS } = await import('../lib/features.js');
+    const p = principalFrom({
+      email: 'm@x.test', person: { roleId: 'member' }, globalFlags: DEFAULT_FLAGS,
+      grants: { drives: [{ id: 'd1', prefix: 'secret' }, { id: 'd2', prefix: 'team' }], roles: { d2: 'editor' } },
+    });
+    const q = buildProxyCandidateQuery({ principal: p, minBytes: PROXY_MIN_BYTES });
+    assert.match(q.text, /f\.deleted_at IS NULL/);
+    assert.match(q.text, /f\.storage = 's3'/);
+    assert.match(q.text, /f\.size >= \$1/);
+    assert.equal(q.params[0], PROXY_MIN_BYTES);
+    // Done, failed or waiting, a job is left alone: a failure is not retried
+    // by being offered again, and one someone asked for is in the queue proper.
+    assert.match(q.text, /NOT EXISTS \(SELECT 1 FROM proxies j WHERE j\.file_id = f\.id\)/);
+    assert.match(q.text, /f\.kind = 'video'/);
+    assert.match(q.text, /LIKE ANY/, 'the drive boundary');
+    assert.ok(q.params.some((v) => Array.isArray(v) && v.includes('secret/%')));
+    assert.match(q.text, /ORDER BY f\.created_at DESC, f\.id DESC/, 'newest first');
+    const admin = buildProxyCandidateQuery({ principal: { isAdmin: true }, minBytes: PROXY_MIN_BYTES });
+    assert.doesNotMatch(admin.text, /LIKE ANY/);
+  });
+
+  test('pages on (created_at, id), and will not run without a size floor', async () => {
+    const { buildProxyCandidateQuery } = await import('../lib/file-query.js');
+    const q = buildProxyCandidateQuery({ principal: { isAdmin: true }, minBytes: PROXY_MIN_BYTES, after: { createdAt: 1790000000000, id: 'f9' } });
+    assert.match(q.text, /\(f\.created_at, f\.id\) < \(\$\d+::bigint, \$\d+::text\)/);
+    assert.ok(q.params.includes(1790000000000) && q.params.includes('f9'));
+    assert.throws(() => buildProxyCandidateQuery({ principal: { isAdmin: true } }), /minBytes/);
+  });
+
+  test('lib/db.js offers them only after the jobs asked for, through the write rule and shouldProxy', async () => {
+    const db = await src('lib/db.js');
+    const fn = db.slice(db.indexOf('export async function listProxyJobs'), db.indexOf('export async function queueProxyIfMissing'));
+    const asked = fn.indexOf('buildProxyQueueQuery(');
+    const offered = fn.indexOf('buildProxyCandidateQuery(');
+    assert.ok(asked > 0 && offered > asked, 'what someone asked for comes first');
+    assert.match(fn.slice(offered), /minBytes: PROXY_MIN_BYTES/);
+    assert.match(fn.slice(offered), /modifiableFileIds\(files, principal\)/);
+    assert.match(fn.slice(offered), /mine\.has\(file\.id\) && shouldProxy\(file\)/);
+    assert.match(fn.slice(offered), /requestedAt: null/);
+  });
+
+  test('a job is made only where there is none, and never over one', async () => {
+    const db = await src('lib/db.js');
+    const fn = db.slice(db.indexOf('export async function queueProxyIfMissing'));
+    assert.match(fn.slice(0, 800), /ON CONFLICT \(file_id\) DO NOTHING/);
+  });
+
+  test('the claim makes it, after the guard, and only for a video that should have one', async () => {
+    const route = await src('app/api/files/[id]/proxy/claim/route.js');
+    const guard = route.indexOf("await openProxy(req, params.id, 'claim')");
+    const made = route.indexOf('await queueProxyIfMissing(g.file.id)');
+    assert.ok(guard > 0 && made > guard, 'the checks come first');
+    assert.match(route, /if \(claimed\.missing && shouldProxy\(g\.file\)\) \{\s*await queueProxyIfMissing\(g\.file\.id\);\s*claimed = await claim\(\);/);
   });
 });

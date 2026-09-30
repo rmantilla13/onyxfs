@@ -61,12 +61,14 @@ Finder / Premiere / Resolve
   record for appex"), SIGTRAP — which FSKit reports to the app as
   NSCocoaErrorDomain 4099, "Couldn't communicate with a helper
   application". Every drive went to `~/Onyx`, read-only, after the updates
-  to 0.5.5 and 0.5.6. Since 0.5.7 the updater unregisters the old copy and
-  registers the new one (`lsregister -u`, `-f -R -trusted`) before opening
-  it; the app registers itself (`LSRegisterURL`) before its first disk
-  mounts, for a copy an older updater installed; and a mount that fails
-  that way is tried once more after registering again, then Settings ›
-  Finder says to restart the Mac. By hand:
+  to 0.5.5 and 0.5.6. Since 0.5.7 the updater registers the new copy and
+  unregisters the old one (`lsregister -f -R -trusted`, `-u`) before opening
+  it — now in that order, the new one first, or macOS forgets the file
+  system was switched on ("Kept on across updates", below); the app
+  registers itself (`LSRegisterURL`) before its first disk mounts, for a
+  copy an older updater installed; and a mount that fails that way is tried
+  once more after registering again, then Settings › Finder says to restart
+  the Mac. By hand:
   `lsregister -f -R -trusted /Applications/Onyx.app; killall -9 fskit_agent`
   (lsregister is in LaunchServices.framework/Support).
 - Each drive mounts at `/Volumes/<Drive name>` through
@@ -76,7 +78,8 @@ Finder / Premiere / Resolve
   root, appears in Finder's sidebar under Locations and on the Desktop.
 - macOS 26 and older, or when the extension is not enabled/entitled (or not
   yet taken in by macOS, above): the existing rclone NFS mount in `~/Onyx`
-  stays as the fallback. Nothing is removed.
+  stays as the fallback. Nothing is removed. When it is the switch being
+  off, the fallback is not silent ("Kept on across updates").
 
 **Read and write, in this build.** The owner: "make sure we have permission
 to read and write when copying files in Finder. Both Finder and web should
@@ -161,7 +164,8 @@ Endpoints:
    listing changed. `all: true` = drop everything (e.g. the mirror was rebuilt).
 7. `GET /fs/v1/volume` → the `volume` object from (1), fresh.
 
-(And 12, `GET /fs/v1/icon`, under "The drive's icon" at the end.)
+(And 12, `GET /fs/v1/icon`, under "The drive's icon" at the end; and 13,
+`POST /fs/v1/activity`, under "Activity" after it.)
 
 `generation` is a per-scope counter that moves every time that drive's mirror
 changes.
@@ -191,6 +195,11 @@ logic is testable with `swift test`.
   Range GET on the presigned URL (refresh + retry once on 403/400 from
   storage, 3 attempts with backoff on network errors), local files via
   `/fs/v1/data`; short final chunk handled; reads past EOF return what exists.
+  A chunk goes to the reads waiting on it as it arrives, and into the cache
+  after: they do not wait on its digest and write (a scrub's first read at a
+  new place, 5.8 → 3.1 ms on loopback), and a read of it meanwhile is handed
+  the same bytes. At most 6 chunks are held in memory, those on their way and
+  those not yet written together, so a slow disk holds fetching back.
 - All of it under `apple/OnyxKit/Sources/OnyxFSCore/`, tests under
   `apple/OnyxKit/Tests/OnyxFSCoreTests/` with a stub bridge (URLProtocol or a
   tiny local HTTP server).
@@ -245,20 +254,108 @@ logic is testable with `swift test`.
   goes in under half a second), then unmounts at once.
 - Settings → Finder: which way drives mount; when the module is not enabled,
   a button that opens System Settings' File System Extensions pane
-  (`FSClient.shared.openFileSystemExtensionsSettings()`).
+  (`FSClient.shared.openFileSystemExtensionsSettings()`). The menu bar's
+  panel says it too, while drives are in `~/Onyx` because of it ("Kept on
+  across updates").
 - `scripts/build-mac.sh`: builds `OnyxFS`, assembles
   `Contents/Extensions/OnyxFS.appex`, signs it with its entitlements and
   profile; adds `com.apple.developer.fskit.mount` to the app's entitlements
   only when the app's profile grants it (a restricted entitlement a profile
   does not grant stops the app from launching).
 
+## Kept on across updates
+
+The owner, on 0.5.18: "we lost our custom drive icons when mounted. also
+localhost network still showing up on sidebar. these drives should be
+mounted individually." Every drive was an NFS mount in `~/Onyx` again,
+under "localhost" in Finder's sidebar, and nothing said so outside
+Settings › Finder. The Onyx file system had been switched off.
+
+**Where macOS keeps the switch.** Not with pluginkit: `pluginkit -m` shows
+no election for any FSKit module. fskit_agent keeps the identifiers of the
+modules switched on in
+`~/Library/Group Containers/group.com.apple.fskit.settings/enabledModules.plist`
+(`probeOrder.plist` beside it). It works its list of modules out again
+whenever the LaunchServices database changes, and drops the identifier of
+a module no copy is registered for — "Removed 1 identifiers" in its log;
+`removeBundleFromEnabledModules:` in the binary — and the switch with it.
+Once a copy is registered again the identifier comes back as a new module
+("Added 1 identifiers"): first in `probeOrder.plist`, switched off.
+
+**What switched it off.** Disks mounted until 14:41:22 on 29 September. At
+14:41:49 Finder (DesktopServicesHelper) replaced 0.5.14 with 0.5.15, a
+copy dragged from the disk image: it unregistered the old copy, copied the
+new one in for five seconds, then registered it. fskit_agent looked in
+between. 0.5.15 cleared the last run's disks at 14:42:00 and mounted none
+after it: every drive went to `~/Onyx`. The same happened when 0.5.16 was
+dragged in at 15:07, the last write of `enabledModules.plist` (which kept
+Onyx Dev's `io.onyxfs.app.dev.fs`, and not `io.onyxfs.app.fs`). The in-app
+updates to 0.5.17 and 0.5.18 unregistered the old copy first too, but
+registered the new one 60 ms later, before fskit_agent looked (some 0.3 s
+after a change): they kept a switch that was already off, and could as
+easily have lost one that was on. The stale records of old builds
+unregistered that evening dropped nothing: `/Applications/Onyx.app` was
+registered throughout.
+
+**The updater** now registers the new copy before it lets the old one go
+(`UpdateSwap`, OnyxKit: its tests run the script with stand-ins for
+lsregister and open), so the identifier is registered throughout. Finder's
+own replace cannot be changed; that is what the rest is for.
+
+**Only the person can switch it back on.** On macOS 27.0.1 fskitd sets a
+module's switch only for a caller holding Apple's private
+`com.apple.private.LiveFS.connection` entitlement. System Settings' File
+System Extensions sheet (FSKitModuleManagement) has it — "Incomming
+connection, entitled 1" in fskitd's log, then "Call fskit_agent to set
+enabled state" — and Onyx, "entitled 0", is refused with EPERM whatever it
+does: its Turn On (the undeclared `setEnabledStateForIdentifier` call,
+0.5.1) was refused four times with a freshly started fskitd, moments
+before the sheet's switch went through. `Received error '(null)', errno 2,
+retrieving team ID`, over and over while the Login Items & Extensions pane
+is open, is fskitd looking up the team of the pane itself, which has none
+— the same from a fresh fskitd — not a sign of anything of Onyx's. On this
+Mac the sheet's switch would not take until fskitd was restarted
+(`sudo killall -9 fskitd`, which a restart of the Mac also does); then it
+did at once.
+
+So Onyx (`FileSystemSwitch`, OnyxKit, and DriveService):
+
+- remembers the switch was on (`onyxfs.switch` in UserDefaults);
+- finding it off as it opens, with drives to be in Finder, says so, once
+  for each time it is lost: a notice in Notification Center (macOS asks the
+  person the first time) with Open System Settings, and a row in the menu
+  bar's panel, which stays for as long as drives are in `~/Onyx` because of
+  it. Onyx's own Turn On is offered, and tried once by itself after Onyx
+  was replaced, only on macOS 27.0, and never again on a build that
+  refused it;
+- sent to System Settings (the row, the notice, Settings › Finder), asks
+  FSKit every 2 s for three minutes whether it is on. The moment it is, the
+  drives in `~/Onyx` are unmounted and mounted as disks, each with its icon,
+  and "localhost" leaves the sidebar. Still off when the person comes back
+  a while later, or at the end, the row adds: restart your Mac, then switch
+  it on;
+- asks again with each tick, and as the panel, Settings › Finder or Onyx
+  comes forward, while drives are in `~/Onyx` because it is off: switched
+  on by any way, they are disks within a tick. Nothing is asked while they
+  are disks;
+- takes a switch turned off while Onyx runs as the person's (Onyx cannot be
+  replaced while it runs): it is neither switched back on nor told about;
+- says in the same row when the switch is on but a disk would not mount
+  (DiskMounter.lastFailure), which Settings › Finder alone said before.
+
+`ship-mac.sh` also unregisters its throwaway build before deleting it:
+eleven records of deleted builds were on the owner's Mac.
+
 
 ## Writes (the owner asked for read-write; this is part of this build)
 
 ### Who may write
-The volume is read-write when the account may add to the drive (the same test
-the web's upload uses: drive role editor/owner via getFilespaceForWrite, and
-the role's `files.upload` capability), otherwise read-only: the bridge reports
+The volume is read-write when the account may change something there, as
+`/api/space/filespaces` says: each drive's `can` (`upload`, `edit`, `delete`,
+`folders`: drive role editor/owner and the platform role's capability
+together) and `library.can` for the library (the role's own, as the web's
+upload). A server too old to say leaves a drive's editors and owners, and the
+library for an admin only. Otherwise read-only: the bridge reports
 it as `volume.readOnly`, the extension refuses changes with EACCES before
 asking, and the bridge answers 403 to whoever asks anyway. The mount itself is
 never `rdonly` — the role is checked as it is now, so a viewer made an editor
@@ -267,6 +364,31 @@ names, below) on a drive it may only view. Each operation's own capability (file
 files.delete for delete, folders.manage for folders) is enforced by the server
 route; a refusal comes back to Finder as EACCES with the server's sentence in
 the log.
+
+### Names Finder sees, names the server has
+The index shows some folders under names of their own: " (2)" for one that
+differs from another only in case, ":" for a "/". Each folder entry keeps the
+server's path (`MirrorEntry.serverPath`), and the writer sends that, not the
+shown name, to every folder route and as an upload's or move's folder
+(`DriveWriter.serverFolder`). Names Finder makes are NFC; the server stores
+new names NFC and reaches a folder stored decomposed by its composed name.
+
+Nor does the server keep a space at either end of a name: it trims every
+file and folder name (JavaScript's `trim`, lib/folder-ops.js), so "Selects "
+would be "Selects" there. The disk makes it so from the start
+(`DriveEngine.stored`): a name Finder asks for is made as the server will
+keep it, the kernel is told the name it has (`newItemName`, `newName`), and
+names compare without those spaces as they do without case — so Finder's
+next step, still asking for "Selects ", finds "Selects". Made as asked, the
+folder Finder had just made could not be found under that name, and Finder
+stopped the copy: "its name is too long or includes characters that are
+invalid on the destination volume" (folders named in Frame.io, copied from
+Frame.io Drive, often end in a space). macOS's own names are left as they
+are — "Icon\r" is a folder's custom icon, not "Icon" — and an AppleDouble
+`._` name follows its file's. A name the server refuses (400) is EINVAL.
+A folder delete the server refuses because it holds files this account cannot
+see (409 `hidden_files`, nothing deleted) is ENOTEMPTY in Finder; a folder
+that is not there is a 404, ENOENT.
 
 ### Bridge protocol v1 — write endpoints (app side)
 All require the session bearer; all 403 with `{error}` when the volume is
@@ -317,7 +439,10 @@ extension's cached chunks.
   cannot be swapped into another, nor the reverse, so the kind is settled
   before anything is sent: a new job waits 2 s first (UploadQueue.settle),
   long enough for an app's rename-over-the-document to arrive, and an upload
-  already under way as the other kind starts again.
+  already under way as the other kind starts again. It waits beside the
+  others, not in one of the four slots, so a thousand files copied at once
+  settle together and then go as fast as the line takes them, in the order
+  they came.
 - **Nothing is sent twice.** Once the bytes are in storage their key is kept
   with the job, so a retry only records or swaps. `POST /api/files` is not
   idempotent: asked again after a lost answer it says 409, which the queue
@@ -325,7 +450,12 @@ extension's cached chunks.
   (403 `not_issued`: over a day old or used; 409 `moved`, `conflict`,
   `changed`) is traded for a new one and the bytes sent again; new contents
   for a file deleted on the web meanwhile (404) become a file of their own
-  where Finder has them.
+  where Finder has them. Every change to a job is on disk before anything
+  is done about it — a line added to `jobs.log`, with `jobs.json` written
+  whole only once the log outgrows it, at most once a second — the key
+  before the record is asked for. A crash between the two records the key
+  again, and the 409 says done; without the key the bytes would go up under
+  a new one, "name (2)", as a second file.
 - The mirror is updated at once from each response (the delta confirms it
   later), so Finder, the menus and the web page inside the app agree
   immediately.
@@ -347,6 +477,15 @@ extension's cached chunks.
   carry Finder's hidden flag (`UF_HIDDEN`), as on any disk — which is what
   keeps the Time Machine marker at each disk's root
   (`com.apple.timemachine.donotpresent`, no dot to hide it) out of sight.
+- **Finder's -8062** ("an unexpected error occurred") at the end of a copy is
+  its copy engine creating the source folder's `.DS_Store` — last, and
+  exclusively — in a folder where a Finder window showing it has already
+  written one: `File exists` in DesktopServicesHelper's log. It happens on
+  any volume without atomic renames (this one, SMB, exFAT), and more here,
+  where a copy from a slow source (Frame.io Drive) takes minutes. Every file
+  has arrived by then. Finder writes no `.DS_Store` to a volume that is not
+  local once `DSDontWriteNetworkStores` is set (com.apple.desktopservices)
+  and Finder has been relaunched; this volume is not local.
 - **Extended attributes** never leave this Mac. The engine can keep them
   per item (LocalStore), but FSKit never asks it to: OnyxVolume's
   `supportedXattrNames` answers `[]`, which FSKit takes as "limited"
@@ -360,10 +499,17 @@ extension's cached chunks.
   copy of the web's, kept in step with nothing.
 
 ### Keeping them the same
-The app syncs a mounted drive's mirror every 5 s (not 15) while it is
-mounted, and the bridge's `changes` long-poll carries that to the extension,
-which invalidates listings and the kernel's cache for changed files
-(`KernelCacheCoherencyAction.revoke` / `.invalidate`).
+The app syncs a mounted drive's mirror every 5 s while anything is
+happening — a change made here, one the server showed, an upload on its
+way, the Onyx window open — in the last minute; every 30 s after that, and
+every minute once ten have passed with nothing (DriveService.tickPace, one
+timer with a tenth of its wait as tolerance). Drives sync four at a time.
+Each pass sends back the tag of the folder list it holds (`foldersTag`), and
+the server leaves the list out while it still matches (lib/sync-scope.js),
+so a quiet pass is a few hundred bytes. The bridge's `changes` long-poll
+carries each change to the extension, which invalidates listings and the
+kernel's cache for changed files (`KernelCacheCoherencyAction.revoke` /
+`.invalidate`).
 
 A file written here is listed as pending (served from this Mac) until the
 mirror shows that change itself — its id, and an entry at least as new as
@@ -432,7 +578,208 @@ letter in the logo's cyan.
   paste) and is never replaced. One that is removed comes back at the next
   mount, as the disk's own. A new drawing, from a new design or a new colour,
   replaces the old one at the next mount.
+- **It follows the drive while mounted.** A drive given a new colour or name
+  on the web gets its new icon at once, not at its disk's next mount: the app
+  sets it as any app sets an icon (`DiskIcons`, `NSWorkspace.setIcon`, which
+  writes `/.VolumeIcon.icns` through the disk and which Finder shows at
+  once). The drive list that brings the change is asked for again when the
+  menu bar panel opens (if older than 10 s), when Onyx comes forward (30 s)
+  and every five minutes (`AppModel.refreshIfOlder`). The same rule holds:
+  only an icon that is the app's is replaced — the extension's, as drawn now,
+  or the last one set this way, whose bytes are remembered in UserDefaults
+  (`diskIcons`, with the drawing they were of) — so the person's own stays.
+  The volume's name is still the one it mounted with; a renamed drive's disk
+  takes its new name at its next mount.
+- **In Finder's sidebar.** Finder lists a volume under Locations by itself
+  when it arrives as a disk or a server does, and never lists an FSKit
+  volume: its record of every volume it has shown (the Locations list,
+  `com.apple.LSSharedFileList.FavoriteVolumes`) held the owner's external
+  disks, installers and Frame.io Drive's shares, and no Onyx disk. So each
+  disk is added to that list as it mounts (`FinderSidebar`, as Frame.io Drive
+  adds its own) and taken off when it is turned off in Onyx or ejected; one
+  that is only unmounted (quitting, signing out) keeps its place and shows
+  again when it is back. LSSharedFileList is deprecated since macOS 10.11 and
+  still how the list is kept; its "last" position is the sentinel `0x2`,
+  which Swift would retain as an object, so an entry goes after the list's
+  last entry instead.
 - **Not on NFS.** Drives mounted the other way, the rclone NFS mounts in
   `~/Onyx`, keep macOS's generic network-volume icon. macOS reads no Finder
   info over NFSv3: a root's `._.` and a file's `._name` are both ignored (tried
   with rclone's NFS server). Only a disk of its own can carry an icon.
+
+## Activity
+
+The owner asked for a live view of what the drives are moving, like a
+network monitor's: download, read and write, each a figure and a graph —
+and then for it to be always in sight. It is a bar along the foot of the
+Onyx window (`ActivityBar`) with four: **Download** (from storage to this
+Mac), **Upload** (back), **Read** (what apps read from the disks) and
+**Write** (what apps wrote to them), in megabits a second, each over the
+last minute; and, at its end, the window's downloads. Settings › General
+and View › Show Activity hide it (`showsActivityBar` in UserDefaults). The
+menu bar item's panel (`MenuPanel`) shows the same four, as tiles two by
+two, above what is on its way and the drives — each with its disk's icon,
+drawn by the same `DriveIcon` the extension puts on the disk.
+
+- **The extension counts** what only it sees (`TransferMeter`, OnyxFSCore):
+  bytes the engine hands the kernel for a read, bytes a write gives it, and
+  every byte storage sends (`FSBridgeClient.storageGET`, a range asked again
+  included: what the network carried). macOS's own files (`.DS_Store` and
+  the rest) never leave this Mac and are not counted. Reads the kernel
+  answers from its own cache never reach the extension, so neither are they.
+- **It tells the app** about once a second while anything moves:
+  13. `POST /fs/v1/activity` — `{ "read": n, "download": n, "write": n }`,
+      bytes since the last report; a field left out is 0. 200
+      `{ "ok": true }`; 400 for anything that is not that (a negative, or
+      past a tebibyte). Any session reports, a read-only disk's included.
+      `"cache": n` rides along: what the disk's chunk cache holds now, its
+      own running total (`ChunkStore.stats`), sent once as the disk mounts
+      too. Settings › Storage shows it with nothing walked.
+  Counting is a lock and an add on the read path. The first bytes after a
+  quiet spell start one report loop, which ends by itself once a second has
+  passed with nothing new, so an idle disk sends nothing. A report the app
+  does not answer (an older app: 404) is dropped, not retried.
+- **The app adds its own**: what an upload sends (`APIUploadTransport`,
+  each `didSendBodyData`), what fetching an offline copy receives
+  (`FileDownload`) and what the window's downloads receive (`WebDownloads`,
+  looked at once a second while one runs), into `TransferLog` (OnyxKit): a
+  ring of one-second buckets, five minutes long. Adding is a lock and an
+  add; nothing runs to keep it.
+- **The bar and the panel read it** once a second from when bytes start to
+  move until the graphs are flat again, and not at all in between: the first
+  bytes after a quiet second wake the one clock they share
+  (`TransferLog.onWake`, called outside the lock; `AppModel.activity`), which
+  stops itself once the log has been quiet for as long as a graph shows, and
+  when the last view showing the graphs goes (`attach`/`detach`). Always on
+  screen, the bar costs nothing while nothing moves. The same wake keeps
+  Onyx out of App Nap while bytes move, looking every two seconds whether
+  they still do (`WorkActivity.poke`, DriveService), so a disk read or
+  written with the window out of sight is served at full speed.
+  Each graph is its last 60 whole seconds, each averaged with its
+  neighbours, since a disk's once-a-second reports can land two in one
+  second and none in the next. The figure is the average of the last three.
+- **Downloads.** The web's Download buttons are links the web view saves
+  into Downloads (`WebController`, then `WebDownloads`, their delegate).
+  They used to run unseen — the owner clicked a 232 MB video three times and
+  got three copies. Now each shows at the bar's end the moment it is clicked
+  (the newest under way, the rest behind "+2"): its name, how far it has got
+  and how long is left, then Show in Finder once it is done. A click on one
+  already under way shows that one instead of saving it twice. What a
+  download that did not finish wrote is deleted — stopped, failed, or cut
+  short by quitting — since WebKit leaves it under the file's own name,
+  where it would pass for the file; Try Again asks for it afresh.
+- **Not seen:** the rclone NFS mounts in `~/Onyx` (macOS 26 and older, or a
+  disk not yet allowed) read storage themselves; the bar shows nothing of
+  them.
+
+## Thumbnails
+
+The owner: "Thumbnail generation is not happening fast enough" — seen on the
+iPhone, for videos straight from an action cam: 4K at 60 fps, often HEVC,
+hundreds of megabytes to several gigabytes each.
+
+Only a browser made thumbnails: as it uploaded a file, or later, in the
+background, while someone who may change the file had the web open
+(lib/thumbnail-client.js). A file that came another way — copied onto a
+drive in Finder — waited for that, and a browser drawing a frame of a
+multi-gigabyte 4K HEVC master over a presigned link is slow when it works
+at all. The phone only shows thumbnails that exist. So Onyx for Mac makes
+the ones that are missing, exactly as a browser would have made them.
+
+- **Which files.** The browser's rules (lib/thumbnail-client.js), with what
+  this Mac can decode: a video AVFoundation opens, or an image ImageIO
+  decodes — HEIC, TIFF and camera RAW included, which a browser often cannot
+  draw, so they kept their placeholder. It makes them for
+  - each file it uploads (`UploadQueue`), from the bytes still on this disk,
+    the moment the server has the file — a new file, or new contents for one
+    saved over, whose old pictures the server has dropped;
+  - the files of the drives it syncs (in Finder, or kept offline) that have
+    no thumbnail; and a video whose thumbnail may be one of the old 480px
+    ones: it has no smaller sizes, and a look at it (`Poster.isUndersized`)
+    decides. An image's old thumbnail is left to the browser, which remakes
+    it when someone looks at it: an image is read whole to draw it, and a
+    library's worth of photos would be a download of the library. An image
+    over 50 MB is never decoded, as on the web.
+  Only in a drive this account may change (the drive list's `can.edit`); the
+  server checks each file anyway.
+- **Knowing which lack one.** The feed already carries each row's
+  `thumbnailKey`, `thumbSizes` and `posterKey`. The replica keeps three bits
+  of them per file (`ReplicaFile.previews`, `FilePreviews`), not the keys: a
+  hundred thousand files' keys would be megabytes held for one yes or no. A
+  thumbnail made later moves the row's `seq` and nothing Finder lists, so it
+  comes back as `Replica.Diff.previews`, not `updated`: the index is not
+  rebuilt, the disks' long-polls are not woken, and the replica is written
+  with it at most every five minutes (`previewSaveInterval`) — the cursor on
+  disk waits with it, so a relaunch fetches what was not written. A replica
+  saved before the bits existed is fetched again from the start once,
+  beside the tree Finder shows (as after a change of access), and swapped in
+  whole.
+- **Each file** (`ThumbnailWorker`, OnyxKit):
+  1. `GET /api/files/<id>`: still missing? In the bucket? A thumbnail it has
+     now is looked at: an old small one is made again, a newer one kept.
+  2. `GET /api/files/<id>/thumbnail`: a 204 when this account may record
+     one, asked before anything is downloaded or drawn, as the browser asks.
+  3. The frame: `Poster.posterTimes` (a tenth in, at least a second, then a
+     quarter and halfway, then `laterPosterTimes`), passing over a black,
+     white or flat frame (`Poster.isBlank`, the web's luma test on a copy
+     48 pixels wide). AVFoundation reads a presigned link a range at a time,
+     and each moment is taken at the nearest keyframe within half a second,
+     so a try is one frame read and decoded. All blank: no thumbnail, as on
+     the web, rather than a black one kept for good.
+  4. The pictures, at lib/poster.js's sizes (`Poster`, its tables checked
+     against numbers lib/poster.js computed): the large one (a video's
+     player poster, 1920 on the long edge; an image's preview, 2400), the
+     grid thumbnail, then sm and xs, each drawn from the one before and each
+     step at most halving. The decoder draws the first step itself, so a 4K
+     frame is never held at 4K. For a 4K clip: 1920x1080, 1024x576,
+     683x384, 213x120. And the placeholder a tile shows until they load
+     (`Placeholder`, lib/placeholder.js): the smallest again, 24 on its
+     long side (24x14), as a JPEG at the browser's quality. ImageIO's JPEG
+     that small is mostly not picture — Exif and Photoshop segments, a
+     colour profile for anything not drawn in sRGB, and the standard
+     Huffman tables — so `TinyJPEG` writes it again without them, with
+     tables made for its own symbols: the same pixels, some 500–820
+     characters as a data URL where ImageIO's would be 1,100–1,250 once the
+     server had taken the segments off. It is kept only when it decodes to
+     exactly ImageIO's picture. A transparent picture has none (a JPEG would
+     put it on black), and a thumbnail from before placeholders gets none
+     from the Mac: a browser draws that one from the row's smallest picture
+     when its tile comes into view, and the Mac downloads nothing for it.
+  5. `POST /api/files/presign` with `{ thumb, sizes }` and `{ poster }`: the
+     server names the keys. The PUTs carry the type and the Cache-Control it
+     asked for. A sibling or a poster that does not land is left out, as on
+     the web.
+  6. `PUT /api/files/<id>/thumbnail` with `thumbnailKey`, `posterKey`,
+     `thumbSizes`, `media` (width, height, duration) and `placeholder` (its
+     data URL): the server deletes what it replaces and moves the file's
+     `seq`, so the web, the phone and every Mac pick it up as they would a
+     browser's.
+  A file just uploaded skips the first step: it is new, and its bytes are
+  here (a hard link keeps them after the queue lets go of its copy).
+- **Format.** WebP where this Mac's ImageIO can write it (asked at run time,
+  `CGImageDestinationCopyTypeIdentifiers`); JPEG otherwise — the server's
+  other format, and what Safari sends. macOS 27 reads WebP but cannot write
+  it, so today it is JPEG at the web's JPEG quality. A picture with real
+  transparency is left to a browser that writes WebP: JPEG would put it on
+  black.
+- **Pace.** One file at a time, at utility priority, holding only that file's
+  pictures. No polling: the worker is woken by a drive's pass that brought a
+  change (DriveService hands it the pass's diff; a drive opened afresh is
+  looked at whole once) and by an upload finishing. A job has three minutes.
+  What came of each file is kept per account (`ThumbnailLedger`, in
+  Application Support/Onyx/Thumbnails): a failure waits an hour, then twice
+  as long each time up to a week; a file this account may not change, or
+  that cannot be drawn, a week — the browser's own wait; a thumbnail kept,
+  half a year. While one waits, one timer is set for the soonest; with
+  nothing due, nothing runs. A server that does not take a thumbnail from
+  the Mac (the thumbnail route used to take only a browser's session) is
+  asked once, and nothing more is tried until the next sign-in.
+- **The switch.** Settings › General, beside the transcripts: "Make
+  thumbnails on this Mac", on unless turned off. Sign-out and quit stop it;
+  the file in hand is dropped, never half-recorded.
+- **Measured**, a 752 MB 4K60 HEVC clip (100 Mbps, 60 s, its index at the
+  end, as a camera writes it): 0.03–0.14 s from this disk; over a link 80 ms
+  away at 100 Mbit/s, about 0.55 s in five range requests, some 1.3 MB read.
+  Up: about 235 KB of JPEG (grid 52 KB, sm 28 KB, xs 6 KB, poster 150 KB).
+  A placeholder, drawn from the xs: about 0.2 ms, and 370–600 bytes on the
+  photos and clips it was measured on.

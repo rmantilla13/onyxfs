@@ -14,6 +14,9 @@ final class FolderListing {
     }
 
     let route: FolderRoute
+    /// This folder's own node in the place's tree (nil at the top): what
+    /// the server says of it, such as whether its links are this account's.
+    private(set) var current: FolderNode?
     private(set) var subfolders: [FolderNode] = []
     /// What each subfolder holds, as the Files app counts it: its files and
     /// its folders.
@@ -62,15 +65,20 @@ final class FolderListing {
         let mine = generation
         // What is shown stays while a new order or a refresh loads.
         if isEmpty || shown?.key.query != key.query { phase = .loading }
+        let asked = ThumbnailTrace.now
+        ThumbnailTrace.event("folder-open", "folder=\(route.folder)")
         do {
             async let tree = session.folders(in: route.place, refresh: refresh)
             async let page = session.api.listFiles(in: route.place.scope, folder: route.folder,
                                                     query: key.query, sort: sort)
             let (nodes, first) = try await (tree, page)
+            ThumbnailTrace.event("listing", "files=\(first.files.count) ms=\(ThumbnailTrace.ms(since: asked))")
             guard mine == generation else { return }
+            current = route.folder.isEmpty ? nil : nodes.first { $0.folder == route.folder }
             subfolders = Self.subfolders(of: route.folder, in: nodes, matching: key.query)
             itemCounts = Self.itemCounts(subfolders, in: nodes)
             files = first.files
+            ThumbnailPrefetcher.shared.listed(files, by: self)
             cursor = first.cursor
             shown = (key, Date())
             problem = nil
@@ -101,6 +109,7 @@ final class FolderListing {
             // two pages could; it is shown once.
             let known = Set(files.map(\.id))
             files += page.files.filter { !known.contains($0.id) }
+            ThumbnailPrefetcher.shared.listed(files, by: self)
             self.cursor = page.cursor
         } catch {
             guard mine == generation, !Session.isCancel(error) else { return }

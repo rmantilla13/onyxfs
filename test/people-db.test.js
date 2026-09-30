@@ -308,6 +308,57 @@ describeDb('people, sessions and the admin tables (database)', () => {
     assert.equal(refused.error.status, 403);
   });
 
+  // A token row's version: xmin is the transaction that wrote it, so any
+  // UPDATE moves it — even one that sets the same value again.
+  const tokenRow = async (id) => (await db.sql`SELECT last_used_at, xmin::text AS version FROM desktop_tokens WHERE id = ${id}`)[0];
+
+  test('a device’s last use is written at most once every few minutes', async () => {
+    const p = await person('touch');
+    const token = await db.createDesktopToken({ email: p.email, label: 'Mac' });
+    const minted = await tokenRow(token.id);
+    const row = await db.getDesktopTokenByRaw(token.token);
+    assert.equal(row.lastUsedAt, Number(minted.last_used_at), 'the time comes with the row the guard reads anyway');
+
+    // Used a moment ago (minted): nothing is sent, and the WHERE would write nothing if it were.
+    assert.equal(await db.touchDesktopToken(token.id, { lastUsedAt: row.lastUsedAt }), false);
+    assert.equal(await db.touchDesktopToken(token.id), false, 'the WHERE alone holds too');
+    assert.equal((await tokenRow(token.id)).version, minted.version, 'the row was not written');
+
+    // Past the window: written once. A second instance that read the same
+    // older time writes nothing.
+    const earlier = Date.now() - db.DESKTOP_TOKEN_TOUCH_MS - 60_000;
+    await db.sql`UPDATE desktop_tokens SET last_used_at = ${earlier} WHERE id = ${token.id}`;
+    assert.equal(await db.touchDesktopToken(token.id, { lastUsedAt: earlier }), true);
+    const touched = await tokenRow(token.id);
+    assert.ok(Number(touched.last_used_at) > earlier);
+    assert.equal(await db.touchDesktopToken(token.id, { lastUsedAt: earlier }), false);
+    assert.equal((await tokenRow(token.id)).version, touched.version);
+
+    // Never recorded: written.
+    await db.sql`UPDATE desktop_tokens SET last_used_at = NULL WHERE id = ${token.id}`;
+    assert.equal(await db.touchDesktopToken(token.id, { lastUsedAt: null }), true);
+  });
+
+  test('the desktop guard records last use when it is due, not on every request', async () => {
+    const p = await person('guard-touch');
+    const token = await db.createDesktopToken({ email: p.email });
+    const req = () => new Request('http://localhost/api/space/filespaces', { headers: { authorization: `Bearer ${token.token}` } });
+    const minted = await tokenRow(token.id);
+    for (let i = 0; i < 3; i++) assert.ok(!(await guard.requireDesktopAuth(req())).error);
+    assert.equal((await tokenRow(token.id)).version, minted.version, 'three requests inside the window, and no write');
+
+    const earlier = Date.now() - db.DESKTOP_TOKEN_TOUCH_MS - 60_000;
+    await db.sql`UPDATE desktop_tokens SET last_used_at = ${earlier} WHERE id = ${token.id}`;
+    assert.ok(!(await guard.requireDesktopAuth(req())).error);
+    // The write is fire-and-forget, after the answer: wait for it.
+    let last = earlier;
+    for (let i = 0; i < 50 && last <= earlier; i++) {
+      last = Number((await tokenRow(token.id)).last_used_at);
+      if (last <= earlier) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(last > earlier, 'the first request past the window records it');
+  });
+
   test('a legacy full-role holder lists only the drives they are a member of', async () => {
     const p = await person('legacy', { roleId: 'admin' });
     const mine = await db.createFilespace({ name: `Mine ${T}`, bucket: 'b', prefix: `mine-${T}`, createdBy: ADMIN });

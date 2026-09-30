@@ -39,6 +39,71 @@ import Testing
         #expect(try await engine.read(local.id, at: 0, count: 100) == Data("local".utf8))
     }
 
+    /// The Activity window's figures end to end: what the engine read and
+    /// wrote, and what its client fetched from storage, reach the app for
+    /// this drive about a second later (TransferMeter → POST /fs/v1/activity).
+    @Test func whatADiskMovesReachesTheApp() async throws {
+        let server = Server()
+        let take = Pattern.bytes(3 << 20)
+        try await server.add("/Take 1.mov", take)
+        let mount = try await Mount(server)
+        defer { mount.remove() }
+        let heard = Tally()
+        mount.app.onActivity { scope, moved in heard.add(scope, moved) }
+
+        let engine = mount.engine
+        let file = try await engine.lookup("Take 1.mov", in: DriveEngine.rootID)
+        var read = 0
+        while read < take.count {
+            read += try await engine.read(file.id, at: Int64(read), count: 1 << 20).count
+        }
+        let notes = try await engine.create("Notes.txt", in: DriveEngine.rootID, isDirectory: false)
+        try await engine.beginWriting(notes.id, truncating: false)
+        _ = try await engine.write(notes.id, at: 0, data: Data("hello world".utf8))
+        try await engine.finishWriting(notes.id)
+
+        let expected = FSActivity(read: Int64(take.count), download: Int64(take.count), write: 11)
+        let deadline = ContinuousClock.now + .seconds(5)
+        while heard.total != expected, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(heard.total == expected)
+        #expect(heard.scopes == [Self.scope])
+    }
+
+    /// What the disk's streaming cache holds reaches the app with each
+    /// report, and once as it mounts, from the cache's own running total:
+    /// Settings shows it with nothing walked.
+    @Test func whatADisksCacheHoldsReachesTheApp() async throws {
+        let server = Server()
+        let take = Pattern.bytes(3 << 20)
+        try await server.add("/Take 1.mov", take)
+        let mount = try await Mount(server)
+        defer { mount.remove() }
+        let heard = Tally()
+        mount.app.onActivity { scope, moved in heard.add(scope, moved) }
+        // As it mounts: nothing moved, only the figure.
+        try await mount.client.activity(.init())
+        #expect(heard.cache == 0 && heard.total == FSActivity())
+
+        let engine = mount.engine
+        let file = try await engine.lookup("Take 1.mov", in: DriveEngine.rootID)
+        var read = 0
+        while read < take.count {
+            read += try await engine.read(file.id, at: Int64(read), count: 1 << 20).count
+        }
+        // The report comes about a second after the bytes moved.
+        var held: Int64 = 0
+        let deadline = ContinuousClock.now + .seconds(5)
+        repeat {
+            held = await mount.store.stats().bytes
+            if held > 0, heard.cache == held { break }
+            try await Task.sleep(for: .milliseconds(50))
+        } while ContinuousClock.now < deadline
+        #expect(held > Int64(take.count), "every byte read is cached, with its digests")
+        #expect(heard.cache == held)
+    }
+
     @Test func theDrivesIconIsOnTheDisk() async throws {
         let server = Server()
         try await server.add("/Readme.md", Data("hello".utf8))
@@ -99,6 +164,28 @@ import Testing
         #expect(try await engine.read(cut.id, at: 6, count: 50) == Data("world".utf8))
     }
 
+    /// A folder from Frame.io Drive named with a space at its end, copied in
+    /// by Finder. The server keeps names without one (as `Server` does here),
+    /// so the disk makes it without one, and Finder, which goes on asking for
+    /// it with the space, finds it — and what it copies into it.
+    @Test func aFolderWhoseNameEndsInASpaceIsCopiedIn() async throws {
+        let server = Server()
+        let mount = try await Mount(server)
+        defer { mount.remove() }
+        let engine = mount.engine
+        let made = try await engine.create("0065_Enraged:PaidMedia ", in: DriveEngine.rootID, isDirectory: true)
+        #expect(made.name == "0065_Enraged:PaidMedia")
+        let folder = try await engine.lookup("0065_Enraged:PaidMedia ", in: DriveEngine.rootID)
+        #expect(folder.id == made.id)
+        let cut = try await engine.create("cut.mov ", in: folder.id, isDirectory: false)
+        try await engine.beginWriting(cut.id, truncating: false)
+        _ = try await engine.write(cut.id, at: 0, data: Data("frames".utf8))
+        try await engine.finishWriting(cut.id)
+        #expect(await server.calls == ["mkdir /0065_Enraged:PaidMedia", "write /0065_Enraged:PaidMedia/cut.mov 6"])
+        #expect(try await engine.children(of: folder.id).map(\.name) == ["cut.mov"])
+        #expect(try await engine.read(cut.id, at: 0, count: 50) == Data("frames".utf8))
+    }
+
     /// A viewer's drive: the engine refuses before asking, and the bridge
     /// refuses whoever asks anyway.
     @Test func aViewersDriveIsReadOnlyAllTheWay() async throws {
@@ -147,11 +234,36 @@ import Testing
 
 // MARK: - The pieces
 
+/// What the app heard from its disks: the sum, and for which drives.
+final class Tally: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sum = FSActivity()
+    private var heardFrom: Set<String> = []
+    private var cached: Int64?
+
+    func add(_ scope: String, _ moved: FSActivity) {
+        lock.withLock {
+            sum.read += moved.read
+            sum.download += moved.download
+            sum.write += moved.write
+            heardFrom.insert(scope)
+            if let cache = moved.cache { cached = cache }
+        }
+    }
+
+    var total: FSActivity { lock.withLock { sum } }
+    var scopes: Set<String> { lock.withLock { heardFrom } }
+    /// What the last report said the disk's cache holds.
+    var cache: Int64? { lock.withLock { cached } }
+}
+
 /// One drive mounted: the app's bridge serving `server`'s drive, and the
 /// extension's engine connected to it with a real ticket.
 struct Mount {
     let app: FSBridge
     let drive: Drive
+    let client: FSBridgeClient
+    let store: ChunkStore
     let bridge: ClientBridge
     let engine: DriveEngine
     let dir: URL
@@ -169,8 +281,11 @@ struct Mount {
 
         let ticket = app.sessions.issueTicket(for: RoundTripTests.scope)
         let url = URL(string: "onyxfs-drive://127.0.0.1:\(port)/\(RoundTripTests.scope)?ticket=\(ticket)&name=Client%20Deliverables&v=1")!
-        let client = try await FSBridgeClient.connect(to: try FSMountResource(url: url), configuration: Loopback.configuration)
-        let store = try ChunkStore(directory: dir.appendingPathComponent("chunks"), limitBytes: client.session.cacheLimitBytes)
+        client = try await FSBridgeClient.connect(to: try FSMountResource(url: url), configuration: Loopback.configuration)
+        store = try ChunkStore(directory: dir.appendingPathComponent("chunks"), limitBytes: client.session.cacheLimitBytes)
+        // As EngineFactory does: the cache's running total rides along with
+        // each report.
+        client.reportsCache { [store] in await store.stats().bytes }
         let local = try LocalStore(directory: dir.appendingPathComponent("local"))
         // As EngineFactory does, before anything is listed.
         if let icon = try await client.volumeIcon() { try await local.placeVolumeIcon(icon) }
@@ -280,7 +395,7 @@ actor Server: FSWriteTarget {
 
     func makeFolder(path: String) async throws {
         calls.append("mkdir \(path)")
-        folders.append(String(path.dropFirst()))
+        folders.append(Self.kept(String(path.dropFirst())))
         await publish()
     }
 
@@ -336,9 +451,17 @@ actor Server: FSWriteTarget {
         await drive?.show(MirrorIndex(replica))
     }
 
+    /// As the server stores a path: each name without spaces at its ends
+    /// (lib/folder-ops.js cleanFolder, and file names on the way in).
     static func split(_ path: String) -> (folder: String, name: String) {
-        let parts = path.split(separator: "/").map(String.init)
+        let parts = kept(path).split(separator: "/").map(String.init)
         return (parts.dropLast().joined(separator: "/"), parts.last ?? "")
+    }
+
+    static func kept(_ path: String) -> String {
+        path.split(separator: "/", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .joined(separator: "/")
     }
 
     static func item(_ id: String, _ name: String, in folder: String, size: Int64, version: Int, updated: Int64) -> FileItem {

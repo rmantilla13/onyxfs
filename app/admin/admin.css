@@ -383,6 +383,10 @@ dialog.dialog-sheet > .dialog-foot { flex: none; border-top: 1px solid var(--lin
 .attention-item > .check-glyph { align-self: start; margin-top: 1px; }
 .attention-title { font-weight: 500; overflow-wrap: anywhere; }
 .attention-detail { margin-top: 2px; overflow-wrap: anywhere; }
+/* A fix that can be made on the spot, then the link to look closer. */
+.attention-actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; justify-content: flex-end; }
+/* The drives a confirm will change, by name. */
+.admin-name-list { margin: 0; padding-left: var(--s5); display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
 .attention-clear { margin: 0; display: flex; align-items: center; gap: var(--s2); }
 .attention-foot { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); margin: var(--s3) 0 0; }
 
@@ -406,6 +410,36 @@ dialog.dialog-sheet > .dialog-foot { flex: none; border-top: 1px solid var(--lin
 .dup-scan-text { flex: 1 1 auto; min-width: 0; }
 .dup-scan-text .admin-note { margin-top: var(--s1); }
 
+/* ── Prices ─────────────────────────────────────────────────────────────── */
+
+.price-facts { margin-bottom: var(--s3); }
+.price-buckets { display: flex; flex-direction: column; gap: 2px; }
+.price-clear { display: block; margin-top: var(--s2); }
+.price-edit { border-top: 1px solid var(--line); padding-top: var(--s2); }
+.price-stale { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.price-stale > li { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap; font-size: var(--t-sm); }
+
+/* ── Previews ───────────────────────────────────────────────────────────── */
+
+.preview-other { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s3); }
+.preview-other .admin-note { margin-top: 2px; max-width: 72ch; }
+.preview-modes { display: flex; flex-direction: column; gap: var(--s2); min-width: 0; margin: 0; padding: 0; border: 0; }
+.preview-modes > legend { padding: 0; margin-bottom: var(--s1); }
+.preview-run { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+.preview-run-head { margin: 0; overflow-wrap: anywhere; }
+.preview-counts { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s5); margin: 0; }
+.preview-counts > div { display: flex; flex-direction: column; gap: 2px; }
+.preview-counts dt { color: var(--muted); font-size: var(--t-sm); }
+.preview-counts dd { margin: 0; font-size: var(--t-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.preview-now { margin: 0; overflow-wrap: anywhere; }
+.preview-now-name { font-weight: 500; }
+.preview-reasons { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s1); }
+.preview-reasons summary { overflow-wrap: anywhere; }
+.preview-failed { color: var(--danger); }
+.preview-names { margin: 0; padding-left: var(--s5); display: flex; flex-direction: column; gap: 2px; font-size: var(--t-sm); min-width: 0; }
+.preview-names a { display: block; max-width: 100%; }
+.preview-names a:hover { text-decoration: underline; text-underline-offset: 2px; }
+
 /* ── Backend ────────────────────────────────────────────────────────────── */
 
 .admin-status-line { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin: 0; }
@@ -428,7 +462,7 @@ dialog.dialog-sheet > .dialog-foot { flex: none; border-top: 1px solid var(--lin
   .stat-value { font-size: var(--t-xl); }
   /* The action goes under its sentence instead of squeezing it. */
   .attention-item { grid-template-columns: 22px minmax(0, 1fr); align-items: start; row-gap: var(--s2); }
-  .attention-item > .btn { grid-column: 2; justify-self: start; }
+  .attention-item > .attention-actions { grid-column: 2; justify-content: flex-start; }
   /* Read the reason before the buttons that answer it. */
   .request-body { order: 2; }
   .request-actions { order: 3; justify-content: flex-start; }

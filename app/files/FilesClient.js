@@ -12,6 +12,7 @@ import FileList from '@/app/components/ui/FileList';
 import FilterPanel, { ActiveFilters, countActive } from '@/app/components/ui/FilterPanel';
 import InfoDialog from '@/app/components/ui/InfoDialog';
 import ShareDialog from '@/app/components/ShareDialog';
+import { useDownloadAs } from '@/app/components/download/DownloadAs';
 import { DriveList, DriveMembersDialog } from '@/app/components/Drives';
 import NewDriveDialog from '@/app/components/drives/NewDriveDialog';
 import { useDeleteDrive } from '@/app/components/drives/DeleteDriveConfirm';
@@ -28,6 +29,8 @@ import {
 } from '@/lib/views';
 import { driveColor } from '@/lib/drive-color';
 import { coverChangeable, effectiveKind } from '@/lib/media';
+import { redrawOffered } from '@/lib/preview-jobs';
+import { probedNow } from '@/lib/decode-probe';
 import { isReviewableKind } from '@/lib/review';
 import UploadPanel from '@/app/components/ui/UploadPanel';
 import { useToast } from '@/app/components/ui/Toast';
@@ -38,10 +41,13 @@ import { MenuItem, MenuSeparator, MenuLabel } from '@/app/components/ui/Menu';
 import { useContextMenu } from '@/app/components/ui/ContextMenu';
 import useMarquee, { MarqueeRect } from '@/app/components/ui/useMarquee';
 import useMacApp from '@/app/components/useMacApp';
+import OfflineMark from '@/app/components/ui/OfflineMark';
+import { offlineMarks, keptWith } from '@/lib/offline-marks';
 import { canFor, canForSome } from './can-for';
 import { fileKey, folderKey, parseKey } from '@/lib/selection';
 import FolderDrop, { DRAG_FILES, DRAG_FOLDER, startFolderDrag } from './FolderDrop';
 import StarredFolders from './StarredFolders';
+import DragLayer, { beginDrag, paneDrop } from './DragPreview';
 import { FolderTiles, FolderRows, MAX_TILES } from './FolderItems';
 import FilesHeader from './FilesHeader';
 import FilesToolbar, { MoreMenu } from './FilesToolbar';
@@ -54,6 +60,8 @@ import {
   folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, folderStats, folderSummaries,
 } from '@/lib/folder-ops';
 import Icon from '@/app/components/ui/Icon';
+import { startActivity, countOf } from '@/lib/activity';
+import { readNdjson, isNdjson } from '@/lib/ndjson';
 
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
@@ -105,6 +113,8 @@ const LAYOUT_CHOICES = [
 
 // What a view filtered to kinds of file calls them, for its empty state.
 const KIND_WORDS = { image: 'images', video: 'videos', audio: 'audio files', doc: 'documents', other: 'other files' };
+// A file's type as its card says it where there is no picture ("PDF").
+const kindLabel = (f) => deriveAuto(f).format || f.kind;
 
 // What a drag-to-select may not start on: anything with a press of its own.
 const MARQUEE_SKIP = [
@@ -195,9 +205,13 @@ async function fetchListing({ filespaceId, folder, query, kinds, sort, flat = fa
  * `initialLocal`, and `initialLegacy` — the grid/list choice kept before
  * there were views); `views` the person's saved views they can still see;
  * `initialQuery` a search from the URL (?q=).
+ *
+ * `folderLinks` says the role may make a folder's links (public and password
+ * links: shares.public); without it the folder Share dialog only lists and
+ * revokes. The route decides again, the folder's drive and grants included.
  */
 export default function FilesClient({
-  flags, canWrite, reviewLinks = false, schema: initialSchema, filespaceId, isAdmin = false,
+  flags, canWrite, reviewLinks = false, folderLinks = false, schema: initialSchema, filespaceId, isAdmin = false,
   drives = [], initial = null, initialFiltersOpen = false, initialSidebarOpen = true, initialStars = [],
   view: initialViewDef = null, views: initialViews = [], initialLocal = {}, initialLegacy = null, initialQuery = '',
 }) {
@@ -270,6 +284,23 @@ export default function FilesClient({
   const [selected, setSelected] = useState(() => new Set());
   // The Mac app's offline and Finder actions, when running inside it.
   const mac = useMacApp();
+  // What it keeps offline, as marks on the cards, rows, folders and drives
+  // (lib/offline-marks.js). Nothing outside the app, where nothing is kept.
+  const marks = useMemo(
+    () => (mac.inApp ? offlineMarks({ pinned: mac.pinned, pinnedFolders: mac.pinnedFolders, driveId: filespaceId, drives }) : null),
+    [mac.inApp, mac.pinned, mac.pinnedFolders, filespaceId, drives],
+  );
+  const keptFolder = useCallback((path) => !!marks?.folder(path).kept, [marks]);
+  const keptDrive = useCallback((id) => !!marks?.drive(id), [marks]);
+  const keptFile = useCallback((f) => !!marks?.file(f), [marks]);
+  // "Kept offline with “Footage”" for a file its folder keeps, naming the
+  // drive when that is what is kept; null for one kept on its own.
+  const fileKeptWords = useCallback((f) => {
+    const by = marks?.fileKeptBy(f);
+    if (!by) return null;
+    const root = by.scope === 'library' ? 'All files' : drives.find((d) => `drive.${d.id}` === by.scope)?.name;
+    return keptWith(by.path, root);
+  }, [marks, drives]);
   const [uploadSnap, setUploadSnap] = useState(null);
   const [dragging, setDragging] = useState(false);
   // The facet filters live in a panel under the toolbar, open only while
@@ -284,8 +315,9 @@ export default function FilesClient({
   const [managingViews, setManagingViews] = useState(false);
   // What "Get info" is showing, if anything (InfoDialog).
   const [info, setInfo] = useState(null);
-  // The file the Share dialog is open for.
+  // The file the Share dialog is open for — or the folder (its path here).
   const [sharing, setSharing] = useState(null);
+  const [sharingFolder, setSharingFolder] = useState(null);
   // The video whose cover is being changed (CoverDialog).
   const [covering, setCovering] = useState(null);
   // Drives: the New drive dialog, and the drive whose members are open.
@@ -301,6 +333,8 @@ export default function FilesClient({
   const { prompt, promptElement } = usePrompt();
   const { pick, pickerElement } = useFolderPicker();
   const { openMenu, contextMenuElement } = useContextMenu();
+  // Download as… — another format or size (app/components/download/).
+  const downloadAs = useDownloadAs();
 
   const inputRef = useRef(null);
   const folderInputRef = useRef(null);
@@ -890,6 +924,9 @@ export default function FilesClient({
         filespaceId: live.current.filespaceId,
         resumeId: item.resumeId,
         ...opts,
+        // A file is recorded without waiting long for its previews; one that
+        // lands afterwards comes here, onto its tile if it is on screen.
+        onPreview: (f) => setFiles((prev) => prev.map((x) => (x.id === f.id ? mergeBackfilled(x, f) : x))),
       });
       // New tiles appear while the rest of the batch is still going, a
       // refresh every second or so rather than one per file.
@@ -924,6 +961,17 @@ export default function FilesClient({
     const warn = (e) => { e.preventDefault(); e.returnValue = ''; };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
+  }, [uploadSnap?.running]);
+
+  // In Onyx for Mac, the app hears while files are going up, and stays out
+  // of App Nap meanwhile: with its window closed they would slow to a crawl.
+  const tellMac = mac.uploading;
+  useEffect(() => {
+    if (!uploadSnap?.running) return undefined;
+    tellMac(true);
+    return () => tellMac(false);
+  // Only as the queue starts and stops: `mac` is new each render, what it calls is not.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uploadSnap?.running]);
 
   // `entries` are [{ file, dir }]; `dir` is relative to the current folder, so
@@ -966,6 +1014,11 @@ export default function FilesClient({
     e.preventDefault();
     dragDepth.current = 0;
     setDragging(false);
+    // A move let go on the page of a folder it sprang open, anywhere but
+    // on a folder of its own, goes into that folder — as a drop in a Finder
+    // window does (DragPreview).
+    const into = paneDrop();
+    if (into != null) { onTreeDrop(into, e); return; }
     if (!e.dataTransfer?.files?.length) return;
     if (!canWrite) { toast.error('Your role can view files here but not upload them.'); return; }
     // Taken synchronously: the DataTransfer is emptied once this returns.
@@ -989,10 +1042,26 @@ export default function FilesClient({
       confirmLabel: 'Remove',
     });
     if (!ok) return;
-    // The server decides trash-vs-purge from its own flag state.
-    const results = await Promise.all(ids.map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' })));
-    const failed = results.filter((r) => !r.ok).length;
+    // Gone from the page at once, rather than when the last answer is in: a
+    // large selection on a slow line still takes a moment, and nothing here
+    // needs to wait for it. One that could not be removed is back with the
+    // reload below, and the toast says how many.
+    const gone = new Set(ids);
+    setFiles((prev) => prev.filter((f) => !gone.has(f.id)));
     setSelected((s) => { const next = new Set(s); ids.forEach((id) => next.delete(id)); return next; });
+    // The server decides trash-vs-purge from its own flag state.
+    const task = startActivity({
+      title: `Removing ${one ? `“${one.name}”` : `${n.toLocaleString()} files`}`,
+      done: 0, total: n, detail: countOf(0, n, 'files'),
+    });
+    let finished = 0;
+    const results = await Promise.all(ids.map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' }).catch(() => null).then((r) => {
+      finished++;
+      task.update({ done: finished, detail: countOf(finished, n, 'files') });
+      return r;
+    })));
+    task.end();
+    const failed = results.filter((r) => !r?.ok).length;
     load();
     loadFolders();
     if (failed) toast.error(`${failed} of ${n} could not be removed.`);
@@ -1058,8 +1127,83 @@ export default function FilesClient({
     return notes.join(' ');
   };
 
+  // A folder rename or move, in as many calls as it takes: for a big folder
+  // the route copies what it can in one call and answers 202 `more`, and the
+  // next call carries on from the copies already made (app/api/files/folders
+  // PATCH, `resumable`). Each call streams its steps as it goes (`progress`,
+  // lib/ndjson.js) to onProgress({ phase, done, total }). A call cut off
+  // part-way is made again — its copies were noted, so none is made twice —
+  // unless it had got as far as the rename itself: then only tidying was
+  // left, and the move is done. Resolves { ok, status, body } for the answer.
+  const patchFolder = async (payload, onProgress) => {
+    let cuts = 0;
+    for (let round = 0; round < 200; round++) {
+      if (cuts) await new Promise((wake) => setTimeout(wake, 1000 * cuts));
+      let r;
+      try {
+        r = await fetch('/api/files/folders', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ...payload, filespaceId: fsBody, resumable: true, progress: true }),
+        });
+      } catch {
+        if (++cuts <= 3) continue;
+        return { ok: false, status: 0, body: { error: 'Could not reach Onyx. Check the connection, then try again: the move carries on where it stopped.' } };
+      }
+      if (!isNdjson(r)) {
+        const body = await r.json().catch(() => ({}));
+        return { ok: r.ok, status: r.status, body };
+      }
+      let renamed = false;
+      const answer = await readNdjson(r, (line) => {
+        if (line.phase === 'tidy') renamed = true;
+        onProgress?.(line);
+      });
+      if (!answer) {
+        if (renamed) return { ok: true, status: 200, body: { from: payload.from, to: payload.to } };
+        if (++cuts <= 3) continue;
+        return { ok: false, status: 504, body: { error: 'The move keeps being cut off. Try again: it carries on where it stopped.' } };
+      }
+      const { status, body = {} } = answer;
+      if (status === 202 && body.more) {
+        cuts = 0;
+        onProgress?.({ phase: 'copy', done: body.copied, total: body.total });
+        continue;
+      }
+      return { ok: status >= 200 && status < 300, status, body };
+    }
+    return { ok: false, status: 504, body: { error: 'The folder is taking too long to move. Try again: it carries on where it stopped.' } };
+  };
+
+  // A folder move or rename in the activity panel (lib/activity.js): the
+  // step it is on, and how far the copying — the part that takes the time —
+  // has got. `step` is patchFolder's onProgress.
+  const folderTask = (title) => {
+    const task = startActivity({ title, detail: 'Starting…' });
+    let copying = null;
+    return {
+      step: ({ phase, done, total }) => {
+        if (phase === 'check') task.update({ detail: `Checking ${countOf(done, total, 'files')}`, done: copying?.done ?? null, total: copying?.total ?? null });
+        else if (phase === 'copy') { copying = { done, total }; task.update({ detail: `Copying ${countOf(done, total, 'files')}`, done, total }); }
+        else if (phase === 'catalog') task.update({ detail: 'Updating the library…', done: 1, total: 1 });
+        else if (phase === 'tidy') task.update({ detail: `Removing the originals · ${countOf(done, total)}`, done: 1, total: 1 });
+      },
+      end: () => task.end(),
+    };
+  };
+
+  // Files the library doesn't list are already where the folder is going
+  // (409 `occupied`) — most likely left by an earlier move of it that
+  // stopped before it finished. Whether to replace them is the person's call.
+  const replaceOccupied = (body) => confirm({
+    title: `Replace ${body.occupied === 1 ? 'a file' : `${body.occupied.toLocaleString()} files`} already in “${baseName(body.to)}”?`,
+    body: `${body.occupied === 1 ? 'A file is' : `${body.occupied.toLocaleString()} files are`} already stored at “${body.to}” but not in the library — most likely left there by an earlier move of this folder that didn't finish. Replacing ${body.occupied === 1 ? 'it' : 'them'} with the files being moved finishes the move.`,
+    confirmLabel: 'Replace and move',
+  });
+
   const renameFolderUI = async (path) => {
     let result = null;
+    let occupied = null;
     const name = await prompt({
       title: 'Rename folder',
       label: 'Name',
@@ -1068,18 +1212,24 @@ export default function FilesClient({
       validate: folderNameProblem,
       submit: async (next) => {
         if (next === baseName(path)) return null;
-        const r = await fetch('/api/files/folders', {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ from: path, to: joinFolder(parentOf(path), next), filespaceId: fsBody }),
-        });
-        const body = await r.json().catch(() => ({}));
-        if (!r.ok) return body.error || `Could not rename the folder (HTTP ${r.status}).`;
+        const task = folderTask(`Renaming “${baseName(path)}” to “${next}”`);
+        const { ok, status, body } = await patchFolder({ from: path, to: joinFolder(parentOf(path), next) }, task.step).finally(task.end);
+        // Asked once this dialog has closed.
+        if (body.code === 'occupied') { occupied = body; return null; }
+        if (!ok) return body.error || `Could not rename the folder (HTTP ${status}).`;
         result = body;
         return null;
       },
     });
-    if (name == null || !result) return;
+    if (name == null) return;
+    if (occupied) {
+      if (!(await replaceOccupied(occupied))) return;
+      const task = folderTask(`Renaming “${baseName(path)}” to “${name}”`);
+      const { ok, status, body } = await patchFolder({ from: path, to: occupied.to, replace: true }, task.step).finally(task.end);
+      if (!ok) { toast.error(body.error || `Could not rename the folder (HTTP ${status}).`); return; }
+      result = body;
+    }
+    if (!result) return;
     followFolder(path, result.to);
     const note = describeRename(result);
     note ? toast.error(`Renamed to “${name}”. ${note}`) : toast.success(`Renamed to “${name}”.`);
@@ -1088,16 +1238,19 @@ export default function FilesClient({
   const moveFolderTo = async (path, dest) => {
     const to = joinFolder(dest, baseName(path));
     if (to === path || isWithin(dest, path)) return;
-    const r = await fetch('/api/files/folders', {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ from: path, to, filespaceId: fsBody }),
-    });
-    const body = await r.json().catch(() => ({}));
-    if (!r.ok) { toast.error(body.error || `Could not move the folder (HTTP ${r.status}).`); return; }
+    const where = dest || rootName;
+    const run = (extra) => {
+      const task = folderTask(`Moving “${baseName(path)}” to ${where}`);
+      return patchFolder({ from: path, to, ...extra }, task.step).finally(task.end);
+    };
+    let { ok, status, body } = await run();
+    if (body.code === 'occupied') {
+      if (!(await replaceOccupied(body))) return;
+      ({ ok, status, body } = await run({ replace: true }));
+    }
+    if (!ok) { toast.error(body.error || `Could not move the folder (HTTP ${status}).`); return; }
     followFolder(path, to);
     const note = describeRename(body);
-    const where = dest || 'All files';
     note ? toast.error(`Moved “${baseName(path)}” to ${where}. ${note}`) : toast.success(`Moved “${baseName(path)}” to ${where}.`);
   };
 
@@ -1130,15 +1283,26 @@ export default function FilesClient({
     let deleted = 0;
     let failed = 0;
     let lastError = null;
+    const total = sum.files || 0;
+    const task = startActivity({
+      title: `Deleting “${baseName(path)}”`,
+      ...(total ? { done: 0, total, detail: countOf(0, total, 'files') } : {}),
+    });
     // The server trashes a batch per call and says whether there is more.
-    for (let round = 0; round < 1000; round++) {
-      const d = await fetch(`/api/files/folders?name=${encodeURIComponent(path)}${fsQuery}`, { method: 'DELETE' });
-      const body = await d.json().catch(() => ({}));
-      if (!d.ok) { lastError = body.error || `HTTP ${d.status}`; break; }
-      deleted += body.deleted || 0;
-      failed = body.failed || 0;
-      lastError = body.error;
-      if (!body.more || !body.deleted) break;
+    try {
+      for (let round = 0; round < 1000; round++) {
+        const d = await fetch(`/api/files/folders?name=${encodeURIComponent(path)}${fsQuery}`, { method: 'DELETE' }).catch(() => null);
+        if (!d) { lastError = 'Could not reach Onyx.'; break; }
+        const body = await d.json().catch(() => ({}));
+        if (!d.ok) { lastError = body.error || `HTTP ${d.status}`; break; }
+        deleted += body.deleted || 0;
+        failed = body.failed || 0;
+        lastError = body.error;
+        if (total) task.update({ done: Math.min(deleted, total), detail: countOf(Math.min(deleted, total), total, 'files') });
+        if (!body.more || !body.deleted) break;
+      }
+    } finally {
+      task.end();
     }
     if (!failed && !lastError) followStars(path, null);
     if (isWithin(folder, path) && !failed && !lastError) navigate(parentOf(path), { replace: true });
@@ -1157,21 +1321,33 @@ export default function FilesClient({
     let catalogOnly = 0;
     let firstError = null;
     // A big move takes a while — each file is a copy and a delete in the
-    // bucket — so it says it is happening rather than looking stuck.
-    const note = list.length > 20
-      ? toast.push(`Moving ${list.length.toLocaleString()} files to ${dest || rootName}…`, { duration: 0 })
-      : null;
-    await mapLimit(list, MOVE_PARALLEL, async (id) => {
-      const r = await fetch(`/api/files/${id}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ folder: dest, filespaceId: fsBody }),
-      });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) { failed++; firstError ||= body.error || `HTTP ${r.status}`; }
-      else if (body.objectMoved === false) catalogOnly++;
+    // bucket — so it shows how far along it is (lib/activity.js).
+    const one = list.length === 1 ? files.find((f) => f.id === list[0]) : null;
+    const task = startActivity({
+      title: `Moving ${one ? `“${one.name}”` : `${list.length.toLocaleString()} files`} to ${dest || rootName}`,
+      done: 0, total: list.length, detail: countOf(0, list.length, 'files'),
     });
-    if (note) toast.dismiss(note);
+    let finished = 0;
+    try {
+      await mapLimit(list, MOVE_PARALLEL, async (id) => {
+        try {
+          const r = await fetch(`/api/files/${id}`, {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ folder: dest, filespaceId: fsBody }),
+          }).catch(() => null);
+          if (!r) { failed++; firstError ||= 'Could not reach Onyx.'; return; }
+          const body = await r.json().catch(() => ({}));
+          if (!r.ok) { failed++; firstError ||= body.error || `HTTP ${r.status}`; }
+          else if (body.objectMoved === false) catalogOnly++;
+        } finally {
+          finished++;
+          task.update({ done: finished, detail: countOf(finished, list.length, 'files') });
+        }
+      });
+    } finally {
+      task.end();
+    }
     setSelected(new Set());
     load();
     loadFolders();
@@ -1234,16 +1410,40 @@ export default function FilesClient({
     a.remove();
   };
 
+  // Regenerate thumbnail: every preview of one file drawn again from its
+  // original, in this browser (lib/thumbnail-regen.js, loaded when first
+  // used), then folded into its tile. Once at a time per file.
+  const redrawingRef = useRef(new Set());
+  const regenerateThumbnail = async (f) => {
+    if (redrawingRef.current.has(f.id)) return;
+    redrawingRef.current.add(f.id);
+    const task = startActivity({ title: `Redrawing the thumbnail of “${f.name}”` });
+    try {
+      const { redrawThumbnail, mergeRedrawn } = await import('@/lib/thumbnail-regen');
+      const row = await redrawThumbnail(f);
+      setFiles((prev) => prev.map((x) => (x.id === row.id ? mergeRedrawn(x, row) : x)));
+      listingCache.clear();
+      toast.success(`Redrew the thumbnail of “${f.name}”.`);
+    } catch (e) {
+      toast.error(e?.message || 'Could not redraw the thumbnail.');
+    } finally {
+      task.end();
+      redrawingRef.current.delete(f.id);
+    }
+  };
+
   // A card drag carries the whole selection when the card is part of it, and
   // says so: dragging a hundred files under the image of one reads as
-  // dragging one. A card outside the selection is selected on its own and
-  // dragged alone, as in Finder. Stable, reading the selection through a
+  // dragging one — the picture that follows the pointer is a stack with a
+  // count (DragPreview). A card outside the selection is selected on its own
+  // and dragged alone, as in Finder. Stable, reading the selection through a
   // ref, so the memoized cards are not re-rendered for it.
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const onDragFile = useCallback((e, key) => {
     const id = parseKey(key)?.id;
-    const f = filesRef.current.find((x) => String(x.id) === id);
+    const all = filesRef.current;
+    const f = all.find((x) => String(x.id) === id);
     if (!f) return;
     const cur = selectedRef.current;
     const ids = cur.has(f.id) ? [...cur] : [f.id];
@@ -1251,15 +1451,8 @@ export default function FilesClient({
     e.dataTransfer.setData(DRAG_FILES, JSON.stringify(ids));
     e.dataTransfer.setData('text/plain', ids.length === 1 ? f.name : `${ids.length} files`);
     e.dataTransfer.effectAllowed = 'move';
-    if (ids.length > 1 && e.dataTransfer.setDragImage) {
-      const badge = document.createElement('div');
-      badge.className = 'drag-badge';
-      badge.textContent = `Moving ${ids.length.toLocaleString()} files`;
-      document.body.appendChild(badge);
-      e.dataTransfer.setDragImage(badge, 18, 18);
-      // The browser snapshots it during this event; it can go right after.
-      setTimeout(() => badge.remove(), 0);
-    }
+    const moving = new Set(ids);
+    beginDrag(e, { kind: 'files', ids, rows: all.filter((x) => moving.has(x.id)), label: kindLabel });
   }, []);
 
   // Something dropped on a folder in the tree: files or a folder from inside
@@ -1327,6 +1520,34 @@ export default function FilesClient({
     type: 'folder', path, stats: folderStats(folders, path), canOpen: path !== folder,
   });
 
+  // Keeping offline, in the Mac app. A file or folder that a kept folder
+  // already keeps says so instead of offering to keep it: letting go of it
+  // alone would change nothing, since it goes with the folder.
+  const fileOfflineItem = (f) => {
+    const words = fileKeptWords(f);
+    if (words) return { label: words, disabled: true };
+    return mac.pinned.has(f.id)
+      ? { label: 'Remove offline copy', onSelect: () => mac.unpinFiles([f.id], filespaceId) }
+      : { label: 'Keep offline on this Mac', onSelect: () => mac.pinFiles([f.id], filespaceId) };
+  };
+  const filesOfflineItem = (ids) => {
+    const byId = new Map(files.map((x) => [x.id, x]));
+    // Those a folder keeps are its to let go of; only the rest are changed.
+    const own = ids.filter((id) => !(byId.has(id) && fileKeptWords(byId.get(id))));
+    if (!own.length) return { label: 'Kept offline with their folders', disabled: true };
+    const toKeep = own.filter((id) => !mac.pinned.has(id));
+    return toKeep.length
+      ? { label: `Keep ${toKeep.length} ${toKeep.length === 1 ? 'file' : 'files'} offline on this Mac`, onSelect: () => mac.pinFiles(toKeep, filespaceId) }
+      : { label: `Remove ${own.length} offline ${own.length === 1 ? 'copy' : 'copies'}`, onSelect: () => mac.unpinFiles(own, filespaceId) };
+  };
+  const folderOfflineItem = (path) => {
+    const { kept, by } = marks?.folder(path) || { kept: false, by: null };
+    if (kept && by !== path) return { label: keptWith(by, rootName), disabled: true };
+    return kept
+      ? { label: 'Remove offline copies', onSelect: () => mac.pinFolder(path, filespaceId, false) }
+      : { label: 'Keep folder offline on this Mac', onSelect: () => mac.pinFolder(path, filespaceId, true) };
+  };
+
   // Per file, the server's word on what may be done to it (./can-for.js):
   // a Member is not offered Rename on a colleague's file the route refuses.
   // `selNow` is the selection the menu acts on: what was selected, or — for
@@ -1334,16 +1555,13 @@ export default function FilesClient({
   const fileMenu = (f, selNow = selected) => {
     const many = selNow.has(f.id) && selNow.size > 1 ? [...selNow] : null;
     if (many) {
-      const allPinned = many.every((id) => mac.pinned.has(id));
       const canMove = canForSome(many, files, 'edit', { canWrite });
       const canDelete = canForSome(many, files, 'delete', { canWrite });
       return [
         { heading: `${many.length} files selected` },
         { label: `Quick Look ${many.length} items`, hint: 'Space', onSelect: () => quickLook(fileKey(f.id)) },
         { label: 'Get info', hint: `${modKey()}I`, onSelect: () => infoForFiles(many) },
-        mac.inApp && (allPinned
-          ? { label: `Remove ${many.length} offline copies`, onSelect: () => mac.unpinFiles(many, filespaceId) }
-          : { label: `Keep ${many.length} files offline on this Mac`, onSelect: () => mac.pinFiles(many, filespaceId) }),
+        mac.inApp && filesOfflineItem(many),
         canMove && { label: `Move ${many.length} files…`, onSelect: () => moveFilesUI(many) },
         { label: 'Clear selection', onSelect: () => sel.clear() },
         canDelete && '-',
@@ -1357,10 +1575,9 @@ export default function FilesClient({
       { label: 'Quick Look', hint: 'Space', onSelect: () => quickLook(fileKey(f.id)) },
       { label: 'Get info', hint: `${modKey()}I`, onSelect: () => infoForFiles([f.id]) },
       { label: 'Download', onSelect: () => downloadFile(f) },
+      downloadAs.offers(f) && { label: 'Download as…', onSelect: () => downloadAs.open(f) },
       // In the Mac app only: a copy on this Mac that opens without a connection.
-      mac.inApp && (mac.pinned.has(f.id)
-        ? { label: 'Remove offline copy', onSelect: () => mac.unpinFiles([f.id], filespaceId) }
-        : { label: 'Keep offline on this Mac', onSelect: () => mac.pinFiles([f.id], filespaceId) }),
+      mac.inApp && fileOfflineItem(f),
       // The flag is the role's (the page computed it); the route checks both
       // it and write access to this file again.
       flags.shares && can.share && { label: 'Share…', onSelect: () => setSharing(f) },
@@ -1368,11 +1585,18 @@ export default function FilesClient({
       can.edit && { label: 'Rename…', onSelect: () => renameFileUI(f) },
       can.edit && { label: 'Move…', onSelect: () => moveFilesUI([f.id]) },
       can.edit && coverChangeable(f) && { label: 'Change cover…', onSelect: () => setCovering(f) },
+      can.edit && redrawOffered(f, { decodes: probedNow() }) && { label: 'Regenerate thumbnail', onSelect: () => regenerateThumbnail(f) },
       { label: selNow.has(f.id) ? 'Deselect' : 'Select', hint: '⇧Space', onSelect: () => toggleSelect(f) },
       can.delete && '-',
       can.delete && { label: 'Delete…', danger: true, onSelect: () => removeFiles([f.id]) },
     ];
   };
+
+  // A folder's links: offered where its other changes are (`canWrite`), as a
+  // file's are where it may be changed, with the `shares` flag as this role
+  // sees it. The route decides again — the drive's editors and owners, or a
+  // folder grant, and the link kinds.
+  const folderShareItem = (path) => path && flags.shares && canWrite && { label: 'Share…', onSelect: () => setSharingFolder(path) };
 
   const folderMenu = (path) => [
     { heading: baseName(path) },
@@ -1382,9 +1606,8 @@ export default function FilesClient({
     isStarred(path)
       ? { label: 'Remove from Starred', onSelect: () => setStar({ driveId: filespaceId || '', folder: path }, false) }
       : { label: 'Add to Starred', onSelect: () => setStar({ driveId: filespaceId || '', folder: path }, true) },
-    mac.inApp && (mac.folderPinned(path, filespaceId)
-      ? { label: 'Remove offline copies', onSelect: () => mac.pinFolder(path, filespaceId, false) }
-      : { label: 'Keep folder offline on this Mac', onSelect: () => mac.pinFolder(path, filespaceId, true) }),
+    mac.inApp && folderOfflineItem(path),
+    folderShareItem(path),
     canWrite && '-',
     canWrite && { label: 'New folder inside…', onSelect: () => newFolder(path) },
     canWrite && { label: 'Rename…', onSelect: () => renameFolderUI(path) },
@@ -1403,6 +1626,7 @@ export default function FilesClient({
     canWrite && { label: 'Upload folder…', onSelect: () => folderInputRef.current?.click() },
     canWrite && '-',
     { label: 'Get info', hint: at === folder ? `${modKey()}I` : undefined, onSelect: () => infoForFolder(at) },
+    folderShareItem(at),
     at === folder && at && { label: 'Enclosing folder', hint: `${modKey()}↑`, onSelect: goUp },
     ...LAYOUT_CHOICES.filter((l) => l.key !== layout).map((l) => ({ label: `View as ${l.label}`, onSelect: () => changeDisplay({ layout: l.key }) })),
     flags.metadata && { label: filtersOpen ? 'Hide filters' : 'Show filters', onSelect: () => toggleFilters() },
@@ -2008,15 +2232,16 @@ export default function FilesClient({
   // Everything here is stable across renders unless what it describes
   // changes, so a memoized card or row re-renders only for its own file,
   // selection or tab stop — not for a click on its neighbour.
-  const labelFor = useCallback((f) => deriveAuto(f).format || f.kind, []);
+  const labelFor = kindLabel;
   const badgesFor = useCallback((f) => {
     const e = flags.usageRights ? expiryState(f, schema) : null;
     const expiry = e === 'expired' ? <span className="tag tag-danger">Expired</span>
       : e === 'soon' ? <span className="tag tag-warning">Expiring</span>
         : null;
     const review = flags.review ? reviewBadges(f) : null;
-    return expiry || review ? <>{expiry}{review}</> : null;
-  }, [flags.usageRights, flags.review, schema]);
+    const kept = marks?.file(f) ? <OfflineMark title={fileKeptWords(f) || undefined} /> : null;
+    return expiry || review || kept ? <>{expiry}{review}{kept}</> : null;
+  }, [flags.usageRights, flags.review, schema, marks, fileKeptWords]);
   const itemHandlers = useMemo(
     () => ({ ...sel.handlers, dragStart: canWrite ? onDragFile : undefined }),
     [sel.handlers, canWrite, onDragFile],
@@ -2064,6 +2289,15 @@ export default function FilesClient({
   const treeDrop = useRef(null);
   treeDrop.current = (target, e) => onTreeDrop(target, e);
   const onItemDrop = useCallback((target, e) => treeDrop.current(target, e), []);
+  // A move held over a folder opens it (DragPreview): the first folder it
+  // opens is a step in history and the next replace it, and a move let go of
+  // nowhere steps back to the folder it began in.
+  const springOpen = useCallback((path, { replace = false } = {}) => navigate(path, { replace }), [navigate]);
+  const springBack = useCallback(() => window.history.back(), []);
+  // Once a move has sprung a folder open, anywhere on the page that is not a
+  // folder of its own takes it into that folder, as a Finder window does —
+  // not in the Column layout, whose columns are other folders.
+  const paneDropTarget = canWrite && layout !== 'column';
 
   // The phone bar's More: the selection's own menu, as a right-click on it
   // would open.
@@ -2089,7 +2323,18 @@ export default function FilesClient({
       });
       if (!ok) return;
     }
-    ids.forEach((id, i) => setTimeout(() => downloadFile({ id }), i * DOWNLOAD_GAP_MS));
+    // Started a few hundred milliseconds apart, which for a long selection is
+    // a while: the activity panel counts them off.
+    const task = ids.length > 1
+      ? startActivity({ title: `Starting ${ids.length.toLocaleString()} downloads`, done: 0, total: ids.length, detail: countOf(0, ids.length) })
+      : null;
+    let started = 0;
+    ids.forEach((id, i) => setTimeout(() => {
+      downloadFile({ id });
+      started++;
+      task?.update({ done: started, detail: countOf(started, ids.length) });
+      if (started === ids.length) task?.end();
+    }, i * DOWNLOAD_GAP_MS));
     if (sel.selectedFolders.size) toast.success(`Downloading ${ids.length} file${ids.length === 1 ? '' : 's'}. Folders are not downloaded: open one and select its files.`);
   };
 
@@ -2146,6 +2391,8 @@ export default function FilesClient({
       ref={mainRef}
       className={`shell files-main${anySelected ? ' is-selecting' : ''}${sel.selectionMode ? ' is-selection-mode' : ''}${opening && viewersReady && viewers.FileOpening ? ' is-opening' : ''}`}
       style={{ paddingBottom: 'var(--files-pad-b, 64px)' }}
+      data-drop-target={paneDropTarget ? folder : undefined}
+      data-drop-pane={paneDropTarget ? '' : undefined}
       onDragOver={(e) => e.preventDefault()}
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
@@ -2176,7 +2423,8 @@ export default function FilesClient({
       )}
 
       <div className={`files-layout${sidebarOpen ? '' : ' is-collapsed'}`}>
-        <aside id="files-sidebar" className="files-sidebar" aria-label="Drives and folders">
+        {/* data-drop-lane: a dragged picture hangs beside the tree, not over its folders (DragPreview). */}
+        <aside id="files-sidebar" className="files-sidebar" aria-label="Drives and folders" data-drop-lane="">
           <DriveList
             drives={drives}
             usage={driveUsage}
@@ -2186,6 +2434,7 @@ export default function FilesClient({
             canCreate={isAdmin}
             onOpen={openDrive}
             onNew={() => setNewDrive(true)}
+            keptDrive={marks ? keptDrive : undefined}
           />
           <StarredFolders
             stars={stars}
@@ -2201,7 +2450,7 @@ export default function FilesClient({
             <Section title={activeDrive ? `Folders in ${activeDrive.name}` : 'Folders'}>
               <div className="folder-list edge-scroll">
                 <FolderDrop target="" enabled={canWrite} onDrop={onTreeDrop}>
-                  <FolderLink active={!folder} onClick={() => navigate('')} path=""><span className="folder-name">{rootName}</span></FolderLink>
+                  <FolderLink active={!folder} onClick={() => navigate('')} path=""><span className="folder-name">{rootName}</span>{keptFolder('') && <OfflineMark size={12} />}</FolderLink>
                 </FolderDrop>
                 <FolderTree
                   folders={folders}
@@ -2211,6 +2460,7 @@ export default function FilesClient({
                   canWrite={canWrite}
                   onDrop={onItemDrop}
                   storageKey={`onyx.tree.open:${filespaceId || 'all'}`}
+                  keptFolder={marks ? keptFolder : undefined}
                 />
               </div>
             </Section>
@@ -2231,6 +2481,7 @@ export default function FilesClient({
             filespaceId={filespaceId}
             onOpenFile={openFile}
             onShowRecent={viewId === 'recent' ? undefined : () => applyView('recent')}
+            onShare={folderShareItem(folder) ? () => setSharingFolder(folder) : null}
             sidebarOpen={sidebarOpen}
             onToggleSidebar={toggleSidebar}
           />
@@ -2336,6 +2587,8 @@ export default function FilesClient({
                 onMissingThumb={requestThumb}
                 fields={columns}
                 cardSize={display.size}
+                keptFolder={marks ? keptFolder : undefined}
+                keptFile={marks ? keptFile : undefined}
                 emptyText={emptyWords || (noFiles ? 'Nothing here' : 'No files match those filters.')}
               />
             ) : layout === 'list' ? (
@@ -2360,6 +2613,7 @@ export default function FilesClient({
                     canWrite={canWrite}
                     onDrop={onItemDrop}
                     navRef={sel.navRef}
+                    keptFolder={marks ? keptFolder : undefined}
                   />
                 ) : null}
               />
@@ -2379,6 +2633,7 @@ export default function FilesClient({
                       canWrite={canWrite}
                       onDrop={onItemDrop}
                       navRef={sel.navRef}
+                      keptFolder={marks ? keptFolder : undefined}
                     />
                   </div>
                 )}
@@ -2443,6 +2698,7 @@ export default function FilesClient({
         </div>
       )}
       <MarqueeRect store={marquee.store} />
+      <DragLayer folder={folder} onSpring={springOpen} onBack={springBack} onPrefetch={prefetch} />
       {viewersReady && viewers.QuickLook && (
         <viewers.QuickLook
           apiRef={quickLookApi}
@@ -2479,6 +2735,7 @@ export default function FilesClient({
       {promptElement}
       {pickerElement}
       {contextMenuElement}
+      {downloadAs.element}
       {isAdmin && flags.metadata && addingField && (
         <NewFieldDialog open onClose={() => setAddingField(false)} onCreate={createField} />
       )}
@@ -2487,6 +2744,12 @@ export default function FilesClient({
         open={!!sharing}
         onClose={() => setSharing(null)}
         canReview={reviewLinks && !!sharing && isReviewableKind(effectiveKind(sharing))}
+      />
+      <ShareDialog
+        folder={sharingFolder ? { path: sharingFolder, filespaceId } : null}
+        open={!!sharingFolder}
+        onClose={() => setSharingFolder(null)}
+        canCreate={folderLinks}
       />
       {covering && (
         <CoverDialog
@@ -2526,7 +2789,7 @@ export default function FilesClient({
           onClose={() => setNewDrive(false)}
           onCreated={(d) => {
             setNewDrive(false);
-            toast.success(`Made the drive “${d.name}”. Add its members from its menu.`);
+            toast.success(`Made the drive “${d.name}”, with you as its owner. Add its members from its menu.`);
             openDrive(d.id);
             router.refresh();
           }}
@@ -2629,7 +2892,7 @@ function readOpen(key) {
  */
 // Memoized: a click or an arrow in the pane re-renders the page, and the tree
 // of a big library is hundreds of rows that have not changed.
-const FolderTree = memo(function FolderTree({ folders, summaries, selected, onSelect, canWrite, onDrop, storageKey }) {
+const FolderTree = memo(function FolderTree({ folders, summaries, selected, onSelect, canWrite, onDrop, storageKey, keptFolder }) {
   const [open, setOpen] = useState(() => new Set());
   const loaded = useRef(null);
 
@@ -2718,6 +2981,7 @@ const FolderTree = memo(function FolderTree({ folders, summaries, selected, onSe
           onDragStart={canWrite ? (e) => startFolderDrag(e, f.folder) : undefined}
         >
           <span className="folder-name">{f.name}</span>
+          {keptFolder?.(f.folder) && <OfflineMark size={12} />}
           {f.count != null && <span className="muted folder-count">{summaries?.get(f.folder)?.total ?? f.count}</span>}
         </FolderLink>
       </FolderDrop>

@@ -36,8 +36,11 @@ final class TranscriptionService: ObservableObject {
             model?.web.publishOfflineState()
         }
     }
-    /// The file being transcribed now, for the page and the menu bar.
-    @Published private(set) var busyFileId: String?
+    /// The file being transcribed now, for the page and the menu bar. A job
+    /// under way keeps Onyx out of App Nap (WorkActivity).
+    @Published private(set) var busyFileId: String? {
+        didSet { WorkActivity.app.set(.transcripts, busyFileId != nil) }
+    }
     @Published private(set) var busyName: String?
     /// 0…1 across the whole job: download, audio, then speech.
     @Published private(set) var progress: Double = 0
@@ -270,9 +273,9 @@ final class TranscriptionService: ObservableObject {
         let source = folder.appendingPathComponent("source." + fileExtension(name: claim.name, mime: claim.mime))
         let size = Double(claim.size ?? 0)
         do {
-            try await FileDownload.fetch(claim.downloadUrl, to: source) { bytes in
+            try await FileDownload.fetch(claim.downloadUrl, to: source, progress: { bytes in
                 if size > 0 { progress(0.10 * min(1, Double(bytes) / size)) }
-            }
+            })
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as URLError where error.code == .cancelled {

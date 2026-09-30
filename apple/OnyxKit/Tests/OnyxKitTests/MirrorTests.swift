@@ -114,6 +114,20 @@ struct MirrorIndexTests {
         #expect(index.folderCount == 4)
     }
 
+    /// A folder shown under a name of its own keeps the server's, which its
+    /// write routes take (DriveWriter.serverFolder); one shown as the server
+    /// names it has nothing extra.
+    @Test func aNumberedFolderKeepsTheServersPath() {
+        let index = MirrorIndex(replica([
+            item("a", "a.png", in: "Brand/Logos"),
+            item("b", "b.png", in: "brand/logos"),
+        ]))
+        #expect(index.entry(at: "brand (2)")?.apiPath == "brand")
+        #expect(index.entry(at: "brand (2)/logos")?.apiPath == "brand/logos")
+        #expect(index.entry(at: "Brand")?.serverPath == nil)
+        #expect(index.entry(at: "Brand/Logos")?.apiPath == "Brand/Logos")
+    }
+
     @Test func aNewFolderNeverTakesTheNameOfOneThatWasThere() {
         // "PHOTOS" sorts before "Photos" byte for byte, and its file is
         // older (moved in from elsewhere). Neither matters: Photos was here
@@ -424,6 +438,8 @@ private final class MirrorStubServer: @unchecked Sendable {
     private var linkDelay: TimeInterval = 0
     private var refusal: (status: Int, body: String)?
     private var log: [URL] = []
+    /// Pages sent without their folder list: asked for under its own tag.
+    private var leftOut = 0
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var servers: [String: MirrorStubServer] = [:]
@@ -446,6 +462,13 @@ private final class MirrorStubServer: @unchecked Sendable {
     }
     var requests: [URL] { lock.withLock { log } }
     func requests(to path: String) -> [URL] { requests.filter { $0.path == path } }
+    var foldersLeftOut: Int { lock.withLock { leftOut } }
+    /// A parameter of the last delta request.
+    func lastDelta(_ name: String) -> String? {
+        requests(to: "/api/files/delta").last.flatMap {
+            URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == name }?.value
+        }
+    }
 
     func respond(to url: URL) -> (status: Int, body: Data, delay: TimeInterval) {
         lock.withLock {
@@ -455,6 +478,15 @@ private final class MirrorStubServer: @unchecked Sendable {
                 if let refusal { return (refusal.status, Data(refusal.body.utf8), delay) }
                 let cursor = query.first { $0.name == "cursor" }.flatMap { Int64($0.value ?? "") } ?? -1
                 guard let page = pages[cursor] else { return (500, Data(#"{"error":"no page"}"#.utf8), delay) }
+                // As the server does: the list left out when the tag sent
+                // back is still its tag (lib/sync-scope.js foldersTag).
+                let held = query.first { $0.name == "foldersTag" }?.value
+                if let tag = page.foldersTag, held == tag {
+                    leftOut += 1
+                    let lean = DeltaPage(changed: page.changed, deleted: page.deleted, cursor: page.cursor, done: page.done,
+                                         scope: page.scope, folders: nil, foldersTag: tag)
+                    return (200, try! JSONEncoder().encode(lean), delay)
+                }
                 return (200, try! JSONEncoder().encode(page), delay)
             }
             let prefix = "/api/space/files/"
@@ -514,9 +546,9 @@ private struct MirrorStubbedAPI {
 }
 
 private func page(_ changed: [FileItem], deleted: [String] = [], cursor: Int64, done: Bool = true,
-                  scope: String? = "s1", folders: [String]? = []) -> DeltaPage {
+                  scope: String? = "s1", folders: [String]? = [], foldersTag: String? = nil) -> DeltaPage {
     DeltaPage(changed: changed, deleted: deleted.map { Tombstone(id: $0, seq: cursor) }, cursor: cursor,
-              done: done, scope: scope, folders: folders)
+              done: done, scope: scope, folders: folders, foldersTag: foldersTag)
 }
 
 private func temporaryDirectory() -> URL {
@@ -1131,6 +1163,74 @@ struct DriveMirrorTests {
         #expect(last == "30")
     }
 
+    /// A drive's folders come with every pass (`folders=1`), and on a quiet
+    /// pass they were most of what came. The mirror sends back the tag the
+    /// list came with; while the list is the same the server leaves it out,
+    /// and the mirror goes on with the one it has — kept on disk with its
+    /// tag, so a relaunch sends it too.
+    @Test func anUnchangedFolderListIsNotSentAgain() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 10, folders: ["Empty"], foldersTag: "t1"))
+        let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        #expect(stub.server.lastDelta("foldersTag") == nil, "nothing held yet: the list is asked for whole")
+        #expect(stub.server.lastDelta("folders") == "1")
+        #expect(await mirror.index.entry(at: "Empty")?.isFolder == true)
+
+        // The same folders: the tag goes back, the list does not come, and
+        // the empty folder is still there.
+        stub.server.page(at: 10, page([], cursor: 10, folders: ["Empty"], foldersTag: "t1"))
+        #expect(try await mirror.sync().isEmpty)
+        #expect(stub.server.lastDelta("foldersTag") == "t1")
+        #expect(stub.server.foldersLeftOut == 1)
+        #expect(await mirror.index.entry(at: "Empty")?.isFolder == true)
+
+        // A folder made on the web: the list moved on, and comes whole.
+        stub.server.page(at: 10, page([], cursor: 10, folders: ["Empty", "New"], foldersTag: "t2"))
+        #expect(try await mirror.sync().updated == ["folder:New"])
+        #expect(stub.server.lastDelta("foldersTag") == "t1")
+        #expect(stub.server.foldersLeftOut == 1)
+
+        // Kept with the replica: a relaunch sends the tag it has, and keeps
+        // the list it read back.
+        let reopened = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                   account: "me@example.com", api: { stub.api })
+        #expect(try await reopened.sync().isEmpty)
+        #expect(stub.server.lastDelta("foldersTag") == "t2")
+        #expect(stub.server.foldersLeftOut == 2)
+        #expect(await reopened.index.entry(at: "New")?.isFolder == true)
+    }
+
+    /// A fetch from the start — the access changed — holds no list yet, so
+    /// it asks for the list whole, whatever tag the tree still shown has.
+    @Test func aFetchFromTheStartAsksForTheFoldersWhole() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 10, scope: "s1", folders: ["Empty"], foldersTag: "t1"))
+        let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+
+        // Joined another drive's worth of access: the scope moves, and the
+        // drive is fetched again beside the tree shown.
+        stub.server.page(at: 10, page([], cursor: 10, scope: "s2", folders: ["Empty"], foldersTag: "t1"))
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 12, scope: "s2", folders: ["Empty"], foldersTag: "t1"))
+        _ = try await mirror.sync()
+        let fromTheStart = stub.server.requests(to: "/api/files/delta").last { url in
+            URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains(URLQueryItem(name: "cursor", value: "0")) == true
+        }
+        let query = fromTheStart.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems } ?? []
+        #expect(!query.contains { $0.name == "foldersTag" }, "a fresh replica has no list to keep")
+        #expect(await mirror.index.entry(at: "Empty")?.isFolder == true)
+        #expect(await mirror.isAuthoritative)
+    }
+
     @Test func overlappingSyncsShareOnePass() async throws {
         let stub = try MirrorStubbedAPI()
         defer { stub.tearDown() }
@@ -1448,5 +1548,116 @@ struct DriveMirrorTests {
         #expect(try await mirror.contentURL(fileId: "a").absoluteString == "https://s3.test/a?sig=2")
         #expect(try await mirror.contentLink(fileId: "a").url.absoluteString == "https://s3.test/a?sig=2")
         #expect(stub.server.requests(to: "/api/space/files/a").count == 2)
+    }
+}
+
+// MARK: - Files' pictures
+
+/// What the thumbnail worker reads from a mirror: which files have a
+/// thumbnail. A thumbnail made later is news for the worker and nothing
+/// else — Finder's tree, the long-polls and the disk are left alone.
+struct DriveMirrorPreviewTests {
+    let server = URL(string: "https://www.onyxfs.io")!
+
+    private func pictured(_ file: FileItem) -> FileItem {
+        var file = file
+        file.thumbnailKey = "_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.webp"
+        file.thumbSizes = ["sm", "xs"]
+        return file
+    }
+
+    @Test func aThumbnailMadeLaterIsReportedButRebuildsNothing() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.mov", mime: "video/quicktime")], cursor: 10))
+        let mirror = DriveMirror(scope: .drive(id: "d1"), directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        #expect(await mirror.files(where: ThumbnailCandidate.lacksPreviews).map(\.id) == ["a"])
+        let revision = await mirror.revision
+
+        stub.server.page(at: 10, page([pictured(item("a", "a.mov", mime: "video/quicktime"))], cursor: 11))
+        let diff = try await mirror.sync()
+        #expect(diff.isEmpty && diff.previews == ["a"])
+        #expect(await mirror.revision == revision, "nothing Finder shows changed")
+        #expect(await mirror.files(where: ThumbnailCandidate.lacksPreviews).isEmpty)
+        #expect(await mirror.files(among: ["a", "gone"], where: { _ in true }).map(\.previews) == [[.thumbnail, .sizes]])
+    }
+
+    @Test func picturesAloneAreWrittenLazilyAndNeverPastTheCursor() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let clock = TestClock()
+        stub.server.page(at: 0, page([item("a", "a.mov")], cursor: 10))
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server, account: "me@example.com",
+                                 api: { stub.api }, clock: { clock.now })
+        _ = try await mirror.sync()
+        let file = dir.appendingPathComponent("library.json")
+        let progress = dir.appendingPathComponent("library.cursor.json")
+        let written = try Data(contentsOf: file)
+
+        // A thumbnail made, then a pass that only moves the cursor.
+        stub.server.page(at: 10, page([pictured(item("a", "a.mov"))], cursor: 11))
+        stub.server.page(at: 11, page([], deleted: ["elsewhere"], cursor: 12))
+        _ = try await mirror.sync()
+        _ = try await mirror.sync()
+        #expect(try Data(contentsOf: file) == written, "the whole drive is not rewritten for one picture")
+        #expect(!FileManager.default.fileExists(atPath: progress.path), "nor the cursor moved past what the disk lacks")
+        let relaunched = DriveMirror(scope: .library, directory: dir, server: server, account: "me@example.com",
+                                     api: { stub.api })
+        #expect(await relaunched.files(among: ["a"], where: { _ in true }).first?.previews == [],
+                "a relaunch now fetches the change again, from cursor 10")
+
+        // Minutes on, the next pass writes it all.
+        clock.advance(DriveMirror.previewSaveInterval + 1)
+        stub.server.page(at: 12, page([], cursor: 12))
+        _ = try await mirror.sync()
+        let stored = try JSONDecoder().decode(DriveMirror.Stored.self, from: Data(contentsOf: file))
+        #expect(stored.replica.cursor == 12 && stored.replica.file(id: "a")?.previews == [.thumbnail, .sizes])
+    }
+
+    @Test func aReplicaSavedBeforePicturesWereKeptIsFetchedAgainOnce() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var old = Replica()
+        old.apply(changed: [item("a", "a.mov"), item("b", "b.mov")], deleted: [], folders: [], cursor: 10)
+        old.scope = "s1"
+        let stored = DriveMirror.Stored(identity: .init(server: server.absoluteString, account: "me@example.com"),
+                                        replica: old, complete: true, generation: "g1")
+        // As an older build wrote it: no `previews` on any file.
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(stored)) as! [String: Any]
+        var fields = json["replica"] as! [String: Any]
+        var files = fields["files"] as! [String: [String: Any]]
+        for id in files.keys { files[id]?["previews"] = nil }
+        fields["files"] = files
+        json["replica"] = fields
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: json).write(to: dir.appendingPathComponent("drive.d1.json"))
+
+        let mirror = await DriveMirror.open(scope: .drive(id: "d1"), directory: dir, server: server,
+                                            account: "me@example.com", api: { stub.api })
+        #expect(await mirror.index.fileCount == 2)
+        #expect(await mirror.files(where: ThumbnailCandidate.lacksPreviews).isEmpty, "not known, so nothing is made")
+
+        // Fetched from the start, beside the tree; b has its pictures.
+        stub.server.page(at: 0, page([item("a", "a.mov"), pictured(item("b", "b.mov"))], cursor: 14, scope: "s1"))
+        let diff = try await mirror.sync()
+        #expect(Set(diff.updated).isSuperset(of: ["a", "b"]), "every file, for the worker to look at")
+        #expect(await mirror.isAuthoritative)
+        #expect(await mirror.files(where: ThumbnailCandidate.lacksPreviews).map(\.id) == ["a"])
+
+        // Once: the next pass carries on from the new cursor.
+        stub.server.page(at: 14, page([], cursor: 14, scope: "s1"))
+        _ = try await mirror.sync()
+        let cursors = stub.server.requests(to: "/api/files/delta").map {
+            URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "cursor" }?.value
+        }
+        #expect(cursors == ["0", "14"])
     }
 }

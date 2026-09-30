@@ -2,7 +2,9 @@ import { NextResponse } from 'next/server';
 import { getFileById, canModifyFile, createShare, listSharesForFile, refreshReviewStatus } from '@/lib/db';
 import { requirePrincipal, can, refusal, shareCapFor, shareKindsForKey } from '@/lib/authz';
 import { parseShareRequest } from '@/lib/share-kinds';
-import { presentShare, reviewLinkRefusal } from '@/lib/share-guard';
+import { presentFileShare, reviewLinkRefusal, linkChoices } from '@/lib/share-guard';
+import { effectiveKind } from '@/lib/media';
+import { isReviewableKind } from '@/lib/review';
 import { audit } from '@/lib/audit';
 
 export const runtime = 'nodejs';
@@ -17,9 +19,14 @@ export const dynamic = 'force-dynamic';
  * Deliberately not gated on the role's link capabilities or the `shares`
  * flag: this list is how links are revoked, and revoking only narrows
  * exposure. Making a link checks those, per kind, in POST.
+ *
+ * Signed in is the browser's session or the iPhone's device token
+ * (requirePrincipal(req)): the same principal either way, and a token only
+ * for a role that may use the apps (desktop.mount). Everything after it is
+ * the same for both.
  */
-async function gate(id) {
-  const g = await requirePrincipal();
+async function gate(req, id) {
+  const g = await requirePrincipal(req);
   if (g.error) return g;
   const file = await getFileById(id);
   if (!file || file.deletedAt) return { error: NextResponse.json({ error: 'File not found' }, { status: 404 }) };
@@ -30,11 +37,30 @@ async function gate(id) {
   return { ...g, file, canModify };
 }
 
-/** GET /api/files/[id]/shares → { shares } — the file's links, newest first. */
-export async function GET(_req, { params }) {
-  const g = await gate(params.id);
+/** What the decisions about this file's links rest on, besides who is asking. */
+const linkContext = (g, driveShareKinds) => ({
+  canModify: g.canModify,
+  driveShareKinds,
+  reviewable: isReviewableKind(effectiveKind(g.file)),
+});
+
+/**
+ * GET /api/files/[id]/shares → { shares, can } — the file's links, newest
+ * first, and what this person may make (lib/share-guard.js linkChoices: the
+ * kinds, review levels and expiries POST would accept, and why not when it
+ * would accept none). Each link says where it opens (`path`, on this
+ * server) and the levels this person may set it to (`levels`; PATCH on the
+ * link decides with the same rule).
+ */
+export async function GET(req, { params }) {
+  const g = await gate(req, params.id);
   if (g.error) return g.error;
-  return NextResponse.json({ shares: (await listSharesForFile(g.file.id)).map(presentShare) });
+  const ctx = linkContext(g, await shareKindsForKey(g.principal, g.file.storageKey));
+  const shares = await listSharesForFile(g.file.id);
+  return NextResponse.json({
+    shares: shares.map((s) => presentFileShare(g.principal, s, ctx)),
+    can: linkChoices(g.principal, ctx),
+  });
 }
 
 /**
@@ -50,7 +76,7 @@ export async function GET(_req, { params }) {
  * (reviewLinkRefusal).
  */
 export async function POST(req, { params }) {
-  const g = await gate(params.id);
+  const g = await gate(req, params.id);
   if (g.error) return g.error;
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
@@ -58,10 +84,11 @@ export async function POST(req, { params }) {
   if (parsed.error) return NextResponse.json({ error: parsed.error }, { status: 400 });
 
   const kind = parsed.password ? 'password' : parsed.mode;
+  const driveShareKinds = await shareKindsForKey(g.principal, g.file.storageKey);
   const allowed = can(g.principal, shareCapFor(kind), {
     canModify: g.canModify,
     kind,
-    driveShareKinds: await shareKindsForKey(g.principal, g.file.storageKey),
+    driveShareKinds,
     expiresInDays: parsed.expiresInDays,
   });
   if (!allowed.ok) return refusal(allowed);
@@ -86,5 +113,5 @@ export async function POST(req, { params }) {
     if (parsed.review) await refreshReviewStatus(g.file.id).catch(() => {});
   }
   const share = (await listSharesForFile(g.file.id)).find((s) => s.token === token);
-  return NextResponse.json({ share: presentShare(share) });
+  return NextResponse.json({ share: presentFileShare(g.principal, share, linkContext(g, driveShareKinds)) });
 }

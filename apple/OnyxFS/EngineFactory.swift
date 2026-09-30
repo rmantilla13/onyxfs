@@ -16,6 +16,10 @@ enum EngineFactory {
             // written and macOS's own files are not.
             let store = try ChunkStore(directory: try Self.directory(.cachesDirectory, folder, "chunks"),
                                        limitBytes: client.session.cacheLimitBytes)
+            // The cache's size goes to the app with each activity report, and
+            // once now, so Settings can show it without walking this folder.
+            client.reportsCache { await store.stats().bytes }
+            Task { try? await client.activity(.init()) }
             let staging = try StagingArea(directory: try Self.directory(.applicationSupportDirectory, folder, "staging"))
             let local = try LocalStore(directory: try Self.directory(.applicationSupportDirectory, folder, "local"))
             // The drive's icon, on the disk before Finder first looks at it.

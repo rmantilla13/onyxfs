@@ -9,7 +9,7 @@ import { forgetSession } from '@/lib/session';
 import {
   loadRolesAndPolicy, assignableRole, parseEmails, parseGrants, applyGrantDiff, personActionProblem,
 } from '@/lib/people';
-import { audit, personSubject } from '@/lib/audit';
+import { audit, auditDriveClaims, personSubject } from '@/lib/audit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -79,11 +79,14 @@ export async function POST(req) {
       if (person && person.roleId !== roleId) await updatePerson(email, { roleId });
     }
     // Admins already reach every drive; a grant row for one is noise.
-    const grants = isAdmin(email) ? { granted: [], revoked: [] }
+    const grants = isAdmin(email) ? { granted: [], revoked: [], claimed: [] }
       : await applyGrantDiff(email, [], parsedGrants.grants, guard.email);
     await audit(guard.email, 'invite.add', personSubject(email), {
       roleId, drives: grants.granted, sendEmail: !!body.sendEmail,
     });
+    // Someone already here, and a drive's only owner, given a lesser role
+    // in it: the admin became its owner (applyGrantDiff).
+    await auditDriveClaims(guard.email, grants.claimed, { from: email });
     invited.push({ email, status: row.status, roleId, drives: grants.granted });
   }
   return NextResponse.json({
@@ -123,7 +126,8 @@ export async function PATCH(req) {
  * DELETE ?email= — remove the person: sign-in, drive grants, devices, links
  * and their rows (removePerson in lib/db.js says exactly what). Their files
  * stay. Env admins are managed in ADMIN_EMAILS, and nobody removes
- * themselves.
+ * themselves. A drive they were the only owner of becomes the admin's
+ * (`removed.claimed`), so it is not left with no owner.
  *
  * DELETE ?id= — drop one request row and nothing else, for clearing the
  * queue of a request that was never approved.
@@ -138,9 +142,10 @@ export async function DELETE(req) {
   if (email) {
     const problem = personActionProblem({ actor: guard.email, target: email, action: 'remove' });
     if (problem) return NextResponse.json({ error: problem.error }, { status: problem.status });
-    const result = await removePerson(email, { apply: true });
+    const result = await removePerson(email, { apply: true, by: guard.email });
     forgetSession(email);
     await audit(guard.email, 'person.remove', personSubject(email), result);
+    await auditDriveClaims(guard.email, result.claimed, { from: email });
     return NextResponse.json({ ok: true, removed: result });
   }
   await deleteInviteRequest(id);

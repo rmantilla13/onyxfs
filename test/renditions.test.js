@@ -4,7 +4,8 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { thumbSources, stageSources, smallOriginal, CARD_SIZES_DEFAULT } from '../lib/renditions.js';
+import { readFile } from 'node:fs/promises';
+import { thumbSources, stageSources, smallOriginal, pictureOrigins, CARD_SIZES_DEFAULT } from '../lib/renditions.js';
 import { gridPosterSize, smPosterSize, coverWidth } from '../lib/poster.js';
 
 const photo = {
@@ -100,5 +101,63 @@ describe('stage', () => {
     const heic = { name: 'a.heic', mime: 'image/heic', url: 'https://s3/heic', thumbnailUrl: null };
     assert.equal(stageSources(heic).original, null);
     assert.equal(stageSources(heic, { probe: { heic: true } }).original, heic.url);
+  });
+});
+
+describe('where the pictures come from', () => {
+  const B2 = 'https://s3.us-west-004.backblazeb2.com';
+
+  test('the origins alone, the most used first: never a path, never a signature', () => {
+    const urls = [
+      `${B2}/onyx/_thumbs/a.webp?X-Amz-Signature=secret`,
+      'https://drive.example.com/team/A001.jpg?X-Amz-Signature=other',
+      `${B2}/onyx/_thumbs/b.sm.webp?X-Amz-Signature=secret2`,
+      `${B2}/onyx/_thumbs/c.webp`,
+    ];
+    assert.deepEqual(pictureOrigins(urls), [B2, 'https://drive.example.com']);
+    assert.ok(!pictureOrigins(urls).join(' ').includes('Signature'));
+  });
+
+  test('at most `max`, and only http(s): no placeholder data, no blob, nothing unparseable', () => {
+    const urls = ['https://a.example/x', 'https://a.example/y', 'https://b.example/x', 'https://c.example/x'];
+    assert.deepEqual(pictureOrigins(urls), ['https://a.example', 'https://b.example']);
+    assert.deepEqual(pictureOrigins(urls, { max: 1 }), ['https://a.example']);
+    assert.deepEqual(pictureOrigins(['data:image/webp;base64,AAAA', 'blob:https://app/x', '/relative.jpg', 'nonsense', null, undefined, 7]), []);
+    assert.deepEqual(pictureOrigins(null), []);
+    assert.deepEqual(pictureOrigins(['http://127.0.0.1:59000/onyx/_thumbs/a.webp']), ['http://127.0.0.1:59000']);
+  });
+
+  test('a listing gives the bucket its tiles are drawn from, and a drive’s own for a small original', () => {
+    const rows = [
+      { ...photo, id: '2', thumbnailUrl: `${B2}/onyx/_thumbs/g.webp?s=1`, smUrl: `${B2}/onyx/_thumbs/g.sm.webp?s=1` },
+      { ...photo, id: '3', thumbnailUrl: `${B2}/onyx/_thumbs/h.webp?s=1`, smUrl: `${B2}/onyx/_thumbs/h.sm.webp?s=1` },
+      { id: '4', name: 'b.png', mime: 'image/png', size: 1000, url: 'https://drive.example.com/team/b.png?s=2', thumbnailUrl: null },
+      { id: '5', name: 'notes.pdf', mime: 'application/pdf', url: 'https://drive.example.com/team/notes.pdf' },
+    ];
+    assert.deepEqual(pictureOrigins(rows.map((f) => thumbSources(f).src)), [B2, 'https://drive.example.com']);
+  });
+});
+
+describe('the pages connect to them first', () => {
+  const src = (p) => readFile(new URL(`../${p}`, import.meta.url), 'utf8');
+
+  test('the library, a file and a share link each name their pictures; a locked link names none', async () => {
+    const files = await src('app/files/page.js');
+    assert.match(files, /<PreviewPreconnect urls=\{initial\?\.files\?\.map\(\(f\) => thumbSources\(f\)\.src\)\} \/>/);
+    const file = await src('app/files/[id]/page.js');
+    assert.match(file, /<PreviewPreconnect urls=\{\[signed\.thumbnailUrl, signed\.posterUrl, signed\.proxyUrl, signed\.url\]\} \/>/);
+    const share = await src('app/s/[token]/page.js');
+    const at = share.indexOf('<PreviewPreconnect');
+    assert.ok(at > share.indexOf("if (access.state === 'ok')"), 'only once the link has let them in');
+    assert.ok(at < share.indexOf("if (access.state === 'password'"));
+  });
+
+  test('both pools, a DNS lookup, and only origins', async () => {
+    const component = await src('app/components/PreviewPreconnect.js');
+    assert.ok(!component.includes("'use client'"), 'a server component: the hints go out with the first bytes');
+    assert.match(component, /for \(const origin of pictureOrigins\(urls\)\)/);
+    assert.match(component, /ReactDOM\.prefetchDNS\?\.\(origin\);/);
+    assert.match(component, /ReactDOM\.preconnect\?\.\(origin\);/);
+    assert.match(component, /ReactDOM\.preconnect\?\.\(origin, \{ crossOrigin: 'anonymous' \}\);/);
   });
 });

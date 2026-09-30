@@ -1,17 +1,18 @@
 import { NextResponse } from 'next/server';
 import {
-  listFileChanges, currentChangeCursor, getFilespaceForUser, listFilespaces, listSyncFolders,
+  listFileChanges, currentChangeCursor, changeHorizon, getFilespaceForUser, listFilespaces, listSyncFolders,
 } from '@/lib/db';
 import { resolveActor } from '@/lib/desktop-guard';
 import { presignFileUrls } from '@/lib/storage';
+import { syncFeedRow } from '@/lib/media';
 import { drivePatterns } from '@/lib/drive-access';
-import { accessFingerprint, syncScope } from '@/lib/sync-scope';
+import { accessFingerprint, foldersTag, syncScope } from '@/lib/sync-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * GET /api/files/delta?cursor=<n>&limit=<n>&drive=<id|library>&folders=1
+ * GET /api/files/delta?cursor=<n>&limit=<n>&drive=<id|library>&folders=1&foldersTag=<tag>
  *
  * What changed since `cursor`: the endpoint a sync client enumerates against —
  * the File Provider behind Onyx in Finder and in Files.app. Cursor 0 means
@@ -31,7 +32,10 @@ export const dynamic = 'force-dynamic';
  * `scope` fingerprints the access the page was computed under. When it
  * differs from the last one a client saw, the client re-syncs from cursor 0
  * (lib/sync-scope.js says why). `folders=1` adds the scope's folders, whole,
- * so empty ones appear too.
+ * so empty ones appear too, and `foldersTag`, a digest of that list
+ * (lib/sync-scope.js foldersTag). A client that sends back the tag it was
+ * last given, and whose list has not changed since, gets the tag alone and
+ * keeps the list it has; one that sends none gets the list every time.
  */
 export async function GET(req) {
   const actor = await resolveActor(req);
@@ -73,8 +77,12 @@ export async function GET(req) {
   // `?cursor=now` hands back the current high-water mark without any payload,
   // for a client that wants to start watching from this moment rather than
   // replay history it does not want.
+  // Settled, like every cursor the feed hands out: "now" is as far as every
+  // change has finished, so one still being written is not skipped.
   if (url.searchParams.get('cursor') === 'now') {
-    return NextResponse.json({ changed: [], deleted: [], cursor: await currentChangeCursor(), done: true, scope: tag });
+    const horizon = await changeHorizon();
+    const cursor = horizon === undefined ? await currentChangeCursor() : horizon;
+    return NextResponse.json({ changed: [], deleted: [], cursor, done: true, scope: tag });
   }
 
   let page;
@@ -95,13 +103,21 @@ export async function GET(req) {
   // 100k files pages through in chunks rather than signing them all at once.
   // Originals only: a device shows no thumbnails from this feed, and a row
   // now has up to five preview URLs (thumbnail, sm, xs, poster, strip) —
-  // each only another bearer token in a response of up to 500 rows.
-  const changed = await presignFileUrls(page.changed, { previews: false });
+  // each only another bearer token in a response of up to 500 rows. Nor the
+  // pictures a row's metadata carries for tiles, its placeholder and a
+  // sound's waveform (lib/media.js syncFeedRow): they more than doubled a
+  // page of pictures, for every Mac, every time a browser drew one.
+  const changed = (await presignFileUrls(page.changed, { previews: false })).map(syncFeedRow);
 
   const body = { changed, deleted: page.deleted, cursor: page.cursor, done: page.done, scope: tag };
   if (url.searchParams.get('folders') === '1') {
     const storagePrefix = drive ? String(drive.prefix || '').replace(/^\/+|\/+$/g, '') : undefined;
-    body.folders = driveParam ? await listSyncFolders(principal, { storagePrefix }) : [];
+    const folders = driveParam ? await listSyncFolders(principal, { storagePrefix }) : [];
+    // The list this caller already holds (the tag it was last sent, handed
+    // back) is not sent again: a mounted drive asks every few seconds, and
+    // its folders rarely change between two asks.
+    body.foldersTag = foldersTag(folders);
+    if (url.searchParams.get('foldersTag') !== body.foldersTag) body.folders = folders;
   }
   return NextResponse.json(body);
 }

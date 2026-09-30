@@ -6,16 +6,23 @@ import SwiftUI
 /// A folder's files full screen, one at a time, swiped through: a picture
 /// zooms, a video or a song plays (picture in picture, AirPlay), and a
 /// document opens in Quick Look. A tap on a picture hides everything else.
+///
+/// Over it, the least that can be: a white rounded-square close, where it
+/// is found at once over any picture, the file's name, and a glass pill to
+/// share it — a copy, or a link — save it — to Photos or to Files, and a
+/// heavy video's smaller streamable copy beside the original — or see its
+/// details.
 struct PreviewView: View {
     let files: [FileItem]
     @Environment(\.dismiss) private var dismiss
     @Environment(Session.self) private var session
+    @Environment(\.verticalSizeClass) private var verticalSize
     @State private var current: String?
     @State private var chromeHidden = false
     @State private var inspecting: FileItem?
-    @State private var sharing: ShareItem?
-    @State private var shareProgress: Double?
-    @State private var shareProblem: String?
+    @State private var linking: LinkSubject?
+    /// Each video's streamable copy, once asked about (StreamableCopy.lookup).
+    @State private var streamables: [String: StreamableCopy] = [:]
 
     init(files: [FileItem], startID: String) {
         self.files = files
@@ -24,8 +31,16 @@ struct PreviewView: View {
 
     private var file: FileItem? { files.first { $0.id == current } }
 
+    /// A phone on its side.
+    private var landscape: Bool { verticalSize == .compact }
+
+    /// A video on a phone on its side: the picture alone, the whole screen,
+    /// black around it — no bars, no tray — with the player's own controls
+    /// a tap away. Turned upright again, everything comes back.
+    private var immersive: Bool { landscape && file?.kind == "video" }
+
     var body: some View {
-        NavigationStack {
+        ScrollViewReader { pager in
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 0) {
                     ForEach(files) { file in
@@ -40,73 +55,138 @@ struct PreviewView: View {
             .scrollTargetBehavior(.paging)
             .scrollPosition(id: $current)
             .scrollIndicators(.hidden)
-            .background(Color.black.ignoresSafeArea())
-            .ignoresSafeArea(edges: .bottom)
-            .navigationTitle(file?.name ?? "")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { dismiss() } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("Close")
-                }
-                ToolbarItemGroup(placement: .bottomBar) {
-                    Button { share() } label: {
-                        if let shareProgress {
-                            ProgressView(value: shareProgress).progressViewStyle(.circular).controlSize(.small)
-                        } else {
-                            Image(systemName: "square.and.arrow.up")
-                        }
-                    }
-                    .disabled(shareProgress != nil)
-                    .accessibilityLabel("Share")
-                    Spacer()
-                    if let index = files.firstIndex(where: { $0.id == current }), files.count > 1 {
-                        Text("\(index + 1) of \(files.count)")
-                            .font(.footnote.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button { inspecting = file } label: { Image(systemName: "info.circle") }
-                        .accessibilityLabel("Info")
-                }
+            .background(Theme.page.ignoresSafeArea())
+            // On its side, each page is the whole screen — the notch's side
+            // too — so what it shows is centred on the screen, not on what
+            // is left between insets.
+            .ignoresSafeArea(edges: landscape ? .all : .bottom)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in
+                // A rotation changes every page's width, and a paging scroll
+                // view keeps its offset in points: the page on screen would
+                // be left part-way off it. Put it back, at once.
+                guard let current else { return }
+                var still = Transaction()
+                still.disablesAnimations = true
+                withTransaction(still) { pager.scrollTo(current, anchor: .center) }
             }
-            .toolbar(chromeHidden ? .hidden : .visible, for: .navigationBar, .bottomBar)
-            .toolbarBackground(.visible, for: .navigationBar, .bottomBar)
-            .statusBarHidden(chromeHidden)
-            .animation(.easeInOut(duration: 0.2), value: chromeHidden)
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !chromeHidden, !immersive {
+                chrome.transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !immersive { DownloadTray() }
+        }
+        .statusBarHidden(chromeHidden || immersive)
+        .persistentSystemOverlays(immersive ? .hidden : .automatic)
+        .animation(.easeInOut(duration: 0.2), value: chromeHidden)
+        .animation(.easeInOut(duration: 0.25), value: immersive)
         .preferredColorScheme(.dark)
         .sheet(item: $inspecting) { FileInfoView(file: $0, place: nil) }
-        .sheet(item: $sharing) { ShareSheet(items: [$0.url]).presentationDetents([.medium, .large]) }
-        .alert("Can't Share", isPresented: Binding(get: { shareProblem != nil }, set: { if !$0 { shareProblem = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(shareProblem ?? "")
-        }
+        .sheet(item: $linking) { ShareLinkSheet(subject: $0) }
+        .task(id: current) { await lookUpStreamable() }
+        // The pages beside this one: their links fetched now, so a swipe plays at once.
+        .task(id: current) { await PreviewLinks.prefetch(around: current, in: files, api: session.api) }
     }
 
-    /// The file itself goes to the share sheet, so it is downloaded first
-    /// (once: it is kept for a Quick Look or a second share).
-    private func share() {
-        guard let file, shareProgress == nil else { return }
-        shareProgress = 0
-        Task {
-            defer { shareProgress = nil }
-            do {
-                let url = try await PreviewFiles.local(for: file, api: session.api) { fraction in
-                    Task { @MainActor in if shareProgress != nil { shareProgress = fraction } }
-                }
-                sharing = ShareItem(url: url)
-            } catch {
-                if !Session.isCancel(error) { shareProblem = session.explain(error) }
+    private var chrome: some View {
+        HStack(spacing: 12) {
+            WhiteSquareButton(systemName: "xmark", label: "Close") { dismiss() }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(file?.name ?? "")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(position)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 6)
+            actions
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 10)
+    }
+
+    /// "2 of 14 · 4.2 MB".
+    private var position: String {
+        var parts: [String] = []
+        if let index = files.firstIndex(where: { $0.id == current }), files.count > 1 {
+            parts.append("\(index + 1) of \(files.count)")
+        }
+        if let file { parts.append(FileFormat.size(file.size)) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Share, Save, Info: one glass pill.
+    ///
+    /// Share is a menu where the file may be shared by link — Send a Copy
+    /// (the file itself, through the share sheet) or Share Link… — rather
+    /// than a fourth button: two ways of sharing one file under the one
+    /// symbol, and a pill that leaves the file's name its room on a phone.
+    /// Where no link is theirs to make or manage it stays the one tap it
+    /// always was, since a menu of one would only be in the way.
+    private var actions: some View {
+        GlassGroup(spacing: 4) {
+            HStack(spacing: 0) {
+                if let file, session.mayLink(file) {
+                    Menu {
+                        Button { save(to: .share) } label: { Label("Send a Copy", systemImage: "doc.on.doc") }
+                        Button { linking = .file(file) } label: { Label("Share Link…", systemImage: "link") }
+                    } label: {
+                        pillIcon("square.and.arrow.up")
+                    }
+                    .accessibilityLabel("Share")
+                } else {
+                    pillButton("square.and.arrow.up", label: "Send a Copy") { save(to: .share) }
+                }
+                if let file {
+                    Menu {
+                        SaveMenuContent(file: file, streamable: streamables[file.id])
+                    } label: {
+                        pillIcon("arrow.down.to.line")
+                    }
+                    .accessibilityLabel("Save")
+                }
+                pillButton("info.circle", label: "Info") { inspecting = file }
+            }
+            .padding(.horizontal, 4)
+            .glassSurface(Capsule(), interactive: true)
         }
     }
-}
 
-private struct ShareItem: Identifiable {
-    let url: URL
-    var id: URL { url }
+    private func pillButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { pillIcon(symbol) }
+            .buttonStyle(.plain)
+            .accessibilityLabel(label)
+    }
+
+    private func pillIcon(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.primary)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+    }
+
+    /// The file itself goes to the share sheet, so it is downloaded first:
+    /// the tray shows it coming, and the sheet opens once it is here.
+    private func save(to destination: SaveDestination) {
+        guard let file else { return }
+        DownloadCenter.shared.save([file], to: destination, api: session.api)
+    }
+
+    /// Whether the video on screen has a smaller copy to offer beside it.
+    private func lookUpStreamable() async {
+        guard let file, streamables[file.id] == nil, StreamableCopy.mayHave(file) else { return }
+        if let copy = await StreamableCopy.lookup(file, api: session.api), !Task.isCancelled {
+            streamables[file.id] = copy
+        }
+    }
 }
 
 /// One file, full screen.
@@ -121,8 +201,10 @@ private struct PreviewPage: View {
         case "image":
             ImagePage(file: file)
                 .onTapGesture { chromeHidden.toggle() }
-        case "video", "audio":
+        case "video":
             MediaPage(file: file, active: active)
+        case "audio":
+            SoundPage(file: file, active: active)
         default:
             DocumentPage(file: file, active: active)
         }
@@ -134,11 +216,21 @@ private struct PreviewPage: View {
 /// The picture at up to 2400 pixels — its preview, made at upload — which
 /// fills any phone or iPad screen; the original only for a picture that has
 /// none, and then decoded down to that size.
+///
+/// Until it comes, the tile's picture, stretched; or, when that is not in
+/// memory either, the placeholder from the file's row (PlaceholderImages),
+/// soft already — asked for on its own, so it never holds up the preview.
 private struct ImagePage: View {
     let file: FileItem
     @Environment(Session.self) private var session
     @State private var image: UIImage?
     @State private var failed = false
+    @State private var still: UIImage?
+
+    init(file: FileItem) {
+        self.file = file
+        _still = State(initialValue: PlaceholderImages.shared.cached(file))
+    }
 
     var body: some View {
         ZStack {
@@ -148,6 +240,9 @@ private struct ImagePage: View {
                 // The tile's picture, stretched, until the sharp one comes.
                 Image(uiImage: small).resizable().scaledToFit().blur(radius: 6)
                 ProgressView().tint(.white)
+            } else if let still, !failed {
+                Image(uiImage: still).resizable().scaledToFit().accessibilityHidden(true)
+                ProgressView().tint(.white)
             } else if failed {
                 KindSymbol(file: file)
             } else {
@@ -155,6 +250,10 @@ private struct ImagePage: View {
             }
         }
         .task(id: file.id) { await load() }
+        .task(id: file.id) {
+            guard still == nil, image == nil, let tiny = await PlaceholderImages.shared.image(for: file) else { return }
+            if !Task.isCancelled, image == nil { still = tiny }
+        }
     }
 
     private func load() async {
@@ -235,9 +334,13 @@ private final class ZoomView: UIScrollView, UIScrollViewDelegate {
 
 // MARK: - Video and sound
 
-/// Streams from storage through a link signed as the page comes on screen
-/// — the listing's may be an hour old — and plays at once. Paged away, the
-/// player goes, and with it its buffers.
+/// Streams from storage, and starts at once from a link that is here
+/// already (PreviewLinks): one kept from before, or fetched while the page
+/// beside it was on screen, or — for a file with no streamable copy to
+/// prefer — the listing's own, which is good for six hours, not one. The
+/// server is asked only when none of those will do. A link storage refuses
+/// gives way to a fresh one, and play goes on from where it was. Paged away,
+/// the player goes, and with it its buffers.
 private struct MediaPage: View {
     let file: FileItem
     let active: Bool
@@ -255,11 +358,13 @@ private struct MediaPage: View {
             if let player {
                 PlayerView(player: player)
             } else if let problem {
-                Label(problem, systemImage: "exclamationmark.triangle")
+                Label(problem, systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote)
-                    .foregroundStyle(.white)
-                    .padding(12)
-                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+                    .symbolRenderingMode(.multicolor)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .glassSurface(Capsule())
+                    .padding(24)
             } else if active {
                 ProgressView().tint(.white)
             }
@@ -270,16 +375,47 @@ private struct MediaPage: View {
                 player = nil
                 return
             }
-            do {
-                let link = try await session.api.contentLink(fileId: file.id)
-                let item = AVPlayerItem(url: link.url)
+            await play()
+        }
+    }
+
+    /// Plays until the page goes. A link that storage refuses — it expired,
+    /// paused past its hours, or the file moved — gives way to a fresh one;
+    /// a fresh one refused at once is the player's to show.
+    private func play() async {
+        var link = await PreviewLinks.ready(for: file)
+        var fetched: Date?
+        while !Task.isCancelled {
+            if link == nil {
+                do {
+                    link = try await PreviewLinks.link(for: file, api: session.api)
+                    fetched = Date()
+                } catch {
+                    if !Session.isCancel(error) { problem = session.explain(error) }
+                    return
+                }
+            }
+            guard let current = link, !Task.isCancelled else { return }
+            // The streamable copy when there is one: an action camera's 4K
+            // master runs at 60–120 Mbps, more than a phone's connection
+            // carries, and stalls; its 1080p copy does not.
+            let item = AVPlayerItem(url: current.playable)
+            if let player {
+                let at = player.currentTime()
+                player.replaceCurrentItem(with: item)
+                if at.seconds > 0, await PreviewLinks.readyToPlay(item) { await player.seek(to: at) }
+                player.play()
+            } else {
                 let next = AVPlayer(playerItem: item)
                 next.allowsExternalPlayback = true
                 player = next
                 next.play()
-            } catch {
-                if !Session.isCancel(error) { problem = session.explain(error) }
             }
+            if current.proxyUrl == nil { PreviewLinks.askForCopy(of: file, api: session.api) }
+            guard await PreviewLinks.failure(of: item) != nil, !Task.isCancelled else { return }
+            if let fetched, Date().timeIntervalSince(fetched) < 60 { return }
+            await PreviewLinks.refused(file)
+            link = nil
         }
     }
 }
@@ -346,7 +482,16 @@ private struct DocumentPage: View {
                 VStack(spacing: 14) {
                     KindSymbol(file: file)
                         .scaleEffect(1.6)
-                        .padding(.bottom, 12)
+                        .frame(width: 112, height: 112)
+                        .background {
+                            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                                .fill(Theme.frost)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                                        .strokeBorder(Theme.edge, lineWidth: 0.5)
+                                }
+                        }
+                        .padding(.bottom, 10)
                     Text(file.name)
                         .font(.headline)
                         .multilineTextAlignment(.center)
@@ -354,18 +499,22 @@ private struct DocumentPage: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     if let progress {
-                        ProgressView(value: progress)
+                        GradientProgressBar(fraction: progress)
                             .frame(maxWidth: 220)
+                            .padding(.top, 6)
                     } else if let problem {
-                        Text(problem).font(.footnote).foregroundStyle(.red).multilineTextAlignment(.center)
+                        Text(problem).font(.footnote).foregroundStyle(.orange).multilineTextAlignment(.center)
                         Button("Try Again") { asked = true; Task { await download() } }
+                            .glassButtonStyle()
                     } else if !wantsDownload {
                         Button("Download to Preview") { asked = true; Task { await download() } }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(BrandButtonStyle())
+                            .padding(.top, 6)
                     }
                 }
                 .padding(32)
-                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background { AuraBackground() }
             }
         }
         .task(id: active) {
@@ -416,15 +565,4 @@ private struct QuickLookView: UIViewControllerRepresentable {
             url as NSURL
         }
     }
-}
-
-/// The system share sheet, for a file on this device.
-struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

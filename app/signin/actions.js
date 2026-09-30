@@ -1,5 +1,7 @@
 'use server';
 
+import { redirect } from 'next/navigation';
+import { AuthError } from 'next-auth';
 import { signIn } from '@/auth';
 import { isEmailGrantedAccess } from '@/lib/auth-allowlist';
 import { hasConnectionString } from '@/lib/db';
@@ -69,4 +71,48 @@ export async function requestMagicLink(_prev, formData) {
     console.error('[signin] magic link failed:', e.message);
     return { error: 'Could not send the sign-in email. Try again in a moment.' };
   }
+}
+
+// Said for every refusal of a password, whatever the reason: no such
+// account, no password, a wrong one, a locked one. lib/password-signin.js
+// keeps them looking and taking the same, so this form is no oracle for who
+// has a password, as the form above is none for who is approved.
+const WRONG_PASSWORD = 'That email and password don’t match. After ten wrong tries, a password stops working for fifteen minutes.';
+
+/**
+ * Sign in with a password — for the accounts an admin gave one, such as App
+ * Review's (lib/password-signin.js). Everyone else signs in with a link.
+ *
+ * Auth.js does the checking: the 'password' provider's authorize, then the
+ * signIn callback's approved-and-not-suspended gate. On success it sets the
+ * session cookie and this sends the browser on — to where the form says it
+ * was going (the app's /space/authorize, when the app asked), or the library.
+ */
+export async function signInWithPassword(_prev, formData) {
+  const email = String(formData.get('email') || '').trim().toLowerCase();
+  const password = String(formData.get('password') || '');
+  if (!email.includes('@') || !password) return { error: 'Enter your email address and password.' };
+
+  if (!hasConnectionString().ok) {
+    console.error('[signin] no DATABASE_URL (or POSTGRES_URL) — sign-in cannot reach the database. Set it in Vercel → Settings → Environment Variables and redeploy.');
+    return { error: 'Sign-in is not available: this server has no database configured (DATABASE_URL is unset). Set it and redeploy — retrying will not help.' };
+  }
+
+  const redirectTo = safeReturnPath(formData.get('callbackUrl')) || '/files';
+  let target;
+  try {
+    // redirect: false, then redirect() below, outside the try: the redirect
+    // Auth.js would throw on success is not an error to catch here.
+    target = await signIn('password', { email, password, redirect: false, redirectTo });
+  } catch (e) {
+    if (e instanceof AuthError) {
+      if (e.type === 'CredentialsSignin') return { error: WRONG_PASSWORD };
+      if (e.type === 'AccessDenied') return { error: 'That address is not approved for this workspace, or its access is paused.' };
+    }
+    console.error('[signin] password sign-in failed:', e?.message || e);
+    return { error: 'Could not sign you in. Try again in a moment.' };
+  }
+  // Auth.js answers with the address it settled on (auth.config.js's
+  // redirect callback keeps it on this site); a path of it, to be sure.
+  redirect(safeReturnPath(target) || redirectTo);
 }

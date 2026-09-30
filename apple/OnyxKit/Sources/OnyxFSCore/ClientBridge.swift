@@ -48,6 +48,10 @@ public final class ClientBridge: EngineBridge {
         return BridgeChanges(generation: news.generation, paths: news.paths, all: news.all)
     }
 
+    public func count(_ kind: TransferMeter.Kind, bytes: Int) {
+        client.meter.add(kind, bytes)
+    }
+
     public func reader(for entry: BridgeEntry) async throws -> any ByteSource {
         guard let id = entry.id else { throw BridgeFailure.notFound }
         return Reader(FileReader(fileId: id, version: entry.version, size: entry.size, client: client, store: store,

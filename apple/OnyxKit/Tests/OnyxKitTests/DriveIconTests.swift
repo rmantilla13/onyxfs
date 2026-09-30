@@ -116,6 +116,19 @@ struct DriveIconTests {
         }
     }
 
+    /// The app shows a drive beside its name with the icon Finder shows on
+    /// its disk: one size of the same drawing, not a lookalike.
+    @Test func oneSizeIsTheIcnssOwnAtThatSize() throws {
+        let icns = try #require(DriveIcon.icns(color: "#E040FB", name: "Inbox"))
+        let fromIcns = Pixels(try image(try #require(try entries(icns)["ic12"])))   // 64 pixels
+        let alone = try #require(DriveIcon.image(color: "#E040FB", name: "Inbox", pixels: 64))
+        #expect(alone.width == 64 && alone.height == 64)
+        let drawn = Pixels(alone)
+        for (x, y) in [(32, 32), (5, 5), (32, 12), (50, 40)] {
+            #expect(drawn[x, y] == fromIcns[x, y], "at \(x),\(y)")
+        }
+    }
+
     @Test func twoDrivesOfOneColourAreToldApartByTheirInitials() throws {
         let videos = try #require(DriveIcon.icns(color: "#81A628", name: "Videos"))
         #expect(DriveIcon.icns(color: "#81A628", name: "Memories") != videos)

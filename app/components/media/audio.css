@@ -1,0 +1,97 @@
+/* The audio player (AudioPlayer.js): a play button, the waveform as the
+   scrubber, the time. Colours are the theme's properties only — the waveform
+   not yet played in a quiet ink, the part played in the brand's gradient. */
+
+.audio-player {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s3);
+  width: 100%;
+}
+.audio-player > audio { display: none; }
+
+.audio-play {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+}
+/* The play triangle sits a hair right of centre, as the eye expects. */
+.audio-play svg { margin-left: 1px; }
+
+.audio-scrub {
+  --played: 0;
+  position: relative;
+  height: 64px;
+  min-width: 0;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  color: color-mix(in srgb, var(--ink) 20%, transparent);
+  border-radius: var(--radius-sm);
+}
+.audio-scrub:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.audio-scrub[aria-disabled='true'] { cursor: default; opacity: 0.5; }
+
+.audio-wave { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+/* The part played: the same bars in the gradient, cut off at the playhead. */
+.audio-played {
+  position: absolute;
+  inset: 0;
+  clip-path: inset(0 calc((1 - var(--played)) * 100%) 0 0);
+  pointer-events: none;
+}
+
+/* No waveform yet: a plain track, played the same way. */
+.audio-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 4px;
+  margin-top: -2px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+}
+.audio-track-played { background: linear-gradient(90deg, var(--aura-a, var(--accent)), var(--aura-b, var(--accent))); }
+
+.audio-head {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: calc(var(--played) * 100%);
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--ink);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.audio-scrub.is-flat .audio-head { top: 50%; bottom: auto; height: 12px; margin-top: -6px; }
+
+.audio-time {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.audio-failed { grid-column: 1 / -1; margin: 0; }
+
+/* Narrow: the time goes under the waveform rather than squeezing it. */
+@media (max-width: 480px) {
+  .audio-player { grid-template-columns: auto minmax(0, 1fr); }
+  .audio-time { grid-column: 2; justify-self: end; margin-top: calc(-1 * var(--s2)); }
+  .audio-scrub { height: 52px; }
+}
+
+/* On a file's own page there is room: a taller waveform, a larger button. */
+.audio-stage .audio-scrub { height: 112px; }
+.audio-stage .audio-play { width: 52px; height: 52px; }
+@media (max-width: 480px) {
+  .audio-stage .audio-scrub { height: 72px; }
+}

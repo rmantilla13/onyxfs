@@ -2,11 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getStorageConfig, s3PresignPut, s3PresignSiblingPut, storageMode, cfgForFilespace, buildObjectKey } from '@/lib/storage';
 import { isThumbKey, thumbSiblingKey, thumbSizesFrom, PREVIEW_CACHE_CONTROL } from '@/lib/media';
-import { getFilespaceForWrite, issueUploadKey, uploadKeyHeld } from '@/lib/db';
+import { getFilespaceForWrite, issueUploadKey, uploadKeyHeld, canonicalFolder } from '@/lib/db';
 import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 import { replacementTarget, replacementKey } from '@/lib/replace-content';
+import { vacateTrashedKey } from '@/lib/trash-move';
 
 export const runtime = 'nodejs';
+// Room for moving a just-trashed file out of the key a new one wants
+// (vacateTrashedKey, at most 15 s).
+export const maxDuration = 30;
 
 const THUMB_CACHE_CONTROL = PREVIEW_CACHE_CONTROL;
 
@@ -104,6 +108,9 @@ export async function POST(req) {
       return NextResponse.json({ error: 'You can view this drive but not add to it. Ask one of its owners for editor access.' }, { status: 403 });
     }
     scoped = cfgForFilespace(cfg, fs);
+    folder = await canonicalFolder(folder, { tag: fs.prefix, prefix: fs.prefix });
+  } else {
+    folder = await canonicalFolder(folder);
   }
 
   if (body.thumb || body.poster || body.strip) {
@@ -138,6 +145,11 @@ export async function POST(req) {
     const held = body.thumb || body.poster || body.strip
       ? null
       : (k) => uploadKeyHeld(k, { by: email }).catch(() => false);
+    // A file just trashed from the key this one wants, whose object has not
+    // moved to the trash yet, is moved first — so a file put back under the
+    // same name (Finder's Replace: delete, then copy) keeps it, rather than
+    // becoming "name (2)" (lib/trash-move.js).
+    if (held && !replacing) await vacateTrashedKey(scoped, buildObjectKey(scoped, filename, folder), { budgetMs: 15_000 });
     out = await s3PresignPut(scoped, { filename, contentType, folder, cacheControl, key: replacing?.key || null, held });
     // The grid thumbnail's siblings, named from the key just made — never
     // from anything the client sent — and so under _thumbs/ with it.

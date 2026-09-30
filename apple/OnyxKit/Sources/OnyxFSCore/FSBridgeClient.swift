@@ -28,6 +28,12 @@ public final class FSBridgeClient: Sendable {
     private let bridge: URLSession
     private let longPoll: URLSession
     let storage: URLSession
+    /// What this disk moved, told to the app as it goes (`activity`). The
+    /// client counts what it fetches from storage; the engine counts what
+    /// apps read and write.
+    public let meter: TransferMeter
+    /// What the disk's streaming cache holds, asked as each report goes.
+    private let cacheTotal = CacheTotal()
 
     /// Exchanges the resource's ticket for a session (POST /fs/v1/session).
     /// A ticket works once and for two minutes; a spent or unknown one is
@@ -56,6 +62,28 @@ public final class FSBridgeClient: Sendable {
         bridge = sessions.bridge
         longPoll = sessions.longPoll
         storage = sessions.storage
+        // The meter reports through this client, and must not keep it.
+        let reporter = Reporter()
+        meter = TransferMeter { counts in try? await reporter.client?.activity(counts) }
+        reporter.client = self
+    }
+
+    private final class Reporter: @unchecked Sendable {
+        weak var client: FSBridgeClient?
+    }
+
+    private final class CacheTotal: @unchecked Sendable {
+        private let lock = NSLock()
+        private var source: (@Sendable () async -> Int64)?
+        func set(_ total: @escaping @Sendable () async -> Int64) { lock.withLock { source = total } }
+        var get: (@Sendable () async -> Int64)? { lock.withLock { source } }
+    }
+
+    /// Where the disk's streaming cache keeps its running total (ChunkStore):
+    /// every activity report carries it from then on, so the app shows the
+    /// cache's size without walking it. Set as the engine is made.
+    public func reportsCache(_ total: @escaping @Sendable () async -> Int64) {
+        cacheTotal.set(total)
     }
 
     deinit {
@@ -222,8 +250,34 @@ public final class FSBridgeClient: Sendable {
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         request.httpShouldHandleCookies = false
         let (data, response) = try await storage.data(for: request)
+        // Every byte storage sent, a range asked for again included: what
+        // the network carried.
+        meter.add(.download, data.count)
         guard let http = response as? HTTPURLResponse else { return (0, data, nil) }
         return (http.statusCode, data, http.value(forHTTPHeaderField: "Content-Range"))
+    }
+
+    /// POST /fs/v1/activity: what this disk moved since the last report
+    /// (TransferMeter), for the app's Activity window, and what its
+    /// streaming cache holds now (`reportsCache`) — nothing moved, only
+    /// that, as the disk mounts. An app that does not know the route
+    /// answers 404, and the report is dropped; one that does not know
+    /// `cache` passes it over.
+    public func activity(_ counts: TransferMeter.Counts) async throws {
+        var request = self.request("POST", "activity", query: [])
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let cache = await cacheTotal.get?()
+        request.httpBody = try JSONEncoder().encode(ActivityReport(read: counts.read, download: counts.download,
+                                                                   write: counts.write, cache: cache))
+        let (body, response) = try await Self.send(request, on: bridge)
+        try Self.check(response, body)
+    }
+
+    private struct ActivityReport: Encodable {
+        let read: Int64
+        let download: Int64
+        let write: Int64
+        let cache: Int64?
     }
 
     // MARK: - Plumbing

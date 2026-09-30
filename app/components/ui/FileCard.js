@@ -1,12 +1,13 @@
 'use client';
 
 import { memo, useEffect, useRef, useState } from 'react';
-import { effectiveKind, drawableKind, fmtDuration, fmtSize } from '@/lib/media';
+import { effectiveKind, drawableKind, fmtDuration, fmtSize, isThumbKey } from '@/lib/media';
 import { isUndersizedPoster, thumbSiblingSizes } from '@/lib/poster';
 import { thumbSources } from '@/lib/renditions';
 import { fileKey } from '@/lib/selection';
 import { watch } from '@/lib/thumb-observer';
 import Icon from '@/app/components/ui/Icon';
+import Waveform from '@/app/components/media/Waveform';
 import { FieldLine } from './FieldValue';
 
 /**
@@ -31,7 +32,8 @@ import { FieldLine } from './FieldValue';
  *
  * `onMissingThumb(file, opts)` asks the backfill queue (lib/thumbnail-client.js)
  * for what the tile lacks, once it is near the screen: a thumbnail, a sharper
- * one than the old 480px ones, or its smaller siblings.
+ * one than the old 480px ones, or its smaller siblings — or, for a sound, its
+ * waveform (`{ wave: true }`, lib/waveform-client.js).
  */
 
 // Lives in lib/media.js so server pages can use it too; re-exported here for
@@ -40,6 +42,14 @@ export { fmtSize };
 
 // A card's box before the grid is measured: a 240px column's 4:3 picture.
 const CARD_BOX = { width: 240, height: 180 };
+
+/** How many bars a sound's waveform is drawn with on a surface: about one every five pixels of a card. */
+function waveBars(surface, sizes) {
+  if (surface === 'row' || surface === 'palette' || surface === 'storage') return 10;
+  if (surface === 'info') return 28;
+  const width = typeof sizes === 'number' && sizes > 0 ? sizes : CARD_BOX.width;
+  return Math.max(20, Math.min(72, Math.round((width * 0.8) / 5)));
+}
 
 /** Whether a picture of `md` dimensions is smaller than `box` both ways, and so shown at its own size. */
 function smallerThan(md, box) {
@@ -52,8 +62,8 @@ function smallerThan(md, box) {
  * The picture of a file on a surface (lib/renditions.js): a card gets a
  * srcset of its sm sibling and the grid poster sized to the measured column
  * (`sizes`, CSS px); a list row, the palette and the storage pages its xs
- * sibling; Get info its sm. `eager` is for the first row of the grid, which
- * is on screen before anything else is.
+ * sibling; Get info its sm. `eager` is for the cards the grid's first screen
+ * shows, which are on screen before anything else is.
  */
 export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface = 'card', sizes, boxHeight, eager = false, fitMode = 'fill' }) {
   const kind = effectiveKind(file);
@@ -88,13 +98,27 @@ export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface 
   // picture too small to have any.
   const needsSizes = !!onMissingThumb && !needsThumb && !!file.thumbnailUrl && !hasSizes
     && (!known || Object.keys(thumbSiblingSizes(file.metadata)).length > 0);
+  // A sound's picture is its waveform (lib/waveform.js), drawn by an
+  // editor's browser for one that has none.
+  const wave = kind === 'audio' ? file.metadata?.waveform : null;
+  const needsWave = !!onMissingThumb && kind === 'audio' && !wave && file.storage === 's3' && file.can?.edit !== false;
+  // The thumbnail's picture, tiny (lib/placeholder.js), shown blurred under
+  // it until it loads — so a tile has its picture the moment it is drawn, not
+  // once its request comes back. A thumbnail from before placeholders gets
+  // one drawn from its smallest sibling by an editor's browser (the sizes job
+  // draws it for one without siblings).
+  const placeholder = src && fit !== 'scale-down' ? file.metadata?.placeholder : null;
+  const [loadedSrc, setLoadedSrc] = useState(null);
+  const needsPlaceholder = !!onMissingThumb && !needsThumb && !needsSizes && !!file.thumbnailUrl
+    && isThumbKey(file.thumbnailKey) && !file.metadata?.placeholder && file.can?.edit !== false;
 
   // Asked once the tile is near the viewport, through one shared observer.
   useEffect(() => {
     const el = ref.current;
-    if (!el || (!needsThumb && !needsSizes)) return undefined;
-    return watch(el, () => onMissingThumb(file, needsThumb ? {} : { sizes: true }));
-  }, [needsThumb, needsSizes, file, onMissingThumb]);
+    if (!el || (!needsThumb && !needsSizes && !needsWave && !needsPlaceholder)) return undefined;
+    const want = needsWave ? { wave: true } : needsThumb ? {} : needsSizes ? { sizes: true } : { placeholder: true };
+    return watch(el, () => onMissingThumb(file, want));
+  }, [needsThumb, needsSizes, needsWave, needsPlaceholder, file, onMissingThumb]);
 
   const inspect = (img) => {
     if (!img || !img.naturalWidth) return;
@@ -116,24 +140,35 @@ export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface 
       onMissingThumb(file, { upgrade: true });
     }
   };
-  const onLoad = (e) => inspect(e.currentTarget);
+  const onLoad = (e) => {
+    setLoadedSrc(src);
+    inspect(e.currentTarget);
+  };
   // The grid is server-rendered, and an image that finished loading before
   // hydration fired its `load` before React was listening — React does not
   // replay it — so a tile already on screen is inspected here instead.
   useEffect(() => {
     const img = imgRef.current;
-    if (img?.complete) inspect(img);
+    if (img?.complete && img.naturalWidth) {
+      setLoadedSrc(src);
+      inspect(img);
+    }
     // Once per picture; `inspect` reads the rest fresh on each call.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src]);
 
-  const duration = kind === 'video' ? fmtDuration(file.metadata?.duration) : '';
+  const duration = kind === 'video' || kind === 'audio' ? fmtDuration(file.metadata?.duration) : '';
+  const drawn = !src && wave;
   return (
-    <div ref={ref} className="filecard-thumb">
+    <div ref={ref} className={drawn ? 'filecard-thumb is-sound' : 'filecard-thumb'}>
+      {placeholder && loadedSrc !== src && (
+        <img className="thumb-ph" src={placeholder} alt="" aria-hidden draggable={false} style={{ objectFit: fit }} />
+      )}
       {src
         ? (
           <img
             ref={imgRef}
+            className="thumb-main"
             src={src}
             srcSet={srcSet}
             sizes={sizesAttr}
@@ -151,8 +186,11 @@ export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface 
             style={{ objectFit: fit }}
           />
         )
-        : <span className="muted small mono">{label || kind}</span>}
+        : drawn
+          ? <Waveform waveform={wave} count={waveBars(surface, sizes)} tone="aura" className="thumb-wave" />
+          : <span className="muted small mono">{label || kind}</span>}
       {kind === 'video' && <span className="filecard-badge"><Icon name="play" size={10} strokeWidth={2.5} fill="currentColor" />{duration}</span>}
+      {kind === 'audio' && duration && <span className="filecard-badge"><Icon name="audio-lines" size={10} strokeWidth={2.5} />{duration}</span>}
     </div>
   );
 });

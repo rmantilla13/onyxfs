@@ -7,6 +7,7 @@ import {
 } from '@/lib/video-time';
 import { frameIndexAt, framePosition, layoutFromMetadata } from '@/lib/filmstrip';
 import { pendingSeek } from '@/lib/pending-seek';
+import { frameFollower } from '@/lib/frame-follow';
 import useContainedRect from '@/app/components/review/useContainedRect';
 import Icon from '@/app/components/ui/Icon';
 
@@ -33,11 +34,14 @@ import Icon from '@/app/components/ui/Icon';
  * follows the presented frame with requestVideoFrameCallback, whose
  * `mediaTime` is the timestamp of the frame the compositor actually showed
  * (timeupdate fires four times a second and says nothing about frames), and
- * falls back to timeupdate/seeked where that API is missing. The rate is the
- * file's exact one when it was probed (lib/mp4-probe.js), so the timecode
- * reads as the NLE's does, start timecode and drop-frame included; without
- * one it assumes 30 and says so on hover. Seeks land mid-frame
- * (secondsOfFrame), the one instant Chrome and Safari agree on.
+ * falls back to timeupdate/seeked where that API is missing. That frame is
+ * kept exactly, and the label repainted from it a few times a second while
+ * playing and on every frame while paused (lib/frame-follow.js) — not a
+ * re-render of the whole player per frame. The rate is the file's exact one
+ * when it was probed (lib/mp4-probe.js), so the timecode reads as the NLE's
+ * does, start timecode and drop-frame included; without one it assumes 30 and
+ * says so on hover. Seeks land mid-frame (secondsOfFrame), the one instant
+ * Chrome and Safari agree on.
  *
  * REVIEW. `markers` are comments on the scrub bar (click one to land on its
  * frame), `overlay` renders inside the stage on the picture's own rectangle —
@@ -61,9 +65,10 @@ import Icon from '@/app/components/ui/Icon';
  *
  * HEAVY FILES. A multi-gigabyte master streamed from object storage seeks
  * badly, and every byte is egress. So while no proxy rendition exists the
- * player shows the poster and does not touch the master until someone presses
- * play — `preload="none"` until then. With a proxy it loads metadata eagerly,
- * because the proxy is small.
+ * player shows the poster and does not touch a master over HEAVY_BYTES until
+ * someone presses play — `preload="none"` until then. A proxy, or a clip under
+ * that, loads its metadata eagerly: it is small, and knowing its length and
+ * first frame early is what lets it start without a wait.
  */
 
 // Above this, warn that seeking will buffer. Under it, streaming the original
@@ -102,8 +107,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   const [hover, setHover] = useState(null);
   const [scrubbing, setScrubbing] = useState(false);
   const [error, setError] = useState(null);
-  // A proxy is small enough to preload; a master is not, so it waits for a
-  // deliberate press. `started` is what flips preload on.
+  // A proxy or a light clip is small enough to preload; a heavy master is
+  // not, so it waits for a deliberate press. `started` is what flips preload
+  // on for it.
   const [started, setStarted] = useState(false);
 
   // The picture's shape, which decides the stage's size in every state. The
@@ -163,9 +169,14 @@ const VideoPlayer = forwardRef(function VideoPlayer({
     [fps, md.tcStart, md.dropFrame],
   );
   const total = frameCount({ frames: md.frames, duration, fps });
-  const [frame, setFrame] = useState(() => frameAt(Number(startAt) || 0, fps));
-  const frameRef = useRef(frame);
-  frameRef.current = frame;
+  // `frame` is what the label shows. While playing it is repainted a few
+  // times a second, not on every frame (lib/frame-follow.js), so it can trail
+  // the picture by a frame or two; what acts on "this frame" — a step, In and
+  // Out, a comment, the review panel — reads the frame on screen, exactly,
+  // from onScreen.
+  const [frame, paintFrame] = useState(() => frameAt(Number(startAt) || 0, fps));
+  const onScreen = useRef(null);
+  if (!onScreen.current) onScreen.current = frameFollower(paintFrame, { start: frame });
 
   // The picture's own size, for placing the overlay on it: recorded at
   // upload, then the element's once its metadata arrives.
@@ -223,26 +234,36 @@ const VideoPlayer = forwardRef(function VideoPlayer({
 
   // Follow the frame on screen. requestVideoFrameCallback fires once per
   // presented frame, with that frame's timestamp — during playback, and once
-  // after each seek while paused. Where it is missing (older Firefox), the
-  // media events are the best there is.
+  // after each seek while paused. Every one is kept; the label is repainted
+  // from them at most fifteen times a second while playing, from each one
+  // while paused, and on pause with the frame playback stopped on
+  // (lib/frame-follow.js). Where the callback is missing (older Firefox), the
+  // media events are the best there is, and a few a second anyway.
   useEffect(() => {
     const v = video.current;
     if (!v) return undefined;
+    const follow = onScreen.current;
     // Until the source loads (a master waits for play) its currentTime is 0
     // whatever was asked for; the label shows where playback will start.
-    setFrame(frameAt(v.readyState > 0 ? v.currentTime : intent.current.pending() ?? 0, fps));
+    follow.set(frameAt(v.readyState > 0 ? v.currentTime : intent.current.pending() ?? 0, fps));
     if (typeof v.requestVideoFrameCallback === 'function') {
       let live = true;
       let handle = 0;
-      const tick = (_now, meta) => {
+      const tick = (now, meta) => {
         if (!live) return;
-        setFrame(frameAt(meta.mediaTime, fps));
+        follow.onFrame(frameAt(meta.mediaTime, fps), now, v.paused);
         handle = v.requestVideoFrameCallback(tick);
       };
+      const settle = () => follow.settle();
       handle = v.requestVideoFrameCallback(tick);
-      return () => { live = false; v.cancelVideoFrameCallback?.(handle); };
+      v.addEventListener('pause', settle);
+      return () => {
+        live = false;
+        v.cancelVideoFrameCallback?.(handle);
+        v.removeEventListener('pause', settle);
+      };
     }
-    const sync = () => setFrame(frameAt(v.currentTime, fps));
+    const sync = () => follow.set(frameAt(v.currentTime, fps));
     v.addEventListener('timeupdate', sync);
     v.addEventListener('seeked', sync);
     return () => {
@@ -273,7 +294,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
     onTime?.(clamped);
     // No frame will be presented to say where this landed until the source
     // loads, so the label moves now.
-    if (v.readyState === 0) setFrame(frameAt(clamped, fps));
+    if (v.readyState === 0) onScreen.current.set(frameAt(clamped, fps));
   }, [duration, fps, onTime]);
 
   // Where the player is, or will be once it has loaded: the base for a
@@ -289,13 +310,13 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   const seekToFrame = useCallback((n) => {
     const f = clampFrame(n, total);
     setStarted(true);
-    setFrame(f);
+    onScreen.current.set(f);
     seek(secondsOfFrame(f, fps));
   }, [seek, total, fps]);
 
   const step = useCallback((dir) => {
     video.current?.pause();
-    seekToFrame(frameRef.current + dir);
+    seekToFrame(onScreen.current.frame() + dir);
   }, [seekToFrame]);
 
   /**
@@ -306,7 +327,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
    */
   const hold = useCallback(() => {
     video.current?.pause();
-    if (!intent.current.presented()) seekToFrame(frameRef.current);
+    if (!intent.current.presented()) seekToFrame(onScreen.current.frame());
   }, [seekToFrame]);
 
   useImperativeHandle(ref, () => ({
@@ -316,8 +337,11 @@ const VideoPlayer = forwardRef(function VideoPlayer({
     seekTo: (seconds) => { setStarted(true); seek(seconds); },
     pause: () => video.current?.pause(),
     hold,
-    frame: () => frameRef.current,
+    frame: () => onScreen.current.frame(),
     time: position,
+    // The <video> itself, for "Download as…" to take a still of the frame on
+    // screen (from a copy of its own: this one is not CORS-read, so not readable).
+    element: () => video.current,
   }), [seekToFrame, hold, seek, position]);
 
   // A track added after the video loaded is not shown by `default` alone in
@@ -373,13 +397,13 @@ const VideoPlayer = forwardRef(function VideoPlayer({
     const out = Math.min(inFrame + 1, lastFrame);
     return out > inFrame ? { inFrame, outFrame: out } : { inFrame: Math.max(0, out - 1), outFrame: out };
   }, [lastFrame]);
-  const setIn = useCallback(() => setRange((r) => tidy({ ...r, inFrame: frameRef.current })), [tidy]);
-  const setOut = useCallback(() => setRange((r) => tidy({ ...r, outFrame: frameRef.current })), [tidy]);
+  const setIn = useCallback(() => setRange((r) => tidy({ ...r, inFrame: onScreen.current.frame() })), [tidy]);
+  const setOut = useCallback(() => setRange((r) => tidy({ ...r, outFrame: onScreen.current.frame() })), [tidy]);
   const clearRange = useCallback(() => setRange({ inFrame: null, outFrame: null }), []);
   const comment = useCallback(() => {
     if (!onComment) return;
     hold();
-    onComment({ frame: frameRef.current });
+    onComment({ frame: onScreen.current.frame() });
   }, [onComment, hold]);
 
   const toggleFullscreen = useCallback(() => {
@@ -475,9 +499,11 @@ const VideoPlayer = forwardRef(function VideoPlayer({
           playsInline
           // No picture-in-picture, the player's or the browser's hover button.
           disablePictureInPicture
-          // Nothing is fetched until play is pressed on a master with no
+          // Nothing is fetched until play is pressed on a heavy master with no
           // proxy: opening a detail page should not cost a gigabyte of egress.
-          preload={started || proxy ? 'metadata' : 'none'}
+          // A proxy or a light clip loads its metadata at once (`heavy` is
+          // false for both), so it starts without a wait.
+          preload={started || !heavy ? 'metadata' : 'none'}
           onClick={togglePlay}
           onLoadedMetadata={(e) => {
             setReady(true);

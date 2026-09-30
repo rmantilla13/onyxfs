@@ -1,18 +1,22 @@
 import { NextResponse } from 'next/server';
 import {
   createUpload, getUpload, deleteUpload, touchUpload, listUploads, getFilespaceForUser, getFilespaceForWrite,
-  issueUploadKey, uploadKeyHeld,
+  issueUploadKey, uploadKeyHeld, canonicalFolder,
 } from '@/lib/db';
 import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 import { replacementTarget, replacementKey } from '@/lib/replace-content';
+import { vacateTrashedKey } from '@/lib/trash-move';
 import {
-  getStorageConfig, storageMode, cfgForFilespace, choosePartSize, partCount, buildObjectKey,
+  getStorageConfig, storageMode, cfgForFilespace, partSizeFor, partCount, buildObjectKey,
   s3CreateMultipartUpload, s3PresignUploadParts, s3ListParts,
   s3CompleteMultipartUpload, s3AbortMultipartUpload,
 } from '@/lib/storage';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// Room for moving a just-trashed file out of the key a new one wants
+// (vacateTrashedKey, at most 15 s).
+export const maxDuration = 30;
 
 /**
  * Resumable multipart upload.
@@ -22,7 +26,9 @@ export const dynamic = 'force-dynamic';
  * retryable parts.
  *
  * Actions (POST body `action`):
- *   create    → start an upload, get { id, partSize, partCount }
+ *   create    → start an upload, get { id, partSize, partCount }; an optional
+ *               `partSize` asks for parts of that size (lib/storage.js
+ *               partSizeFor says what is honoured)
  *   sign      → presign a batch of part URLs
  *   status    → which parts S3 already holds (this is what resume reads)
  *   complete  → assemble the parts into the final object
@@ -116,14 +122,21 @@ export async function POST(req) {
         const fs = await getFilespaceForWrite(email, body.filespaceId, principal);
         if (!fs) return noWrite();
         scoped = cfgForFilespace(cfg, fs);
+        body.folder = await canonicalFolder(body.folder, { tag: fs.prefix, prefix: fs.prefix });
       }
+      // Composed, and spelled as the folder already there is (canonicalFolder).
+      if (!replacing && !body.filespaceId) body.folder = await canonicalFolder(body.folder);
 
       // choosePartSize throws above the provider's single-object ceiling —
       // 5 TiB on S3, 10 TB on B2. Surfacing that here, before a single byte
       // moves, is much kinder than failing on the final assemble. It reads
       // the ceiling from the config the upload will actually use, so a
       // filespace on a different provider gets that provider's limit.
-      const partSize = choosePartSize(size, scoped);
+      // `partSize` is the size the client would like its parts, which the
+      // browser sets well above the floor; partSizeFor keeps it inside the
+      // limits, and what it settles on is what every later action — and a
+      // resume — uses.
+      const partSize = partSizeFor(size, scoped, body.partSize);
 
       // As in the presign route: a role that may add files, landing inside a
       // drive takes its editor, and the size is held to the limits — for new
@@ -135,6 +148,9 @@ export async function POST(req) {
       });
       if (!d.ok) return refusal(d);
 
+      // A just-trashed file still at the key this one wants moves to the
+      // trash first, so this one keeps its name (lib/trash-move.js).
+      if (!replacing) await vacateTrashedKey(scoped, buildObjectKey(scoped, body.filename, body.folder), { budgetMs: 15_000 });
       const { uploadId, key, name } = await s3CreateMultipartUpload(scoped, {
         filename: replacing ? replacing.file.name : body.filename,
         contentType: body.mime,

@@ -5,14 +5,17 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { fmtSize } from '@/lib/media';
 import { plural } from '@/lib/admin-format';
+import { attentionItems } from '@/lib/admin-overview';
 import NewDriveDialog from '@/app/components/drives/NewDriveDialog';
 import { useDeleteDrive } from '@/app/components/drives/DeleteDriveConfirm';
 import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
 import { useToast } from '@/app/components/ui/Toast';
-import AdminPage from '../_ui/AdminPage';
+import AdminPage, { AdminCard } from '../_ui/AdminPage';
 import AdminState from '../_ui/AdminState';
+import AttentionItem from '../_ui/AttentionItem';
 import DataTable from '../_ui/DataTable';
 import { useDrawerReturn } from '../_ui/RouteDrawer';
+import ClaimDrives from './ClaimDrives';
 import DriveLocation from './DriveLocation';
 
 const size = (n) => fmtSize(n) || '0 B';
@@ -21,6 +24,10 @@ const driveHref = (d, hash = '') => `/admin/drives/${encodeURIComponent(d.id)}${
 /**
  * Every drive, one row each; a row opens the drive's drawer, and closing it
  * puts the keyboard back on that row (useDrawerReturn).
+ *
+ * Drives with no owner are tagged in their rows, and above the list is the
+ * Overview's warning about them, with the same fix (ClaimDrives) — less its
+ * "Open drives" link, which would lead here.
  */
 export default function DrivesList({ rows, storage }) {
   const router = useRouter();
@@ -28,6 +35,8 @@ export default function DrivesList({ rows, storage }) {
   const toast = useToast();
   const [making, setMaking] = useState(false);
   const { deleteDrive, deleteElement } = useDeleteDrive();
+  const ownerless = attentionItems({ drivesWithoutOwner: rows.filter((d) => d.owners === 0) })
+    .map((item) => (item.href === '/admin/drives' ? { ...item, href: null } : item));
 
   const remove = async (d) => {
     const done = await deleteDrive(d);
@@ -78,6 +87,17 @@ export default function DrivesList({ rows, storage }) {
       description="Each drive is a folder in a bucket with its own members — a disk of its own on the desktop."
       actions={<button type="button" className="btn btn-primary" onClick={() => setMaking(true)}>New drive…</button>}
     >
+      {ownerless.length > 0 && (
+        <AdminCard>
+          <ul className="attention" aria-label="Needs attention">
+            {ownerless.map((item) => (
+              <AttentionItem key={item.id} item={item}>
+                <ClaimDrives drives={item.claim} />
+              </AttentionItem>
+            ))}
+          </ul>
+        </AdminCard>
+      )}
       <DataTable
         label="Drives"
         columns={columns}
@@ -106,7 +126,7 @@ export default function DrivesList({ rows, storage }) {
         onClose={() => setMaking(false)}
         onCreated={(d) => {
           setMaking(false);
-          toast.success(`Made the drive “${d.name}”. Add its members next.`);
+          toast.success(`Made the drive “${d.name}”, with you as its owner. Add its members next.`);
           router.push(driveHref(d, '#members'), { scroll: false });
           router.refresh();
         }}

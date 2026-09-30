@@ -93,11 +93,19 @@ public struct FileMetadata: Codable, Sendable, Equatable {
     public var height: Double?
     /// Seconds, for video and audio.
     public var duration: Double?
+    /// A sound's shape (Waveform), once a browser or a Mac has drawn it.
+    public var waveform: Waveform?
+    /// The thumbnail's picture, tiny (Placeholder): what a tile shows,
+    /// softened, until the thumbnail itself has come. Only ever beside the
+    /// thumbnail it is a copy of.
+    public var placeholder: Placeholder?
 
-    enum CodingKeys: String, CodingKey { case width, height, duration }
+    enum CodingKeys: String, CodingKey { case width, height, duration, waveform, placeholder }
 
-    public init(width: Double? = nil, height: Double? = nil, duration: Double? = nil) {
-        self.width = width; self.height = height; self.duration = duration
+    public init(width: Double? = nil, height: Double? = nil, duration: Double? = nil, waveform: Waveform? = nil,
+                placeholder: Placeholder? = nil) {
+        self.width = width; self.height = height; self.duration = duration; self.waveform = waveform
+        self.placeholder = placeholder
     }
 
     public init(from decoder: Decoder) throws {
@@ -110,6 +118,12 @@ public struct FileMetadata: Codable, Sendable, Equatable {
         width = number(.width)
         height = number(.height)
         duration = number(.duration)
+        // One this cannot read is no waveform, not a file that fails to decode.
+        waveform = (try? c.decodeIfPresent(String.self, forKey: .waveform)).flatMap { $0.flatMap(Waveform.init(stored:)) }
+        // Likewise a placeholder: checked as the server checks one, and
+        // none if it is not one. Well under a microsecond a row, which a Mac
+        // syncing a drive pays too, though it shows no tiles of its own.
+        placeholder = (try? c.decodeIfPresent(String.self, forKey: .placeholder)).flatMap { $0.flatMap(Placeholder.init(dataURL:)) }
     }
 }
 
@@ -150,8 +164,13 @@ public struct DeltaPage: Codable, Sendable {
     /// the replica must start again from cursor 0 (lib/sync-scope.js).
     public let scope: String?
     /// Present when asked for (`folders=1`): every folder of the scope, whole,
-    /// so empty ones appear. Nil means "not sent", not "no folders".
+    /// so empty ones appear. Nil means "not sent", not "no folders" — nor,
+    /// when `foldersTag` is the one the request sent back, any change.
     public let folders: [String]?
+    /// A digest of the folder list, with it (`folders=1`). Sent back with
+    /// the next request, it leaves the list out while the list is still
+    /// this one (lib/sync-scope.js foldersTag). Nil from an older server.
+    public var foldersTag: String? = nil
 }
 
 /// A drive (a "filespace" on the wire): a named folder of the bucket with
@@ -172,23 +191,52 @@ public struct Filespace: Codable, Sendable, Identifiable, Equatable, Hashable {
     /// web — which its disk icon is drawn in (DriveIcon). Absent from older
     /// servers.
     public let color: String?
+    /// What this account may do to the drive's files: its drive role and
+    /// its platform role together (WriteCaps). Absent from older servers.
+    public let can: WriteCaps?
 
     public var isMember: Bool { member ?? true }
 
-    /// Whether this account may add files to the drive, as far as the app
-    /// can tell: an editor or owner (an admin is listed as owner). The
-    /// server caps `role` at what the platform role allows, but does not say
-    /// whether that role may upload at all (`files.upload`), so a custom role
-    /// that may not reads as able to here — and the server refuses its
-    /// writes, as it re-checks every one. Decides what the Mac offers, never
-    /// what is allowed.
-    public var mayAddFiles: Bool { role == "editor" || role == "owner" }
+    /// Whether the drive's disk is offered writable: when the server says
+    /// what this account may do (`can`), whether it may do anything at all
+    /// — so a custom role that may not upload, edit, delete or manage
+    /// folders gets a read-only disk even as the drive's editor. An older
+    /// server does not say, and then it is an editor or owner (an admin is
+    /// listed as owner). Decides what the Mac offers, never what is allowed:
+    /// the server re-checks every write.
+    public var mayAddFiles: Bool {
+        if let can { return can.anyWrite }
+        return role == "editor" || role == "owner"
+    }
 
     public init(id: String, name: String, bucket: String? = nil, prefix: String? = nil,
-                region: String? = nil, role: String? = nil, member: Bool? = nil, color: String? = nil) {
+                region: String? = nil, role: String? = nil, member: Bool? = nil, color: String? = nil,
+                can: WriteCaps? = nil) {
         self.id = id; self.name = name; self.bucket = bucket; self.prefix = prefix
         self.region = region; self.role = role; self.member = member; self.color = color
+        self.can = can
     }
+}
+
+/// What this account may do to the files in one place — a drive, or the
+/// library — as `/api/space/filespaces` says (`can`): add files (`upload`),
+/// rename or move them (`edit`), delete them (`delete`), and make, rename,
+/// move or remove folders (`folders`). Each is its platform role's
+/// capability, and for a drive its drive role's as well. A missing one is
+/// false.
+public struct WriteCaps: Codable, Sendable, Equatable, Hashable {
+    public let upload: Bool?
+    public let edit: Bool?
+    public let delete: Bool?
+    public let folders: Bool?
+
+    public init(upload: Bool? = nil, edit: Bool? = nil, delete: Bool? = nil, folders: Bool? = nil) {
+        self.upload = upload; self.edit = edit; self.delete = delete; self.folders = folders
+    }
+
+    /// Whether any change at all is allowed: what makes a disk writable.
+    /// Each change is still the server's to refuse alone.
+    public var anyWrite: Bool { upload == true || edit == true || delete == true || folders == true }
 }
 
 /// Where to fetch one file's bytes (`GET /api/space/files/<id>`). Presigned,
@@ -199,6 +247,10 @@ public struct ContentLink: Codable, Sendable {
     public let expiresAt: EpochMillis?
     public let version: Int?
     public let contentHash: String?
+    /// A video's streamable copy, when one has been made: what a player
+    /// should play, the original being what is downloaded. Nil from a server
+    /// that does not send it.
+    public let proxyUrl: URL?
 }
 
 /// `POST /api/desktop/web-session`: the one-time URL that signs a web view in.

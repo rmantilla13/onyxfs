@@ -6,6 +6,7 @@ import { getSessionUser } from '@/lib/session';
 import { getPrincipal, can } from '@/lib/authz';
 import { presignFileUrls } from '@/lib/storage';
 import TopNav from '@/app/components/TopNav';
+import PreviewPreconnect from '@/app/components/PreviewPreconnect';
 import FileDetail from '@/app/components/file/FileDetail';
 import { buildLabel, buildDetail } from '@/lib/version';
 import { parseTimecode, secondsOfFrame, toRate, ASSUMED_RATE } from '@/lib/video-time';
@@ -113,9 +114,13 @@ export default async function FilePage({ params, searchParams }) {
   // And one that takes comments: a public or password link that is also a
   // review link, to a photo or a video.
   const canReviewLinks = canShare && isReviewableKind(effectiveKind(file)) && ['shares.public', 'review.links'].every(linkable);
+  const signed = signedList[0];
 
   return (
     <>
+      {/* Where the viewer's layers come from: the previews' bucket, and the
+          original's, which a drive of its own keeps elsewhere. */}
+      <PreviewPreconnect urls={[signed.thumbnailUrl, signed.posterUrl, signed.proxyUrl, signed.url]} />
       <TopNav
         build={{ label: buildLabel(), detail: buildDetail() }}
         brandName={brand.name}
@@ -126,7 +131,7 @@ export default async function FilePage({ params, searchParams }) {
         filespaces={filespaces}
       />
       <FileDetail
-        file={signedList[0]}
+        file={signed}
         canWrite={canWrite}
         // Sharing takes a link capability AND write access to the file; the
         // routes check both again.

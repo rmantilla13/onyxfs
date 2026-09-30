@@ -14,15 +14,18 @@ import { crumbsFor } from '@/lib/folder-ops';
  * to the open one. Every crumb above the open folder is a way back up and a
  * drop target, so files can be dragged to a folder above without the
  * sidebar; each carries data-folder, so the page's context menu treats it as
- * that folder.
+ * that folder. A crumb held under a drag does not spring open (DragPreview):
+ * opening it would take away the crumb being aimed at.
  *
  * Right: Upload (files, a folder, a new folder — for someone who may add
- * here), Activity (what changed most recently), and the sidebar's toggle.
+ * here), Share (a link to the open folder, when there is one and this person
+ * may make its links: `onShare`), Activity (what changed most recently), and
+ * the sidebar's toggle.
  */
 /* icons: upload folder-open folder-plus */
 export default function FilesHeader({
   folder, rootName, color, canWrite, onOpen, onDrop, onUploadFiles, onUploadFolder, onNewFolder,
-  filespaceId, onOpenFile, onShowRecent, sidebarOpen, onToggleSidebar,
+  filespaceId, onOpenFile, onShowRecent, onShare = null, sidebarOpen, onToggleSidebar,
 }) {
   const crumbs = crumbsFor(folder, rootName);
   const here = crumbs[crumbs.length - 1];
@@ -47,7 +50,7 @@ export default function FilesHeader({
         <ol>
           {crumbs.slice(0, -1).map((c) => (
             <li key={c.path || '/'} className="crumb-item">
-              <FolderDrop target={c.path} enabled={canWrite} onDrop={onDrop} className="crumb-drop">
+              <FolderDrop target={c.path} enabled={canWrite} onDrop={onDrop} spring={false} className="crumb-drop">
                 <button type="button" className="crumb" data-folder={c.path} title={c.path || c.name} onClick={() => onOpen(c.path)}>
                   {c.name}
                 </button>
@@ -73,6 +76,17 @@ export default function FilesHeader({
             <MenuSeparator />
             <MenuItem icon="folder-plus" onClick={onNewFolder}>New folder…</MenuItem>
           </Menu>
+        )}
+        {onShare && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon hdr-btn"
+            onClick={onShare}
+            aria-label={`Share “${here.name}”`}
+            title="Share this folder"
+          >
+            <Icon name="link" size={18} />
+          </button>
         )}
         <ActivityPopover filespaceId={filespaceId} folder={folder} rootName={rootName} onOpen={onOpenFile} onShowAll={onShowRecent} />
         <button

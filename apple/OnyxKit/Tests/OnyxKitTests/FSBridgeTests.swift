@@ -598,7 +598,10 @@ struct FSBridgeTests {
 
     @Test func aLongPollWhoseDriveIsUnmountedMeanwhileGetsNothing() async throws {
         let rig = try await rig(); defer { rig.remove() }
-        let poll = Task { await ask(rig, "changes", ["since": String(Self.first), "wait": "0.3"]) }
+        // A wait well past the unmount: under load (a 4K encode in another
+        // test) a 100 ms sleep can overrun a short one, and the poll then
+        // ends with its wait instead.
+        let poll = Task { await ask(rig, "changes", ["since": String(Self.first), "wait": "2"]) }
         try await Task.sleep(for: .milliseconds(100))
         rig.bridge.end(scope: Self.scope)
         let answer = await poll.value
@@ -669,6 +672,16 @@ struct FSBridgeTests {
         func drive(_ role: String?) -> Filespace { Filespace(id: "d", name: "D", role: role) }
         #expect(drive("owner").mayAddFiles && drive("editor").mayAddFiles)
         #expect(!drive("viewer").mayAddFiles && !drive(nil).mayAddFiles && !drive("Owner").mayAddFiles)
+    }
+
+    /// When the server says what the account may do (`can`), that decides:
+    /// an editor whose role may change nothing gets a read-only disk.
+    @Test func aDriveIsWritableOnlyWhereTheServerSaysSomethingMayChange() {
+        let none = WriteCaps(upload: false, edit: false, delete: false, folders: false)
+        #expect(!Filespace(id: "d", name: "D", role: "editor", can: none).mayAddFiles)
+        #expect(Filespace(id: "d", name: "D", role: "editor", can: WriteCaps(upload: false, delete: true)).mayAddFiles)
+        #expect(!WriteCaps().anyWrite)
+        #expect(WriteCaps(upload: true).anyWrite)
     }
 
     // MARK: - The resource URL

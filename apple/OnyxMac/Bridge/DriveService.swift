@@ -9,7 +9,8 @@ import OnyxKit
 /// together, and holds their settings.
 ///
 ///   mirror   each drive's tree, from the server's access-checked feed —
-///            exactly what the web shows this account, synced every 15 s
+///            exactly what the web shows this account, synced every 5 s
+///            while anything is happening, less often when nothing is
 ///   bridge   answers rclone from the mirror; reads go to storage by redirect,
 ///            or to a pinned copy
 ///   mounts   one rclone NFS mount per drive, under ~/Onyx
@@ -35,11 +36,30 @@ final class DriveService: ObservableObject {
     /// when it did not.
     @Published var turningOnDisks = false
     @Published var turnOnProblem: String?
+    /// Sent to System Settings to switch the Onyx file system on, and it is
+    /// still off: the note says a restart may be what it takes.
+    @Published var switchDidNotTake = false
+    /// What Onyx remembers of its file system's switch across launches: was
+    /// it on, what was said (FileSystemSwitch). The first time, a disk that
+    /// had its icon says it was on.
+    var switchMemory = FileSystemSwitch.Memory.load(disksSeen: DiskIcons.anyRecorded)
+    /// This run's look at the switch as the drives come back: once a run.
+    var switchDecided = false
+    /// When the person was last sent to System Settings for the switch, and
+    /// the watch for it coming on (watchForSwitch).
+    var settingsOpenedAt: ContinuousClock.Instant?
+    var switchWatch: Task<Void, Never>?
     @Published private(set) var pinnedFiles: Set<String> = []
     @Published private(set) var pinRules: [PinRule] = []
     /// Folder rules naming no folder in their drive now: renamed or deleted
     /// on the web. What they kept stays meanwhile (PinStore.unresolved).
     @Published private(set) var unresolvedPins: Set<PinRule> = []
+    /// What each drive keeps offline, by path as mounted, and what of it is
+    /// not here yet: for Finder's menus and marks (FinderSyncService). Not
+    /// published, since it changes with every file a pass brings and nothing
+    /// on screen here shows it; `onKeptPathsChanged` says when it does.
+    private(set) var keptPaths: [String: KeptPaths] = [:]
+    var onKeptPathsChanged: (() -> Void)?
     @Published private(set) var pinnedBytes: Int64 = 0
     @Published private(set) var streamingBytes: Int64 = 0
     @Published private(set) var syncing: Set<String> = []
@@ -68,9 +88,31 @@ final class DriveService: ObservableObject {
     var uploads: UploadQueue?
     /// One per drive with a disk: Finder's changes, made on the server.
     var writers: [String: DriveWriter] = [:]
-    @Published var uploadSummary = UploadSummary()
-    /// Moves the menu's upload percentage while something is on its way.
+    /// Files waiting to upload keep Onyx out of App Nap (WorkActivity), from
+    /// the first one queued until the last is up or given up on.
+    @Published var uploadSummary = UploadSummary() {
+        didSet { WorkActivity.app.set(.uploads, uploadSummary.waiting > 0) }
+    }
+    /// Asks the queue for the menu's summary, a few times a second while
+    /// anything changes or is on its way (summarizeUploads), and is nil
+    /// when nothing is.
     var uploadTicker: Task<Void, Never>?
+    /// Moved by each sign-in and sign-out: a summary loop from before one
+    /// does not clear the next one's ticker.
+    var uploadSummaryRound = 0
+    /// Set by the queue's news, from its own thread; the summary loop
+    /// clears it as it asks. What starts a loop when none runs.
+    let uploadSummaryWanted = OSAllocatedUnfairLock(initialState: false)
+    /// What the drives moved, second by second, for the Activity window: the
+    /// disks' own reports, uploads and offline copies. Kept by adding; read
+    /// only while the window is open.
+    let transfers = TransferLog()
+    /// Told after each pass that brought a drive's mirror up to date, with
+    /// what it changed, and of each upload the server has now — before the
+    /// queue lets go of its copy: the thumbnail worker's way in
+    /// (ThumbnailService).
+    var onMirrorSynced: ((DriveMirror, Replica.Diff) -> Void)?
+    var onUploadFinished: ((UploadJob) -> Void)?
     private let server = DAVServer()
     private var mirrors: [String: DriveMirror] = [:]
     private var names: [String: String] = [:]
@@ -99,9 +141,29 @@ final class DriveService: ObservableObject {
     private var active: Int?
     private var tickingGeneration: Int?
     private var tickAgain = false
+    /// The next tick, and when it is due (`scheduleTick`).
+    private var nextTick: (timer: Timer, at: ContinuousClock.Instant)?
+    /// When anything last happened that the drives should keep up with: a
+    /// change made here, a change the server showed, an upload on its way,
+    /// Onyx brought forward. How soon the next tick comes goes by it.
+    private var lastActivity = ContinuousClock.now
+    /// Syncs asked for as uploads finish, by drive (`syncSoon`): whether
+    /// another is wanted after the one under way, and under which sign-in.
+    private var soonSyncs: [String: (generation: Int, again: Bool)] = [:]
     /// Scopes being reconciled; true when another pass is wanted after.
     private var reconciling: [String: Bool] = [:]
-    private var timer: Timer?
+    /// Each pinned drive's last pass: the mirror it read (its revision, and
+    /// whether it was whole), and when. A tick asks for another only when
+    /// something is owed (`reconcileOwed`).
+    private var reconciled: [String: (revision: UInt64, whole: Bool, at: ContinuousClock.Instant)] = [:]
+    /// Views showing the cache's figures now (Settings › Storage): only
+    /// while there are any is the streaming folder walked for them.
+    private var usageShown = 0
+    /// Each disk's streaming cache, as its extension last said: its own
+    /// running total, so nothing is walked for it. Written from the
+    /// bridge's threads. A disk not mounted now keeps its last figure — its
+    /// cache stays on this Mac.
+    private let diskCaches = OSAllocatedUnfairLock<[String: Int64]>(initialState: [:])
     weak var model: AppModel?
     private let defaults = UserDefaults.standard
     private var forwarding: AnyCancellable?
@@ -124,7 +186,29 @@ final class DriveService: ObservableObject {
         forwarding = mounts.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         setUpDisks()
         mounts.onEjected = { [weak self] scope in self?.forgetWanted(scope) }
+        // What each disk read, fetched and was given, as its extension
+        // reports it about once a second (POST /fs/v1/activity), and what
+        // its streaming cache holds.
+        let transfers = self.transfers, diskCaches = self.diskCaches
+        server.fs.onActivity { scope, moved in
+            transfers.add(.read, moved.read)
+            transfers.add(.download, moved.download)
+            transfers.add(.write, moved.write)
+            if let cache = moved.cache { diskCaches.withLock { $0[scope] = cache } }
+        }
+        // Bytes going by — apps reading and writing the disks, and every
+        // transfer counted here — keep Onyx out of App Nap until a few
+        // seconds pass with none. Woken by the first bytes after a quiet
+        // spell, never polled while nothing moves (the Activity graphs hear
+        // the same wake, ActivityClock).
+        let quiet: @Sendable () -> Bool = { [weak transfers] in transfers?.quiet(for: 2) ?? true }
+        transfers.onWake = {
+            WorkActivity.app.poke(.transfers, every: DriveService.transfersLookEvery, quiet: quiet)
+        }
     }
+
+    /// How often bytes going by are looked for while they move.
+    nonisolated static let transfersLookEvery: Duration = .seconds(2)
 
     /// ~/Library/Application Support/Onyx/Offline: not Caches, which macOS
     /// may empty on its own — pinned files are promised to stay.
@@ -205,13 +289,14 @@ final class DriveService: ObservableObject {
         active = started
         await mountWanted()
         guard started == generation else { return }
-        timer?.invalidate()
-        // Every 5 s: a mounted drive is to show what the web shows, and a
-        // delta pass with nothing new is one small request.
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            Task { await self?.tick() }
-        }
-        Task { await tick() }
+        // Is the Onyx file system as the person left it? If not, they hear
+        // why their drives are in ~/Onyx (FileSystemSwitch).
+        await decideFileSystemSwitch()
+        guard started == generation else { return }
+        // A mounted drive is to show what the web shows: every 5 s while
+        // anything is happening, and less often when nothing is (tickPace).
+        lastActivity = .now
+        Task { await ticked() }
     }
 
     /// Sign-out: unmount everything and stop syncing. Pinned copies stay on
@@ -220,8 +305,10 @@ final class DriveService: ObservableObject {
     func stop() {
         generation += 1
         active = nil
-        timer?.invalidate()
-        timer = nil
+        nextTick?.timer.invalidate()
+        nextTick = nil
+        soonSyncs = [:]
+        reconciled = [:]
         mounts.unmountAllNow()
         stopDisks()
         for key in mirrors.keys { server.setRoute(MountManager.remoteName(SyncDomain(identifier: key)!), nil) }
@@ -241,6 +328,7 @@ final class DriveService: ObservableObject {
         unresolvedPins = []
         pinnedBytes = 0
         offlineProblem = nil
+        setKeptPaths([:])
     }
 
     func quit() {
@@ -297,22 +385,39 @@ final class DriveService: ObservableObject {
         }
     }
 
-    /// The file system extension just came on (Settings › Turn On): each
-    /// drive in ~/Onyx moves to a disk of its own. One whose folder mount
-    /// will not let go (a file open on it) stays where it is until the next
-    /// launch; one whose disk does not mount comes back to ~/Onyx, as always.
+    /// The file system extension just came on — switched on in System
+    /// Settings while Onyx runs, or by Turn On: each drive in ~/Onyx moves to
+    /// a disk of its own, and with the last of them "localhost" leaves
+    /// Finder's sidebar. One whose folder mount will not let go (a file open
+    /// on it) stays where it is until the next launch; one whose disk does not
+    /// mount comes back to ~/Onyx, as always.
+    ///
+    /// One pass at a time: asked again while one runs (the switch's news and
+    /// Turn On's own answer can arrive together), one more pass follows it.
     func remountAsDisks() async {
-        guard let model else { return }
-        let started = generation
-        var drives: [(SyncDomain, String)] = model.finderDrives.map { (.drive(id: $0.id), $0.name) }
-        drives.append((.library, MountFolder.library))
-        for (scope, name) in drives where wantMounted.contains(scope.identifier) && mounts.state(of: scope) != nil {
-            await mounts.unmount(scope)
-            guard started == generation else { return }
-            guard mounts.state(of: scope) == nil else { continue }
-            await mount(scope, name: name)
+        if remounting {
+            remountAgain = true
+            return
         }
+        remounting = true
+        defer { remounting = false }
+        repeat {
+            remountAgain = false
+            guard let model else { return }
+            let started = generation
+            var drives: [(SyncDomain, String)] = model.finderDrives.map { (.drive(id: $0.id), $0.name) }
+            drives.append((.library, MountFolder.library))
+            for (scope, name) in drives where wantMounted.contains(scope.identifier) && mounts.state(of: scope) != nil {
+                await mounts.unmount(scope)
+                guard started == generation else { return }
+                guard mounts.state(of: scope) == nil else { continue }
+                await mount(scope, name: name)
+            }
+        } while remountAgain
     }
+
+    private var remounting = false
+    private var remountAgain = false
 
     private func mount(_ scope: SyncDomain, name: String) async {
         let started = generation
@@ -356,10 +461,53 @@ final class DriveService: ObservableObject {
     /// After a change Finder made: the drive's mirror now, not at the next
     /// tick, so the next listing already shows it.
     func syncForWrites(_ scope: SyncDomain) async {
+        noteActivity()
         guard let mirror = mirrors[scope.identifier] else { return }
-        _ = try? await mirror.sync()
+        if let diff = try? await sync(mirror) { onMirrorSynced?(mirror, diff) }
         await writers[scope.identifier]?.mirrorChanged()
     }
+
+    /// A drive's mirror brought up to the server — held as work in flight
+    /// (WorkActivity) once it has gone on past `syncGrace`, so a pass
+    /// bringing pages goes at full speed with the window closed. A quiet
+    /// pass, a few hundred bytes, is over well before and never touches the
+    /// activity: its timer is called off unfired.
+    private func sync(_ mirror: DriveMirror) async throws -> Replica.Diff {
+        let hold = WorkActivity.app.begin(.sync, grace: Self.syncGrace)
+        defer { hold.end() }
+        return try await mirror.sync()
+    }
+
+    static let syncGrace: Duration = .seconds(2)
+
+    /// After an upload finished: the drive's mirror before long, so the file
+    /// leaves pending for the server's copy. At once for the first; then at
+    /// most once a second, however many finish meanwhile — a thousand
+    /// photos copied in were a thousand syncs, each fetching the drive's
+    /// folders, one per file. The file is listed all along, read from its
+    /// copy here.
+    func syncSoon(_ scope: SyncDomain) {
+        let id = scope.identifier
+        if soonSyncs[id]?.generation == generation {
+            soonSyncs[id]?.again = true
+            return
+        }
+        let started = generation
+        soonSyncs[id] = (started, false)
+        Task {
+            while started == generation, soonSyncs[id]?.generation == started {
+                soonSyncs[id]?.again = false
+                let began = ContinuousClock.now
+                await syncForWrites(scope)
+                try? await Task.sleep(until: began + .seconds(1), clock: .continuous)
+                guard soonSyncs[id]?.generation == started, soonSyncs[id]?.again == true else { break }
+            }
+            if soonSyncs[id]?.generation == started { soonSyncs[id] = nil }
+        }
+    }
+
+    /// The drives' mirrors open now.
+    var openMirrors: [DriveMirror] { Array(mirrors.values) }
 
     func reveal(_ scope: SyncDomain) {
         if diskState(of: scope) != nil { diskReveal(scope) } else { mounts.reveal(scope) }
@@ -435,17 +583,18 @@ final class DriveService: ObservableObject {
 
     /// The disk's name and figures, asked for afresh by `/fs/v1/volume`.
     ///
-    /// Writable only when this account may add to the drive: an editor or
-    /// owner (Filespace.mayAddFiles). The drive list does not say whether
-    /// the account's role may upload at all (`files.upload`), and nothing
-    /// says so of the library — which the web lets anyone who may upload add
-    /// to — so the library is writable for an admin only. The server checks
-    /// every write again whatever this says.
+    /// Writable only when this account may change something there, as the
+    /// server says (`can` in the drive list): a drive's editor or owner
+    /// whose platform role allows it (Filespace.mayAddFiles), and for the
+    /// library anyone whose role may upload, as on the web
+    /// (AppModel.libraryWritable). From an older server, which does not say,
+    /// a drive's editors and owners, and the library for an admin only. The
+    /// server checks every write again whatever this says.
     private func onyxfsVolume(_ scope: SyncDomain) -> FSVolumeInfo {
         let limit = Int64(max(0, cacheLimitGB)) << 30
         switch scope {
         case .library:
-            return FSVolumeInfo(name: MountFolder.library, readOnly: !(model?.isAdmin ?? false), cacheLimitBytes: limit)
+            return FSVolumeInfo(name: MountFolder.library, readOnly: !(model?.libraryWritable ?? false), cacheLimitBytes: limit)
         case let .drive(id):
             let drive = model?.drives.first { $0.id == id }
             return FSVolumeInfo(name: drive?.name ?? names[scope.identifier] ?? id,
@@ -498,7 +647,8 @@ final class DriveService: ObservableObject {
         // The first listing waits for a sync, so a new mount does not open empty.
         if await mirror.lastSynced == nil {
             do {
-                _ = try await mirror.sync()
+                let diff = try await sync(mirror)
+                onMirrorSynced?(mirror, diff)
             } catch OnyxError.driveGone {
                 // Not with the thresholds as they are — a first sync is one
                 // refusal (DriveMirror.refusalsBeforeGone) — but should they
@@ -556,12 +706,71 @@ final class DriveService: ObservableObject {
         await model?.refresh()
     }
 
-    /// Every 15 s: bring each mirror that is mounted or pinned up to the
-    /// server, and fetch whatever a pin now wants.
+    // MARK: - Ticking
+
+    /// How often a tick comes: every 5 s within a minute of anything
+    /// happening, or while a window is open; every 30 s after that; every
+    /// minute once ten have gone by with nothing. Each tick is a request per
+    /// drive, and a Mac left alone need not make twelve a minute for each.
+    static let activePace: Duration = .seconds(5)
+    static let idlePace: Duration = .seconds(30)
+    static let restingPace: Duration = .seconds(60)
+    static let activeFor: Duration = .seconds(60)
+    static let idleFor: Duration = .seconds(600)
+    /// A pinned drive's copies are looked at on a tick at least this often
+    /// with nothing else owed: a copy deleted by hand is fetched again.
+    static let reconcileAtLeastEvery: Duration = .seconds(600)
+    /// And this often while the last pass could not do everything (the
+    /// cache's disk full or gone), in case it can now.
+    static let reconcileAfterProblem: Duration = .seconds(60)
+
+    /// Something happened the drives should keep up with: the ticks come
+    /// every 5 s for the next minute, the next one within 5 s.
+    func noteActivity() {
+        lastActivity = .now
+        if let nextTick, nextTick.at > .now + Self.activePace { scheduleTick(in: Self.activePace) }
+    }
+
+    /// The pace now (`activePace` and the rest).
+    private var tickPace: Duration {
+        let quiet = ContinuousClock.now - lastActivity
+        if quiet < Self.activeFor || Self.windowIsOpen { return Self.activePace }
+        return quiet < Self.idleFor ? Self.idlePace : Self.restingPace
+    }
+
+    /// Onyx's own window on screen: the person is looking at the drives.
+    private static var windowIsOpen: Bool {
+        NSApp.windows.contains { $0.isVisible && $0.canBecomeMain && !($0 is NSPanel) }
+    }
+
+    /// One timer, for the next tick only, set again after each: the pace
+    /// can change between two. Given a tenth of its wait as tolerance, so
+    /// macOS may fold its firing in with other work rather than wake for it.
+    private func scheduleTick(in delay: Duration) {
+        nextTick?.timer.invalidate()
+        let seconds = Double(delay.components.seconds) + Double(delay.components.attoseconds) / 1e18
+        let timer = Timer(timeInterval: seconds, repeats: false) { [weak self] _ in
+            Task { @MainActor in await self?.ticked() }
+        }
+        timer.tolerance = seconds / 10
+        RunLoop.main.add(timer, forMode: .common)
+        nextTick = (timer, .now + delay)
+    }
+
+    /// A tick, then the next one set for the pace it leaves.
+    private func ticked() async {
+        nextTick?.timer.invalidate()
+        nextTick = nil
+        await tick()
+        guard active == generation, model?.phase == .signedIn, nextTick == nil else { return }
+        scheduleTick(in: tickPace)
+    }
+
+    /// Bring each mirror that is mounted or pinned up to the server, and
+    /// fetch whatever a pin now wants.
     ///
-    /// One at a time. The timer fires whatever the last tick is doing, and
-    /// a tick that finds one running asks it to go round once more instead
-    /// of starting a second.
+    /// One tick at a time. A tick asked for while one runs (syncNow) asks
+    /// it to go round once more instead of starting a second.
     private func tick() async {
         guard model?.phase == .signedIn else { return }
         if tickingGeneration == generation {
@@ -585,58 +794,88 @@ final class DriveService: ObservableObject {
             await model.refresh()
             guard started == generation else { return }
         }
-        // A cache disk plugged back in: its store opens now.
+        // And every five minutes once it has: a colour or name changed on
+        // the web reaches the drive's disk icon (drivesChanged).
+        await model?.refreshIfOlder(than: 300)
+        guard started == generation else { return }
+        // Drives in ~/Onyx because the Onyx file system is off: switched on
+        // in System Settings since, they become disks now, not at the next
+        // launch. Asked only while that is so.
+        await checkFileSystemSwitch()
+        guard started == generation else { return }
+        // A cache disk plugged back in: its store opens now, and every
+        // pinned drive is owed a pass on it.
         if pins == nil {
             openPins()
-            if pins != nil { await refreshPins() }
+            if pins != nil {
+                reconciled = [:]
+                await refreshPins()
+            }
             guard started == generation else { return }
         }
         let pinnedScopes = Set(pinRules.map(\.scope))
+        let due = mirrors.filter { wantMounted.contains($0.key) || pinnedScopes.contains($0.key) || onyxfsScopes.contains($0.key) }
         var gone: Set<String> = []
-        for (id, mirror) in mirrors where wantMounted.contains(id) || pinnedScopes.contains(id) || onyxfsScopes.contains(id) {
+        // One drive after another. They went four at a time in a task group
+        // in 0.5.14, and on macOS 27 the group's children crashed the app as
+        // they reported back — EXC_BAD_ACCESS in TaskGroup::offer, the moment
+        // a launch's first syncs finished, on every launch. A drive with
+        // nothing new answers in a few hundred milliseconds; in turn is what
+        // 0.5.13 did, for as long as it ran.
+        for (id, mirror) in due {
             guard started == generation else { return }
             syncing.insert(id)
-            do {
-                _ = try await mirror.sync()
+            let result: Result<Replica.Diff, Error>
+            do { result = .success(try await sync(mirror)) } catch { result = .failure(error) }
+            // Signed out while it synced: nothing more for that account.
+            guard started == generation else { return }
+            switch result {
+            case let .success(diff):
+                onMirrorSynced?(mirror, diff)
+                // Something changed on the web: the ticks keep up for a while.
+                if !diff.isEmpty { noteActivity() }
                 // Files this Mac uploaded that the mirror now shows stop
                 // being pending, and their staged copies go.
                 await writers[id]?.mirrorChanged()
                 if isOffline {
                     isOffline = false
                     // Back: what failed for want of a network is tried now,
-                    // not after its wait.
+                    // not after its wait — every pinned drive's.
                     await pins?.retryNow()
+                    reconciled = [:]
                 }
-            } catch OnyxError.notAuthenticated {
-                syncing.remove(id)
-                // Only for the sign-in this tick began under: signed out
-                // meanwhile, the token was simply gone, and whoever is
-                // signed in now is not to be signed out for it.
-                if started == generation { await model?.tokenRejected() }
-                return
-            } catch OnyxError.driveGone {
-                syncing.remove(id)
-                guard started == generation else { return }
-                gone.insert(id)
-                await driveGone(mirror.scope)
-                continue
-            } catch is URLError {
-                // Offline: the mount keeps answering from the last good
-                // mirror, and pinned files keep working.
-                isOffline = true
-            } catch {
-                // A server hiccup: the same, and the next tick tries again.
-                // A refusal of the drive lands here too until it has gone on
-                // long enough to be believed; the mirror withholds the drive
-                // meanwhile, and a pass against it deletes nothing.
+            case let .failure(error):
+                if case .notAuthenticated? = error as? OnyxError {
+                    syncing.remove(id)
+                    // For the sign-in this tick began under, which it still is
+                    // (checked above): whoever is signed in now is not to be
+                    // signed out for another's token.
+                    await model?.tokenRejected()
+                    return
+                }
+                if case .driveGone? = error as? OnyxError {
+                    syncing.remove(id)
+                    gone.insert(id)
+                    await driveGone(mirror.scope)
+                    continue
+                }
+                if error is URLError {
+                    // Offline: the mount keeps answering from the last good
+                    // mirror, and pinned files keep working.
+                    isOffline = true
+                }
+                // Otherwise a server hiccup: the same, and the next tick tries
+                // again. A refusal of the drive lands here too until it has
+                // gone on long enough to be believed; the mirror withholds the
+                // drive meanwhile, and a pass against it deletes nothing.
             }
-            // Signed out while it synced: nothing more for that account.
             guard started == generation else { return }
             syncing.remove(id)
             // Not waited for: a pin downloading for hours must not hold up
             // the syncing of every drive after this one.
-            if pinnedScopes.contains(id) { reconcileSoon(id) }
+            if pinnedScopes.contains(id), await reconcileOwed(id, mirror) { reconcileSoon(id) }
         }
+        guard started == generation else { return }
         // Pins in drives that are not mounted still need their mirror.
         for scope in pinnedScopes where mirrors[scope] == nil && !gone.contains(scope) {
             // Checked before opening one, which would be for whoever is
@@ -647,12 +886,37 @@ final class DriveService: ObservableObject {
             guard started == generation else { return }
             if opened != nil { reconcileSoon(scope) }
         }
-        await refreshUsage()
+        // Only for someone looking: Settings › Storage.
+        if usageShown > 0 { await refreshUsage() }
+    }
+
+    /// Whether a pinned drive's copies are owed a pass: its mirror shows
+    /// something new since the last one read it, a failed download is due
+    /// again, or it has been a while. Each pass looks at every copy on disk,
+    /// and one every tick for a drive kept offline whole was a hundred
+    /// thousand stats every few seconds, with nothing changed.
+    private func reconcileOwed(_ scope: String, _ mirror: DriveMirror) async -> Bool {
+        guard let last = reconciled[scope] else { return true }
+        let (revision, index) = await mirror.snapshot
+        if revision != last.revision || index.isAuthoritative != last.whole { return true }
+        let since = ContinuousClock.now - last.at
+        if since >= Self.reconcileAtLeastEvery { return true }
+        guard let pins else { return false }
+        if await pins.retryDue(scope: scope) { return true }
+        // The cache's disk unplugged, or back, since the last pass said
+        // otherwise: a pass finds out, and Settings says so (one look at
+        // /Volumes, not at the copies).
+        let problem = await pins.problem
+        if PinStore.isOnMissingVolume(cacheRoot) != (problem == .unavailable) { return true }
+        return since >= Self.reconcileAfterProblem && problem != nil
     }
 
     func syncNow() async {
-        // Asked for: whatever is waiting to be tried again goes now.
+        // Asked for: whatever is waiting to be tried again goes now, and
+        // every pinned drive is looked at.
         await pins?.retryNow()
+        reconciled = [:]
+        noteActivity()
         await tick()
     }
 
@@ -680,7 +944,8 @@ final class DriveService: ObservableObject {
         if on { await pin(rules) } else { await unpin(rules) }
     }
 
-    private func pin(_ rules: [PinRule]) async {
+    /// Many at once, in any drives (Finder's Keep Offline on a selection).
+    func pin(_ rules: [PinRule]) async {
         guard let pins, !rules.isEmpty else { return }
         let started = generation
         await pins.pin(rules)
@@ -695,7 +960,7 @@ final class DriveService: ObservableObject {
         }
     }
 
-    private func unpin(_ rules: [PinRule]) async {
+    func unpin(_ rules: [PinRule]) async {
         guard let pins, !rules.isEmpty else { return }
         let started = generation
         await pins.unpin(rules)
@@ -707,6 +972,21 @@ final class DriveService: ObservableObject {
     func localCopy(scope: String, entry: MirrorEntry) async -> URL? {
         guard let id = entry.fileId else { return nil }
         return await pins?.localCopy(scope: scope, fileId: id, etag: entry.etag)
+    }
+
+    /// A file's copy kept offline, found by its id alone, for the proxy
+    /// worker, which has no drive for it: in whichever open drive's mirror
+    /// has the file, and only at the version that mirror has now, as a read
+    /// from Finder would be served. With it, what the mirror says of the
+    /// bytes: its size, and its etag (the content hash, where the server has
+    /// one).
+    func keptCopy(fileId: String) async -> (url: URL, entry: MirrorEntry)? {
+        for (scope, mirror) in mirrors {
+            guard let entry = await mirror.snapshot.index.file(id: fileId),
+                  let url = await localCopy(scope: scope, entry: entry) else { continue }
+            return (url, entry)
+        }
+        return nil
     }
 
     /// A pass for `scope` soon, not waited for. One at a time per scope: a
@@ -738,19 +1018,31 @@ final class DriveService: ObservableObject {
         let started = generation
         downloading += 1
         defer { downloading -= 1 }
-        let index = await mirror.index
+        let (revision, index) = await mirror.snapshot
         guard started == generation else { return }
+        reconciled[scope] = (revision, index.isAuthoritative, .now)
+        // Finder's marks: what this pass is to bring shows as on its way,
+        // and each file as here the moment it is.
+        await refreshKeptPaths(scope, index: index, pins: pins)
+        guard started == generation else { return }
+        let arrived = copyArrived(in: scope)
+        let transfers = self.transfers
         let report = await pins.reconcile(scope: scope, index: index) { entry, destination in
             guard let id = entry.fileId else { throw OnyxError.decoding("not a file") }
+            // Work in flight while this copy comes down (WorkActivity): what
+            // is kept offline arrives as fast with the window closed as open.
+            let fetching = WorkActivity.app.begin(.offlineCopies)
+            defer { fetching.end() }
             let url = try await mirror.contentURL(fileId: id)
             // Straight into the store's folder, on the cache's own disk.
             do {
-                try await FileDownload.fetch(url, to: destination)
+                try await FileDownload.fetch(url, to: destination, received: { transfers.add(.download, $0) })
             } catch let OnyxError.http(status, message) {
                 // Storage refused the link: the next try fetches a new one.
                 await mirror.forgetContentURL(fileId: id)
                 throw OnyxError.http(status: status, message: message)
             }
+            arrived(entry.path)
         }
         guard started == generation else { return }
         if !report.failed.isEmpty {
@@ -788,6 +1080,7 @@ final class DriveService: ObservableObject {
             pinnedFiles = []
             unresolvedPins = []
             pinnedBytes = 0
+            setKeptPaths([:])
             model?.web.publishOfflineState()
             return
         }
@@ -795,12 +1088,19 @@ final class DriveService: ObservableObject {
         let scopes = Set(rules.map(\.scope))
         var files = Set<String>()
         var unresolved = Set<PinRule>()
+        var kept: [String: KeptPaths] = [:]
         for (scope, mirror) in mirrors where scopes.contains(scope) {
             let index = await mirror.index
-            for entry in await pins.wanted(scope: scope, index: index) {
+            let wanted = await pins.wanted(scope: scope, index: index)
+            for entry in wanted {
                 if let id = entry.fileId { files.insert(id) }
             }
             unresolved.formUnion(await pins.unresolved(scope: scope, index: index))
+            if onKeptPathsChanged != nil {
+                let local = await pins.keptOffline(scope: scope, wanted)
+                kept[scope] = KeptPaths.make(rules: rules.filter { $0.scope == scope }, index: index,
+                                             wanted: wanted, kept: local)
+            }
         }
         for rule in rules { if case let .file(id) = rule.target { files.insert(id) } }
         let bytes = await pins.usage()
@@ -812,7 +1112,42 @@ final class DriveService: ObservableObject {
         unresolvedPins = unresolved
         pinnedBytes = bytes
         offlineProblem = describe(problem)
+        setKeptPaths(kept)
         model?.web.publishOfflineState()
+    }
+
+    /// One drive's kept paths from its index now (keptPaths): as each of its
+    /// passes begins. Only while Finder's extension is listened for.
+    private func refreshKeptPaths(_ scope: String, index: MirrorIndex, pins: PinStore) async {
+        guard onKeptPathsChanged != nil else { return }
+        let started = generation
+        let rules = await pins.rules(scope: scope)
+        let wanted = await pins.wanted(scope: scope, index: index)
+        let local = await pins.keptOffline(scope: scope, wanted)
+        guard started == generation else { return }
+        var all = keptPaths
+        all[scope] = KeptPaths.make(rules: rules, index: index, wanted: wanted, kept: local)
+        setKeptPaths(all)
+    }
+
+    /// For a pass's downloads, which run off the main thread: a copy that
+    /// has just come down leaves `pending` now, not when the pass ends.
+    private func copyArrived(in scope: String) -> @Sendable (String) -> Void {
+        guard onKeptPathsChanged != nil else { return { _ in } }
+        let started = generation
+        return { [weak self] path in
+            Task { @MainActor in
+                guard let self, started == self.generation,
+                      self.keptPaths[scope]?.pending.remove(path) != nil else { return }
+                self.onKeptPathsChanged?()
+            }
+        }
+    }
+
+    private func setKeptPaths(_ paths: [String: KeptPaths]) {
+        guard paths != keptPaths else { return }
+        keptPaths = paths
+        onKeptPathsChanged?()
     }
 
     private func describe(_ problem: PinStore.Problem?) -> String? {
@@ -832,16 +1167,31 @@ final class DriveService: ObservableObject {
 
     // MARK: - Cache settings
 
+    /// Settings › Storage on screen (`true`) or gone: its figures are
+    /// brought up to date now and with each tick while it shows them, and
+    /// not otherwise.
+    func showUsage(_ shown: Bool) {
+        usageShown = max(0, usageShown + (shown ? 1 : -1))
+        guard shown else { return }
+        noteActivity()
+        Task { await refreshUsage() }
+    }
+
+    /// The cache's figures: what is kept offline, from the store's records,
+    /// and what is streamed — the disks' caches as their extensions report
+    /// them, and the folder mounts' (rclone's, which keeps no total of its
+    /// own) walked. Only when asked for: each tick walked every file of
+    /// that folder, with no one looking.
     private func refreshUsage() async {
         let started = generation
         let bytes = await pins?.usage() ?? 0
         let problem = await pins?.problem
         let dir = streamingDirectory
-        let streamed = await Task.detached { Self.directorySize(dir) }.value
+        let streamed = await Task.detached(priority: .utility) { Self.directorySize(dir) }.value
         guard started == generation else { return }
         pinnedBytes = bytes
         if pins != nil { offlineProblem = describe(problem) }
-        streamingBytes = streamed
+        streamingBytes = streamed + diskCaches.withLock { $0.values.reduce(0, +) }
     }
 
     /// Move everything — pinned copies and the streaming cache — to a folder

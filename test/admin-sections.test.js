@@ -68,7 +68,8 @@ describe('rail: the admin sections', () => {
   test('groups in the design order; unbuilt sections are left out, not shown disabled', () => {
     assert.deepEqual(ADMIN_NAV.map((g) => g.label || ''), ['', 'People', 'Content', 'Storage', 'AI', 'System']);
     assert.deepEqual(items.map((i) => i.href), [
-      '/admin', '/admin/requests', '/admin/drives', '/admin/usage', '/admin/usage/duplicates', '/admin/storage', '/admin/health',
+      '/admin', '/admin/requests', '/admin/drives', '/admin/usage', '/admin/usage/duplicates', '/admin/usage/prices',
+      '/admin/previews', '/admin/storage', '/admin/health',
     ]);
     assert.equal(items.some((i) => i.disabled), false);
   });
@@ -86,6 +87,8 @@ describe('rail: the admin sections', () => {
     assert.equal(activeHref('/admin', items), '/admin');
     assert.equal(activeHref('/admin/drives/abc', items), '/admin/drives');
     assert.equal(activeHref('/admin/usage/duplicates', items), '/admin/usage/duplicates');
+    assert.equal(activeHref('/admin/usage/prices', items), '/admin/usage/prices');
+    assert.equal(activeHref('/admin/previews', items), '/admin/previews');
     assert.equal(activeHref('/admin/requests?status=denied', items), '/admin/requests');
   });
 });

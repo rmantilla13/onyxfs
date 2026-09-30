@@ -62,8 +62,8 @@ public protocol UploadTransport: Sendable {
              progress: @escaping @Sendable (Int64) -> Void) async throws
 }
 
-/// Uploads, one after another in pairs, surviving a restart of the app and
-/// a network that comes and goes. The web's own flow (OnyxAPI.Writes): a
+/// Uploads, several at once, surviving a restart of the app and a network
+/// that comes and goes. The web's own flow (OnyxAPI.Writes): a
 /// small file in one presigned PUT, a large one in parts, then recorded —
 /// or, for a file saved over, swapped in as that file's new contents.
 ///
@@ -72,20 +72,73 @@ public protocol UploadTransport: Sendable {
 /// it does not (no network, a 5xx, storage timing out) is retried with
 /// backoff, a large upload picking up at the parts the bucket already has,
 /// and bytes already in storage are never sent twice.
+///
+/// Jobs start in the order they came. A new one first waits out its settle
+/// moment (`settle`) beside every other, not in one of the four slots: a
+/// thousand files copied at once all settle together, then go as fast as
+/// the line takes them. It went two files a second when each waited in a
+/// slot of its own.
+///
+/// Every change is on disk before anything is done about it, as one line
+/// added to jobs.log; now and then jobs.json is written whole and the log
+/// emptied (`compact`). Written whole on every change, a thousand files
+/// copied in cost some 700 MB of writing.
 public actor UploadQueue {
     public static let multipartThreshold: Int64 = 64 << 20
-    static let concurrency = 2
+    /// Files at once. A small one is a presign, one PUT from the file on disk
+    /// and a record — mostly waiting on the network, little of this Mac's —
+    /// so a folder of photos goes four at a time.
+    static let concurrency = 4
+    /// Of those, large ones (in parts) at once: each sends its own parts in
+    /// parallel already.
+    static let largeConcurrency = 2
+    /// A large file's parts in flight at once. One after another, each part
+    /// waited out a round trip to storage before the next began, which on a
+    /// fast line is most of the time; in parallel the line stays full. Each
+    /// is read into memory (8 MB at the server's usual part size), so at
+    /// most largeConcurrency × this — 64 MB — while two large files go up,
+    /// and nothing when none does.
+    static let partConcurrency = 4
+    /// Parts signed in one request to the server. The next batch is asked
+    /// for while this one's parts are sending, so the line never stops to
+    /// wait for signatures (`send`).
+    static let signBatch = 16
     static let maxAttempts = 12
+    /// jobs.log is folded into jobs.json once it has outgrown the queue it
+    /// describes: past twice what jobs.json last took, and past this. So
+    /// what is written whole is of the order of what was added since, never
+    /// the whole queue again for each change.
+    static let logFloor = 256 << 10
+    /// And not more often than this, however fast jobs change.
+    static let compactInterval: Duration = .seconds(1)
+    static let jobsFile = "jobs.json"
+    static let logFile = "jobs.log"
+
+    /// What the menu bar says about uploads, asked for in one go.
+    public struct Summary: Sendable, Equatable {
+        /// Jobs not done yet: waiting, sending, or between tries.
+        public var waiting = 0
+        public var sentBytes: Int64 = 0
+        public var totalBytes: Int64 = 0
+        /// The name of one on its way, for "Uploading Take 1.mov".
+        public var current: String?
+        public var failed: [UploadJob] = []
+
+        public init() {}
+
+        public var fraction: Double { totalBytes > 0 ? min(1, Double(sentBytes) / Double(totalBytes)) : 0 }
+    }
 
     private let directory: URL
     private let transport: any UploadTransport
-    /// Seconds a new job waits before anything is sent (UploadQueue.run).
+    /// Seconds a new job waits before anything is sent: see `settleLater`.
     private let settle: Double
     private var jobs: [UUID: UploadJob] = [:]
     /// The task sending each job, under a token of its own: a job started
     /// over gets a new task, and the old one, still unwinding, changes
     /// nothing.
     private var running: [UUID: (token: UUID, task: Task<Void, Never>)] = [:]
+    /// Bytes sent so far, for the jobs still here that have sent any.
     private var progress: [UUID: Int64] = [:]
     /// Jobs finished this run → the file each became. The writer asks this
     /// rather than waiting to be told, so a rename or delete that comes
@@ -98,6 +151,49 @@ public actor UploadQueue {
     private var onChange: (@Sendable (UploadJob) -> Void)?
     private var sleep: @Sendable (Double) async -> Void
 
+    /// Every job in the order it came, for jobs.json and `all`: a restart
+    /// goes on in the same order. Ids of jobs that have left stay until the
+    /// next `compact`.
+    private var arrival: [UUID] = []
+    /// Each job waiting out its settle moment, and when that moment ends.
+    /// A job with none here has settled (or never had to), and may start.
+    private var notBefore: [UUID: ContinuousClock.Instant] = [:]
+    /// Jobs waiting out their settle moment, soonest first — each waits the
+    /// same, so in the order they came. An entry whose job has left, or was
+    /// started over (a later moment in `notBefore`), is passed over.
+    private var settling = Line<(id: UUID, at: ContinuousClock.Instant)>()
+    /// Jobs whose moment has passed, in order, each waiting for a slot.
+    private var ready = Line<UUID>()
+    /// Large ones that came up while both large slots were taken: they go
+    /// first when one frees, and a small one behind them goes meanwhile.
+    private var heldLarge = Line<UUID>()
+    /// The one timer: for the soonest settle moment still to come.
+    private var timer: (at: ContinuousClock.Instant, task: Task<Void, Never>)?
+
+    /// Kept as jobs change, so the menu bar's summary counts nothing.
+    private var waitingCount = 0
+    private var waitingBytes: Int64 = 0
+    private var failedIDs = Set<UUID>()
+
+    /// jobs.log, open for adding to while the queue lives; -1 until first used.
+    private var log: Int32 = -1
+    /// Bytes of whole lines in jobs.log.
+    private var logBytes = 0
+    /// What jobs.json took when last written.
+    private var snapshotBytes = 0
+    private var compactedAt: ContinuousClock.Instant?
+
+    /// What the queue has written, for tests and the bench.
+    struct DiskWrites: Sendable, Equatable {
+        /// jobs.json written whole.
+        var snapshots = 0
+        var snapshotBytes = 0
+        /// Lines added to jobs.log.
+        var appends = 0
+        var appendBytes = 0
+    }
+    private(set) var disk = DiskWrites()
+
     public init(directory: URL, transport: any UploadTransport, settle: Double = 2,
                 sleep: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(nanoseconds: UInt64($0 * 1e9)) }) throws {
         self.directory = directory
@@ -106,12 +202,50 @@ public actor UploadQueue {
         self.sleep = sleep
         let files = directory.appendingPathComponent("files")
         try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
-        if let data = try? Data(contentsOf: directory.appendingPathComponent("jobs.json")),
-           let saved = try? JSONDecoder().decode([UploadJob].self, from: data) {
-            for var job in saved where job.state != .done {
-                // Interrupted mid-upload: it starts again (resuming its parts).
-                if job.state == .uploading { job.state = .queued }
-                jobs[job.id] = job
+        let (saved, logged) = Self.load(directory)
+        var jobs: [UUID: UploadJob] = [:]
+        var arrival: [UUID] = []
+        var ready = Line<UUID>()
+        var waitingCount = 0, waitingBytes: Int64 = 0, failedIDs = Set<UUID>()
+        for var job in saved where job.state != .done && jobs[job.id] == nil {
+            // Interrupted mid-upload: it starts again (resuming its parts).
+            if job.state == .uploading { job.state = .queued }
+            jobs[job.id] = job
+            arrival.append(job.id)
+            switch job.state {
+            case .queued, .uploading:
+                // No settle moment: what it was for (an app's save, the move
+                // that follows it) cannot reach a job from before a restart.
+                waitingCount += 1
+                waitingBytes += job.size
+                ready.append(job.id)
+            case .failed:
+                failedIDs.insert(job.id)
+            case .done:
+                break
+            }
+        }
+        self.jobs = jobs
+        self.arrival = arrival
+        self.ready = ready
+        self.waitingCount = waitingCount
+        self.waitingBytes = waitingBytes
+        self.failedIDs = failedIDs
+        if let whole = logged {
+            // Folded in now, so jobs.log starts empty and stays short.
+            let logURL = directory.appendingPathComponent(Self.logFile)
+            let list = arrival.compactMap { jobs[$0] }
+            if let data = try? JSONEncoder().encode(list),
+               (try? data.write(to: directory.appendingPathComponent(Self.jobsFile), options: .atomic)) != nil {
+                try? FileManager.default.removeItem(at: logURL)
+                snapshotBytes = data.count
+                disk.snapshots = 1
+                disk.snapshotBytes = data.count
+            } else {
+                // Kept, to be added to: it holds what jobs.json lacks. A line
+                // a crash cut short goes first, or the next would join it.
+                _ = logURL.withUnsafeFileSystemRepresentation { $0.map { truncate($0, off_t(whole)) } }
+                logBytes = whole
             }
         }
         // Copies kept for reading by the last run: nothing reads them now.
@@ -121,6 +255,11 @@ public actor UploadQueue {
         }
     }
 
+    deinit {
+        if log >= 0 { close(log) }
+        timer?.task.cancel()
+    }
+
     /// Told of every change to a job (for the menu bar, and the bridge's
     /// pending entries).
     public func observe(_ handler: @escaping @Sendable (UploadJob) -> Void) { onChange = handler }
@@ -128,6 +267,10 @@ public actor UploadQueue {
     /// Takes the file at `source` into the queue's own folder (moved, not
     /// copied, when it is on the same disk) and starts it. `replaceOf`: the
     /// file it was saved over, whose contents it becomes.
+    ///
+    /// On disk before it returns: the bridge answers Finder's copy with it,
+    /// and a job lost to a crash after that would be a file that never
+    /// arrives, its bytes swept away at the next launch.
     @discardableResult
     public func enqueue(from source: URL, scope: String, filespaceId: String?, folder: String,
                         name: String, mime: String, replaceOf: String? = nil,
@@ -144,9 +287,9 @@ public actor UploadQueue {
                             staged: staged.path, size: size, mime: mime, replaceOf: replaceOf, multipartId: nil,
                             state: .queued, attempts: 0, lastError: nil, fileId: nil,
                             fileCreatedAt: created, fileModifiedAt: modified)
-        jobs[id] = job
-        save()
-        onChange?(job)
+        arrival.append(id)
+        update(job)
+        settleLater(id)
         pump()
         return job
     }
@@ -154,7 +297,8 @@ public actor UploadQueue {
     /// Start whatever is waiting (at launch, or after a sign-in).
     public func resume() { pump() }
 
-    public func all() -> [UploadJob] { jobs.values.sorted { $0.path < $1.path } }
+    /// Every job still here, in the order they came.
+    public func all() -> [UploadJob] { arrival.compactMap { jobs[$0] } }
 
     public func job(_ id: UUID) -> UploadJob? { jobs[id] }
 
@@ -163,12 +307,28 @@ public actor UploadQueue {
 
     /// A finished job's copy is no longer read: it goes.
     public func release(_ id: UUID) {
+        recorded[id] = nil
         guard let staged = retained.removeValue(forKey: id) else { return }
         try? FileManager.default.removeItem(atPath: staged)
     }
 
     /// Bytes sent so far, for progress.
     public func sent(_ id: UUID) -> Int64 { progress[id] ?? 0 }
+
+    /// How many are on their way, how far they have got, and which did not
+    /// make it: one question, however many jobs there are. The menu bar
+    /// asked for every job, then for each one's progress in turn, on every
+    /// change to any of them.
+    public func summary() -> Summary {
+        var summary = Summary()
+        summary.waiting = waitingCount
+        summary.totalBytes = waitingBytes
+        for (id, sent) in progress where jobs[id].map(Self.isWaiting) ?? false { summary.sentBytes += sent }
+        summary.current = running.keys.lazy.compactMap { self.jobs[$0]?.name }.first
+            ?? arrival.lazy.compactMap { self.jobs[$0] }.first(where: Self.isWaiting)?.name
+        summary.failed = failedIDs.compactMap { jobs[$0] }.sorted { $0.path < $1.path }
+        return summary
+    }
 
     /// A job not yet done whose file is at `path` in `scope` — a rename in
     /// Finder of a file still uploading moves where it will land.
@@ -183,11 +343,12 @@ public actor UploadQueue {
     /// contents it becomes (how an app saves: a new copy, moved over the
     /// old). A key is issued for one or the other — a new file's cannot be
     /// swapped into a file, nor the reverse — so an upload under way as the
-    /// other kind starts again.
+    /// other kind starts again, with a settle moment of its own.
     public func retarget(_ id: UUID, folder: String, name: String, replacing: String?) {
         guard var job = jobs[id], job.fileId == nil else { return }
         job.folder = folder
         job.name = name
+        var startedOver = false
         if job.replaceOf != replacing {
             job.replaceOf = replacing
             // Waiting its moment, or between attempts, with nothing sent:
@@ -198,57 +359,145 @@ public actor UploadQueue {
                 job.state = .queued
                 job.attempts = 0
                 progress[id] = nil
+                startedOver = true
             }
         }
-        jobs[id] = job
-        save()
-        onChange?(job)
+        update(job)
+        if startedOver { settleLater(id) }
         pump()
     }
 
     /// Deleted in Finder before it finished: it never arrives.
     public func cancel(_ id: UUID) {
         running.removeValue(forKey: id)?.task.cancel()
-        guard var job = jobs.removeValue(forKey: id) else { return }
+        guard var job = remove(id) else { return }
         abortLater(forget(&job))
         try? FileManager.default.removeItem(atPath: job.staged)
-        save()
+        pump()
     }
 
-    /// Try a failed one again (the menu's "Retry").
+    /// Try a failed one again (the menu's "Retry"): at once, since nothing
+    /// Finder does now can make it another kind of upload.
     public func retry(_ id: UUID) {
         guard var job = jobs[id], job.state == .failed else { return }
         job.state = .queued
         job.attempts = 0
         job.lastError = nil
-        jobs[id] = job
-        save()
-        onChange?(job)
+        update(job)
+        notBefore[id] = nil
+        ready.append(id)
         pump()
     }
 
     // MARK: - Running
 
-    private func pump() {
-        let waiting = jobs.values.filter { $0.state == .queued && running[$0.id] == nil }
-            .sorted { $0.id.uuidString < $1.id.uuidString }
-        for job in waiting.prefix(max(0, Self.concurrency - running.count)) {
-            let token = UUID()
-            running[job.id] = (token, Task { await self.run(job.id, token: token) })
+    /// A new job, or one started over as the other kind, waits `settle`
+    /// before anything is sent: an app saving a document writes a new copy,
+    /// then moves it over the old one — and the move decides what this is
+    /// (a new file, or new contents for that one). Deleted in that moment,
+    /// nothing is sent at all. It waits outside the four slots, so every
+    /// job copied in at once waits out the same moment together.
+    private func settleLater(_ id: UUID) {
+        let at = ContinuousClock.now + .seconds(settle)
+        notBefore[id] = at
+        settling.append((id, at))
+    }
+
+    /// Starts what can start: each job past its settle moment, in the order
+    /// they came, while there are slots. `deadline`: the moment the timer
+    /// was set for, and has reached — every job settled by then is due,
+    /// whatever the clock says (a test's timer is let go by hand).
+    private func pump(dueBy deadline: ContinuousClock.Instant? = nil) {
+        let now = ContinuousClock.now
+        let due = deadline.map { max($0, now) } ?? now
+        while let next = settling.first, next.at <= due {
+            settling.removeFirst()
+            guard notBefore[next.id] == next.at else { continue }
+            notBefore[next.id] = nil
+            ready.append(next.id)
         }
+        arm()
+        var free = Self.concurrency - running.count
+        guard free > 0 else { return }
+        var largeFree = Self.largeConcurrency - running.keys.filter { jobs[$0].map(Self.sendsParts) ?? false }.count
+        // A large one that had to wait for a slot of its own goes first.
+        while free > 0, largeFree > 0, let id = heldLarge.removeFirst() {
+            guard startable(id) != nil else { continue }
+            start(id)
+            free -= 1
+            largeFree -= 1
+        }
+        while free > 0, let id = ready.removeFirst() {
+            guard let job = startable(id) else { continue }
+            if Self.sendsParts(job) {
+                // A large one waits for another to finish; a small one
+                // behind it may go meanwhile.
+                guard largeFree > 0 else {
+                    heldLarge.append(id)
+                    continue
+                }
+                largeFree -= 1
+            }
+            start(id)
+            free -= 1
+        }
+    }
+
+    /// The job, if it is waiting to start and may: queued, not running, not
+    /// waiting out a settle moment. An entry for anything else is stale —
+    /// the job left, started, or was started over — and dropped.
+    private func startable(_ id: UUID) -> UploadJob? {
+        guard let job = jobs[id], job.state == .queued, running[id] == nil, notBefore[id] == nil else { return nil }
+        return job
+    }
+
+    private func start(_ id: UUID) {
+        let token = UUID()
+        running[id] = (token, Task { await self.run(id, token: token) })
+    }
+
+    /// The one timer, set for the soonest settle moment still to come, or
+    /// none when no job is waiting one out.
+    private func arm() {
+        while let next = settling.first, notBefore[next.id] != next.at { settling.removeFirst() }
+        guard let next = settling.first else {
+            timer?.task.cancel()
+            timer = nil
+            return
+        }
+        if let timer, timer.at <= next.at { return }
+        timer?.task.cancel()
+        let at = next.at
+        let wait = sleep
+        timer = (at, Task { [weak self] in
+            let left = ContinuousClock.now.duration(to: at)
+            if left > .zero { await wait(Self.seconds(left)) }
+            guard !Task.isCancelled else { return }
+            await self?.fired(at)
+        })
+    }
+
+    private func fired(_ at: ContinuousClock.Instant) {
+        if timer?.at == at { timer = nil }
+        pump(dueBy: at)
+    }
+
+    static func seconds(_ duration: Duration) -> Double {
+        let (seconds, attoseconds) = duration.components
+        return Double(seconds) + Double(attoseconds) / 1e18
+    }
+
+    static func isWaiting(_ job: UploadJob) -> Bool { job.state == .queued || job.state == .uploading }
+
+    /// Whether a job still has parts to send: large, and not in storage yet.
+    static func sendsParts(_ job: UploadJob) -> Bool {
+        job.size >= multipartThreshold && job.uploadedKey == nil
     }
 
     private func run(_ id: UUID, token: UUID) async {
         defer {
             if running[id]?.token == token { running[id] = nil }
             pump()
-        }
-        if settle > 0, jobs[id]?.attempts == 0 {
-            // A moment before anything is sent: an app saving a document
-            // writes a new copy, then moves it over the old one — and the
-            // move decides what this is (a new file, or new contents for
-            // that one). Deleted in that moment, nothing is sent at all.
-            await sleep(settle)
         }
         while running[id]?.token == token, !Task.isCancelled,
               var job = jobs[id], job.state == .queued || job.state == .uploading {
@@ -264,8 +513,7 @@ public actor UploadQueue {
                 done.lastError = nil
                 if let file { recorded[id] = file.id }
                 retained[id] = done.staged
-                jobs[id] = nil
-                save()
+                remove(id)
                 onChange?(done)
                 return
             } catch is CancellationError {
@@ -277,6 +525,7 @@ public actor UploadQueue {
                 switch Self.next(after: error, replacing: failed.replaceOf != nil) {
                 case .fail:
                     failed.state = .failed
+                    progress[id] = nil
                     update(failed)
                     return
                 case .again:
@@ -292,6 +541,7 @@ public actor UploadQueue {
                 }
                 guard failed.attempts < Self.maxAttempts else {
                     failed.state = .failed
+                    progress[id] = nil
                     update(failed)
                     return
                 }
@@ -316,6 +566,10 @@ public actor UploadQueue {
             guard running[id]?.token == token, var sent = jobs[id] else { throw CancellationError() }
             sent.uploadedKey = key
             sent.uploadedUrl = url
+            // On disk before the record is asked for: a crash after the
+            // server has the file then asks again for this key, and its 409
+            // says done. Without the key a restart would send the bytes
+            // afresh, under a new key, and record a second file.
             update(sent)
         }
         // As it is now: renamed while its bytes went up, it lands at the new name.
@@ -370,22 +624,74 @@ public actor UploadQueue {
             partCount = status.partCount
         }
         let done = status.done
-        var sentBefore = Int64(done.count) * partSize
-        setProgress(id, sentBefore)
+        let tally = PartTally(sent: Int64(done.count) * partSize)
+        setProgress(id, tally.total)
         let missing = (1...max(1, partCount)).filter { !done.contains($0) }
-        for batch in stride(from: 0, to: missing.count, by: 16).map({ Array(missing[$0..<min($0 + 16, missing.count)]) }) {
-            let urls = try await Self.expiring { try await self.transport.signParts(uploadId: uploadId, parts: batch) }
-            for part in batch {
-                try Task.checkCancellation()
-                guard let url = urls[part] else { throw OnyxError.decoding("part \(part) was not signed") }
-                let offset = Int64(part - 1) * partSize
-                let length = min(partSize, job.size - offset)
-                let base = sentBefore
-                try await transport.put(file, offset: offset, length: length, to: url, contentType: nil) { sent in
-                    Task { await self.setProgress(id, base + sent) }
+        let batches = stride(from: 0, to: missing.count, by: Self.signBatch).map {
+            Array(missing[$0..<min($0 + Self.signBatch, missing.count)])
+        }
+        let transport = self.transport
+        let size = job.size
+        /// Signed URLs for the batch at `index`; none past the last.
+        @Sendable func signed(_ index: Int) async throws -> [Int: URL] {
+            guard index < batches.count else { return [:] }
+            return try await Self.expiring { try await transport.signParts(uploadId: uploadId, parts: batches[index]) }
+        }
+        // One stream of parts, partConcurrency at a time, from the first
+        // missing to the last. Each batch's URLs are asked for while the
+        // batch before it sends: waiting for all sixteen to land before
+        // asking, the line went idle every 128 MB for a round trip to the
+        // server and the slowest part. A part that fails stops the rest of
+        // this attempt; the next asks storage which parts it has, and sends
+        // only the others.
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            var inFlight = 0
+            var urls = try await signed(0)
+            for index in batches.indices {
+                // The next batch's URLs, asked for in a task of their own
+                // beside the group rather than an `async let` among its
+                // children: 0.5.14's drive sync crashed on macOS 27 as a task
+                // group's children reported back, and this was the one other
+                // place that release mixed the two. Cancelled with this
+                // attempt.
+                let upcoming = Task { try await signed(index + 1) }
+                do {
+                    for part in batches[index] {
+                        if inFlight == Self.partConcurrency {
+                            try await group.next()
+                            inFlight -= 1
+                        }
+                        try Task.checkCancellation()
+                        guard let url = urls[part] else { throw OnyxError.decoding("part \(part) was not signed") }
+                        let offset = Int64(part - 1) * partSize
+                        let length = min(partSize, size - offset)
+                        group.addTask {
+                            try await transport.put(file, offset: offset, length: length, to: url, contentType: nil) { sent in
+                                let total = tally.sending(part, sent)
+                                Task { await self.setProgress(id, total) }
+                            }
+                            await self.setProgress(id, tally.finished(part, length))
+                        }
+                        inFlight += 1
+                    }
+                } catch {
+                    upcoming.cancel()
+                    throw error
                 }
-                sentBefore += length
+                do {
+                    urls = try await withTaskCancellationHandler {
+                        try await upcoming.value
+                    } onCancel: {
+                        upcoming.cancel()
+                    }
+                } catch {
+                    // The parts already on their way are let land, so the
+                    // next attempt need not send them again.
+                    try? await group.waitForAll()
+                    throw error
+                }
             }
+            try await group.waitForAll()
         }
         let completed = try await Self.expiring { try await self.transport.completeMultipart(uploadId: uploadId) }
         return (completed.key, completed.publicUrl)
@@ -463,16 +769,196 @@ public actor UploadQueue {
         status == 400 || status == 403 || status == 404 || status == 409 || status == 410 || status == 413
     }
 
-    private func setProgress(_ id: UUID, _ sent: Int64) { progress[id] = sent }
+    /// Only for a job still here: a report from a PUT that outlived its job
+    /// would otherwise count bytes for nothing, for good.
+    private func setProgress(_ id: UUID, _ sent: Int64) {
+        guard jobs[id] != nil else { return }
+        progress[id] = sent
+    }
 
+    // MARK: - Keeping the books
+
+    /// Every change to a job comes through here: kept, counted, on disk,
+    /// and told.
     private func update(_ job: UploadJob) {
-        jobs[job.id] = job
-        save()
+        let old = jobs.updateValue(job, forKey: job.id)
+        tally(old, -1)
+        tally(job, 1)
+        note(Change(job: job))
         onChange?(job)
     }
 
-    private func save() {
-        guard let data = try? JSONEncoder().encode(Array(jobs.values)) else { return }
-        try? data.write(to: directory.appendingPathComponent("jobs.json"), options: .atomic)
+    /// A job leaving the queue, done or cancelled: no longer counted, and
+    /// on disk as gone. Not told: the caller says what became of it.
+    @discardableResult
+    private func remove(_ id: UUID) -> UploadJob? {
+        guard let job = jobs.removeValue(forKey: id) else { return nil }
+        tally(job, -1)
+        progress[id] = nil
+        notBefore[id] = nil
+        note(Change(gone: id))
+        return job
+    }
+
+    private func tally(_ job: UploadJob?, _ sign: Int) {
+        guard let job else { return }
+        switch job.state {
+        case .queued, .uploading:
+            waitingCount += sign
+            waitingBytes += Int64(sign) * job.size
+        case .failed:
+            if sign > 0 { failedIDs.insert(job.id) } else { failedIDs.remove(job.id) }
+        case .done:
+            break
+        }
+    }
+
+    // MARK: - On disk
+
+    /// One line of jobs.log: a job as it is now, or one that has left.
+    struct Change: Codable {
+        var job: UploadJob?
+        var gone: UUID?
+    }
+
+    /// The change, added to jobs.log at once: a few hundred bytes, whatever
+    /// else is waiting. Then jobs.json, if it is time (`compactIfDue`).
+    private func note(_ change: Change) {
+        guard var line = try? JSONEncoder().encode(change) else { return }
+        line.append(0x0A)
+        if append(line) {
+            logBytes += line.count
+            disk.appends += 1
+            disk.appendBytes += line.count
+            compactIfDue()
+        } else {
+            // Not added (the disk full, say): the log goes back to its whole
+            // lines, and the queue is written whole instead.
+            if log >= 0 { ftruncate(log, off_t(logBytes)) }
+            compact()
+        }
+    }
+
+    private func append(_ line: Data) -> Bool {
+        if log < 0 {
+            log = open(directory.appendingPathComponent(Self.logFile).path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o600)
+            guard log >= 0 else { return false }
+        }
+        let written = line.withUnsafeBytes { Darwin.write(log, $0.baseAddress, $0.count) }
+        return written == line.count
+    }
+
+    /// When the log has grown past the queue it describes (`logFloor`), or
+    /// the queue is empty and the log is not — at most once a
+    /// `compactInterval`. A log left longer is no harm: it holds every
+    /// change, and the next launch folds it in.
+    private func compactIfDue() {
+        guard logBytes > 0, logBytes > max(Self.logFloor, 2 * snapshotBytes) || jobs.isEmpty else { return }
+        if let compactedAt, ContinuousClock.now - compactedAt < Self.compactInterval { return }
+        compact()
+    }
+
+    /// jobs.json, written whole in the order the jobs came, and the log
+    /// emptied, all of it being in jobs.json now. If jobs.json cannot be
+    /// written the log stays as it is: nothing is lost.
+    private func compact() {
+        arrival = arrival.filter { jobs[$0] != nil }
+        guard let data = try? JSONEncoder().encode(arrival.compactMap { jobs[$0] }),
+              (try? data.write(to: directory.appendingPathComponent(Self.jobsFile), options: .atomic)) != nil else { return }
+        if log >= 0 {
+            ftruncate(log, 0)
+        } else {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(Self.logFile))
+        }
+        logBytes = 0
+        snapshotBytes = data.count
+        compactedAt = .now
+        disk.snapshots += 1
+        disk.snapshotBytes += data.count
+    }
+
+    /// jobs.json, then each change jobs.log holds since, in order; and, when
+    /// there is a log, how much of it is whole lines. A line cut short — a
+    /// crash as it was written — says nothing, and is passed over.
+    static func load(_ directory: URL) -> (jobs: [UploadJob], logged: Int?) {
+        var order: [UUID] = []
+        var byID: [UUID: UploadJob] = [:]
+        if let data = try? Data(contentsOf: directory.appendingPathComponent(jobsFile)),
+           let saved = try? JSONDecoder().decode([UploadJob].self, from: data) {
+            for job in saved where byID.updateValue(job, forKey: job.id) == nil { order.append(job.id) }
+        }
+        guard let log = try? Data(contentsOf: directory.appendingPathComponent(logFile)) else {
+            return (order.compactMap { byID[$0] }, nil)
+        }
+        let decoder = JSONDecoder()
+        for line in log.split(separator: 0x0A) {
+            guard let change = try? decoder.decode(Change.self, from: Data(line)) else { continue }
+            if let job = change.job {
+                if byID.updateValue(job, forKey: job.id) == nil { order.append(job.id) }
+            } else if let gone = change.gone {
+                byID[gone] = nil
+            }
+        }
+        let whole = log.lastIndex(of: 0x0A).map { log.distance(from: log.startIndex, to: $0) + 1 } ?? 0
+        return (order.compactMap { byID[$0] }, whole)
+    }
+
+    /// First in, first out, taking from the front without moving what is
+    /// behind it: a thousand jobs waiting cost a thousand steps, not a million.
+    struct Line<Element> {
+        private var items: [Element] = []
+        private var head = 0
+
+        var first: Element? { head < items.count ? items[head] : nil }
+        var isEmpty: Bool { head == items.count }
+        var count: Int { items.count - head }
+
+        mutating func append(_ element: Element) { items.append(element) }
+
+        @discardableResult
+        mutating func removeFirst() -> Element? {
+            guard head < items.count else { return nil }
+            let element = items[head]
+            head += 1
+            if head == items.count {
+                items.removeAll(keepingCapacity: true)
+                head = 0
+            } else if head >= 1024, head * 2 >= items.count {
+                // What was taken is let go of once it is half the line.
+                items.removeFirst(head)
+                head = 0
+            }
+            return element
+        }
+    }
+}
+
+/// A large upload's bytes sent: the parts done, and how far each part in
+/// flight has got — several at once, so each reports into this rather than
+/// adding to a running total of its own.
+final class PartTally: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done: Int64
+    private var inFlight: [Int: Int64] = [:]
+
+    init(sent: Int64) { done = sent }
+
+    var total: Int64 { lock.withLock { done + inFlight.values.reduce(0, +) } }
+
+    /// `part` has sent `bytes` so far. → the total now.
+    func sending(_ part: Int, _ bytes: Int64) -> Int64 {
+        lock.withLock {
+            inFlight[part] = bytes
+            return done + inFlight.values.reduce(0, +)
+        }
+    }
+
+    /// `part` is in storage, all `length` of it. → the total now.
+    func finished(_ part: Int, _ length: Int64) -> Int64 {
+        lock.withLock {
+            inFlight[part] = nil
+            done += length
+            return done + inFlight.values.reduce(0, +)
+        }
     }
 }

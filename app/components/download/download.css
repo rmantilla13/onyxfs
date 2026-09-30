@@ -1,0 +1,88 @@
+/* "Download as…" (app/components/download/DownloadAs.js): the split Download
+   button, and the dialog of formats and sizes. Styled only from the custom
+   properties the root layout emits, so the brand and dark mode reach it. */
+
+/* Download, and beside it the arrow that opens the choices — one control. */
+.dl-split { display: inline-flex; align-items: stretch; flex: none; }
+.dl-split > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+/* No padding of its own above and below: the row stretches the arrow to the
+   height of the Download beside it, whatever size that one is. */
+.dl-split > .dl-more {
+  justify-content: center;
+  margin-left: -1px;
+  padding: 0 7px;
+  border-top-left-radius: 0; border-bottom-left-radius: 0;
+}
+.dl-split > .dl-more.btn-sm { padding: 0 5px; }
+.dl-split > .dl-more:focus-visible,
+.dl-split > .btn:first-child:focus-visible { position: relative; z-index: 1; }
+
+.dl-file { margin: 0 0 var(--s4); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-form { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+.dl-group { display: flex; flex-direction: column; gap: var(--s2); margin: 0; padding: 0; border: 0; min-width: 0; }
+.dl-group legend { margin-bottom: var(--s2); padding: 0; }
+.dl-detail { margin: 0; }
+
+/* The formats: radios drawn as one segmented control, as the share dialog's are. */
+.dl-segments {
+  display: inline-flex; align-self: flex-start; flex-wrap: wrap; gap: 3px; max-width: 100%;
+  padding: 3px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+.dl-segment {
+  position: relative;
+  display: inline-flex; align-items: center;
+  padding: 6px var(--s3);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--t-sm); font-weight: 500; white-space: nowrap;
+  cursor: pointer;
+}
+/* Still focusable and still a radio to a screen reader; only not drawn. */
+.dl-segment input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+.dl-segment.is-on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-1); }
+.dl-segment:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The sizes, and a video's choices: a list of radios with what each comes to. */
+.dl-options { display: flex; flex-direction: column; gap: var(--s1); }
+.dl-option {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+}
+.dl-option.is-on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.dl-option input { flex: none; margin: 0; accent-color: var(--accent); }
+.dl-option-label { flex: 1; min-width: 0; font-weight: 500; }
+.dl-option-detail { color: var(--muted); font-size: var(--t-sm); font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; }
+/* A video's copy still being checked, or too large to make here: shown, not pickable. */
+.dl-option.is-off { cursor: not-allowed; background: var(--surface-sunken); }
+.dl-option.is-off .dl-option-label { color: var(--muted); }
+.dl-group:disabled .dl-segments,
+.dl-group:disabled .dl-options { opacity: 0.55; }
+.dl-group:disabled .dl-segment,
+.dl-group:disabled .dl-option { cursor: not-allowed; }
+
+.dl-name { margin: 0; overflow-wrap: anywhere; }
+.dl-name-value { color: var(--ink); font-weight: 500; }
+.dl-note { margin: 0; }
+/* A long job: said before it starts. */
+.dl-warn { color: var(--warning); }
+.dl-done { margin: 0; overflow-wrap: anywhere; }
+.dl-error { margin: 0; color: var(--danger); overflow-wrap: anywhere; }
+
+/* Preparing: how much of the original has arrived, then a bar that moves. */
+.dl-progress-wrap { display: flex; flex-direction: column; gap: var(--s1); }
+.dl-progress-wrap p { margin: 0; }
+.dl-progress { position: relative; height: 4px; border-radius: 2px; background: var(--surface-sunken); overflow: hidden; }
+.dl-progress > span { display: block; height: 100%; background: var(--accent); transition: width var(--dur-1) linear; }
+.dl-progress.is-indeterminate > span { position: absolute; width: 35%; animation: dl-slide 1.1s ease-in-out infinite; }
+@keyframes dl-slide {
+  from { left: -35%; }
+  to { left: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dl-progress.is-indeterminate > span { animation: none; left: 0; width: 100%; opacity: 0.45; }
+}

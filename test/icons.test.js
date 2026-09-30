@@ -50,9 +50,11 @@ test('an unknown icon name fails generation with a pointer to the renames', () =
 });
 
 test('icons come from the kit, not hand-drawn SVG or text glyphs', () => {
-  // The one SVG a component may draw itself is artwork: the wordmark, and the
-  // review tool's drawing layer.
-  const allowed = new Set(['app/components/OnyxWordmark.js', 'app/components/review/AnnotationLayer.js']);
+  // The one SVG a component may draw itself is artwork: the wordmark, the
+  // review tool's drawing layer, and a sound's waveform.
+  const allowed = new Set([
+    'app/components/OnyxWordmark.js', 'app/components/review/AnnotationLayer.js', 'app/components/media/Waveform.js',
+  ]);
   // A lone glyph standing in for an icon; a key hint like "← → step" is text.
   const glyphs = /aria-hidden(?:="true")?>\s*[✕✓✗▾▸▴▶❚⋯‹←→↑↓↕]\s*</u;
   const glyphStrings = /['"](?:✕|✓|✗|▾|▸|▴|⋯|❚❚|🔇|🔊|⛶)['"]/u;

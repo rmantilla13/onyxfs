@@ -15,6 +15,8 @@ import { useConfirm } from '@/app/components/ui/Confirm';
 import { deriveAuto } from '@/lib/dam';
 import { whenCreated } from '@/lib/file-dates';
 import { effectiveKind, fmtSize, coverChangeable } from '@/lib/media';
+import { redrawOffered } from '@/lib/preview-jobs';
+import { probedNow } from '@/lib/decode-probe';
 import { toRate, rateLabel, timecode, ASSUMED_RATE } from '@/lib/video-time';
 import ShareDialog from '@/app/components/ShareDialog';
 import CoverDialog from '@/app/components/video/CoverDialog';
@@ -28,7 +30,9 @@ import useTranscript from '@/app/components/transcript/useTranscript';
 import useProxy from '@/app/components/video/useProxy';
 import { createMediaClock } from '@/app/components/transcript/mediaClock';
 import useMacApp from '@/app/components/useMacApp';
+import { DownloadButtons } from '@/app/components/download/DownloadAs';
 import { toVTT } from '@/lib/transcripts';
+import { startActivity } from '@/lib/activity';
 
 /**
  * The file detail view: preview on the left, inspector on the right.
@@ -133,6 +137,15 @@ export default function FileDetail({
       .catch(() => { /* the assumed rate stands */ });
   }, [canWrite, kind, md.fps, md.fpsUnknown, file.id]);
 
+  // A sound with no waveform gets one from an editor's visit, as its tile
+  // would (lib/waveform-client.js): the player shows it the moment it is
+  // recorded, without stopping.
+  useEffect(() => {
+    if (kind === 'audio' && !md.waveform) backfill?.(file, { wave: true });
+    // Asked once per file; `file` changes as the backfill merges into it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backfill, kind, file.id]);
+
   // ── Review ──
   const tabs = useMemo(() => [review && 'comments', transcripts && 'transcript', 'details'].filter(Boolean), [review, transcripts]);
   const [tab, setTab] = useState(tabs[0]);
@@ -153,6 +166,15 @@ export default function FileDetail({
   // ── Proxy ── watched for as long as the page is open, since a transcode
   // finishing is what lets the player switch sources.
   const proxy = useProxy(file.id, { enabled: proxies });
+  // Download as…: the proxy by the live job once it has loaded (a transcode
+  // that lands while the page is open, or one since removed), else as the
+  // page was rendered with; a still from the frame the player is showing.
+  const job = proxy.proxy;
+  const proxyOffer = useMemo(() => ({
+    available: job ? job.status === 'done' && !job.stale && !!job.url : !!file.proxyUrl,
+    size: job?.size ?? null,
+  }), [job, file.proxyUrl]);
+  const playerVideo = useCallback(() => player.current?.element?.() || null, []);
   const clock = useMemo(createMediaClock, []);
   const mac = useMacApp();
   const seekTo = useCallback((seconds) => player.current?.seekTo?.(seconds), []);
@@ -214,6 +236,30 @@ export default function FileDetail({
     if (await patch({ name: next }, 'Renamed.')) setRenaming(false);
   };
 
+  // Regenerate thumbnail: every preview drawn again from the original, in
+  // this browser (lib/thumbnail-regen.js, loaded when first used). A video's
+  // is its automatic frame; choosing one is Change cover's.
+  const [redrawing, setRedrawing] = useState(false);
+  const regenerate = async () => {
+    if (redrawing) return;
+    setRedrawing(true);
+    const task = startActivity({ title: `Redrawing the thumbnail of “${file.name}”` });
+    try {
+      const { redrawThumbnail, mergeRedrawn } = await import('@/lib/thumbnail-regen');
+      const row = await redrawThumbnail(file);
+      setFile((x) => mergeRedrawn(x, row));
+      // The old pictures are deleted: ← Back must not bring their URLs back.
+      returnSlot.updateFile(row.id, (x) => mergeRedrawn(x, row));
+      listingCache.clear();
+      toast.success('Thumbnail redrawn.');
+    } catch (e) {
+      toast.error(e?.message || 'Could not redraw the thumbnail.');
+    } finally {
+      task.end();
+      setRedrawing(false);
+    }
+  };
+
   const trash = async () => {
     const ok = await confirm({
       title: `Move “${file.name}” to trash?`,
@@ -244,12 +290,15 @@ export default function FileDetail({
         {review && <ReviewStatusTag status={status} className="review-status-head" />}
         <div className="spacer" />
         {canShare && <button type="button" className="btn" onClick={() => setSharing(true)}>Share</button>}
-        <a className="btn" href={`/api/files/${file.id}/download`}>Download</a>
+        <DownloadButtons file={file} frame={playerVideo} proxy={proxies ? proxyOffer : null} />
         {canWrite && (
           <Menu label="File actions">
             <MenuItem onClick={() => { setName(file.name); setRenaming(true); }}>Rename…</MenuItem>
             {coverChangeable(file) && (
               <MenuItem onClick={() => { player.current?.pause?.(); setCovering({ at: player.current?.time?.() ?? null }); }}>Change cover…</MenuItem>
+            )}
+            {redrawOffered(file, { decodes: probedNow() }) && (
+              <MenuItem onClick={regenerate} disabled={redrawing}>Regenerate thumbnail</MenuItem>
             )}
             <MenuSeparator />
             <MenuItem danger onClick={trash}>Move to trash</MenuItem>

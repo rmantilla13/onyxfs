@@ -56,6 +56,7 @@
   --z-menu: 50;
   --z-dialog: 100;
   --z-toast: 200;
+  --z-drag: 300;
 
   --dur-1: 120ms;
   --dur-2: 200ms;
@@ -125,6 +126,13 @@ html, body {
 /* The paper is the canvas (html). body stays transparent: its own background
    would paint OVER the aura layer below, which sits at z-index -1. */
 html { background: var(--paper); }
+/* And the paper is at least the window. Onyx for Mac's web view is
+   transparent (apple/OnyxMac/WebController.swift, drawsBackground), and while
+   anything on the page is animated on a layer of its own — the admin panel's
+   pulsing skeletons — WebKit paints the paper only as far down as the page
+   reaches: on a page shorter than the window, the window's grey showed below
+   it. 100%, not 100vh: on an iPhone 100vh is taller than what shows. */
+html { min-height: 100%; }
 /* A scrollbar that comes and goes (a mouse attached, or "Always" in System
    Settings) keeps its room either way, so the page never shifts sideways when
    a listing grows past the window or shrinks back. Overlay scrollbars take no
@@ -706,6 +714,35 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .share-level { flex: none; width: auto; padding: 4px var(--s2); font-size: var(--t-sm); }
 .share-level.is-review { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--accent-deep); }
 .share-revoke { color: var(--danger); }
+/* A folder's link is public or password: two kinds side by side. */
+@media (min-width: 721px) { .share-kinds.is-two { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.share-folder-note { margin: 0; }
+
+/* A folder link's page: a folder as the Files view shows one — its path from
+   the shared folder down, its subfolders as tiles, its files as cards — for
+   someone with no account, so every item is a link and nothing selects. */
+.share-folder-head .crumbs { gap: var(--s2); }
+.share-folder-summary { margin: var(--s2) 0 var(--s5); }
+.share-folder .folder-tile { text-decoration: none; }
+/* No selection bar here for the grid to clear on a phone. */
+.share-folder .files-grid { padding-bottom: 0; }
+/* A file's download sits over its card's corner: beside the card's link
+   rather than inside it (a link cannot hold another), shown on hover and
+   focus, and always where there is no hover. */
+.share-tile { position: relative; min-width: 0; }
+.share-tile-download {
+  position: absolute; top: 8px; right: 8px;
+  width: 34px; height: 34px; padding: 0; justify-content: center;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease);
+}
+.share-tile:hover .share-tile-download,
+.share-tile:focus-within .share-tile-download { opacity: 1; }
+@media (hover: none) { .share-tile-download { opacity: 1; } }
+.share-more { display: flex; justify-content: center; padding-top: var(--s5); }
+.share-more-error { margin: var(--s3) 0 0; text-align: center; color: var(--danger); }
+.share-back { color: var(--accent-deep); text-decoration: underline; text-underline-offset: 2px; }
+.share-file-crumbs { margin-bottom: var(--s3); }
 
 /* ── Get info ───────────────────────────────────────────────────────────── */
 .info-head { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s4); min-width: 0; }
@@ -724,17 +761,50 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 
 /* ── Upload tray ────────────────────────────────────────────────────────── */
 
-.upload-panel {
+/* Work in progress, bottom left (app/components/ui/Activity.js): the
+   activity panel, and under it the upload tray — one column, so neither
+   covers the other. The dock itself takes no clicks, only what is in it. */
+.dock {
   position: fixed;
   z-index: var(--z-menu);
   left: var(--s5); bottom: var(--s5);
   width: min(380px, calc(100vw - var(--s5) * 2));
+  display: flex; flex-direction: column; gap: var(--s2);
+  pointer-events: none;
+}
+.dock > * { pointer-events: auto; }
+.upload-panel, .work-panel {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow-2);
   overflow: hidden;
   animation: upload-in var(--dur-2) var(--ease);
+}
+.work-panel { order: 0; }
+.upload-panel { order: 1; }
+/* The upload tray on its own, where there is no dock to sit in. */
+.upload-panel.is-floating {
+  position: fixed;
+  z-index: var(--z-menu);
+  left: var(--s5); bottom: var(--s5);
+  width: min(380px, calc(100vw - var(--s5) * 2));
+}
+.work-list { list-style: none; margin: 0; padding: var(--s1) 0; max-height: 240px; overflow-y: auto; }
+.work-row { display: grid; gap: 3px; padding: var(--s2) var(--s4); }
+.work-row + .work-row { border-top: 1px solid var(--line); }
+.work-title { font-weight: 600; }
+.work-detail { font-variant-numeric: tabular-nums; }
+.work-row .upbar { border-radius: var(--radius-pill); margin-top: 3px; }
+/* Work that can't be counted: a segment that keeps crossing the bar. */
+.upbar-indeterminate .upbar-fill {
+  right: auto; width: 35%;
+  transition: none;
+  animation: activity-slide 1.3s var(--ease) infinite;
+}
+@keyframes activity-slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+@media (prefers-reduced-motion: reduce) {
+  .upbar-indeterminate .upbar-fill { animation: none; width: 100%; opacity: 0.45; transform: none; }
 }
 .upload-head { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s4) var(--s2); }
 .upload-list { list-style: none; margin: 0; padding: var(--s1) 0; max-height: 320px; overflow-y: auto; border-top: 1px solid var(--line); }
@@ -917,6 +987,10 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 .files-pane[data-card-size='s'] { --card-min: 150px; --folder-min: 210px; --folder-h: 80px; --folder-name: 15px; }
 .files-pane[data-card-size='m'] { --card-min: 200px; --folder-min: 240px; --folder-h: 108px; --folder-name: 18px; }
 .files-pane[data-card-size='l'] { --card-min: 280px; --folder-min: 300px; --folder-h: 132px; --folder-name: 20px; }
+/* A folder a move has sprung open (DragPreview): let go anywhere on the page
+   and the move goes into it, as the dashed edge — the upload overlay's —
+   around its listing says. */
+.files-main[data-drop='ok'] .files-pane { outline: 2px dashed var(--accent-alt); outline-offset: 6px; border-radius: var(--radius); }
 .files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(var(--card-min), 100%), 1fr)); gap: var(--s4); }
 /* A card is picked, not read: no text selection from a double-click, and no
    iOS image callout on a long-press (which selects, useLongPress). */
@@ -936,6 +1010,28 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   background: var(--surface-sunken);
 }
 .filecard-thumb img { width: 100%; height: 100%; -webkit-touch-callout: none; -webkit-user-drag: none; }
+/* The thumbnail's tiny copy (lib/placeholder.js), under it until it loads:
+   stretched, so softened a little further, and scaled past the edges the
+   blur would otherwise leave pale. The picture itself, positioned, paints
+   over it in document order — and the badge over both. */
+.filecard-thumb > .thumb-ph {
+  position: absolute;
+  inset: 0;
+  filter: blur(6px);
+  transform: scale(1.08);
+  pointer-events: none;
+}
+.filecard-thumb > .thumb-main { position: relative; }
+/* A sound's tile: its waveform (Waveform, in the brand's gradient) over a
+   faint wash of the same two colours. */
+.filecard-thumb.is-sound {
+  background:
+    radial-gradient(120% 90% at 15% 0%, color-mix(in srgb, var(--aura-a, var(--accent)) 16%, transparent), transparent 62%),
+    radial-gradient(120% 90% at 90% 100%, color-mix(in srgb, var(--aura-b, var(--accent)) 14%, transparent), transparent 62%),
+    var(--surface-sunken);
+}
+.thumb-wave { display: block; width: 80%; height: 46%; }
+.filelist-thumb .thumb-wave, .col-thumb .thumb-wave { width: 86%; height: 62%; }
 .filecard-text { padding: 10px 12px 12px; }
 .filecard-name { font-size: var(--t-sm); min-width: 0; }
 .filecard-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -944,7 +1040,13 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
    height, so every card must be the same. */
 .filecard-text > .filecard-meta.small { margin-top: 4px; min-height: 1.4em; line-height: 1.4; }
 .filecard-meta > .filecard-name { flex: 1; }
-.filecard-badges { display: inline-flex; gap: 4px; flex: none; margin-left: auto; }
+.filecard-badges { display: inline-flex; align-items: center; gap: 4px; flex: none; margin-left: auto; }
+/* Kept offline by Onyx for Mac (OfflineMark): the accent, so it reads as a
+   state the file is in rather than a warning about it. After a name it never
+   shrinks; the name gives way first. */
+.offline-mark { display: inline-flex; flex: none; align-items: center; color: var(--accent); line-height: 0; }
+.folder-tile-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.folder-tile-title > .folder-tile-name { min-width: 0; }
 .field-line { min-width: 0; font-variant-numeric: tabular-nums; }
 .filecard-meta > .field-line { flex: 1; }
 .field-sep { opacity: 0.6; }
@@ -1010,9 +1112,14 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   font-size: var(--t-xs);
   cursor: pointer;
 }
-/* A tree row with something droppable over it. */
+/* A tree row with something droppable over it: .is-over for files from the
+   desktop, data-drop="ok" for a move the drag layer is following
+   (DragPreview) — which also blinks a folder about to spring open, and
+   marks the folder a move has just gone into. */
 .folder-drop { border-radius: var(--radius-sm); transition: background-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease); }
-.folder-drop.is-over { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
+.folder-drop.is-over, .folder-drop[data-drop='ok'] { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
+@keyframes drop-spring { 0%, 50%, 100% { opacity: 1; } 25%, 75% { opacity: 0.4; } }
+.folder-drop[data-spring='armed'] > :last-child { animation: drop-spring 380ms linear; }
 .folder-link[draggable="true"] { cursor: pointer; }
 /* Starred: the folder's name, and the drive it is in when that is not the
    one on screen. The remove button shows on hover and on keyboard focus. */
@@ -1084,7 +1191,16 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 .folder-tile-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .folder-tile-name { font-size: var(--folder-name, 17px); line-height: 1.25; letter-spacing: -0.01em; }
 .folder-tile-meta { font-size: var(--t-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
-.folder-tile-wrap.is-over .folder-tile { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+.folder-tile-wrap.is-over .folder-tile,
+.folder-tile-wrap[data-drop='ok'] .folder-tile { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+/* Under a move it can take, a tile rises a little to meet it, and gives a
+   small bounce as the move goes in. */
+@keyframes drop-land { 40% { transform: scale(1.06); } }
+@media (prefers-reduced-motion: no-preference) {
+  .folder-tile-wrap .folder-tile { transition: transform var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease), border-color var(--dur-1); }
+  .folder-tile-wrap[data-drop='ok'] .folder-tile { transform: scale(1.035); }
+  .folder-tile-wrap[data-drop-land] .folder-tile { animation: drop-land 380ms var(--ease); }
+}
 
 /* The list view. Header, folder rows and file rows share one column
    template, so everything lines up without a table. The template is built
@@ -1245,7 +1361,8 @@ select.input.cell-input { padding-right: 2px; }
 .colpick-note { margin: 2px 0 var(--s1); padding: 0 var(--s1); }
 .colpick-foot { margin-top: var(--s2); padding: var(--s2) var(--s1) 0; border-top: 1px solid var(--line); }
 .filelist-folders .folder-drop { border-radius: 0; }
-.filelist-folders .folder-drop.is-over .filelist-row { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
+.filelist-folders .folder-drop.is-over .filelist-row,
+.filelist-folders .folder-drop[data-drop='ok'] .filelist-row { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 1px var(--accent); }
 .filelist-more { margin: 0; padding: var(--s2); }
 
 /* The folder picker (Move dialog). */
@@ -1322,7 +1439,7 @@ select.input.cell-input { padding-right: 2px; }
 .crumb-item:first-child .crumb { margin-left: -6px; }
 .crumb:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .crumb:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.crumb-drop.is-over .crumb { color: var(--ink); }
+.crumb-drop.is-over .crumb, .crumb-drop[data-drop='ok'] .crumb { color: var(--ink); }
 .crumb-sep { flex: none; color: var(--muted); opacity: 0.6; }
 /* ── Selection action bar (phone) ──────────────────────────────────────────
    The header's Trash button scrolls out of reach on a phone, so a selection
@@ -1709,7 +1826,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   .dialog-foot { padding: var(--s3) var(--s4) var(--s4); }
 
   .toast-stack { left: var(--s4); right: var(--s4); bottom: calc(var(--s4) + env(safe-area-inset-bottom)); max-width: none; }
-  .upload-panel { left: var(--s3); right: var(--s3); width: auto; bottom: calc(var(--s3) + env(safe-area-inset-bottom)); }
+  .dock, .upload-panel.is-floating { left: var(--s3); right: var(--s3); width: auto; bottom: calc(var(--s3) + env(safe-area-inset-bottom)); }
 
   .files-selbar {
     display: flex;
@@ -1945,19 +2062,119 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 body.is-marqueeing { -webkit-user-select: none; user-select: none; cursor: default; }
 body.is-marqueeing * { cursor: default !important; }
 
-/* The picture under the pointer while a selection is dragged: how many are
-   going, rather than the image of the one card that was grabbed. Drawn off
-   screen for the moment the browser snapshots it. */
-.drag-badge {
-  position: fixed; top: -1000px; left: -1000px;
-  padding: 8px 14px;
+/* ── Moving files: the picture that follows the pointer (DragPreview) ─────
+   Laid out at the item's size (or the thumbnail's, if that is larger) and
+   only ever scaled down, by transforms the script sets each frame: it lifts
+   from the item, springs down to a thumbnail beside the pointer, and flies
+   into a folder or home. `--k` is how many times the thumbnail's size it is
+   laid out at, so every length a thumbnail shows — labels, borders,
+   shadows, the stack's offsets — is set k times over and reads at its own
+   size once shrunk. States are attributes: data-compact once it is down to
+   size, data-verdict ok/no over a folder, data-phase land/return at the end,
+   data-hidden with the pointer out of the window. */
+:root { --drag-shadow: color-mix(in srgb, var(--ink) 26%, transparent); }
+:root[data-theme='dark'] { --drag-shadow: color-mix(in srgb, #000 62%, transparent); }
+/* No will-change: it would pin the layer's raster to the scale it started at,
+   and a list row's picture starts small and grows. The 3D translate the
+   script writes keeps it on a layer of its own all the same. */
+.drag-preview {
+  position: fixed; left: 0; top: 0;
+  z-index: var(--z-drag);
+  transform-origin: 0 0;
+  pointer-events: none;
+  color: var(--ink);
+  font: 600 calc(12px * var(--k, 1)) / 1.3 var(--font-body);
+  transition: opacity var(--dur-2) var(--ease);
+}
+.drag-preview[data-hidden], .drag-preview[data-gone] { opacity: 0; }
+.drag-preview[data-phase='land'] { opacity: 0; transition: opacity 200ms var(--ease) 80ms; }
+.drag-preview-pic, .drag-preview-chip {
+  border: calc(1px * var(--k, 1)) solid var(--line);
+  box-shadow: 0 calc(2px * var(--k, 1)) calc(6px * var(--k, 1)) var(--drag-shadow);
+  transition: box-shadow var(--dur-2) var(--ease), border-color var(--dur-1) var(--ease),
+    opacity var(--dur-2) var(--ease), filter var(--dur-2) var(--ease), transform var(--dur-2) var(--ease);
+}
+.drag-preview[data-compact] .drag-preview-pic,
+.drag-preview[data-compact] .drag-preview-chip {
+  box-shadow:
+    0 calc(16px * var(--k, 1)) calc(32px * var(--k, 1)) calc(-10px * var(--k, 1)) var(--drag-shadow),
+    0 calc(2px * var(--k, 1)) calc(6px * var(--k, 1)) var(--drag-shadow);
+}
+.drag-preview-pic {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  overflow: hidden;
+  border-radius: calc(var(--radius) * var(--k, 1));
+  background: var(--surface-sunken);
+}
+.drag-preview-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.drag-preview-label { font: 400 1.05em/1 var(--font-mono); color: var(--muted); }
+/* Several files: the others fan out behind the one grabbed. */
+.drag-preview-pic.is-under { opacity: 0; }
+.drag-preview[data-compact] .drag-preview-pic.is-under { opacity: 1; transform: translate(calc(8px * var(--k, 1)), calc(-6px * var(--k, 1))) rotate(6deg); }
+.drag-preview[data-compact] .drag-preview-pic.is-under + .drag-preview-pic.is-under { transform: translate(calc(-7px * var(--k, 1)), calc(5px * var(--k, 1))) rotate(-5deg); }
+.drag-preview-name, .drag-preview-count, .drag-preview-ban {
+  position: absolute;
+  opacity: 0;
+  transition: opacity var(--dur-2) var(--ease), transform var(--dur-2) var(--ease);
+}
+.drag-preview-name {
+  left: 50%; top: 100%;
+  width: max-content; max-width: 17em;
+  margin-top: 0.55em;
+  padding: 0.3em 0.75em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border: calc(1px * var(--k, 1)) solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  font-weight: 500;
+  box-shadow: 0 calc(4px * var(--k, 1)) calc(12px * var(--k, 1)) calc(-4px * var(--k, 1)) var(--drag-shadow);
+  transform: translateX(-50%) scale(0.9);
+}
+.drag-preview-count {
+  top: 0; right: 0;
+  display: grid; place-items: center;
+  min-width: 1.9em; height: 1.9em; padding: 0 0.5em;
   border-radius: var(--radius-pill);
   background: linear-gradient(120deg, var(--aura-a-deep), var(--aura-b-deep));
   color: var(--on-aura);
-  font: 600 var(--t-sm)/1.2 var(--font-body);
-  white-space: nowrap;
-  box-shadow: 0 8px 22px -10px color-mix(in srgb, var(--aura-b) 70%, transparent);
+  font-size: 0.95em; line-height: 1; font-variant-numeric: tabular-nums;
+  box-shadow: 0 calc(4px * var(--k, 1)) calc(10px * var(--k, 1)) calc(-3px * var(--k, 1)) color-mix(in srgb, var(--aura-b) 60%, transparent);
+  transform: translate(45%, -45%) scale(0.4);
 }
+.drag-preview[data-compact] .drag-preview-name { opacity: 1; transform: translateX(-50%); }
+.drag-preview[data-compact] .drag-preview-count { opacity: 1; transform: translate(45%, -45%); }
+/* A folder: a chip, as its tile would be drawn small. */
+.drag-preview-chip {
+  display: flex; align-items: center; gap: 0.55em;
+  height: 100%; max-width: 20em;
+  padding: 0 1em 0 0.6em;
+  border-radius: calc((var(--radius) + 4px) * var(--k, 1));
+  background: var(--surface);
+  font-size: 1.1em; font-weight: 500;
+  white-space: nowrap;
+}
+.drag-preview-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Over a folder it can go into: the accent's edge. Over one it cannot: grey,
+   with a no-entry mark at the corner nearest the pointer. */
+.drag-preview[data-verdict='ok'] .drag-preview-pic:not(.is-under),
+.drag-preview[data-verdict='ok'] .drag-preview-chip { border-color: var(--accent); }
+.drag-preview[data-verdict='no'] .drag-preview-pic,
+.drag-preview[data-verdict='no'] .drag-preview-chip { opacity: 0.7; filter: grayscale(0.9); }
+.drag-preview-ban {
+  top: 0; left: 0;
+  display: grid; place-items: center;
+  width: 2em; height: 2em;
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--danger);
+  box-shadow: 0 0 0 calc(1px * var(--k, 1)) var(--line), 0 calc(4px * var(--k, 1)) calc(10px * var(--k, 1)) calc(-3px * var(--k, 1)) var(--drag-shadow);
+  transform: translate(-40%, -40%) scale(0.4);
+}
+.drag-preview-ban .icon { width: 1.3em; height: 1.3em; }
+.drag-preview[data-verdict='no'] .drag-preview-ban { opacity: 1; transform: translate(-40%, -40%); }
+/* The items being moved, where they were, while they are. */
+[data-drag-source] { opacity: 0.4; transition: opacity var(--dur-2) var(--ease); }
 
 /* ── Storage ────────────────────────────────────────────────────────────── */
 /* /storage and /storage/duplicates. Kinds keep one colour everywhere they
@@ -1974,6 +2191,9 @@ body.is-marqueeing * { cursor: default !important; }
 .storage-stat { margin: 0 0 var(--s3); font-size: var(--t-xl); }
 .storage-stat strong { font-variant-numeric: tabular-nums; }
 .storage-foot { margin: 0; }
+/* The cost estimate's small print: what it counts, then a line per service. */
+.storage-notes p { margin: 0; max-width: 72ch; }
+.storage-notes p + p { margin-top: var(--s1); }
 
 .usage-bar { display: flex; gap: 2px; height: 14px; overflow: hidden; border-radius: var(--radius-pill); background: var(--surface-sunken); }
 .usage-seg { flex: none; min-width: 3px; height: 100%; }

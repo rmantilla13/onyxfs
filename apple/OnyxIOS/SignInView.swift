@@ -17,11 +17,13 @@ struct SignInView: View {
             Spacer()
             Mark(size: 96)
             Text("Onyx")
-                .font(.system(size: 36, weight: .bold))
+                .font(.largeTitle.weight(.semibold))
+                .tracking(-0.6)
                 .padding(.top, 28)
             Text("Your drives, on this \(Session.deviceLabel).")
                 .font(.body)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
                 .padding(.top, 6)
             Spacer()
             VStack(spacing: 12) {
@@ -29,13 +31,11 @@ struct SignInView: View {
                     session.signIn(with: webAuthenticationSession)
                 } label: {
                     HStack(spacing: 8) {
-                        if session.signingIn { ProgressView().tint(.white) }
+                        if session.signingIn { ProgressView().tint(Theme.onAura) }
                         Text("Sign In")
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(BrandButtonStyle(fullWidth: true))
 
                 Button {
                     session.problem = nil
@@ -43,14 +43,13 @@ struct SignInView: View {
                 } label: {
                     Text("Use a Pairing Code")
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
                 }
-                .buttonStyle(.bordered)
+                .glassButtonStyle()
 
                 if let problem = session.problem, !pairing {
-                    Text(problem)
+                    Label(problem, systemImage: "exclamationmark.triangle.fill")
                         .font(.footnote)
-                        .foregroundStyle(.red)
+                        .symbolRenderingMode(.multicolor)
                         .multilineTextAlignment(.center)
                         .padding(.top, 4)
                 }
@@ -71,6 +70,8 @@ struct SignInView: View {
         .padding(.horizontal, 24)
         .padding(.bottom, 16)
         .frame(maxWidth: 440)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background { AuraBackground() }
         .sheet(isPresented: $pairing) { PairingSheet() }
         .alert("Onyx Server", isPresented: $choosingServer) {
             TextField("www.onyxfs.io", text: $serverText)
@@ -109,10 +110,16 @@ private struct PairingSheet: View {
                 } footer: {
                     Text("On a computer signed in to Onyx, open \(session.serverName)/space/pair and type the code it shows. It works once, within five minutes.")
                 }
+                .glassRow()
                 if let problem = session.problem {
-                    Section { Text(problem).foregroundStyle(.red) }
+                    Section {
+                        Label(problem, systemImage: "exclamationmark.triangle.fill")
+                            .symbolRenderingMode(.multicolor)
+                    }
+                    .glassRow()
                 }
             }
+            .sheetBackground()
             .navigationTitle("Pairing Code")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -146,8 +153,7 @@ struct Mark: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(AngularGradient(colors: [.accentColor, Color("AuraMagenta"), Color("AuraCyan"), .accentColor],
-                                      center: .center))
+                .fill(Theme.halo)
                 .frame(width: size * 1.5, height: size * 1.5)
                 .blur(radius: size * 0.42)
                 .opacity(0.55)

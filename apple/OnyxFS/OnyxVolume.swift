@@ -230,7 +230,9 @@ final class OnyxVolume: FSVolume, FSVolume.Handler, FSVolume.PathConfOperations,
             return (made, try await self.engine.node(dirID))
         }
         attributes.consumedAttributes = [.mode, .uid, .gid, .flags]
-        guard let result = FSCreateItemResult(newItem: items.item(for: node.id), newItemName: name,
+        // The name it was made under, which is the server's (DriveEngine.stored):
+        // "Selects " asked for is "Selects".
+        guard let result = FSCreateItemResult(newItem: items.item(for: node.id), newItemName: Self.name(node.name, asked: name),
                                               newItemAttributes: self.attributes(of: node),
                                               directoryAttributes: self.attributes(of: dir), freeSpace: nil)
         else { throw Self.posix(EIO) }
@@ -262,7 +264,8 @@ final class OnyxVolume: FSVolume, FSVolume.Handler, FSVolume.PathConfOperations,
             return (moved, try await self.engine.node(from), try await self.engine.node(to))
         }
         let over = replaced.map { _ in self.gone() }
-        guard let result = FSRenameItemResult(newName: destinationName, renamedItemAttributes: attributes(of: node),
+        guard let result = FSRenameItemResult(newName: Self.name(node.name, asked: destinationName),
+                                              renamedItemAttributes: attributes(of: node),
                                               sourceDirectoryAttributes: attributes(of: source),
                                               destinationDirectoryAttributes: attributes(of: destination),
                                               overItemAttributes: over, freeSpace: nil)
@@ -399,6 +402,12 @@ final class OnyxVolume: FSVolume, FSVolume.Handler, FSVolume.PathConfOperations,
 
     private static func id(_ item: FSItem) -> UInt64 {
         (item as? OnyxItem)?.id ?? 0
+    }
+
+    /// The name as the engine keeps it, or the one asked for when that is it
+    /// (the same bytes back, however the kernel spelled them).
+    private static func name(_ kept: String, asked: FSFileName) -> FSFileName {
+        kept == string(asked) ? asked : FSFileName(string: kept)
     }
 
     private static func string(_ name: FSFileName) -> String {

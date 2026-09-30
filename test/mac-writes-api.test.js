@@ -9,7 +9,7 @@
 // the desktop guard, getPrincipal and can(), uploadCheck, the routes,
 // lib/replace-content.js, lib/preview-gc.js — is the real code.
 
-import { test, describe, beforeEach } from 'node:test';
+import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import { createHash, randomUUID } from 'node:crypto';
@@ -46,7 +46,7 @@ sdk.S3Client.prototype.send = async function send(cmd) {
     case 'HeadObjectCommand': {
       const o = b.objects.get(at(i.Key));
       if (!o) throw missing('NotFound');
-      return { ContentLength: o.size, ETag: `"${o.etag}"` };
+      return { ContentLength: o.size, ETag: `"${o.etag}"`, ...(o.modified != null && { LastModified: new Date(o.modified) }) };
     }
     case 'PutObjectCommand': {
       const body = Buffer.from(i.Body ?? '');
@@ -55,6 +55,8 @@ sdk.S3Client.prototype.send = async function send(cmd) {
     }
     case 'DeleteObjectCommand': b.objects.delete(at(i.Key)); return {};
     case 'CopyObjectCommand': {
+      // A test holding copies (b.copyGate) sees what a slow copy leaves meanwhile.
+      if (b.copyGate) await b.copyGate;
       const o = b.objects.get(decodeURIComponent(String(i.CopySource).replace(/^\//, '')));
       if (!o) throw missing('NoSuchKey');
       b.objects.set(at(i.Key), { ...o });
@@ -109,13 +111,21 @@ const stored = (key) => globalThis.__mw.s3.objects.get(`onyx/${key}`) || null;
 const { NextRequest } = await import('next/server');
 const { middleware, config: mwConfig } = await import('../middleware.js');
 const { bearerMayPass, bearerToken } = await import('../lib/bearer-gate.js');
+const { encodeWaveform } = await import('../lib/waveform.js');
 const filesRoute = await import('../app/api/files/route.js');
 const presignRoute = await import('../app/api/files/presign/route.js');
 const multipartRoute = await import('../app/api/files/upload/multipart/route.js');
 const fileRoute = await import('../app/api/files/[id]/route.js');
 const contentRoute = await import('../app/api/files/[id]/content/route.js');
+const thumbnailRoute = await import('../app/api/files/[id]/thumbnail/route.js');
+const waveformRoute = await import('../app/api/files/[id]/waveform/route.js');
+const placeholderRoute = await import('../app/api/files/[id]/placeholder/route.js');
+const filmstripRoute = await import('../app/api/files/[id]/filmstrip/route.js');
 const foldersRoute = await import('../app/api/files/folders/route.js');
+const { _setFolderMoveBudgetMs } = await import('../lib/folder-ops.js');
 const restoreRoute = await import('../app/api/admin/trash/restore/route.js');
+// What a route finishes after it answers: a trashed file's object moving to the trash.
+const { afterResponseSettled } = await import('../lib/after-response.js');
 
 // ── the world ──
 const STORAGE = { provider: 's3', bucket: 'onyx', accessKeyId: 'k', secretAccessKey: 's', region: 'us-east-1', endpoint: 'http://s3.test', prefix: 'files' };
@@ -148,6 +158,8 @@ function reset() {
   }
 }
 beforeEach(reset);
+// Nothing one test started in the background lands in the next one's bucket.
+afterEach(afterResponseSettled);
 
 /** A device token, as /api/desktop/token hands one out. The store's clock is globalThis.__mw.now. */
 function tokenFor(email, { expiresAt = globalThis.__mw.now + 86400_000 } = {}) {
@@ -175,6 +187,19 @@ const patchFile = (who, id, body, headers) => call(fileRoute.PATCH, `/api/files/
 const trashFile = (who, id) => call(fileRoute.DELETE, `/api/files/${id}`, { method: 'DELETE', params: { id }, ...who });
 const swap = (who, id, body, headers) => call(contentRoute.POST, `/api/files/${id}/content`, { method: 'POST', body, params: { id }, headers, ...who });
 const restore = (who, ids) => call(restoreRoute.POST, '/api/admin/trash/restore', { method: 'POST', body: { ids }, ...who });
+/** PATCH with `progress`: the HTTP status, and the NDJSON lines read to the end — progress, then the answer. */
+async function moveStreamed({ token, cookie } = {}, body) {
+  globalThis.__mw.session = cookie ? { user: { email: cookie } } : null;
+  const h = { 'content-type': 'application/json' };
+  if (token) h.authorization = `Bearer ${token}`;
+  const res = await foldersRoute.PATCH(new Request('http://app.test/api/files/folders', {
+    method: 'PATCH', headers: h, body: JSON.stringify({ ...body, progress: true }),
+  }), { params: {} });
+  const type = res.headers.get('content-type') || '';
+  if (!type.includes('ndjson')) return { status: res.status, type, lines: [], answer: null, body: await res.json().catch(() => null) };
+  const lines = (await res.text()).split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  return { status: res.status, type, lines: lines.slice(0, -1), answer: lines.at(-1) };
+}
 const folders = {
   create: (who, body) => call(foldersRoute.POST, '/api/files/folders', { method: 'POST', body, ...who }),
   move: (who, body) => call(foldersRoute.PATCH, '/api/files/folders', { method: 'PATCH', body, ...who }),
@@ -205,7 +230,13 @@ describe('the sign-in gate (middleware.js)', () => {
   const PATHS = [
     '/api/files', '/api/files/presign', '/api/files/upload/multipart', '/api/files/folders',
     '/api/files/3f0c7e1a-1111-4222-8333-944455556666', '/api/files/3f0c7e1a-1111-4222-8333-944455556666/content',
+    '/api/files/3f0c7e1a-1111-4222-8333-944455556666/thumbnail',
+    '/api/files/3f0c7e1a-1111-4222-8333-944455556666/waveform',
     '/api/admin/trash/restore', '/api/stars',
+    // The iPhone's links: a file's, and one of them; a folder's, and one of them.
+    '/api/files/3f0c7e1a-1111-4222-8333-944455556666/shares',
+    '/api/files/3f0c7e1a-1111-4222-8333-944455556666/shares/Zk3_q9Lx0aB7cD2eF4gH6i',
+    '/api/files/folders/shares', '/api/files/folders/shares/Zk3_q9Lx0aB7cD2eF4gH6i',
   ];
 
   test('with no session and no token, the Mac’s paths are redirected to sign in exactly as before', async () => {
@@ -215,8 +246,10 @@ describe('the sign-in gate (middleware.js)', () => {
   test('a bearer token takes those paths, and only those, past the gate', async () => {
     for (const p of PATHS) assert.ok(passed(await run(p, { authorization: 'Bearer dt_live_x' })), p);
     for (const p of [
-      '/api/files/abc/comments', '/api/files/abc/thumbnail', '/api/files/abc/download', '/api/files/upload',
+      '/api/files/abc/comments', '/api/files/abc/thumbnail/sizes', '/api/files/abc/filmstrip', '/api/files/abc/download', '/api/files/upload',
       '/api/files/config', '/api/admin/people', '/api/admin/trash', '/api/filespaces', '/files/abc', '/admin',
+      '/api/files/abc/shares/t/x', '/api/files/folders/shares/t/x', '/api/files/config/shares', '/api/files/presign/shares',
+      '/api/files/upload/shares/t', '/api/admin/shares',
     ]) {
       assert.ok(redirected(await run(p, { authorization: 'Bearer dt_live_x' })), p);
     }
@@ -461,9 +494,12 @@ describe('the Mac’s writes', () => {
 
     const trashed = await trashFile(who, f.id);
     assert.deepEqual(trashed.body, { ok: true, trashed: true }, 'the trash flag is read on the server');
-    assert.ok(stored(`_trash/${f.id}/team/Selects/Take 2.mov`), 'moved out of the drive');
+    assert.equal((await getFile(who, f.id)).status, 404, 'gone at once, whether or not its object has moved yet');
+    await afterResponseSettled();
+    assert.ok(stored(`_trash/${f.id}/team/Selects/Take 2.mov`), 'moved out of the drive once the delete has answered');
     assert.ok(!stored('team/Selects/Take 2.mov'));
     const retried = await trashFile(who, f.id);
+    await afterResponseSettled();
     assert.deepEqual([retried.status, retried.body], [200, { ok: true, trashed: true }], 'asked again, the same answer');
     assert.ok(stored(`_trash/${f.id}/team/Selects/Take 2.mov`), 'and the trashed object stays where it is');
     assert.equal((await trashFile(mac(DV), f.id)).status, 403, 'still only for someone who could delete it');
@@ -493,6 +529,7 @@ describe('the Mac’s writes', () => {
   test('with the trash off, a file already in the trash is left to the purge, not stranded', async () => {
     const f = await upload(mac(ED));
     await trashFile(mac(ED), f.id);
+    await afterResponseSettled();
     globalThis.__mw.settings.set('features.flags', { trash: false });
     const out = await trashFile(mac(ED), f.id);
     assert.deepEqual(out.body, { ok: true, trashed: true });
@@ -901,6 +938,202 @@ describe('folder names are per drive', () => {
     assert.deepEqual([clash.status, clash.body], [409, { error: '“Selects” already exists. Choose another name, or move the files into it instead.' }]);
   });
 
+  // A move cut off by the time limit mid-copy never undid its copies: they
+  // sat at the new keys, and every try after was refused ("Something is
+  // already stored at …") with the folder still where it was. Each copy is
+  // noted before it is made (folder_move_copies), so the next call knows
+  // its own.
+  const copies = () => globalThis.__mw.s3.calls.filter((c) => c === 'CopyObjectCommand').length;
+  const budget = async (ms, run) => {
+    _setFolderMoveBudgetMs(ms);
+    try { return await run(); } finally { _setFolderMoveBudgetMs(); }
+  };
+  const bytes = (s) => Buffer.from(s.repeat(50));
+
+  test('a move that stopped part-way carries on from its copies, even from the Mac', async () => {
+    const who = mac(ED);
+    const a = await upload(who, { name: 'A.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+    const b = await upload(who, { name: 'B.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('b') });
+    const first = await budget(0, () => folders.move(web(ED), { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', resumable: true }));
+    assert.deepEqual([first.status, first.body], [202, { more: true, from: 'Shoot', to: '2026/Shoot', copied: 1, total: 2 }]);
+    assert.equal(row(a.id).folder, 'Shoot', 'nothing has moved yet');
+
+    // Onyx for Mac doesn't come back on a 202, so it moves in one call — past the copy already made.
+    const before = copies();
+    const moved = await folders.move(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1' });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.equal(copies() - before, 1, 'only the file not yet copied');
+    assert.equal(row(a.id).storageKey, 'team/2026/Shoot/A.arw');
+    assert.equal(row(b.id).storageKey, 'team/2026/Shoot/B.arw');
+    assert.equal(stored('team/2026/Shoot/A.arw').etag, md5(bytes('a')));
+    assert.equal(stored('team/2026/Shoot/B.arw').etag, md5(bytes('b')));
+    assert.ok(!stored('team/Shoot/A.arw') && !stored('team/Shoot/B.arw'), 'the originals are gone');
+    assert.deepEqual([...(globalThis.__mw.moveCopies || new Map()).keys()], [], 'and the notes with them');
+  });
+
+  test('a noted copy is used as long as it is still one, and made again when it isn’t', async () => {
+    const who = mac(ED);
+    const a = await upload(who, { name: 'A.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+    const b = await upload(who, { name: 'B.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('b') });
+    const objects = globalThis.__mw.s3.objects;
+    const t = Date.now();
+    // A was uploaded in parts: its copy has another ETag, and was written after it.
+    objects.set('onyx/team/Shoot/A.arw', { size: 100, etag: `${'1'.repeat(32)}-2`, modified: t - 60_000 });
+    objects.set('onyx/team/2026/Shoot/A.arw', { size: 100, etag: '2'.repeat(32), modified: t - 30_000 });
+    // B was written again after its copy was made, at the same length.
+    objects.set('onyx/team/Shoot/B.arw', { size: 100, etag: '3'.repeat(32), modified: t - 10_000 });
+    objects.set('onyx/team/2026/Shoot/B.arw', { size: 100, etag: '4'.repeat(32), modified: t - 30_000 });
+    globalThis.__mw.moveCopies = new Map([
+      ['team/2026/Shoot/A.arw', 'team/Shoot/A.arw'],
+      ['team/2026/Shoot/B.arw', 'team/Shoot/B.arw'],
+    ]);
+
+    const before = copies();
+    const moved = await folders.move(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1' });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.equal(copies() - before, 1, 'B again, not A');
+    assert.equal(stored('team/2026/Shoot/A.arw').etag, '2'.repeat(32));
+    assert.equal(stored('team/2026/Shoot/B.arw').etag, '3'.repeat(32), 'B as it is now');
+    assert.equal(row(a.id).folder, '2026/Shoot');
+    assert.equal(row(b.id).folder, '2026/Shoot');
+  });
+
+  test('a noted copy of another file, from a move of another folder that stopped, is made again', async () => {
+    const who = mac(ED);
+    const a = await upload(who, { name: 'A.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+    await upload(who, { name: 'A.arw', folder: 'Old/Shoot', filespaceId: 'd1', bytes: bytes('z') });
+    globalThis.__mw.s3.objects.set('onyx/team/2026/Shoot/A.arw', { ...stored('team/Old/Shoot/A.arw') });
+    globalThis.__mw.moveCopies = new Map([['team/2026/Shoot/A.arw', 'team/Old/Shoot/A.arw']]);
+
+    const moved = await folders.move(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1' });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.equal(row(a.id).storageKey, 'team/2026/Shoot/A.arw');
+    assert.equal(stored('team/2026/Shoot/A.arw').etag, md5(bytes('a')), 'this A, not the other');
+  });
+
+  test('something the rename didn’t put there is refused — unless the caller says to replace it', async () => {
+    const who = mac(ED);
+    const a = await upload(who, { name: 'A.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+    const other = { size: 7, etag: 'e'.repeat(32) };
+    globalThis.__mw.s3.objects.set('onyx/team/2026/Shoot/A.arw', other);
+    // Even the very same bytes: nothing says who put them there.
+    globalThis.__mw.s3.objects.set('onyx/team/2026/Shoot/B.arw', { ...stored('team/Shoot/A.arw') });
+    await upload(who, { name: 'B.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+
+    const out = await folders.move(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1' });
+    assert.deepEqual([out.status, out.body], [409, {
+      error: '2 files are already stored at “2026/Shoot” but not in the library (team/2026/Shoot/A.arw, …), perhaps left by a move that didn\'t finish. Nothing was renamed.',
+      code: 'occupied', occupied: 2, from: 'Shoot', to: '2026/Shoot',
+    }]);
+    assert.equal(row(a.id).storageKey, 'team/Shoot/A.arw');
+    assert.deepEqual(stored('team/2026/Shoot/A.arw'), other, 'what was there is left alone');
+
+    const replaced = await folders.move(web(ED), { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', resumable: true, replace: true });
+    assert.equal(replaced.status, 200, JSON.stringify(replaced.body));
+    assert.equal(row(a.id).storageKey, 'team/2026/Shoot/A.arw');
+    assert.equal(stored('team/2026/Shoot/A.arw').etag, md5(bytes('a')));
+  });
+
+  test('an object the library keeps at a new key is never replaced', async () => {
+    const who = mac(ED);
+    const a = await upload(who, { name: 'A.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+    // A file in the trash whose object never moved aside still holds its key.
+    const gone = await upload(who, { name: 'A.arw', folder: 'Elsewhere', filespaceId: 'd1', bytes: bytes('g') });
+    Object.assign(row(gone.id), { storageKey: 'team/2026/Shoot/A.arw', deletedAt: Date.now(), trashKey: null });
+    globalThis.__mw.s3.objects.set('onyx/team/2026/Shoot/A.arw', { ...stored('team/Elsewhere/A.arw') });
+
+    for (const replace of [false, true]) {
+      const out = await folders.move(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', replace });
+      assert.deepEqual([out.status, out.body], [409, { error: 'A file the library keeps is already stored at team/2026/Shoot/A.arw. Nothing was renamed.' }]);
+    }
+    assert.equal(row(a.id).folder, 'Shoot');
+    assert.equal(stored('team/2026/Shoot/A.arw').etag, md5(bytes('g')));
+  });
+
+  test('undoing never takes a copy the library has come to point at', async () => {
+    globalThis.__mw.globalNames = true;
+    const who = mac(ED);
+    await folders.create(who, { name: 'Selects', filespaceId: 'd1' });
+    await folders.create(who, { name: 'Picks', filespaceId: 'd2' });
+    await upload(who, { name: 'A.mov', folder: 'Selects', filespaceId: 'd1' });
+    const other = await upload(who, { name: 'Z.mov', folder: 'Other', filespaceId: 'd1' });
+    let release;
+    globalThis.__mw.s3.copyGate = new Promise((r) => { release = r; });
+    const going = folders.move(who, { from: 'Selects', to: 'Picks', filespaceId: 'd1' });
+    for (let i = 0; i < 200 && !copies(); i++) await new Promise((r) => setTimeout(r, 5));
+    assert.equal(copies(), 1, 'the copy is under way');
+    // Meanwhile a row has come to point at the new key (the same rename,
+    // run twice at once, got there first).
+    row(other.id).storageKey = 'team/Picks/A.mov';
+    globalThis.__mw.s3.copyGate = null;
+    release();
+    const out = await going;
+    assert.equal(out.status, 409, 'the one statement still refuses the name, as before');
+    assert.ok(stored('team/Picks/A.mov'), 'the copy the row points at stays');
+  });
+
+  // What the web's move shows while it runs: each step as it goes, then the
+  // answer the plain response would have been.
+  test('with progress, a move streams its steps and then its answer', async () => {
+    const who = web(ED);
+    for (const n of ['1', '2', '3']) await upload(mac(ED), { name: `${n}.arw`, folder: 'Shoot', filespaceId: 'd1', bytes: bytes(n) });
+    const out = await moveStreamed(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', resumable: true });
+    assert.equal(out.status, 200);
+    assert.match(out.type, /application\/x-ndjson/);
+    const phases = [...new Set(out.lines.map((l) => l.phase))];
+    assert.deepEqual(phases, ['check', 'copy', 'catalog', 'tidy']);
+    for (const phase of ['check', 'copy', 'tidy']) {
+      const last = out.lines.filter((l) => l.phase === phase).at(-1);
+      assert.deepEqual([last.done, last.total], [3, 3], `${phase} reaches the end`);
+    }
+    assert.equal(out.answer.status, 200);
+    assert.equal(out.answer.body.files, 3);
+    assert.equal(out.answer.body.to, '2026/Shoot');
+  });
+
+  test('with progress, a round that runs out of time answers 202 last, and nothing moves', async () => {
+    const who = web(ED);
+    for (const n of ['1', '2']) await upload(mac(ED), { name: `${n}.arw`, folder: 'Shoot', filespaceId: 'd1', bytes: bytes(n) });
+    const out = await budget(0, () => moveStreamed(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', resumable: true }));
+    assert.deepEqual([...new Set(out.lines.map((l) => l.phase))], ['check', 'copy']);
+    assert.deepEqual(out.answer, { status: 202, body: { more: true, from: 'Shoot', to: '2026/Shoot', copied: 1, total: 2 } });
+  });
+
+  test('with progress, a refusal found while checking is the answer; one found before is a plain response', async () => {
+    const who = web(ED);
+    await upload(mac(ED), { name: 'A.arw', folder: 'Shoot', filespaceId: 'd1', bytes: bytes('a') });
+    globalThis.__mw.s3.objects.set('onyx/team/2026/Shoot/A.arw', { size: 7, etag: 'e'.repeat(32) });
+    const occupied = await moveStreamed(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', resumable: true });
+    assert.equal(occupied.answer.status, 409);
+    assert.equal(occupied.answer.body.code, 'occupied');
+
+    const missing = await moveStreamed(who, { from: 'Nowhere', to: 'Elsewhere', filespaceId: 'd1', resumable: true });
+    assert.deepEqual([missing.status, missing.type.includes('json'), missing.body], [404, true, { error: 'There is no folder “Nowhere” here.' }]);
+  });
+
+  test('a resumable move copies over several calls, then moves; one that is not does it in one', async () => {
+    const who = mac(ED);
+    const ids = [];
+    for (const n of ['1', '2', '3']) ids.push((await upload(who, { name: `${n}.arw`, folder: 'Shoot', filespaceId: 'd1', bytes: bytes(n) })).id);
+    await budget(0, async () => {
+      const seen = [];
+      for (let round = 0; round < 10; round++) {
+        const r = await folders.move(who, { from: 'Shoot', to: '2026/Shoot', filespaceId: 'd1', resumable: true });
+        seen.push(r.status);
+        if (r.status !== 202) { assert.equal(r.status, 200, JSON.stringify(r.body)); break; }
+        assert.deepEqual(r.body, { more: true, from: 'Shoot', to: '2026/Shoot', copied: round + 1, total: 3 });
+        assert.equal(row(ids[0]).folder, 'Shoot', 'nothing has moved yet');
+      }
+      assert.deepEqual(seen, [202, 202, 200]);
+      for (const id of ids) assert.equal(row(id).folder, '2026/Shoot');
+
+      // Without `resumable` (Onyx for Mac), the budget doesn't apply.
+      const back = await folders.move(who, { from: '2026/Shoot', to: 'Shoot', filespaceId: 'd1' });
+      assert.equal(back.status, 200, JSON.stringify(back.body));
+      for (const id of ids) assert.equal(row(id).folder, 'Shoot');
+    });
+  });
+
   test('delete in one drive leaves the other drive’s folder of that name, and its file', async () => {
     const who = mac(ED);
     for (const d of ['d1', 'd2']) await folders.create(who, { name: 'Selects/Empty', filespaceId: d });
@@ -1027,5 +1260,452 @@ describe('the session path, unchanged', () => {
   test('a signed-out browser is refused by the handler as before', async () => {
     const out = await presign({}, { filename: 'a.mov', size: 1 });
     assert.deepEqual([out.status, out.body], [401, { error: 'Not authenticated' }]);
+  });
+});
+
+describe('what a mounted disk relies on the server for', () => {
+  const NFD = 'Cafe\u0301';
+  const NFC = 'Caf\u00e9';
+
+  test('a folder stored decomposed is the one a Mac names composed: uploads join it, a rename moves it all', async () => {
+    const first = await upload(web(ED), { name: 'a.txt', folder: `${NFD}/Sub`, mime: 'text/plain' });
+    assert.equal(row(first.id).folder, `${NFC}/Sub`, 'a new folder is stored composed');
+    // One made before names were composed: its folder and its key decomposed.
+    const objects = globalThis.__mw.s3.objects;
+    objects.set(`onyx/team/${NFD}/Sub/a.txt`, objects.get(`onyx/team/${NFC}/Sub/a.txt`));
+    objects.delete(`onyx/team/${NFC}/Sub/a.txt`);
+    Object.assign(row(first.id), { folder: `${NFD}/Sub`, storageKey: `team/${NFD}/Sub/a.txt` });
+    const second = await upload(mac(ED), { name: 'b.txt', folder: `${NFC}/Sub`, mime: 'text/plain' });
+    assert.equal(row(second.id).folder, `${NFD}/Sub`, 'the Mac’s composed name reaches the folder already there');
+    assert.equal(row(second.id).storageKey, `team/${NFD}/Sub/b.txt`, 'and so does its key, from the presign');
+    const moved = await folders.move(mac(ED), { from: NFC, to: 'Coffee', filespaceId: 'd1' });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.deepEqual([row(first.id).folder, row(second.id).folder], ['Coffee/Sub', 'Coffee/Sub'], 'both, not only the composed one');
+  });
+
+  test('a new name is stored composed, file or folder', async () => {
+    // (An upload's name is the object's, which is ASCII; a rename keeps the name given.)
+    const f = await upload(mac(ED), { name: 'plain.txt', folder: 'Notes', mime: 'text/plain' });
+    const r = await patchFile(mac(ED), f.id, { name: `Re${NFD}.txt`, filespaceId: 'd1' });
+    assert.equal(r.status, 200);
+    assert.equal(row(f.id).name, `Re${NFC}.txt`);
+    const made = await folders.create(mac(ED), { name: `New ${NFD}`, filespaceId: 'd1', ensure: true });
+    assert.equal(made.status, 201);
+    assert.equal(made.body.folder.name, `New ${NFC}`);
+  });
+
+  test('a folder that is not there: deleting or renaming it is a 404, not a quiet success', async () => {
+    await upload(mac(ED), { name: 'p.txt', folder: 'Photos', mime: 'text/plain' });
+    const gone = await folders.remove(mac(ED), 'photos (2)');
+    assert.equal(gone.status, 404, JSON.stringify(gone.body));
+    const moved = await folders.move(mac(ED), { from: 'photos (2)', to: 'Old', filespaceId: 'd1' });
+    assert.equal(moved.status, 404);
+    assert.equal((await folders.list(mac(ED))).body.folders.some((f) => f.folder === 'Old'), false, 'and nothing was made');
+  });
+
+  test('a folder holding a file its deleter cannot see is refused whole, saying why', async () => {
+    const theirs = await upload(web(ED2), { name: 'private.txt', folder: 'Shared', mime: 'text/plain' });
+    row(theirs.id).visibility = 'owner';
+    const mine = await upload(mac(ED), { name: 'mine.txt', folder: 'Shared', mime: 'text/plain' });
+    const r = await folders.remove(mac(ED), 'Shared');
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.equal(r.body.code, 'hidden_files');
+    assert.equal(r.body.hidden, 1);
+    assert.ok(!row(theirs.id).deletedAt && !row(mine.id).deletedAt, 'nothing was deleted');
+    // Its owner, who sees both, deletes it.
+    assert.equal((await folders.remove(web(ED2), 'Shared')).status, 200);
+    assert.ok(row(theirs.id).deletedAt && row(mine.id).deletedAt);
+  });
+
+  test('a file whose key does not spell its folder still goes with the folder', async () => {
+    const f = await upload(mac(ED), { name: 'stray.txt', folder: 'Old', mime: 'text/plain' });
+    row(f.id).folder = 'Elsewhere';
+    const r = await folders.remove(mac(ED), 'Elsewhere');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.deleted, 1);
+    assert.ok(row(f.id).deletedAt, 'deleted, where it used to be left behind and bring the folder back');
+  });
+
+  test('moving or renaming a drive’s file without naming the drive moves its object too', async () => {
+    const f = await upload(mac(ED), { name: 'mv.txt', folder: 'From', mime: 'text/plain' });
+    const moved = await patchFile(web(ED), f.id, { folder: 'To' });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.equal(moved.body.objectMoved, true);
+    assert.equal(row(f.id).storageKey, 'team/To/mv.txt');
+    assert.ok(stored('team/To/mv.txt') && !stored('team/From/mv.txt'));
+    const renamed = await patchFile(web(ED), f.id, { name: 'renamed.txt' });
+    assert.equal(renamed.body.objectMoved, true);
+    assert.equal(row(f.id).storageKey, 'team/To/renamed.txt');
+  });
+});
+
+describe('a thumbnail made on the Mac', () => {
+  const mayRecord = (who, id) => call(thumbnailRoute.GET, `/api/files/${id}/thumbnail`, { params: { id }, ...who });
+  const recordThumb = (who, id, body) => call(thumbnailRoute.PUT, `/api/files/${id}/thumbnail`, { method: 'PUT', body, params: { id }, ...who });
+
+  test('the Mac asks whether it may, puts the pictures where the server names, and records them as a browser does', async () => {
+    const who = mac(ED);
+    const f = await upload(who, { name: 'GX010042.MP4', mime: 'video/mp4' });
+    const before = structuredClone(row(f.id));
+    assert.equal((await mayRecord(who, f.id)).status, 204);
+
+    const grid = await presign(who, { thumb: true, sizes: ['sm', 'xs'], contentType: 'image/jpeg' });
+    assert.equal(grid.status, 200, JSON.stringify(grid.body));
+    assert.match(grid.body.key, /^_thumbs\/[0-9a-f-]{36}\.jpg$/);
+    assert.equal(grid.body.cacheControl, 'private, max-age=31536000, immutable');
+    assert.deepEqual(Object.keys(grid.body.siblings).sort(), ['sm', 'xs']);
+    assert.equal(grid.body.siblings.sm.key, grid.body.key.replace(/\.jpg$/, '.sm.jpg'));
+    const poster = await presign(who, { poster: true, contentType: 'image/jpeg' });
+    assert.match(poster.body.key, /^_thumbs\/[0-9a-f-]{36}\.poster\.jpg$/);
+    for (const url of [grid.body.putUrl, grid.body.siblings.sm.putUrl, grid.body.siblings.xs.putUrl, poster.body.putUrl]) {
+      put(url, Buffer.alloc(100, 5));
+    }
+    assert.ok(stored(grid.body.siblings.xs.key), 'the siblings land under the thumbnail’s own name');
+
+    const out = await recordThumb(who, f.id, {
+      thumbnailKey: grid.body.key, posterKey: poster.body.key, thumbSizes: ['sm', 'xs'],
+      media: { width: 3840, height: 2160, duration: 42.52 },
+    });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    const r = row(f.id);
+    assert.deepEqual([r.thumbnailKey, r.posterKey, r.thumbSizes], [grid.body.key, poster.body.key, ['sm', 'xs']]);
+    assert.deepEqual([r.metadata.width, r.metadata.height, r.metadata.duration], [3840, 2160, 42.5]);
+    assert.ok(r.seq > before.seq, 'seq moves: every device picks the thumbnail up');
+    assert.equal(r.version, before.version, 'a picture is not an edit');
+    assert.match(out.body.file.thumbnailUrl, /^http:\/\/s3\.test\/onyx\/_thumbs\/.*X-Amz-/, 'signed for the answer');
+  });
+
+  test('a viewer’s Mac is told no before it draws anything, and cannot record one either', async () => {
+    const f = await upload(mac(ED), { name: 'Take 2.mov' });
+    const viewer = mac(DV);
+    assert.equal((await mayRecord(viewer, f.id)).status, 403);
+    const uuid = randomUUID();
+    const out = await recordThumb(viewer, f.id, { thumbnailKey: `_thumbs/${uuid}.jpg`, thumbSizes: ['sm'] });
+    assert.equal(out.status, 403);
+    assert.equal(row(f.id).thumbnailKey, null);
+    // Capped to the Viewer role by the platform, whatever the drive says.
+    assert.equal((await mayRecord(mac(VR), f.id)).status, 403);
+    assert.equal((await mayRecord(mac(ED2), f.id)).status, 204, 'another editor of the drive may');
+  });
+
+  test('a token that does not count is refused, and a role without the desktop app too', async () => {
+    const f = await upload(mac(ED));
+    const revoked = tokenFor(ED);
+    globalThis.__mw.tokens.delete(revoked);
+    for (const out of [await mayRecord({ token: revoked }, f.id), await recordThumb({ token: revoked }, f.id, {})]) {
+      assert.equal(out.status, 401);
+    }
+    const noDesktop = await mayRecord(mac(ND), f.id);
+    assert.equal(noDesktop.status, 403);
+    assert.equal(noDesktop.body.error, 'Your role cannot use the desktop app.');
+    assert.equal((await mayRecord({}, f.id)).status, 401, 'nor with nothing at all');
+  });
+
+  test('the browser’s session still works as it did', async () => {
+    const f = await upload(web(ED));
+    assert.equal((await mayRecord(web(ED), f.id)).status, 204);
+    assert.equal((await mayRecord(web(DV), f.id)).status, 403);
+  });
+});
+
+describe('a thumbnail’s placeholder', () => {
+  // A real 24×18 WebP (test/placeholder.test.js has the rest of what one may be).
+  const PH = 'data:image/webp;base64,UklGRkQAAABXRUJQVlA4IDgAAAAQAwCdASoYABIAPtFiqk+oJaOiKAgBABoJZQDKABanFAAA/uX6P+HPtj97JX/VR2OO4YxZAAAAAA==';
+  const recordThumb = (who, id, body) => call(thumbnailRoute.PUT, `/api/files/${id}/thumbnail`, { method: 'PUT', body, params: { id }, ...who });
+  const recordPh = (who, id, body) => call(placeholderRoute.PUT, `/api/files/${id}/placeholder`, { method: 'PUT', body, params: { id }, ...who });
+  const thumbKey = async (who) => {
+    const grid = await presign(who, { thumb: true, sizes: [], contentType: 'image/webp' });
+    assert.equal(grid.status, 200, JSON.stringify(grid.body));
+    put(grid.body.putUrl, Buffer.alloc(50, 3));
+    return grid.body.key;
+  };
+
+  test('comes with its thumbnail, and goes when the thumbnail is replaced without one', async () => {
+    const who = mac(ED);
+    const f = await upload(who, { name: 'A001.mov' });
+    const first = await recordThumb(who, f.id, { thumbnailKey: await thumbKey(who), placeholder: PH });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.equal(row(f.id).metadata.placeholder, PH);
+    const junk = await recordThumb(who, f.id, { thumbnailKey: await thumbKey(who), placeholder: 'data:image/svg+xml;base64,PHN2Zz4=' });
+    assert.equal(junk.status, 200, 'a bad placeholder never costs the thumbnail');
+    assert.equal(row(f.id).metadata.placeholder, undefined, 'and the old picture’s does not stay on the new one');
+  });
+
+  test('is recorded later for the thumbnail it was drawn from, and only that one', async () => {
+    const who = web(ED);
+    const f = await upload(who, { name: 'A002.mov' });
+    const key = await thumbKey(who);
+    assert.equal((await recordThumb(who, f.id, { thumbnailKey: key })).status, 200);
+    const before = structuredClone(row(f.id));
+    const out = await recordPh(who, f.id, { placeholder: PH, thumbnailKey: key });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.equal(row(f.id).metadata.placeholder, PH);
+    assert.ok(row(f.id).seq > before.seq, 'listings and devices pick it up');
+    assert.equal(row(f.id).version, before.version, 'not an edit');
+    assert.equal((await recordPh(who, f.id, { placeholder: PH, thumbnailKey: await thumbKey(who) })).status, 409, 'another thumbnail’s');
+  });
+
+  test('refused: a viewer, nobody, something that is not one, a key that is not a thumbnail’s', async () => {
+    const f = await upload(web(ED), { name: 'A003.mov' });
+    const key = await thumbKey(web(ED));
+    await recordThumb(web(ED), f.id, { thumbnailKey: key });
+    assert.equal((await recordPh(web(DV), f.id, { placeholder: PH, thumbnailKey: key })).status, 403);
+    assert.equal((await recordPh({}, f.id, { placeholder: 'junk', thumbnailKey: key })).status, 401, 'asked who before what');
+    assert.equal((await recordPh(web(ED), f.id, { placeholder: 'junk', thumbnailKey: key })).status, 400);
+    assert.equal((await recordPh(web(ED), f.id, { placeholder: PH, thumbnailKey: 'files/A003.mov' })).status, 400);
+    assert.equal((await recordPh(web(ED), 'nope', { placeholder: PH, thumbnailKey: key })).status, 404);
+    assert.equal(row(f.id).metadata.placeholder, undefined);
+  });
+});
+
+describe('a sound’s waveform', () => {
+  const WAVE = encodeWaveform(Uint8Array.from({ length: 256 }, (_, i) => (i * 7) % 256));
+  const mayRecord = (who, id) => call(waveformRoute.GET, `/api/files/${id}/waveform`, { params: { id }, ...who });
+  const recordWave = (who, id, body) => call(waveformRoute.PUT, `/api/files/${id}/waveform`, { method: 'PUT', body, params: { id }, ...who });
+  const sound = (who, extra = {}) => upload(who, { name: 'Interview take 3.m4a', mime: 'audio/mp4', ...extra });
+
+  test('drawn at upload, it is recorded with the file — for a sound, and only as a waveform', async () => {
+    const who = web(ED);
+    const p = await presign(who, { filename: 'Take.m4a', contentType: 'audio/mp4', size: 10, folder: 'Cuts', filespaceId: 'd1' });
+    put(p.body.putUrl, Buffer.alloc(10, 1));
+    const base = { name: p.body.name, url: p.body.publicUrl, size: 10, folder: 'Cuts', storage: 's3', storageKey: p.body.key, filespace: 'd1' };
+    const out = await record(who, { ...base, mime: 'audio/mp4', waveform: WAVE, metadata: { waveform: 'x' } });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.equal(row(out.body.file.id).metadata.waveform, WAVE, 'the checked one, not the metadata’s');
+
+    const v = await presign(who, { filename: 'Take.mov', contentType: 'video/quicktime', size: 10, folder: 'Cuts', filespaceId: 'd1' });
+    put(v.body.putUrl, Buffer.alloc(10, 1));
+    const video = await record(who, { ...base, name: v.body.name, url: v.body.publicUrl, storageKey: v.body.key, mime: 'video/quicktime', waveform: WAVE });
+    assert.equal(row(video.body.file.id).metadata.waveform, undefined, 'a video keeps no waveform');
+
+    const w = await presign(who, { filename: 'Bad.m4a', contentType: 'audio/mp4', size: 10, folder: 'Cuts', filespaceId: 'd1' });
+    put(w.body.putUrl, Buffer.alloc(10, 1));
+    const bad = await record(who, { ...base, name: w.body.name, url: w.body.publicUrl, storageKey: w.body.key, mime: 'audio/mp4', waveform: '1:AAAA' });
+    assert.equal(bad.status, 200, 'a bad waveform never fails the upload');
+    assert.equal(row(bad.body.file.id).metadata.waveform, undefined);
+  });
+
+  test('the Mac asks whether it may, then records one: seq moves, version does not', async () => {
+    const who = mac(ED);
+    const f = await sound(who);
+    const before = structuredClone(row(f.id));
+    assert.equal((await mayRecord(who, f.id)).status, 204);
+    const out = await recordWave(who, f.id, { waveform: WAVE, contentHash: before.contentHash });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.equal(row(f.id).metadata.waveform, WAVE);
+    assert.equal(out.body.file.metadata.waveform, WAVE);
+    assert.ok(row(f.id).seq > before.seq, 'every device picks it up');
+    assert.equal(row(f.id).version, before.version, 'a waveform is not an edit');
+    assert.match(out.body.file.url, /X-Amz-/, 'signed for the answer');
+  });
+
+  test('refused: a viewer, a video, something that is not a waveform, contents that changed', async () => {
+    const f = await sound(mac(ED));
+    assert.equal((await mayRecord(mac(DV), f.id)).status, 403);
+    assert.equal((await recordWave(mac(DV), f.id, { waveform: WAVE })).status, 403);
+    assert.equal(row(f.id).metadata.waveform, undefined);
+
+    const video = await upload(mac(ED), { name: 'Take 9.mov' });
+    assert.equal((await mayRecord(mac(ED), video.id)).status, 400);
+    assert.equal((await recordWave(mac(ED), video.id, { waveform: WAVE })).status, 400);
+
+    for (const waveform of [undefined, '', 'nope', '1:AAAA', `2:${WAVE.slice(2)}`, { bars: [1, 2] }]) {
+      assert.equal((await recordWave(mac(ED), f.id, { waveform })).status, 400, String(waveform));
+    }
+    const moved = await recordWave(mac(ED), f.id, { waveform: WAVE, contentHash: 'not-its-hash' });
+    assert.equal(moved.status, 409);
+    assert.equal(row(f.id).metadata.waveform, undefined);
+    assert.equal((await recordWave(mac(ED), 'nope', { waveform: WAVE })).status, 404);
+    assert.equal((await recordWave({}, f.id, { waveform: WAVE })).status, 401);
+    assert.equal((await recordWave({}, f.id, { waveform: 'junk' })).status, 401, 'asked who it is before what it sent');
+  });
+
+  test('new contents take the old shape with them', async () => {
+    const f = await sound(mac(ED));
+    assert.equal((await recordWave(mac(ED), f.id, { waveform: WAVE })).status, 200);
+    const { MEDIA_KEYS } = await import('../lib/media.js');
+    assert.ok(MEDIA_KEYS.includes('waveform'), 'cleared with the media facts when contents are replaced');
+    const edit = await patchFile(mac(ED), f.id, { metadata: { waveform: '1:zzzz', client: 'Acme' } });
+    assert.equal(edit.status, 200, JSON.stringify(edit.body));
+    assert.equal(row(f.id).metadata.waveform, WAVE, 'nor can a metadata edit write one');
+  });
+});
+
+// A browser records an upload without waiting long for its hover-scrub
+// sheet (lib/upload-client.js), and attaches the sheet once it is in the
+// bucket: PUT /api/files/[id]/filmstrip, with the thumbnail PUT's checks.
+describe('a filmstrip attached after its file was recorded', () => {
+  const attach = (who, id, body) => call(filmstripRoute.PUT, `/api/files/${id}/filmstrip`, { method: 'PUT', body, params: { id }, ...who });
+  const LAYOUT = { frames: 40, columns: 8, tileWidth: 160, tileHeight: 90 };
+  /** A sheet in the bucket, at the key the presign route names. */
+  const sheet = async (who) => {
+    const p = await presign(who, { strip: true, contentType: 'image/webp' });
+    assert.equal(p.status, 200, JSON.stringify(p.body));
+    assert.match(p.body.key, /^_thumbs\/[0-9a-f-]{36}\.strip\.webp$/);
+    put(p.body.putUrl, Buffer.alloc(300, 7));
+    return p.body.key;
+  };
+
+  test('recorded on the file: the key, its layout, seq moved, and nothing else', async () => {
+    const who = web(ED);
+    const f = await upload(who, { name: 'A001.mov' });
+    const before = structuredClone(row(f.id));
+    const key = await sheet(who);
+    const out = await attach(who, f.id, { filmstripKey: key, filmstrip: LAYOUT });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    const r = row(f.id);
+    assert.equal(r.filmstripKey, key);
+    assert.deepEqual(r.metadata.filmstrip, LAYOUT);
+    assert.ok(r.seq > before.seq, 'seq moves: every device picks it up');
+    assert.equal(r.version, before.version, 'a preview is not an edit');
+    assert.equal(r.updatedAt, before.updatedAt);
+    assert.match(out.body.file.filmstripUrl, /^http:\/\/s3\.test\/onyx\/_thumbs\/[0-9a-f-]{36}\.strip\.webp\?.*X-Amz-/, 'signed for the answer');
+  });
+
+  test('a new sheet replaces the old, which leaves the bucket once nothing points at it', async () => {
+    const who = web(ED);
+    const f = await upload(who, { name: 'A002.mov' });
+    const first = await sheet(who);
+    assert.equal((await attach(who, f.id, { filmstripKey: first, filmstrip: LAYOUT })).status, 200);
+    const second = await sheet(who);
+    assert.equal((await attach(who, f.id, { filmstripKey: second, filmstrip: LAYOUT })).status, 200);
+    assert.equal(row(f.id).filmstripKey, second);
+    assert.equal(stored(first), null, 'the replaced sheet is deleted');
+    assert.ok(stored(second));
+  });
+
+  test('only a filmstrip key, with a layout that places every tile, and never another file’s', async () => {
+    const f = await upload(web(ED), { name: 'A003.mov' });
+    const theirs = await upload(web(ED2), { name: 'B001.mov' });
+    const taken = await sheet(web(ED2));
+    assert.equal((await attach(web(ED2), theirs.id, { filmstripKey: taken, filmstrip: LAYOUT })).status, 200);
+    const uuid = randomUUID();
+    for (const [body, status, why] of [
+      [{ filmstripKey: `_thumbs/${uuid}.webp`, filmstrip: LAYOUT }, 400, 'a thumbnail’s key'],
+      [{ filmstripKey: f.storageKey, filmstrip: LAYOUT }, 400, 'the file itself'],
+      [{ filmstripKey: `_thumbs/${uuid}.strip.webp` }, 400, 'no layout'],
+      [{ filmstripKey: `_thumbs/${uuid}.strip.webp`, filmstrip: { ...LAYOUT, columns: 0 } }, 400, 'a layout that places nothing'],
+      [{ filmstripKey: `_thumbs/${uuid}.strip.webp`, filmstrip: { ...LAYOUT, tileWidth: 1000 } }, 400, 'a sheet past 4096px'],
+      [{ filmstripKey: taken, filmstrip: LAYOUT }, 409, 'another file’s sheet'],
+    ]) {
+      const out = await attach(web(ED), f.id, body);
+      assert.equal(out.status, status, why);
+    }
+    assert.equal(row(f.id).filmstripKey, null, 'nothing recorded');
+    assert.equal(row(theirs.id).filmstripKey, taken, 'theirs as it was');
+    const deck = await upload(web(ED), { name: 'Deck.pdf', mime: 'application/pdf' });
+    const onDeck = await attach(web(ED), deck.id, { filmstripKey: await sheet(web(ED)), filmstrip: LAYOUT });
+    assert.equal(onDeck.status, 400, 'only a video is scrubbed');
+    assert.equal(onDeck.body.error, 'Only a video has a filmstrip.');
+    assert.equal(row(deck.id).filmstripKey, null);
+  });
+
+  test('who may: an editor of the file — not a viewer, the Viewer role, nobody, or anyone for a trashed file', async () => {
+    const f = await upload(web(ED), { name: 'A004.mov' });
+    const key = await sheet(web(ED));
+    const body = { filmstripKey: key, filmstrip: LAYOUT };
+    assert.equal((await attach(web(DV), f.id, body)).status, 403, 'a viewer of the drive');
+    assert.equal((await attach(web(VR), f.id, body)).status, 403, 'the Viewer role, granted editor');
+    assert.equal((await attach({}, f.id, body)).status, 401);
+    assert.equal((await attach(web(ED), 'no-such-file', body)).status, 404);
+    await trashFile(web(ED), f.id);
+    assert.equal((await attach(web(ED), f.id, body)).status, 404, 'in the trash');
+    assert.equal(row(f.id).filmstripKey, null);
+    assert.equal((await attach(web(ED2), (await upload(web(ED2), { name: 'B002.mov' })).id, body)).status, 200, 'another editor of the drive, on a file of theirs');
+  });
+});
+
+// A delete answers once the row is trashed; the object follows to the trash
+// after it (lib/trash-move.js). What that leaves meanwhile, and after.
+describe('a delete answers at once, and its object follows', () => {
+  /** Hold every copy until the returned function is called. */
+  const holdCopies = () => {
+    let release;
+    globalThis.__mw.s3.copyGate = new Promise((r) => { release = r; });
+    return () => { globalThis.__mw.s3.copyGate = null; release(); };
+  };
+
+  test('gone at once, with its object still where it was until the move lands', async () => {
+    const who = mac(ED);
+    const f = await upload(who);
+    const release = holdCopies();
+    const out = await trashFile(who, f.id);
+    assert.deepEqual(out.body, { ok: true, trashed: true });
+    assert.ok(row(f.id).deletedAt, 'trashed before the copy');
+    assert.equal(row(f.id).trashKey, null);
+    assert.equal((await getFile(who, f.id)).status, 404);
+    assert.ok(stored('team/Cuts/Take 1.mov'), 'the object waits at its key meanwhile');
+    release();
+    await afterResponseSettled();
+    assert.equal(row(f.id).trashKey, `_trash/${f.id}/team/Cuts/Take 1.mov`);
+    assert.ok(stored(`_trash/${f.id}/team/Cuts/Take 1.mov`) && !stored('team/Cuts/Take 1.mov'));
+  });
+
+  test('restored before its object moved: it stays where it was, and the copy made meanwhile goes', async () => {
+    const who = mac(ED);
+    const f = await upload(who);
+    const release = holdCopies();
+    await trashFile(who, f.id);
+    const back = await restore(mac(BOSS), [f.id]);
+    assert.equal(back.status, 200);
+    assert.deepEqual(back.body.restored, [{ id: f.id, name: 'Take 1.mov', movedTo: null, restored: true }]);
+    release();
+    await afterResponseSettled();
+    assert.equal(row(f.id).deletedAt, null);
+    assert.equal(row(f.id).trashKey, null);
+    assert.ok(stored('team/Cuts/Take 1.mov'), 'the live file keeps its object');
+    assert.equal(stored(`_trash/${f.id}/team/Cuts/Take 1.mov`), null, 'no copy left in the trash');
+  });
+
+  test('a file put back under the name of one deleted keeps it — it used to be refused', async () => {
+    const who = mac(ED);
+    const f = await upload(who);
+    await trashFile(who, f.id);
+    await afterResponseSettled();
+    const again = await upload(who, { bytes: Buffer.alloc(1000, 2) });
+    assert.equal(again.name, 'Take 1.mov');
+    assert.equal(again.storageKey, 'team/Cuts/Take 1.mov');
+    assert.ok(stored(`_trash/${f.id}/team/Cuts/Take 1.mov`), 'the deleted one waits in the trash');
+  });
+
+  test('…even before the deleted one’s object has moved: it moves first (Finder’s Replace)', async () => {
+    const who = mac(ED);
+    const f = await upload(who);
+    // Trashed, its object not moved: as a delete leaves it until its move
+    // lands, or for good if that move was cut short.
+    Object.assign(row(f.id), { deletedAt: globalThis.__mw.now, trashKey: null });
+    const again = await upload(who, { bytes: Buffer.alloc(1000, 2) });
+    assert.equal(again.name, 'Take 1.mov', 'not “Take 1 (2).mov”');
+    assert.equal(again.storageKey, 'team/Cuts/Take 1.mov');
+    assert.equal(row(f.id).trashKey, `_trash/${f.id}/team/Cuts/Take 1.mov`, 'the old one went to the trash first');
+    assert.ok(stored(`_trash/${f.id}/team/Cuts/Take 1.mov`));
+  });
+
+  test('a restore after that finds its name taken, and comes back beside the new one', async () => {
+    const who = mac(ED);
+    const f = await upload(who);
+    await trashFile(who, f.id);
+    await afterResponseSettled();
+    const again = await upload(who, { bytes: Buffer.alloc(1000, 2) });
+    const back = await restore(mac(BOSS), [f.id]);
+    assert.equal(back.status, 200);
+    assert.equal(back.body.restored[0].movedTo, 'team/Cuts/Take 1 (2).mov');
+    assert.equal(row(again.id).storageKey, 'team/Cuts/Take 1.mov', 'the new file keeps its object');
+    assert.ok(stored('team/Cuts/Take 1.mov') && stored('team/Cuts/Take 1 (2).mov'));
+  });
+
+  test('a folder’s files are trashed at once, and their objects follow', async () => {
+    const who = mac(ED);
+    const a = await upload(who, { name: 'A.mov', folder: 'Wrap' });
+    const b = await upload(who, { name: 'B.mov', folder: 'Wrap' });
+    const release = holdCopies();
+    const gone = await folders.remove(who, 'Wrap');
+    assert.equal(gone.status, 200);
+    assert.equal(gone.body.deleted, 2);
+    assert.ok(row(a.id).deletedAt && row(b.id).deletedAt, 'trashed before any copy');
+    release();
+    await afterResponseSettled();
+    assert.ok(stored(`_trash/${a.id}/team/Wrap/A.mov`) && stored(`_trash/${b.id}/team/Wrap/B.mov`));
+    assert.ok(!stored('team/Wrap/A.mov') && !stored('team/Wrap/B.mov'));
   });
 });

@@ -9,7 +9,7 @@ import { overrideProblem } from '@/lib/policy';
 import {
   loadRolesAndPolicy, presentPerson, assignableRole, personActionProblem, backfillOnce,
 } from '@/lib/people';
-import { audit, personSubject } from '@/lib/audit';
+import { audit, auditDriveClaims, personSubject } from '@/lib/audit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -124,7 +124,10 @@ export async function PATCH(req, { params }) {
 /**
  * DELETE — remove them (lib/db.js removePerson). `?preview=1` answers with
  * what would go, for the confirmation — "3 drive grants, 2 devices and 5
- * links; their 214 files (38 GB) stay" — and changes nothing.
+ * links; their 214 files (38 GB) stay" — and changes nothing. It also names
+ * the drives they are the only owner of (`soleOwnerOf`): removing them makes
+ * the admin doing it the owner of those (`removed.claimed`), so no drive is
+ * left with none (lib/drive-access.js).
  */
 export async function DELETE(req, { params }) {
   const guard = await requireAdmin();
@@ -139,8 +142,9 @@ export async function DELETE(req, { params }) {
     return NextResponse.json({ preview: impact, blocked: problem ? problem.error : null });
   }
   if (problem) return NextResponse.json({ error: problem.error }, { status: problem.status });
-  const result = await removePerson(email, { apply: true });
+  const result = await removePerson(email, { apply: true, by: guard.email });
   forgetSession(email);
   await audit(guard.email, 'person.remove', personSubject(email, got.person.displayName), result);
+  await auditDriveClaims(guard.email, result.claimed, { from: email });
   return NextResponse.json({ ok: true, removed: result });
 }
