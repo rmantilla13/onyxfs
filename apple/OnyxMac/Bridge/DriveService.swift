@@ -54,6 +54,12 @@ final class DriveService: ObservableObject {
     /// Folder rules naming no folder in their drive now: renamed or deleted
     /// on the web. What they kept stays meanwhile (PinStore.unresolved).
     @Published private(set) var unresolvedPins: Set<PinRule> = []
+    /// What each drive keeps offline, by path as mounted, and what of it is
+    /// not here yet: for Finder's menus and marks (FinderSyncService). Not
+    /// published, since it changes with every file a pass brings and nothing
+    /// on screen here shows it; `onKeptPathsChanged` says when it does.
+    private(set) var keptPaths: [String: KeptPaths] = [:]
+    var onKeptPathsChanged: (() -> Void)?
     @Published private(set) var pinnedBytes: Int64 = 0
     @Published private(set) var streamingBytes: Int64 = 0
     @Published private(set) var syncing: Set<String> = []
@@ -322,6 +328,7 @@ final class DriveService: ObservableObject {
         unresolvedPins = []
         pinnedBytes = 0
         offlineProblem = nil
+        setKeptPaths([:])
     }
 
     func quit() {
@@ -937,7 +944,8 @@ final class DriveService: ObservableObject {
         if on { await pin(rules) } else { await unpin(rules) }
     }
 
-    private func pin(_ rules: [PinRule]) async {
+    /// Many at once, in any drives (Finder's Keep Offline on a selection).
+    func pin(_ rules: [PinRule]) async {
         guard let pins, !rules.isEmpty else { return }
         let started = generation
         await pins.pin(rules)
@@ -952,7 +960,7 @@ final class DriveService: ObservableObject {
         }
     }
 
-    private func unpin(_ rules: [PinRule]) async {
+    func unpin(_ rules: [PinRule]) async {
         guard let pins, !rules.isEmpty else { return }
         let started = generation
         await pins.unpin(rules)
@@ -1013,6 +1021,11 @@ final class DriveService: ObservableObject {
         let (revision, index) = await mirror.snapshot
         guard started == generation else { return }
         reconciled[scope] = (revision, index.isAuthoritative, .now)
+        // Finder's marks: what this pass is to bring shows as on its way,
+        // and each file as here the moment it is.
+        await refreshKeptPaths(scope, index: index, pins: pins)
+        guard started == generation else { return }
+        let arrived = copyArrived(in: scope)
         let transfers = self.transfers
         let report = await pins.reconcile(scope: scope, index: index) { entry, destination in
             guard let id = entry.fileId else { throw OnyxError.decoding("not a file") }
@@ -1029,6 +1042,7 @@ final class DriveService: ObservableObject {
                 await mirror.forgetContentURL(fileId: id)
                 throw OnyxError.http(status: status, message: message)
             }
+            arrived(entry.path)
         }
         guard started == generation else { return }
         if !report.failed.isEmpty {
@@ -1066,6 +1080,7 @@ final class DriveService: ObservableObject {
             pinnedFiles = []
             unresolvedPins = []
             pinnedBytes = 0
+            setKeptPaths([:])
             model?.web.publishOfflineState()
             return
         }
@@ -1073,12 +1088,19 @@ final class DriveService: ObservableObject {
         let scopes = Set(rules.map(\.scope))
         var files = Set<String>()
         var unresolved = Set<PinRule>()
+        var kept: [String: KeptPaths] = [:]
         for (scope, mirror) in mirrors where scopes.contains(scope) {
             let index = await mirror.index
-            for entry in await pins.wanted(scope: scope, index: index) {
+            let wanted = await pins.wanted(scope: scope, index: index)
+            for entry in wanted {
                 if let id = entry.fileId { files.insert(id) }
             }
             unresolved.formUnion(await pins.unresolved(scope: scope, index: index))
+            if onKeptPathsChanged != nil {
+                let local = await pins.keptOffline(scope: scope, wanted)
+                kept[scope] = KeptPaths.make(rules: rules.filter { $0.scope == scope }, index: index,
+                                             wanted: wanted, kept: local)
+            }
         }
         for rule in rules { if case let .file(id) = rule.target { files.insert(id) } }
         let bytes = await pins.usage()
@@ -1090,7 +1112,42 @@ final class DriveService: ObservableObject {
         unresolvedPins = unresolved
         pinnedBytes = bytes
         offlineProblem = describe(problem)
+        setKeptPaths(kept)
         model?.web.publishOfflineState()
+    }
+
+    /// One drive's kept paths from its index now (keptPaths): as each of its
+    /// passes begins. Only while Finder's extension is listened for.
+    private func refreshKeptPaths(_ scope: String, index: MirrorIndex, pins: PinStore) async {
+        guard onKeptPathsChanged != nil else { return }
+        let started = generation
+        let rules = await pins.rules(scope: scope)
+        let wanted = await pins.wanted(scope: scope, index: index)
+        let local = await pins.keptOffline(scope: scope, wanted)
+        guard started == generation else { return }
+        var all = keptPaths
+        all[scope] = KeptPaths.make(rules: rules, index: index, wanted: wanted, kept: local)
+        setKeptPaths(all)
+    }
+
+    /// For a pass's downloads, which run off the main thread: a copy that
+    /// has just come down leaves `pending` now, not when the pass ends.
+    private func copyArrived(in scope: String) -> @Sendable (String) -> Void {
+        guard onKeptPathsChanged != nil else { return { _ in } }
+        let started = generation
+        return { [weak self] path in
+            Task { @MainActor in
+                guard let self, started == self.generation,
+                      self.keptPaths[scope]?.pending.remove(path) != nil else { return }
+                self.onKeptPathsChanged?()
+            }
+        }
+    }
+
+    private func setKeptPaths(_ paths: [String: KeptPaths]) {
+        guard paths != keptPaths else { return }
+        keptPaths = paths
+        onKeptPathsChanged?()
     }
 
     private func describe(_ problem: PinStore.Problem?) -> String? {

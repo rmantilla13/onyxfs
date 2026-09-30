@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- The name System Settings lists it under, beside the app's icon:
+       General › Login Items & Extensions › Finder. build-mac.sh sets it
+       ("Onyx Dev" for a dev build), with the bundle keys. -->
+  <key>CFBundleDisplayName</key><string>Onyx</string>
+  <key>CFBundleExecutable</key><string>OnyxFinder</string>
+  <key>CFBundlePackageType</key><string>XPC!</string>
+  <key>LSUIElement</key><true/>
+  <key>NSExtension</key>
+  <dict>
+    <key>NSExtensionAttributes</key><dict/>
+    <key>NSExtensionPointIdentifier</key><string>com.apple.FinderSync</string>
+    <!-- The class's Objective-C name (@objc(OnyxFinderSync)), the same
+         whether Xcode or scripts/build-mac.sh built it. -->
+    <key>NSExtensionPrincipalClass</key><string>OnyxFinderSync</string>
+  </dict>
+</dict>
+</plist>

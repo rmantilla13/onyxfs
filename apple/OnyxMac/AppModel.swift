@@ -43,6 +43,9 @@ final class AppModel: ObservableObject {
     let proxies = ProxyService()
     /// Thumbnails the web is missing, made on this Mac.
     let thumbnailer = ThumbnailService()
+    /// Keep Offline in Finder's own right-click menu, and the marks on what
+    /// is kept (the OnyxFinder extension asks here).
+    let finderSync = FinderSyncService()
     /// What redraws the activity graphs, wherever they show (ActivityClock).
     lazy var activity = ActivityClock(transfers: finder.transfers)
     private let settings = SharedSettings()
@@ -61,6 +64,8 @@ final class AppModel: ObservableObject {
         thumbnailer.attach(to: self)
         // After the thumbnails: each hears this Mac's uploads as they finish.
         proxies.attach(to: self)
+        // Before the drives open: it hears what each keeps from the first.
+        finderSync.attach(to: self)
         if phase == .signedIn { startup = Task { await afterSignIn() } }
         // A notice's Open System Settings: the Onyx file system's switch,
         // watched for coming on.

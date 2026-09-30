@@ -15,6 +15,7 @@ let package = Package(
         .executable(name: "OnyxMac", targets: ["OnyxMac"]),
         .executable(name: "OnyxFileProvider", targets: ["OnyxFileProvider"]),
         .executable(name: "OnyxFS", targets: ["OnyxFS"]),
+        .executable(name: "OnyxFinder", targets: ["OnyxFinder"]),
     ],
     dependencies: [
         .package(path: "OnyxKit"),
@@ -22,9 +23,25 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "OnyxMac",
-            dependencies: ["OnyxKit"],
+            dependencies: ["OnyxKit", .product(name: "OnyxFinderCore", package: "OnyxKit")],
             path: "OnyxMac",
             exclude: ["Info.plist", "OnyxMac.entitlements"]
+        ),
+        // Finder's right-click menu (Keep Offline, Remove Offline Copy) and
+        // the marks on what is kept offline: a Finder Sync extension, built
+        // into Contents/PlugIns/OnyxFinder.appex by scripts/build-mac.sh.
+        // An NSExtension, so its entry point is NSExtensionMain, as for the
+        // File Provider extension below.
+        .executableTarget(
+            name: "OnyxFinder",
+            dependencies: [.product(name: "OnyxFinderCore", package: "OnyxKit")],
+            path: "OnyxFinder",
+            exclude: ["Info.plist", "OnyxFinder.entitlements"],
+            swiftSettings: [.unsafeFlags(["-application-extension"])],
+            linkerSettings: [.unsafeFlags([
+                "-Xlinker", "-e", "-Xlinker", "_NSExtensionMain",
+                "-Xlinker", "-application_extension",
+            ])]
         ),
         // The Onyx file system (onyxfs, ONYXFS.md): an ExtensionKit
         // extension. Built into Contents/Extensions/OnyxFS.appex by
