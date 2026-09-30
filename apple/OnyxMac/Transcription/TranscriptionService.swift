@@ -36,8 +36,11 @@ final class TranscriptionService: ObservableObject {
             model?.web.publishOfflineState()
         }
     }
-    /// The file being transcribed now, for the page and the menu bar.
-    @Published private(set) var busyFileId: String?
+    /// The file being transcribed now, for the page and the menu bar. A job
+    /// under way keeps Onyx out of App Nap (WorkActivity).
+    @Published private(set) var busyFileId: String? {
+        didSet { WorkActivity.app.set(.transcripts, busyFileId != nil) }
+    }
     @Published private(set) var busyName: String?
     /// 0…1 across the whole job: download, audio, then speech.
     @Published private(set) var progress: Double = 0

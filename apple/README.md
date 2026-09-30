@@ -18,7 +18,20 @@ One Swift codebase. On the Mac it is **Onyx.app**:
 - **A menu bar item** that keeps Finder in sync while the window is closed.
   It opens a panel: how Onyx is doing, the activity graphs and what is on
   its way, and each drive with the icon its disk has in Finder and a switch
-  to put it there or take it away.
+  to put it there or take it away. Closing the window, or ⌘Q (Close to Menu
+  Bar), leaves Onyx there; ⌥⌘Q, or Quit in the panel or the Dock, quits it.
+  Settings › General can keep its Dock icon while the window is closed.
+- **As fast out of sight as in view.** macOS naps an app it cannot see,
+  putting off its timers and slowing its CPU, disk and network. 0.5.17 was
+  napped for hours at a time, its window open behind others; in a test app
+  shaped like Onyx, the nap began within a minute of the window going out
+  of sight, and a transfer on a busy Mac then ran about five times slower.
+  While Onyx has work in flight — uploads (Finder's and the window's),
+  downloads, offline copies, a sync bringing pages, bytes going to and from
+  the disks, thumbnails, waveforms, streamable versions, transcripts, an
+  update — it holds one activity that keeps it out of App Nap, and lets it
+  go five seconds after the last (`WorkActivity`). It never keeps the Mac
+  awake, and while nothing is under way nothing is held.
 - **Activity**, along the foot of the window: what the drives are moving
   right now, download, upload, read and write, each a figure and a minute's
   graph, and each download from its click until it is done, with Show in

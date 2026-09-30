@@ -124,6 +124,9 @@ final class WebController: NSObject, ObservableObject {
         await store.removeData(ofTypes: types, for: records)
         webView.loadHTMLString("", baseURL: nil)
         lastHandoff = nil
+        // The blank page says nothing (it is not the server's): its
+        // uploads, if any were under way, stopped with the page.
+        WorkActivity.app.set(.pageUploads, false)
     }
 
     // MARK: - Navigation
@@ -193,6 +196,9 @@ final class WebController: NSObject, ObservableObject {
         // drag moves the window.
         setBar: (bar, holes) => post({ type: 'bar', bar: bar || null, holes: holes || [] }),
         transcribe: (fileId) => post({ type: 'transcribe', fileId: String(fileId || '') }),
+        // The page's own uploads under way, or not: the app stays out of
+        // App Nap meanwhile, so they keep their speed with the window closed.
+        uploading: (on) => post({ type: 'uploads', active: !!on }),
         _update: (next) => {
           Object.assign(state, next);
           if (next.chrome) lay(next.chrome);
@@ -280,6 +286,9 @@ final class WebController: NSObject, ObservableObject {
         Task { @MainActor in
             switch type {
             case "ready":
+                // A page of its own, with no uploads of its own yet: whatever
+                // the one before said has gone with it.
+                WorkActivity.app.set(.pageUploads, false)
                 publishOfflineState()
             case "pinFiles":
                 let ids = (msg["ids"] as? [Any] ?? []).compactMap { $0 as? String }.prefix(5000)
@@ -308,6 +317,11 @@ final class WebController: NSObject, ObservableObject {
                 // is read now instead of at the next poll. The server says
                 // which jobs there are, so the id is not needed here.
                 model.transcriber.pollNow()
+            case "uploads":
+                // The page's uploads (window.onyxMac.uploading): work in
+                // flight while it says so (WorkActivity).
+                WorkActivity.app.set(.pageUploads, msg["active"] as? Bool ?? false)
+                return
             default:
                 break
             }
@@ -428,6 +442,8 @@ extension WebController: WKNavigationDelegate {
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        // Its uploads went with it.
+        WorkActivity.app.set(.pageUploads, false)
         webView.reload()
     }
 }

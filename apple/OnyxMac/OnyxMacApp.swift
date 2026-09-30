@@ -57,7 +57,8 @@ struct OnyxMacApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// Closing the window leaves Onyx in the menu bar, keeping Finder in sync.
+    /// Closing the window leaves Onyx in the menu bar, keeping Finder in sync
+    /// — as ⌘Q does (OnyxCommands).
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     /// A SIGTERM (a logout, launchd, `kill`) quits the normal way, so the
@@ -73,12 +74,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MainActor.assumeIsolated {
             let background = Background.shared
             background.registerOnFirstRun()
-            // Opened at login: no window, no Dock icon — just the menu bar.
+            // Opened at login: no window — just the menu bar, and the Dock
+            // icon only if Settings keeps it there.
             if Background.launchedAtLogin {
-                DispatchQueue.main.async {
-                    for window in NSApp.windows where window.canBecomeMain { window.close() }
-                    NSApp.setActivationPolicy(.accessory)
-                }
+                DispatchQueue.main.async { MainActor.assumeIsolated { background.openedAtLogin() } }
             }
             for name in [NSWindow.willCloseNotification, NSWindow.didBecomeKeyNotification] {
                 NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
@@ -89,9 +88,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Quitting always quits. AppKit refuses while a sheet is open (the update
-    /// sheet, say) — which also left drives mounted after a logout — so any
-    /// open sheet is closed first.
+    /// Quitting always quits: ⌥⌘Q, Quit in the menu bar's panel or the Dock,
+    /// a logout or restart, a SIGTERM. (⌘Q does not come here: it only
+    /// closes the windows, OnyxCommands.) AppKit refuses while a sheet is
+    /// open (the update sheet, say) — which also left drives mounted after a
+    /// logout — so any open sheet is closed first.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         for window in NSApp.windows {
             if let sheet = window.attachedSheet { window.endSheet(sheet) }
@@ -99,10 +100,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .terminateNow
     }
 
-    /// Clicking Onyx in Finder or Launchpad while it runs in the menu bar
-    /// opens its window, as any app would.
+    /// Clicking Onyx in Finder, Launchpad or the Dock (its icon kept there)
+    /// while it runs in the menu bar opens its window, as any app would.
+    /// Onyx's own windows are counted, not AppKit's `flag`: the note by the
+    /// menu bar item is a window too.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { NotificationCenter.default.post(name: .onyxOpenWindow, object: nil) }
+        let none = MainActor.assumeIsolated { Background.windows.isEmpty }
+        if none { NotificationCenter.default.post(name: .onyxOpenWindow, object: nil) }
         return true
     }
 }
@@ -135,6 +139,15 @@ struct OnyxCommands: Commands {
             Button("Check for Updates…") {
                 Task { await model.updater.check(userInitiated: true) }
             }
+        }
+        // ⌘Q leaves Onyx in the menu bar, its drives in Finder and in sync;
+        // ⌥⌘Q quits. Quit in the menu bar's panel or the Dock, a logout and
+        // a SIGTERM quit as they always did: none of them come this way.
+        CommandGroup(replacing: .appTermination) {
+            Button("Close to Menu Bar") { Background.shared.closeToMenuBar() }
+                .keyboardShortcut("q")
+            Button("Quit Onyx") { NSApp.terminate(nil) }
+                .keyboardShortcut("q", modifiers: [.command, .option])
         }
         CommandGroup(replacing: .newItem) {}
         CommandGroup(after: .newItem) {

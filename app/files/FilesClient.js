@@ -955,6 +955,17 @@ export default function FilesClient({
     return () => window.removeEventListener('beforeunload', warn);
   }, [uploadSnap?.running]);
 
+  // In Onyx for Mac, the app hears while files are going up, and stays out
+  // of App Nap meanwhile: with its window closed they would slow to a crawl.
+  const tellMac = mac.uploading;
+  useEffect(() => {
+    if (!uploadSnap?.running) return undefined;
+    tellMac(true);
+    return () => tellMac(false);
+  // Only as the queue starts and stops: `mac` is new each render, what it calls is not.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadSnap?.running]);
+
   // `entries` are [{ file, dir }]; `dir` is relative to the current folder, so
   // a dropped folder keeps its structure beneath wherever it was dropped.
   // Entries without a file are the empty directories of a dropped tree; they

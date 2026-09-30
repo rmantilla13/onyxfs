@@ -379,6 +379,13 @@ final class AppModel: ObservableObject {
             ActivityDemo.start(finder.transfers)
             web.downloads.demo()
         }
+        // `--demo-work <seconds>`: work in flight for that long, then none —
+        // for watching Onyx leave App Nap and go back (WorkActivity) with
+        // nobody signed in.
+        if let seconds = value("--demo-work").flatMap(Double.init) {
+            let hold = WorkActivity.app.begin(.transfers)
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { hold.end() }
+        }
         #endif
     }
 }

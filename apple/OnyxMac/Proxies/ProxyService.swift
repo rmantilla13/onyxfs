@@ -45,8 +45,12 @@ final class ProxyService: ObservableObject {
             if enabled, let model { start(model: model) } else if !enabled { turnedOff() }
         }
     }
-    /// The video being made streamable now, for the menu bar's panel.
-    @Published private(set) var busyFileId: String?
+    /// The video being made streamable now, for the menu bar's panel. A job
+    /// under way — download, transcode, upload — keeps Onyx out of App Nap
+    /// (WorkActivity).
+    @Published private(set) var busyFileId: String? {
+        didSet { WorkActivity.app.set(.proxies, busyFileId != nil) }
+    }
     @Published private(set) var busyName: String?
     /// 0…1 across the whole job: download, transcode, upload.
     @Published private(set) var progress: Double = 0

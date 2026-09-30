@@ -563,7 +563,10 @@ drawn by the same `DriveIcon` the extension puts on the disk.
   (`TransferLog.onWake`, called outside the lock; `AppModel.activity`), which
   stops itself once the log has been quiet for as long as a graph shows, and
   when the last view showing the graphs goes (`attach`/`detach`). Always on
-  screen, the bar costs nothing while nothing moves.
+  screen, the bar costs nothing while nothing moves. The same wake keeps
+  Onyx out of App Nap while bytes move, looking every two seconds whether
+  they still do (`WorkActivity.poke`, DriveService), so a disk read or
+  written with the window out of sight is served at full speed.
   Each graph is its last 60 whole seconds, each averaged with its
   neighbours, since a disk's once-a-second reports can land two in one
   second and none in the next. The figure is the average of the last three.
