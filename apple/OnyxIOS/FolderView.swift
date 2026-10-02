@@ -19,6 +19,10 @@ struct FolderView: View {
     @State private var inspecting: FileItem?
     /// The file or folder a Share Link sheet is open for.
     @State private var linking: LinkSubject?
+    /// The subfolder whose tags and metadata are being set.
+    @State private var tagging: FolderNode?
+    /// The collection on screen, being edited.
+    @State private var editingCollection: FileCollection?
     /// Choosing files, and the ones chosen.
     @State private var selecting = false
     @State private var selection: Set<String> = []
@@ -77,10 +81,26 @@ struct FolderView: View {
         }
         .sheet(item: $inspecting) { FileInfoView(file: $0, place: route.place) }
         .sheet(item: $linking) { ShareLinkSheet(subject: $0) }
+        .sheet(item: $tagging) { node in
+            FolderMetaEditor(place: route.place, node: node) {
+                Task { await listing.load(session, sort: sort, query: query, refresh: true) }
+            }
+        }
+        .sheet(item: $editingCollection) { c in
+            CollectionEditor(existing: c, onSaved: { _, _ in
+                Task { await listing.load(session, sort: sort, query: query, refresh: true) }
+            }, onDeleted: { dismiss() })
+        }
+    }
+
+    /// The collection on screen, as the session last heard of it.
+    private var collection: FileCollection? {
+        route.collection.flatMap { ref in session.collections.first { $0.id == ref.id } }
     }
 
     private var title: String {
-        if let collection = route.collection { return collection.name }
+        // Its current name: it may have been renamed since it was opened.
+        if let ref = route.collection { return collection?.name ?? ref.name }
         return route.folder.isEmpty ? route.place.name : (route.folder as NSString).lastPathComponent
     }
 
@@ -265,6 +285,9 @@ struct FolderView: View {
     /// A folder's long-press menu: a link to it, where one is theirs to
     /// make or manage. With nothing to offer, no menu at all.
     @ViewBuilder private func folderMenu(_ node: FolderNode) -> some View {
+        if route.place.role != "viewer" {
+            Button { tagging = node } label: { Label("Tags & Metadata…", systemImage: "tag") }
+        }
         starButton(node)
         if let share = shareAction(node) {
             Button(action: share) { Label("Share Link…", systemImage: "link") }
@@ -301,6 +324,11 @@ struct FolderView: View {
                     .fontWeight(.semibold)
             }
         } else {
+            if let collection, collection.canEdit == true {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Edit") { editingCollection = collection }
+                }
+            }
             if !route.folder.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) {
                     let starred = session.isStarred(route)

@@ -151,6 +151,28 @@ import Testing
         #expect(c.canEdit == true)
     }
 
+    @Test func theEditorsNeedsComeAlongAndAreOptional() async throws {
+        let stub = try ListingStub { _ in
+            (200, #"{ "collections": [], "fields": [{ "key": "status", "label": "Status", "type": "select", "options": ["Active"] }], "canCreate": ["", "d1"] }"#)
+        }
+        defer { stub.tearDown() }
+        let index = try await stub.api.collectionsIndex()
+        #expect(index.fields.map(\.key) == ["status"] && index.fields.first?.options == ["Active"])
+        #expect(index.canCreate == ["", "d1"])
+        // The list above, from a server before the editor: decoded all the same.
+        let bare = try ListingStub { _ in (200, #"{ "collections": [] }"#) }
+        defer { bare.tearDown() }
+        let old = try await bare.api.collectionsIndex()
+        #expect(old.fields.isEmpty && old.canCreate.isEmpty)
+    }
+
+    @Test func folderMetadataReadsOneValueOrAList() throws {
+        let node = try JSONDecoder().decode(FolderNode.self, from: Data(#"{ "folder": "A", "name": "A", "parent": "", "depth": 1, "count": 0, "tags": ["spring"], "metadata": { "status": "Active", "project": ["X", "Y"], "n": 3 } }"#.utf8))
+        #expect(node.tags == ["spring"])
+        #expect(node.metadata?["status"] == .one("Active") && node.metadata?["project"] == .many(["X", "Y"]))
+        #expect(node.metadata?["n"]?.values == ["3"])
+    }
+
     @Test func aCollectionsFilesAreAskedForByItsIdNotAFolder() async throws {
         let stub = try ListingStub { _ in (200, #"{ "files": [], "cursor": null }"#) }
         defer { stub.tearDown() }

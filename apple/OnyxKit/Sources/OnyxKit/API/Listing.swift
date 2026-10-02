@@ -29,12 +29,18 @@ public struct FolderNode: Codable, Sendable, Hashable, Identifiable {
     /// markFolderLinks): the folder's half of whether to offer Share Link…,
     /// as a file's `can.share` is. Nil, from an older server, is no.
     public let share: Bool?
+    /// What the folder carries itself, which the files inside it inherit in
+    /// collections (FileCollection). Nil when it carries nothing.
+    public let tags: [String]?
+    public let metadata: [String: MetadataValue]?
 
     public var id: String { folder }
 
-    public init(folder: String, name: String, parent: String, depth: Int, count: Int, share: Bool? = nil) {
+    public init(folder: String, name: String, parent: String, depth: Int, count: Int, share: Bool? = nil,
+                tags: [String]? = nil, metadata: [String: MetadataValue]? = nil) {
         self.folder = folder; self.name = name; self.parent = parent; self.depth = depth; self.count = count
         self.share = share
+        self.tags = tags; self.metadata = metadata
     }
 }
 

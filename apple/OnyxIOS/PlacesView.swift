@@ -10,6 +10,7 @@ struct PlacesView: View {
     @Binding var selection: Place?
     /// A starred folder chosen: open it, in its place.
     var open: (FolderRoute) -> Void = { _ in }
+    @State private var makingCollection = false
 
     /// Collections in a place this account can open, each with that place.
     private var gathered: [(collection: FileCollection, place: Place)] {
@@ -45,8 +46,9 @@ struct PlacesView: View {
                         .listRowSeparator(.hidden)
                         .selectionDisabled()
                 }
-                if !gathered.isEmpty {
-                    SectionHeading(title: "Collections")
+                if !gathered.isEmpty || !session.placesForNewCollections.isEmpty {
+                    SectionHeading(title: "Collections",
+                                   action: session.placesForNewCollections.isEmpty ? nil : ("New", { makingCollection = true }))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 22, leading: 20, bottom: 6, trailing: 20))
@@ -99,6 +101,11 @@ struct PlacesView: View {
             }
         }
         .listStyle(.plain)
+        .sheet(isPresented: $makingCollection) {
+            CollectionEditor(existing: nil) { saved, place in
+                open(FolderRoute(place: place, folder: "", collection: CollectionRef(id: saved.id, name: saved.name)))
+            }
+        }
         .auraBackground()
         .toolbar(.hidden, for: .navigationBar)
         .navigationTitle("Browse")

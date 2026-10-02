@@ -20,6 +20,11 @@ struct Place: Hashable, Identifiable, Sendable {
     static let library = Place(scope: .library, name: "All Files", role: nil)
 }
 
+/// What the server said was wrong with a save, in words for the sheet.
+struct SaveProblem: Error {
+    let words: String
+}
+
 /// Who is signed in, to which server, and the places they may open.
 ///
 /// Sign-in is the device sign-in the Mac uses: the web's own page in a
@@ -40,6 +45,10 @@ final class Session {
     /// Collections of All Files and of these drives (/api/collections): the
     /// files that meet rules on their tags and metadata, by drive then name.
     private(set) var collections: [FileCollection] = []
+    /// The workspace's metadata fields, for the rule editor and folder tags.
+    private(set) var metadataFields: [MetadataField] = []
+    /// Where this account may make a collection: drive ids, "" for All Files.
+    private(set) var collectionPlaces: [String] = []
     private(set) var isAdmin = false
     /// Whether this account may share by link at all: the `shares` flag as
     /// the web's menus read it for them (/api/space/filespaces). The other
@@ -213,6 +222,8 @@ final class Session {
         drives = []
         stars = []
         collections = []
+        metadataFields = []
+        collectionPlaces = []
         isAdmin = false
         sharing = false
         trees = [:]
@@ -249,7 +260,64 @@ final class Session {
         // Stars are shortcuts: without them the drives still open, so a
         // failure here keeps the last list rather than saying anything.
         if let list = try? await api.stars() { stars = list }
-        if let list = try? await api.collections() { collections = list }
+        await loadCollections()
+    }
+
+    // MARK: - Collections
+
+    /// The collections, with the metadata fields and where new ones may go.
+    /// A failure keeps what was shown: the drives open all the same.
+    func loadCollections() async {
+        guard let index = try? await api.collectionsIndex() else { return }
+        collections = index.collections
+        metadataFields = index.fields
+        collectionPlaces = index.canCreate
+    }
+
+    /// The places this account may make a collection in, in Browse's order.
+    var placesForNewCollections: [Place] {
+        (drives + [Place.library]).filter { place in
+            if case let .drive(id) = place.scope { return collectionPlaces.contains(id) }
+            return collectionPlaces.contains("")
+        }
+    }
+
+    /// Make a collection (`existing` nil) or change one. Resolves the saved
+    /// collection, or the server's sentence for what is wrong.
+    func saveCollection(_ existing: FileCollection?, in place: Place, name: String, match: String,
+                        rules: [FileCollection.Rule]) async -> Result<FileCollection, SaveProblem> {
+        do {
+            let saved = existing == nil
+                ? try await api.createCollection(in: place.scope, name: name, match: match, rules: rules)
+                : try await api.updateCollection(existing!.id, name: name, match: match, rules: rules)
+            await loadCollections()
+            return .success(saved)
+        } catch {
+            return .failure(SaveProblem(words: explain(error)))
+        }
+    }
+
+    func deleteCollection(_ collection: FileCollection) async -> String? {
+        do {
+            try await api.deleteCollection(collection.id)
+            collections.removeAll { $0.id == collection.id }
+            return nil
+        } catch {
+            return explain(error)
+        }
+    }
+
+    /// Set a folder's own tags and metadata; its place's tree is read again
+    /// so the next look at the folder shows them.
+    func setFolderMeta(in place: Place, folder: String, tags: [String],
+                       metadata: [String: MetadataValue?]) async -> String? {
+        do {
+            try await api.setFolderMeta(in: place.scope, folder: folder, tags: tags, metadata: metadata)
+            _ = try? await folders(in: place, refresh: true)
+            return nil
+        } catch {
+            return explain(error)
+        }
     }
 
     // MARK: - Starred folders

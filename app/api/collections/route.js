@@ -30,16 +30,26 @@ const toClient = (c, principal, drives) => {
 };
 
 /**
- * GET → { collections: [{ id, driveId, name, match, rules, updatedAt, canEdit }] }
+ * GET → { collections: [{ id, driveId, name, match, rules, updatedAt, canEdit }], fields, canCreate }
  *
  * Every collection in All Files and in the drives the caller can open, by
- * drive then name.
+ * drive then name. With what a client's rule editor needs and has no other
+ * way to read: the workspace's metadata fields (lib/dam.js; their names and
+ * choices, which every member sees on the web anyway), and where this caller
+ * may make a collection — drive ids, '' for All Files.
  */
 export async function GET(req) {
   const g = await requirePrincipal(req);
   if (g.error) return g.error;
-  const [all, drives] = await Promise.all([listCollections(), listFilespacesForSpace(g.email, g.principal)]);
-  return json({ collections: all.filter((c) => collectionVisible(c, drives)).map((c) => toClient(c, g.principal, drives)) });
+  const [all, drives, rawSchema] = await Promise.all([
+    listCollections(), listFilespacesForSpace(g.email, g.principal), getFileMetadataSchema(),
+  ]);
+  const canCreate = [null, ...drives].filter((d) => canEditCollections(g.principal, d)).map((d) => (d ? d.id : ''));
+  return json({
+    collections: all.filter((c) => collectionVisible(c, drives)).map((c) => toClient(c, g.principal, drives)),
+    fields: normalizeSchema(rawSchema).fields.map(({ key, label, type, options }) => ({ key, label, type, ...(options?.length ? { options } : {}) })),
+    canCreate,
+  });
 }
 
 /**
