@@ -1136,6 +1136,38 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 }
 .starred-row:hover .starred-remove, .starred-remove:focus-visible { opacity: 1; }
 .starred-remove:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+/* Collections: the sidebar's list, the bar above one's files, and the editor. */
+.side-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.side-title-row .side-title { margin: 0; }
+.side-add { width: 24px; height: 24px; padding: 0; justify-content: center; color: var(--muted); }
+.side-empty { margin: var(--s1) 6px 0; }
+.collection-list .folder-link { align-items: center; }
+.collection-glyph { flex: none; color: var(--accent); }
+.collection-bar {
+  display: flex; align-items: center; gap: var(--s2);
+  margin-bottom: var(--s3); padding: var(--s2) var(--s3);
+  border: 1px solid var(--line); border-radius: var(--radius-md, 10px);
+  background: var(--surface);
+}
+.collection-bar-rules { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.collection-rule-chip {
+  padding: 2px 8px; border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--ink);
+}
+.collection-match { display: flex; align-items: center; gap: var(--s2); }
+.collection-match .input { width: auto; }
+.collection-rules { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.collection-rule { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(110px, 1fr) minmax(0, 2fr) auto; gap: var(--s2); align-items: start; }
+.collection-values { min-width: 0; }
+.collection-choices { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; }
+.collection-choices .chip {
+  padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--radius-pill);
+  background: var(--surface); color: var(--ink); font: inherit; font-size: var(--t-sm); cursor: pointer;
+}
+.collection-choices .chip.is-on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.collection-rule-remove { width: 32px; height: 32px; padding: 0; justify-content: center; }
+.collection-add-rule { align-self: flex-start; gap: 4px; }
+.collection-delete { margin-right: auto; }
 
 /* A folder, drawn solid (FolderGlyph): the kit's folder filled for the
    back, a lighter front panel over it, both the accent mixed with the page's
@@ -1774,6 +1806,11 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   .starred-list { overflow-x: auto; }
   .starred-row > .folder-link { padding-right: var(--s3); }
   .starred-remove, .starred-where { display: none; }
+  .side-collections h3, .side-collections .side-add, .side-empty { display: none; }
+  .side-collections { margin-bottom: var(--s2); }
+  .collection-list { overflow-x: auto; }
+  .collection-rule { grid-template-columns: 1fr 1fr auto; }
+  .collection-rule .collection-values { grid-column: 1 / -1; grid-row: 2; }
   .folder-list { display: flex; gap: 6px; padding-bottom: var(--s1); }
   .folder-list .folder-link {
     width: auto;

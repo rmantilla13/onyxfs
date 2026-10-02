@@ -3,6 +3,7 @@ import { createFile, getFilespaceForUser, storageKeyInUse, claimUploadKey, issue
 import { nfc } from '@/lib/folder-ops';
 import { requirePrincipal, uploadCheck, refusal } from '@/lib/authz';
 import { listFilesPage, listFolderTree, storagePrefixFor } from '@/lib/file-listing';
+import { collectionFor, collectionListing } from '@/lib/collection-scope';
 import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject, s3DeleteObject } from '@/lib/storage';
 import { decodeCursor } from '@/lib/file-query';
 import { uploadFields } from '@/lib/media';
@@ -61,6 +62,22 @@ export async function GET(req) {
     // opt-in — the grid only needs to know whether another page exists.
     withTotal: url.searchParams.get('withTotal') === '1',
   };
+
+  // A collection (?collection=): its rules, across the whole drive it was
+  // made in — never a folder of it — narrowed further by the kind and search
+  // sent with it. One the caller cannot see is a 404, the same as none.
+  const collectionId = url.searchParams.get('collection');
+  if (collectionId) {
+    const c = await collectionFor(collectionId, principal);
+    if (!c) return NextResponse.json({ error: 'No such collection.' }, { status: 404 });
+    const scope = await collectionListing(c);
+    const page = await listFilesPage({
+      principal,
+      opts: { ...opts, folder: undefined, folderPrefix: '', collection: scope.collection },
+      storagePrefix: scope.storagePrefix,
+    });
+    return NextResponse.json(page);
+  }
 
   // AUTHORIZE → FILTER → PRESIGN, in lib/file-listing.js — shared with the
   // files page, which renders the first page on the server.

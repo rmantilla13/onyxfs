@@ -1,7 +1,9 @@
 import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
 import { loadBrand } from '@/lib/brand-config';
-import { listFilespacesForSpace, getFileMetadataSchema, listSavedViews, listFolderStars } from '@/lib/db';
+import { listFilespacesForSpace, getFileMetadataSchema, listSavedViews, listFolderStars, listCollections } from '@/lib/db';
+import { collectionVisible } from '@/lib/collections';
+import { canEditCollections } from '@/lib/collection-scope';
 import { getSessionUser } from '@/lib/session';
 import { getPrincipal, can } from '@/lib/authz';
 import { listFilesPage, listFolderTree } from '@/lib/file-listing';
@@ -58,7 +60,7 @@ export default async function FilesPage({ searchParams }) {
   // capped by their platform role.
   const principal = await getPrincipal(email, { person: user.person });
   const admin = principal.isAdmin;
-  const [brand, filespaces, rawSchema, savedViews, savedStars] = await Promise.all([
+  const [brand, filespaces, rawSchema, savedViews, savedStars, allCollections] = await Promise.all([
     loadBrand(),
     // Admins see every filespace (as owner), others their grants. The old
     // listFilespacesForUser left admins with an empty switcher: an env-admin
@@ -71,10 +73,16 @@ export default async function FilesPage({ searchParams }) {
     listSavedViews(email).catch(() => []),
     // Their starred folders, left out in the same way (GET /api/stars).
     listFolderStars(email).catch(() => []),
+    // Collections of All Files and of the drives they can open (GET /api/collections).
+    listCollections().catch(() => []),
   ]);
   const { flags } = principal;
   const views = visibleViews(savedViews, filespaces).map(toClientView);
   const driveIds = new Set(filespaces.map((f) => f.id));
+  const collections = allCollections.filter((c) => collectionVisible(c, filespaces)).map((c) => ({
+    id: c.id, driveId: c.driveId, name: c.name, match: c.match, rules: c.rules, updatedAt: c.updatedAt,
+    canEdit: canEditCollections(principal, c.driveId ? filespaces.find((d) => d.id === c.driveId) : null),
+  }));
   const stars = savedStars
     .filter((s) => !s.driveId || driveIds.has(s.driveId))
     .map(({ driveId, folder }) => ({ driveId, folder }));
@@ -166,6 +174,7 @@ export default async function FilesPage({ searchParams }) {
         initialFiltersOpen={initialFiltersOpen}
         initialSidebarOpen={initialSidebarOpen}
         initialStars={stars}
+        initialCollections={collections}
         view={view}
         views={views}
         initialLocal={initialLocal}

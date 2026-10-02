@@ -57,8 +57,12 @@ extension OnyxAPI {
     /// One page of a folder: the files directly in `folder` ("" is the top
     /// of the scope). With a `query`, the files matching it anywhere beneath
     /// `folder` instead — the web's search, scoped the same way.
+    ///
+    /// With a `collection` (FileCollection.id), its files instead: everything
+    /// in its drive that meets its rules, whatever `folder` says, narrowed by
+    /// the `query` too.
     public func listFiles(in scope: SyncDomain, folder: String, query: String? = nil, sort: FileSort = .name,
-                          cursor: String? = nil, limit: Int = 100) async throws -> FilePage {
+                          cursor: String? = nil, limit: Int = 100, collection: String? = nil) async throws -> FilePage {
         var items: [URLQueryItem] = [
             .init(name: "sort", value: sort.rawValue),
             .init(name: "limit", value: String(limit)),
@@ -66,7 +70,12 @@ extension OnyxAPI {
             .init(name: "folders", value: "0"),
         ]
         if case let .drive(id) = scope { items.append(.init(name: "filespace", value: id)) }
-        if let query = query?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty {
+        if let collection {
+            items.append(.init(name: "collection", value: collection))
+            if let query = query?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty {
+                items.append(.init(name: "q", value: query))
+            }
+        } else if let query = query?.trimmingCharacters(in: .whitespacesAndNewlines), !query.isEmpty {
             items.append(.init(name: "q", value: query))
             if !folder.isEmpty { items.append(.init(name: "folderPrefix", value: folder)) }
         } else {

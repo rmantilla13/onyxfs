@@ -47,6 +47,10 @@ import { canFor, canForSome } from './can-for';
 import { fileKey, folderKey, parseKey } from '@/lib/selection';
 import FolderDrop, { DRAG_FILES, DRAG_FOLDER, startFolderDrag } from './FolderDrop';
 import StarredFolders from './StarredFolders';
+import CollectionsList from './CollectionsList';
+import CollectionEditor from './CollectionEditor';
+import FolderMetaDialog from './FolderMetaDialog';
+import CollectionBar from './CollectionBar';
 import DragLayer, { beginDrag, paneDrop } from './DragPreview';
 import { FolderTiles, FolderRows, MAX_TILES } from './FolderItems';
 import FilesHeader from './FilesHeader';
@@ -183,8 +187,8 @@ const historyState = () => {
  * through everything beneath the folder instead (lib/views.js listingOpts,
  * which the server render uses too).
  */
-async function fetchListing({ filespaceId, folder, query, kinds, sort, flat = false }, after = null) {
-  const p = listingParams({ folder, query, kinds, sort, flat }, { filespaceId, cursor: after });
+async function fetchListing({ filespaceId, folder, query, kinds, sort, flat = false, collection = '' }, after = null) {
+  const p = listingParams({ folder, query, kinds, sort, flat }, { filespaceId, cursor: after, collection });
   const r = await fetch(`/api/files?${p}`);
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Request failed (${r.status})`);
   const data = await r.json();
@@ -212,7 +216,7 @@ async function fetchListing({ filespaceId, folder, query, kinds, sort, flat = fa
  */
 export default function FilesClient({
   flags, canWrite, reviewLinks = false, folderLinks = false, schema: initialSchema, filespaceId, isAdmin = false,
-  drives = [], initial = null, initialFiltersOpen = false, initialSidebarOpen = true, initialStars = [],
+  drives = [], initial = null, initialFiltersOpen = false, initialSidebarOpen = true, initialStars = [], initialCollections = [],
   view: initialViewDef = null, views: initialViews = [], initialLocal = {}, initialLegacy = null, initialQuery = '',
 }) {
   // Back from a file this page opened: the listing as it was left — every
@@ -245,6 +249,9 @@ export default function FilesClient({
   // survives a reload, and the browser's Back and Forward — the mouse's back
   // button, ⌘[ — walk between folders the way they do between pages.
   const folder = cleanFolder(searchParams.get('folder') || '');
+  // A collection open instead (?collection=): its files, from the whole of
+  // the drive, in place of a folder's (lib/collections.js).
+  const collectionId = searchParams.get('collection') || '';
 
   // ── The view ──────────────────────────────────────────────────────────────
   // What is on screen is a view (lib/views.js): one of the built-ins or one
@@ -347,7 +354,7 @@ export default function FilesClient({
 
   // Which listing is on screen, as a key: the cache (lib/listing-cache.js)
   // and the server-rendered first page are both matched against it.
-  const currentKey = listingKey({ filespaceId, folder, query, kinds, sort, flat });
+  const currentKey = listingKey({ filespaceId, folder, query, kinds, sort, flat, collection: collectionId });
 
   /**
    * Fetch one page. `after` is the opaque cursor from the previous page; with
@@ -358,12 +365,12 @@ export default function FilesClient({
    */
   const fetchPage = useCallback(async (after = null, quiet = false) => {
     const token = ++requestRef.current;
-    const key = listingKey({ filespaceId, folder, query, kinds, sort, flat });
+    const key = listingKey({ filespaceId, folder, query, kinds, sort, flat, collection: collectionId });
     if (after) setLoadingMore(true);
     else if (!quiet) setLoading(true);
     setError(null);
     try {
-      const data = await fetchListing({ filespaceId, folder, query, kinds, sort, flat }, after);
+      const data = await fetchListing({ filespaceId, folder, query, kinds, sort, flat, collection: collectionId }, after);
       if (!after) listingCache.set(key, data);
       if (token !== requestRef.current) return; // superseded
       if (after) {
@@ -391,7 +398,7 @@ export default function FilesClient({
     } finally {
       if (token === requestRef.current) { setLoading(false); setLoadingMore(false); }
     }
-  }, [folder, query, kinds, sort, flat, filespaceId]);
+  }, [folder, query, kinds, sort, flat, filespaceId, collectionId]);
 
   const fetchPageRef = useRef(fetchPage);
   fetchPageRef.current = fetchPage;
@@ -575,6 +582,9 @@ export default function FilesClient({
   const navigate = useCallback((path, { replace = false } = {}) => {
     const next = cleanFolder(path);
     const params = new URLSearchParams(window.location.search);
+    // Opening a folder leaves a collection for the folder.
+    const leaving = params.has('collection');
+    params.delete('collection');
     if (next) params.set('folder', next);
     else params.delete('folder');
     const qs = params.toString();
@@ -584,7 +594,7 @@ export default function FilesClient({
       window.history.replaceState({ onyxDepth: cur.depth, onyxFrom: cur.from }, '', url);
       return;
     }
-    if (next === folder) return;
+    if (next === folder && !leaving) return;
     window.history.pushState({ onyxDepth: cur.depth + 1, onyxFrom: folder }, '', url);
   }, [folder]);
 
@@ -680,7 +690,7 @@ export default function FilesClient({
   // the tree. Hidden while the listing is flattened or searched, or filtered
   // by metadata: those are a flat list across folders.
   const recursive = isRecursive({ flat, query });
-  const showTiles = !recursive && !hasAnyFacet(facets);
+  const showTiles = !recursive && !hasAnyFacet(facets) && !collectionId;
   const subfolders = useMemo(() => {
     const paths = new Set(folders.map((f) => f.folder));
     return folders.filter((f) => (paths.has(f.parent) ? f.parent : '') === folder);
@@ -1603,6 +1613,7 @@ export default function FilesClient({
     { label: 'Open', hint: 'Return', onSelect: () => navigate(path) },
     itemFolders.some((f) => f.folder === path) && { label: 'Quick Look', hint: 'Space', onSelect: () => quickLook(folderKey(path)) },
     { label: 'Get info', onSelect: () => infoForFolder(path) },
+    canWrite && { label: 'Tags and metadata…', onSelect: () => setTaggingFolder(path) },
     isStarred(path)
       ? { label: 'Remove from Starred', onSelect: () => setStar({ driveId: filespaceId || '', folder: path }, false) }
       : { label: 'Add to Starred', onSelect: () => setStar({ driveId: filespaceId || '', folder: path }, true) },
@@ -1696,6 +1707,96 @@ export default function FilesClient({
     startDriveOpen(() => router.push(`/files?${params}`));
   }, [filespaceId, navigate, router]);
   const unstar = useCallback((s) => setStar(s, false), [setStar]);
+
+  // ── Collections ───────────────────────────────────────────────────────────
+  // The files that meet rules on their kind, tags and metadata — a folder's
+  // count for the files inside it (lib/collections.js). Shared with everyone
+  // who can open the drive; the sidebar lists the ones of the drive on
+  // screen. Opening one lists its files from the whole drive, through the
+  // same listing (GET /api/files?collection=), so search, sort, the layouts
+  // and everything a file can do work as in a folder.
+  const [collections, setCollections] = useState(initialCollections);
+  const [editingCollection, setEditingCollection] = useState(null); // { collection } | { driveId }
+  const scopeCollections = useMemo(
+    () => collections.filter((c) => c.driveId === (filespaceId || '')),
+    [collections, filespaceId],
+  );
+  const activeCollection = collectionId ? collections.find((c) => c.id === collectionId) || null : null;
+  // Making one takes the right to edit files here; the server checks it again.
+  const canMakeCollections = canWrite && flags.metadata !== false;
+  const reloadCollections = useCallback(async () => {
+    const r = await fetch('/api/collections').catch(() => null);
+    const data = r?.ok ? await r.json().catch(() => null) : null;
+    if (data?.collections) setCollections(data.collections);
+  }, []);
+  const openCollection = useCallback((c) => {
+    if (c.driveId !== (filespaceId || '')) {
+      setPendingDrive(c.driveId);
+      const params = new URLSearchParams();
+      if (c.driveId) params.set('filespace', c.driveId);
+      params.set('collection', c.id);
+      startDriveOpen(() => router.push(`/files?${params}`));
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('collection') === c.id) return;
+    params.delete('folder');
+    params.set('collection', c.id);
+    const cur = historyState();
+    window.history.pushState({ onyxDepth: cur.depth + 1, onyxFrom: folder }, '', `${window.location.pathname}?${params}`);
+  }, [filespaceId, folder, router]);
+  const saveCollection = useCallback(async (body) => {
+    const editing = editingCollection?.collection;
+    const r = await fetch(editing ? `/api/collections/${encodeURIComponent(editing.id)}` : '/api/collections', {
+      method: editing ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(editing ? body : { ...body, driveId: editingCollection?.driveId || '' }),
+    }).catch(() => null);
+    const data = r ? await r.json().catch(() => ({})) : {};
+    if (!r?.ok) return data.error || 'Could not save the collection.';
+    setEditingCollection(null);
+    await reloadCollections();
+    if (editing) {
+      if (collectionId === editing.id) load();
+      toast.success(`Saved “${data.collection.name}”.`);
+    } else {
+      openCollection(data.collection);
+    }
+    return null;
+  }, [editingCollection, reloadCollections, collectionId, load, openCollection, toast]);
+  const deleteCollectionUI = useCallback(async () => {
+    const c = editingCollection?.collection;
+    if (!c) return;
+    const ok = await confirm({
+      title: `Delete “${c.name}”?`,
+      body: 'The collection goes for everyone who can see it. Its files stay where they are.',
+      confirmLabel: 'Delete collection',
+    });
+    if (!ok) return;
+    const r = await fetch(`/api/collections/${encodeURIComponent(c.id)}`, { method: 'DELETE' }).catch(() => null);
+    if (!r?.ok) { toast.error((await r?.json().catch(() => ({})))?.error || 'Could not delete the collection.'); return; }
+    setEditingCollection(null);
+    await reloadCollections();
+    if (collectionId === c.id) navigate('');
+    toast.success(`Deleted “${c.name}”.`);
+  }, [editingCollection, confirm, reloadCollections, collectionId, navigate, toast]);
+
+  // A folder's own tags and metadata, which its files inherit in collections.
+  const [taggingFolder, setTaggingFolder] = useState(null);
+  const saveFolderMeta = useCallback(async ({ tags, metadata }) => {
+    const r = await fetch('/api/files/folders/meta', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder: taggingFolder, filespaceId: filespaceId || undefined, tags, metadata }),
+    }).catch(() => null);
+    const data = r ? await r.json().catch(() => ({})) : {};
+    if (!r?.ok) return data.error || 'Could not save.';
+    setTaggingFolder(null);
+    loadFolders();
+    if (collectionId) load();
+    toast.success('Saved. Collections now count them for the files in it.');
+    return null;
+  }, [taggingFolder, filespaceId, loadFolders, collectionId, load, toast]);
 
   const infoForDrive = (d) => setInfo({
     type: 'drive', drive: d, usage: driveUsage[d.id] || null, canManage: canManageDrive(d), isAdmin,
@@ -1818,6 +1919,20 @@ export default function FilesClient({
     if (disk) {
       const d = drives.find((x) => x.id === disk.dataset.drive);
       return { el: disk, items: d ? driveMenu(d) : libraryMenu() };
+    }
+    const coll = target?.closest?.('[data-collection]');
+    if (coll) {
+      const c = collections.find((x) => x.id === coll.dataset.collection);
+      if (c) {
+        return {
+          el: coll,
+          items: [
+            { heading: c.name },
+            { label: 'Open', onSelect: () => openCollection(c) },
+            c.canEdit && { label: 'Edit…', onSelect: () => setEditingCollection({ collection: c }) },
+          ],
+        };
+      }
     }
     const star = target?.closest?.('[data-star-drive]');
     if (star) {
@@ -2446,6 +2561,14 @@ export default function FilesClient({
             onUnstar={unstar}
             onDrop={onItemDrop}
           />
+          <CollectionsList
+            collections={scopeCollections}
+            activeId={collectionId}
+            schema={schema}
+            canCreate={canMakeCollections}
+            onOpen={openCollection}
+            onNew={() => setEditingCollection({ driveId: filespaceId || '' })}
+          />
           <div className="side-folders">
             <Section title={activeDrive ? `Folders in ${activeDrive.name}` : 'Folders'}>
               <div className="folder-list edge-scroll">
@@ -2469,10 +2592,10 @@ export default function FilesClient({
 
         <div className="files-content">
           <FilesHeader
-            folder={folder}
-            rootName={rootName}
+            folder={activeCollection ? '' : folder}
+            rootName={activeCollection ? activeCollection.name : rootName}
             color={driveColor(filespaceId)}
-            canWrite={canWrite}
+            canWrite={canWrite && !collectionId}
             onOpen={navigate}
             onDrop={onTreeDrop}
             onUploadFiles={() => inputRef.current?.click()}
@@ -2485,6 +2608,15 @@ export default function FilesClient({
             sidebarOpen={sidebarOpen}
             onToggleSidebar={toggleSidebar}
           />
+
+          {collectionId && (
+            <CollectionBar
+              collection={activeCollection}
+              schema={schema}
+              onEdit={activeCollection?.canEdit ? () => setEditingCollection({ collection: activeCollection }) : null}
+              onClose={() => navigate('')}
+            />
+          )}
 
           <FilesToolbar
             sort={sort}
@@ -2558,7 +2690,7 @@ export default function FilesClient({
             data-card-size={display.size}
             data-thumb={display.thumb}
           >
-            {layout === 'column' ? (
+            {layout === 'column' && !collectionId ? (
               <ColumnView
                 folder={folder}
                 rootName={rootName}
@@ -2736,6 +2868,23 @@ export default function FilesClient({
       {pickerElement}
       {contextMenuElement}
       {downloadAs.element}
+      <CollectionEditor
+        open={!!editingCollection}
+        collection={editingCollection?.collection || null}
+        driveName={(editingCollection?.collection?.driveId ?? editingCollection?.driveId) ? activeDrive?.name || '' : ''}
+        schema={schema}
+        onClose={() => setEditingCollection(null)}
+        onSave={saveCollection}
+        onDelete={deleteCollectionUI}
+      />
+      <FolderMetaDialog
+        open={taggingFolder != null}
+        folder={taggingFolder}
+        meta={folders.find((f) => f.folder === taggingFolder) || null}
+        schema={schema}
+        onClose={() => setTaggingFolder(null)}
+        onSave={saveFolderMeta}
+      />
       {isAdmin && flags.metadata && addingField && (
         <NewFieldDialog open onClose={() => setAddingField(false)} onCreate={createField} />
       )}

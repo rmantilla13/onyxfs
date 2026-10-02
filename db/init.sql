@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 146
+-- Statements: 150
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -349,6 +349,10 @@ ALTER TABLE folders DROP CONSTRAINT IF EXISTS folders_pkey;
 
 ALTER TABLE folders ALTER COLUMN name SET NOT NULL;
 
+ALTER TABLE folders ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE folders ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 CREATE TABLE IF NOT EXISTS folder_move_copies (
   to_key   TEXT PRIMARY KEY,
   from_key TEXT NOT NULL,
@@ -504,6 +508,19 @@ CREATE TABLE IF NOT EXISTS folder_stars (
 );
 
 CREATE INDEX IF NOT EXISTS folder_stars_path_idx ON folder_stars (drive_id, folder);
+
+CREATE TABLE IF NOT EXISTS collections (
+  id          TEXT PRIMARY KEY,
+  drive_id    TEXT NOT NULL DEFAULT '',
+  name        TEXT NOT NULL,
+  match       TEXT NOT NULL DEFAULT 'all',
+  rules       JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_by  TEXT,
+  created_at  BIGINT NOT NULL,
+  updated_at  BIGINT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS collections_drive_idx ON collections (drive_id, name);
 
 CREATE TABLE IF NOT EXISTS folder_access (
   folder TEXT NOT NULL,

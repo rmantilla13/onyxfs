@@ -11,6 +11,11 @@ struct PlacesView: View {
     /// A starred folder chosen: open it, in its place.
     var open: (FolderRoute) -> Void = { _ in }
 
+    /// Collections in a place this account can open, each with that place.
+    private var gathered: [(collection: FileCollection, place: Place)] {
+        session.collections.compactMap { c in session.place(for: c.scope).map { (c, $0) } }
+    }
+
     /// Stars in a place this account can open, each with that place.
     private var starred: [(star: FolderStar, place: Place)] {
         session.stars.compactMap { star in session.place(for: star).map { (star, $0) } }
@@ -39,6 +44,26 @@ struct PlacesView: View {
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .selectionDisabled()
+                }
+                if !gathered.isEmpty {
+                    SectionHeading(title: "Collections")
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 22, leading: 20, bottom: 6, trailing: 20))
+                        .selectionDisabled()
+                    ForEach(gathered, id: \.collection) { item in
+                        Button {
+                            open(FolderRoute(place: item.place, folder: "",
+                                             collection: CollectionRef(id: item.collection.id, name: item.collection.name)))
+                        } label: {
+                            CollectionRow(collection: item.collection, place: item.place)
+                        }
+                        .buttonStyle(.plain)
+                        .selectionDisabled()
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                        .listRowBackground(PlaceCard().padding(.horizontal, 16).padding(.vertical, 5))
+                    }
                 }
                 if !starred.isEmpty {
                     SectionHeading(title: "Starred")
@@ -134,6 +159,49 @@ private struct PlaceCard: View {
                     shape.strokeBorder(Theme.edge, lineWidth: 0.5)
                 }
             }
+    }
+}
+
+/// A collection: its name, and the place whose files it gathers.
+private struct CollectionRow: View {
+    let collection: FileCollection
+    let place: Place
+
+    var body: some View {
+        HStack(spacing: 14) {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(place.cardFill)
+                .frame(width: 50, height: 50)
+                .overlay {
+                    Image(systemName: "square.stack.3d.up.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(.white.opacity(0.16), lineWidth: 0.5)
+                }
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(collection.name)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 9)
+        .padding(.horizontal, 4)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
+
+    private var detail: String {
+        let n = collection.rules.count
+        return "\(place.name) · \(n == 1 ? "1 rule" : "\(n) rules")"
     }
 }
 

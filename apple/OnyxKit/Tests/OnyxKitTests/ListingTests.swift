@@ -135,6 +135,35 @@ import Testing
     }
 }
 
+/// Collections, as GET /api/collections sends them, and their files as the
+/// listing sends them (GET /api/files?collection=).
+@Suite struct CollectionsTests {
+    @Test func collectionsComeBackWithTheirScopeAndRules() async throws {
+        let stub = try ListingStub { _ in
+            (200, #"{ "collections": [{ "id": "c1", "driveId": "d1", "name": "Spring", "match": "all", "rules": [{ "field": "tag", "op": "any", "values": ["spring"] }], "updatedAt": 1, "canEdit": true }] }"#)
+        }
+        defer { stub.tearDown() }
+        let list = try await stub.api.collections()
+        #expect(stub.requests.first?.path == "/api/collections")
+        let c = try #require(list.first)
+        #expect(c.scope == .drive(id: "d1") && c.name == "Spring" && c.match == "all")
+        #expect(c.rules == [FileCollection.Rule(field: "tag", op: "any", values: ["spring"])])
+        #expect(c.canEdit == true)
+    }
+
+    @Test func aCollectionsFilesAreAskedForByItsIdNotAFolder() async throws {
+        let stub = try ListingStub { _ in (200, #"{ "files": [], "cursor": null }"#) }
+        defer { stub.tearDown() }
+        _ = try await stub.api.listFiles(in: .drive(id: "d1"), folder: "", query: " hero ", collection: "c1")
+        let asked = try #require(stub.requests.first)
+        #expect(asked.path == "/api/files")
+        #expect(asked.query["collection"] == "c1")
+        #expect(asked.query["folder"] == nil && asked.query["folderPrefix"] == nil, "a collection lists its whole drive")
+        #expect(asked.query["q"] == "hero")
+        #expect(asked.query["filespace"] == "d1")
+    }
+}
+
 /// Starred folders, as GET and PUT /api/stars (app/api/stars/route.js) send them.
 @Suite struct StarsTests {
     @Test func starsComeBackWithTheirScope() async throws {

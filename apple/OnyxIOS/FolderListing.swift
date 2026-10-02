@@ -68,9 +68,11 @@ final class FolderListing {
         let asked = ThumbnailTrace.now
         ThumbnailTrace.event("folder-open", "folder=\(route.folder)")
         do {
-            async let tree = session.folders(in: route.place, refresh: refresh)
+            // A collection is its files alone, from the whole place: no tree.
+            let inCollection = route.collection != nil
+            async let tree = inCollection ? [] : session.folders(in: route.place, refresh: refresh)
             async let page = session.api.listFiles(in: route.place.scope, folder: route.folder,
-                                                    query: key.query, sort: sort)
+                                                    query: key.query, sort: sort, collection: route.collection?.id)
             let (nodes, first) = try await (tree, page)
             ThumbnailTrace.event("listing", "files=\(first.files.count) ms=\(ThumbnailTrace.ms(since: asked))")
             guard mine == generation else { return }
@@ -103,7 +105,7 @@ final class FolderListing {
         do {
             let page = try await session.api.listFiles(in: route.place.scope, folder: route.folder,
                                                        query: query.trimmingCharacters(in: .whitespacesAndNewlines),
-                                                       sort: sort, cursor: cursor)
+                                                       sort: sort, cursor: cursor, collection: route.collection?.id)
             guard mine == generation else { return }
             // Keyset paging never repeats a row, but a file moved between
             // two pages could; it is shown once.

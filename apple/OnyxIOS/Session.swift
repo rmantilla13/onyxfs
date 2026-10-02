@@ -37,6 +37,9 @@ final class Session {
     /// Starred folders, oldest first — the sidebar's shortcuts, the web's
     /// own (/api/stars). Only those in a place listed here show.
     private(set) var stars: [FolderStar] = []
+    /// Collections of All Files and of these drives (/api/collections): the
+    /// files that meet rules on their tags and metadata, by drive then name.
+    private(set) var collections: [FileCollection] = []
     private(set) var isAdmin = false
     /// Whether this account may share by link at all: the `shares` flag as
     /// the web's menus read it for them (/api/space/filespaces). The other
@@ -209,6 +212,7 @@ final class Session {
         email = nil
         drives = []
         stars = []
+        collections = []
         isAdmin = false
         sharing = false
         trees = [:]
@@ -245,13 +249,17 @@ final class Session {
         // Stars are shortcuts: without them the drives still open, so a
         // failure here keeps the last list rather than saying anything.
         if let list = try? await api.stars() { stars = list }
+        if let list = try? await api.collections() { collections = list }
     }
 
     // MARK: - Starred folders
 
     /// The place a star opens in, while it is one of this account's.
-    func place(for star: FolderStar) -> Place? {
-        star.scope == .library ? .library : drives.first { $0.scope == star.scope }
+    func place(for star: FolderStar) -> Place? { place(for: star.scope) }
+
+    /// The place a scope is, while it is one of this account's.
+    func place(for scope: SyncDomain) -> Place? {
+        scope == .library ? .library : drives.first { $0.scope == scope }
     }
 
     func isStarred(_ route: FolderRoute) -> Bool {

@@ -14,10 +14,18 @@ struct RootView: View {
     }
 }
 
-/// A folder within a place ("" is its top).
+/// A folder within a place ("" is its top) — or, with a `collection`, that
+/// collection's files from the whole place instead.
 struct FolderRoute: Hashable {
     let place: Place
     let folder: String
+    var collection: CollectionRef? = nil
+}
+
+/// Which collection a route lists, and what to call it.
+struct CollectionRef: Hashable {
+    let id: String
+    let name: String
 }
 
 /// The app's three places to be.
@@ -184,7 +192,8 @@ private struct Browser: View {
     /// it, so Back climbs out one level at a time.
     private func open(_ route: FolderRoute) {
         let parts = route.folder.split(separator: "/").map(String.init)
-        let trail = parts.indices.map { i in
+        // A collection is one screen; a folder brings the ones above it.
+        let trail = route.collection != nil ? [route] : parts.indices.map { i in
             FolderRoute(place: route.place, folder: parts[...i].joined(separator: "/"))
         }
         if place == route.place {

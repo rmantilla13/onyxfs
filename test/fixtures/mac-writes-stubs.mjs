@@ -556,3 +556,9 @@ export async function visibleFileIds(ids, principal = {}) {
     return f && ((f.visibility ?? 'org') === 'org' || norm(f.createdBy) === me);
   }));
 }
+
+// Collections: none here; the listing route resolves one only when asked
+// (?collection=), which these tests never do.
+export async function getCollection() { return null; }
+export async function listCollections() { return []; }
+export async function listFilespacesForSpace() { return []; }

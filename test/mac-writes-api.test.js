@@ -232,7 +232,7 @@ describe('the sign-in gate (middleware.js)', () => {
     '/api/files/3f0c7e1a-1111-4222-8333-944455556666', '/api/files/3f0c7e1a-1111-4222-8333-944455556666/content',
     '/api/files/3f0c7e1a-1111-4222-8333-944455556666/thumbnail',
     '/api/files/3f0c7e1a-1111-4222-8333-944455556666/waveform',
-    '/api/admin/trash/restore', '/api/stars',
+    '/api/admin/trash/restore', '/api/stars', '/api/collections', '/api/collections/3f0c7e1a-1111',
     // The iPhone's links: a file's, and one of them; a folder's, and one of them.
     '/api/files/3f0c7e1a-1111-4222-8333-944455556666/shares',
     '/api/files/3f0c7e1a-1111-4222-8333-944455556666/shares/Zk3_q9Lx0aB7cD2eF4gH6i',

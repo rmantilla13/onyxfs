@@ -80,7 +80,8 @@ struct FolderView: View {
     }
 
     private var title: String {
-        route.folder.isEmpty ? route.place.name : (route.folder as NSString).lastPathComponent
+        if let collection = route.collection { return collection.name }
+        return route.folder.isEmpty ? route.place.name : (route.folder as NSString).lastPathComponent
     }
 
     private var selectionTitle: String {
@@ -90,7 +91,8 @@ struct FolderView: View {
     /// The folder this one is in, for the chip beside the back chevron: its
     /// name, or the drive's at the drive's top level. Nil at the top.
     private var parentName: String? {
-        guard !route.folder.isEmpty else { return nil }
+        // A collection is opened from Browse, and goes back there.
+        guard route.collection == nil, !route.folder.isEmpty else { return nil }
         let parent = (route.folder as NSString).deletingLastPathComponent
         return parent.isEmpty ? route.place.name : (parent as NSString).lastPathComponent
     }
@@ -105,6 +107,9 @@ struct FolderView: View {
         let count = listing.subfolders.count + listing.files.count
         let more = listing.hasMore ? "+" : ""
         if !query.isEmpty { return count == 1 ? "1 result" : "\(count)\(more) results" }
+        if route.collection != nil {
+            return "\(count == 1 ? "1 file" : "\(count)\(more) files") in \(route.place.name)"
+        }
         return count == 1 ? "1 item" : "\(count)\(more) items"
     }
 
