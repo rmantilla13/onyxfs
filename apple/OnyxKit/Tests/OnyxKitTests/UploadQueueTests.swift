@@ -861,6 +861,40 @@ private actor Seen {
         summary = await queue.summary()
         #expect(summary.waiting == 0 && summary.totalBytes == 0 && summary.sentBytes == 0)
         #expect(summary.failed.map(\.name) == ["c.txt"])
+        // What was sent stays counted once the files have gone: the pace is read from it.
+        #expect(summary.movedBytes == 150 && summary.remainingBytes == 0)
+    }
+}
+
+/// How fast, and how long what is left will take (UploadPace).
+@Suite struct UploadPaceTests {
+    @Test func noEstimateUntilThereIsEnoughToTell() {
+        var pace = UploadPace(window: 20, warmUp: 3)
+        pace.note(moved: 0, at: 100)
+        pace.note(moved: 1_000_000, at: 101)
+        #expect(pace.estimate(remaining: 10_000_000) == nil, "a first second says little")
+        pace.note(moved: 3_000_000, at: 103)
+        let e = pace.estimate(remaining: 9_000_000)
+        #expect(e?.bytesPerSecond == 1_000_000)
+        #expect(e?.secondsLeft == 9)
+    }
+
+    @Test func theRateFollowsTheLastWindow() {
+        var pace = UploadPace(window: 10, warmUp: 1)
+        for t in 0...10 { pace.note(moved: Int64(t) * 100, at: Double(t)) }           // 100 B/s
+        for t in 11...30 { pace.note(moved: 1_000 + Int64(t - 10) * 1_000, at: Double(t)) } // then 1 kB/s
+        #expect(pace.bytesPerSecond == 1_000, "the slow start has left the window")
+    }
+
+    @Test func aStallOrANewRunGivesNoGuess() {
+        var pace = UploadPace(window: 10, warmUp: 1)
+        pace.note(moved: 500, at: 0)
+        pace.note(moved: 500, at: 5)
+        #expect(pace.estimate(remaining: 1_000) == nil, "nothing moved: no hours-long guess")
+        pace.note(moved: 0, at: 6) // the app started again
+        pace.note(moved: 400, at: 8)
+        #expect(pace.bytesPerSecond == 200)
+        #expect(pace.estimate(remaining: 0) == nil, "nothing left, nothing to say")
     }
 }
 

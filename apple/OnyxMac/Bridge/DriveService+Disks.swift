@@ -413,6 +413,14 @@ extension DriveService {
                 let summary = await uploads.summary()
                 guard round == self.uploadSummaryRound else { return }
                 if summary != self.uploadSummary { self.uploadSummary = summary }
+                // How much is left, and how long it should take.
+                if summary.waiting > 0 {
+                    self.uploadPace.note(moved: summary.movedBytes, at: ProcessInfo.processInfo.systemUptime)
+                } else {
+                    self.uploadPace.reset()
+                }
+                let estimate = self.uploadPace.estimate(remaining: summary.remainingBytes)
+                if estimate?.rounded != self.uploadEstimate?.rounded { self.uploadEstimate = estimate }
                 // Uploads on their way keep the drives' ticks at their pace.
                 if summary.waiting > 0 { self.noteActivity() }
                 guard summary.waiting > 0 || wanted.withLock({ $0 }) else { break }
@@ -444,6 +452,12 @@ extension DriveService {
 
 /// What the menu bar says about uploads: the queue's own summary.
 typealias UploadSummary = UploadQueue.Summary
+
+extension UploadPace.Estimate {
+    /// As much as the panel shows of it: the panel is drawn again only when
+    /// this changes, not four times a second.
+    var rounded: [Int] { [Int(secondsLeft.rounded()), Int((bytesPerSecond / 10_000).rounded())] }
+}
 
 @available(macOS 27.0, *)
 extension FileSystemSwitch.State {

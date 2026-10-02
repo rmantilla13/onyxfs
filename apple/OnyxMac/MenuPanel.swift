@@ -75,7 +75,7 @@ struct MenuPanel: View {
             // What is on its way: the window's downloads, the drives'
             // uploads, a transcript this Mac is making.
             PanelDownloads(downloads: model.web.downloads)
-            PanelUploads(summary: finder.uploadSummary) { finder.retryUpload($0) }
+            PanelUploads(summary: finder.uploadSummary, estimate: finder.uploadEstimate) { finder.retryUpload($0) }
             TranscriptionMenuLine(transcriber: model.transcriber)
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             ProxyMenuLine(proxies: model.proxies)
@@ -334,6 +334,7 @@ private struct PanelDownloads: View {
 /// to try again.
 private struct PanelUploads: View {
     let summary: UploadSummary
+    let estimate: UploadPace.Estimate?
     let retry: (UUID) -> Void
 
     var body: some View {
@@ -345,6 +346,9 @@ private struct PanelUploads: View {
                      : "Uploading \(summary.waiting) files — \(percent)%")
                     .font(.system(size: 11)).lineLimit(1).truncationMode(.middle)
                 ProgressLine(fraction: summary.fraction)
+                Text(UploadWords.left(summary, estimate))
+                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    .monospacedDigit()
             }
         }
         ForEach(summary.failed) { job in
@@ -356,6 +360,32 @@ private struct PanelUploads: View {
                 Button("Retry") { retry(job.id) }.controlSize(.small)
             }
         }
+    }
+}
+
+/// "1.2 GB of 4.5 GB left · about 3 min · 12 MB/s": how much is still to
+/// send, and — once the pace is known — how long that should take.
+enum UploadWords {
+    static func left(_ summary: UploadSummary, _ estimate: UploadPace.Estimate?) -> String {
+        let bytes = { (n: Int64) in ByteCountFormatter.string(fromByteCount: n, countStyle: .file) }
+        var parts = ["\(bytes(summary.remainingBytes)) of \(bytes(summary.totalBytes)) left"]
+        if let estimate {
+            parts.append(time(estimate.secondsLeft))
+            parts.append("\(bytes(Int64(estimate.bytesPerSecond)))/s")
+        } else {
+            parts.append("working out the time…")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    static func time(_ seconds: Double) -> String {
+        if seconds < 60 { return "less than a minute" }
+        let f = DateComponentsFormatter()
+        f.unitsStyle = .short
+        f.maximumUnitCount = seconds < 3600 ? 1 : 2
+        f.allowedUnits = [.hour, .minute]
+        // Rounded up to the minute: "about 1 min" for 61 s would undersell it.
+        return "about " + (f.string(from: (seconds / 60).rounded(.up) * 60) ?? "")
     }
 }
 

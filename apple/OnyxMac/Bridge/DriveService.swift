@@ -93,6 +93,11 @@ final class DriveService: ObservableObject {
     @Published var uploadSummary = UploadSummary() {
         didSet { WorkActivity.app.set(.uploads, uploadSummary.waiting > 0) }
     }
+    /// How fast the uploads are going and how long what is left will take;
+    /// nil until there is enough to tell, and while nothing is uploading.
+    @Published var uploadEstimate: UploadPace.Estimate?
+    /// What uploadEstimate is read from (summarizeUploads).
+    var uploadPace = UploadPace()
     /// Asks the queue for the menu's summary, a few times a second while
     /// anything changes or is on its way (summarizeUploads), and is nil
     /// when nothing is.

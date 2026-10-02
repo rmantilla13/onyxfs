@@ -123,10 +123,16 @@ public actor UploadQueue {
         /// The name of one on its way, for "Uploading Take 1.mov".
         public var current: String?
         public var failed: [UploadJob] = []
+        /// Every byte sent since the app started, whichever job it was for:
+        /// only ever goes up — `sentBytes` drops as each file finishes and
+        /// leaves — so a rate can be read from it (UploadPace).
+        public var movedBytes: Int64 = 0
 
         public init() {}
 
         public var fraction: Double { totalBytes > 0 ? min(1, Double(sentBytes) / Double(totalBytes)) : 0 }
+        /// What is still to send, of the files not done yet.
+        public var remainingBytes: Int64 { max(0, totalBytes - sentBytes) }
     }
 
     private let directory: URL
@@ -140,6 +146,9 @@ public actor UploadQueue {
     private var running: [UUID: (token: UUID, task: Task<Void, Never>)] = [:]
     /// Bytes sent so far, for the jobs still here that have sent any.
     private var progress: [UUID: Int64] = [:]
+    /// Every byte reported sent this run (Summary.movedBytes). A job started
+    /// over reports from 0 again; what it had sent was sent all the same.
+    private var moved: Int64 = 0
     /// Jobs finished this run → the file each became. The writer asks this
     /// rather than waiting to be told, so a rename or delete that comes
     /// right as an upload finishes is applied to the file, not lost.
@@ -327,6 +336,7 @@ public actor UploadQueue {
         summary.current = running.keys.lazy.compactMap { self.jobs[$0]?.name }.first
             ?? arrival.lazy.compactMap { self.jobs[$0] }.first(where: Self.isWaiting)?.name
         summary.failed = failedIDs.compactMap { jobs[$0] }.sorted { $0.path < $1.path }
+        summary.movedBytes = moved
         return summary
     }
 
@@ -507,6 +517,9 @@ public actor UploadQueue {
             do {
                 let file = try await upload(id, token: token)
                 guard running[id]?.token == token, var done = jobs[id] else { return }
+                // Its bytes are all up: a last progress report still on its way
+                // would land after the job has gone, and be dropped.
+                setProgress(id, done.size)
                 done.state = .done
                 done.fileId = file?.id
                 done.changedAt = file?.updatedAt?.date
@@ -773,6 +786,8 @@ public actor UploadQueue {
     /// would otherwise count bytes for nothing, for good.
     private func setProgress(_ id: UUID, _ sent: Int64) {
         guard jobs[id] != nil else { return }
+        let before = progress[id] ?? 0
+        if sent > before { moved &+= sent - before }
         progress[id] = sent
     }
 
