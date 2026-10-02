@@ -13,6 +13,7 @@ import {
 } from '@/lib/storage';
 import {
   cleanFolder, folderPathProblem, isWithin, planRename, planFolderDelete, rebase, mapLimit, settleLimit, folderMoveBudgetMs,
+  folderRenameLimit,
 } from '@/lib/folder-ops';
 import { listFolderTree, storagePrefixFor } from '@/lib/file-listing';
 import { markFolderLinks } from '@/lib/share-guard';
@@ -25,8 +26,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-// Objects one rename may move. Past it the rename is refused up front.
-const MAX_RENAME_OBJECTS = 1000;
 
 // Whether a copy noted as `orig`'s (both HEADs, lib/storage.js
 // s3HeadObject) still is one: the same length, and the same ETag or — a
@@ -247,8 +246,15 @@ export async function PATCH(req) {
   if (await renameSpreadsGrants(from, to, { tag: scope.tag, outside: plan.outside.length })) {
     return bad(`“${to}” is also a folder in another drive or in the library, and the access given on “${from}” would reach it there as well. Choose another name, or remove that access first.`, 409);
   }
-  if (plan.moves.length > MAX_RENAME_OBJECTS) {
-    return bad(`This folder holds ${plan.moves.length} stored files; renaming more than ${MAX_RENAME_OBJECTS} at once is not supported yet. Move its subfolders first.`, 413);
+  // Refused up front past what can be done: the web (resumable) goes on
+  // over as many calls as the copying takes; a caller that does it in one
+  // call is held to what one call can copy (lib/folder-ops.js).
+  const limit = folderRenameLimit({ resumable: body.resumable === true });
+  if (plan.moves.length > limit) {
+    const n = plan.moves.length.toLocaleString('en-US');
+    return bad(body.resumable === true
+      ? `This folder holds ${n} stored files; renaming or moving more than ${limit.toLocaleString('en-US')} at once is not supported yet. Move its subfolders first.`
+      : `This folder holds ${n} stored files, more than can be renamed from here at once. Rename it on the web, which moves it in steps.`, 413);
   }
   if (plan.moves.length && !scope.s3) return bad('Storage is not configured for S3, so the stored files cannot be moved.', 409);
 

@@ -122,7 +122,7 @@ const waveformRoute = await import('../app/api/files/[id]/waveform/route.js');
 const placeholderRoute = await import('../app/api/files/[id]/placeholder/route.js');
 const filmstripRoute = await import('../app/api/files/[id]/filmstrip/route.js');
 const foldersRoute = await import('../app/api/files/folders/route.js');
-const { _setFolderMoveBudgetMs } = await import('../lib/folder-ops.js');
+const { _setFolderMoveBudgetMs, _setFolderRenameLimits } = await import('../lib/folder-ops.js');
 const restoreRoute = await import('../app/api/admin/trash/restore/route.js');
 // What a route finishes after it answers: a trashed file's object moving to the trash.
 const { afterResponseSettled } = await import('../lib/after-response.js');
@@ -1132,6 +1132,32 @@ describe('folder names are per drive', () => {
       assert.equal(back.status, 200, JSON.stringify(back.body));
       for (const id of ids) assert.equal(row(id).folder, 'Shoot');
     });
+  });
+
+  // A rename of 2,885 photos from the web was refused at a flat 1,000, though
+  // the web moves a big folder in steps and could have carried on.
+  test('the web renames a folder bigger than one call can copy; a caller that cannot come back is held to one call', async () => {
+    const who = mac(ED);
+    const ids = [];
+    for (const n of ['1', '2', '3']) ids.push((await upload(who, { name: `${n}.arw`, folder: 'Big', filespaceId: 'd1', bytes: bytes(n) })).id);
+    _setFolderRenameLimits({ resumable: 3, once: 2 });
+    try {
+      const once = await folders.move(who, { from: 'Big', to: 'Bigger', filespaceId: 'd1' });
+      assert.equal(once.status, 413);
+      assert.match(once.body.error, /Rename it on the web/);
+      assert.equal(row(ids[0]).folder, 'Big', 'refused before anything moved');
+
+      const web = await folders.move(who, { from: 'Big', to: 'Bigger', filespaceId: 'd1', resumable: true });
+      assert.equal(web.status, 200, JSON.stringify(web.body));
+      for (const id of ids) assert.equal(row(id).folder, 'Bigger');
+
+      _setFolderRenameLimits({ resumable: 2 });
+      const tooMany = await folders.move(who, { from: 'Bigger', to: 'Big', filespaceId: 'd1', resumable: true });
+      assert.equal(tooMany.status, 413);
+      assert.match(tooMany.body.error, /more than 2 at once/);
+    } finally {
+      _setFolderRenameLimits();
+    }
   });
 
   test('delete in one drive leaves the other drive’s folder of that name, and its file', async () => {
