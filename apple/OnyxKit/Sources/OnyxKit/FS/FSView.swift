@@ -36,14 +36,18 @@ public struct FSNode: Sendable, Equatable {
     /// The mirror's own entry, for what the mirror shows: the pin store and
     /// presigning go by it.
     public let mirrorEntry: MirrorEntry?
+    /// Nothing may be made in it, nor it written, moved or deleted, whatever
+    /// the drive allows: the Collections folder and what is in it.
+    public let readOnly: Bool
 
     public init(path: String, name: String, isFolder: Bool, fileId: String?, size: Int64, modified: Date,
                 content: String, pending: Bool = false, staged: URL? = nil, mirrorEntry: MirrorEntry? = nil,
-                created: Date? = nil) {
+                created: Date? = nil, readOnly: Bool = false) {
         self.path = path; self.name = name; self.isFolder = isFolder; self.fileId = fileId
         self.size = size; self.modified = modified; self.content = content; self.pending = pending
         self.staged = staged; self.mirrorEntry = mirrorEntry
         self.created = created ?? modified
+        self.readOnly = readOnly
     }
 
     /// A mirror entry as the bridge shows it.
@@ -139,10 +143,17 @@ public enum FSNames {
 struct FSView: Sendable {
     let index: MirrorIndex
     let overlay: FSOverlay
+    /// The read-only Collections folder, at the top of the drive. Shown only
+    /// while the drive has no folder of its own by its name (a real one
+    /// keeps it, until the folder is built again under another).
+    let collections: FSCollections
 
-    init(index: MirrorIndex, overlay: FSOverlay = .none) {
+    init(index: MirrorIndex, overlay: FSOverlay = .none, collections: FSCollections = .none) {
         self.index = index
         self.overlay = overlay
+        self.collections = collections.isEmpty || index.entry(at: collections.rootName) != nil
+            || overlay.nodes.keys.contains(where: { $0.caseInsensitiveCompare(collections.rootName) == .orderedSame })
+            ? .none : collections
     }
 
     /// The node at an exact mounted path ("" = the drive), or nil.
@@ -154,6 +165,7 @@ struct FSView: Sendable {
     /// equivalence — since a name reaches a disk in either form.
     func node(at path: String) -> FSNode? {
         if FSNames.isLocalOnly(path: path) { return nil }
+        if collections.contains(path) { return collections.node(at: path) }
         if let put = overlay.nodes[path] { return put }
         if overlay.hides(path) { return nil }
         return mirrorNode(at: path)
@@ -174,6 +186,7 @@ struct FSView: Sendable {
     /// Finder orders them. Nil when `path` is not a folder.
     func children(of path: String) -> [FSNode]? {
         if FSNames.isLocalOnly(path: path) { return nil }
+        if collections.contains(path) { return collections.children(of: path) }
         // node(at:), with the mirror's half kept: its folder's contents are
         // listed only when that folder itself is in sight at this very path.
         let mirrorFolder = overlay.hides(path) ? nil : mirrorNode(at: path)
@@ -190,8 +203,9 @@ struct FSView: Sendable {
                 kids.append(FSNode(entry))
             }
         }
-        // The index has its own in order already; only the overlay's are placed.
-        for node in put {
+        // The index has its own in order already; only the overlay's are placed,
+        // and at the top, the Collections folder.
+        for node in put + (path.isEmpty ? [collections.root].compactMap { $0 } : []) {
             let at = kids.firstIndex { Self.listsBefore(node, $0) } ?? kids.endIndex
             kids.insert(node, at: at)
         }
@@ -217,9 +231,12 @@ struct FSView: Sendable {
         if let put = overlay.nodes.values.first(where: { !$0.isFolder && $0.fileId == id }) {
             return node(at: put.path) == put ? put : nil
         }
-        guard let entry = index.file(id: id), let found = node(at: entry.path),
-              !found.isFolder, found.fileId == id else { return nil }
-        return found
+        if let entry = index.file(id: id), let found = node(at: entry.path), !found.isFolder, found.fileId == id {
+            return found
+        }
+        // A collection's file that this drive's own tree does not hold: one
+        // in another drive, gathered by an All Files collection.
+        return collections.file(id: id)
     }
 
     /// Every folder in sight, the drive itself first, each once.
@@ -232,7 +249,20 @@ struct FSView: Sendable {
         for put in overlay.nodes.values where put.isFolder && node(at: put.path) == put {
             if seen.insert(put.path).inserted { paths.append(put.path) }
         }
+        for path in collections.folderPaths where seen.insert(path).inserted { paths.append(path) }
         return paths
+    }
+
+    /// Whether `path`, or the nearest folder above it that is there, may not
+    /// be changed: what a write to a path that does not exist yet (a new
+    /// file, a new folder, a move's destination) is judged by.
+    func isLocked(_ path: String) -> Bool {
+        var p = path
+        while true {
+            if let node = node(at: p) { return node.readOnly }
+            if p.isEmpty { return false }
+            p = Replica.parentPath(p)
+        }
     }
 
     /// The folders whose listing is not the same in `old` and `new`: one that

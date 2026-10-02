@@ -115,6 +115,8 @@ final class DriveService: ObservableObject {
     var onUploadFinished: ((UploadJob) -> Void)?
     private let server = DAVServer()
     private var mirrors: [String: DriveMirror] = [:]
+    /// Each mounted drive's collections, as its disk's Collections folder.
+    private var collectionFolders: [String: CollectionsFolder] = [:]
     private var names: [String: String] = [:]
     /// Drives the bridge answers the onyxfs extension for (mounted as disks,
     /// or on their way): their mirrors are kept current like a mounted drive's.
@@ -316,6 +318,7 @@ final class DriveService: ObservableObject {
         server.fs.endAll()
         onyxfsScopes = []
         mirrors.removeAll()
+        collectionFolders.removeAll()
         // The account's downloads stop now, rather than carry on under the
         // next sign-in's token. The store stays open for the run (`stores`):
         // the same account signing back in picks it up again.
@@ -551,6 +554,18 @@ final class DriveService: ObservableObject {
             // the mirror so it shows at once.
             let writer = await writer(for: scope)
             let overlay: (@Sendable () async -> (FSOverlay, UInt64))? = writer.map { w in { @Sendable in await w.overlay() } }
+            // Its collections, fetched when Finder looks (CollectionsFolder).
+            // All Files gathers from every drive: what its own mirror does not
+            // hold is looked for in the others this Mac has open.
+            let config = model.config
+            var elsewhere: CollectionsFolder.Elsewhere?
+            if scope == .library {
+                elsewhere = { [weak self] (ids: [String]) async -> [String: MirrorEntry] in
+                    await self?.filesElsewhere(ids, besides: id) ?? [:]
+                }
+            }
+            let collections = CollectionsFolder(scope: scope, api: { OnyxAPI(config: config) }, elsewhere: elsewhere)
+            collectionFolders[id] = collections
             let source = MirrorFSSource(scope: id, mirror: mirror, pins: { [currentPins] in currentPins.withLock { $0 } },
                                         volume: { [weak self] in
                                             await self?.onyxfsVolume(scope)
@@ -564,13 +579,30 @@ final class DriveService: ObservableObject {
                                             let drive = await self?.onyxfsIconDrive(scope)
                                             return DriveIcon.icns(color: drive?.color, name: drive?.name,
                                                                   mark: DriveService.appIcon)
-                                        })
+                                        },
+                                        collections: collections)
             server.fs.register(FSResponder(scope: id, source: source))
             server.fs.setWriter(writer, for: id)
         }
         onyxfsScopes.insert(id)
         let ticket = server.fs.sessions.issueTicket(for: id)
         return FSBridge.resourceURL(port: port, scope: id, ticket: ticket, name: name)
+    }
+
+    /// Files by id in the mirrors other than `scope`'s, for an All Files
+    /// collection's folder: the library's own mirror holds no drive's files.
+    private func filesElsewhere(_ ids: [String], besides scope: String) async -> [String: MirrorEntry] {
+        var found: [String: MirrorEntry] = [:]
+        var wanted = ids
+        for (key, mirror) in mirrors where key != scope && !wanted.isEmpty {
+            let index = await mirror.snapshot.index
+            wanted = wanted.filter { id in
+                guard let entry = index.file(id: id) else { return true }
+                found[id] = entry
+                return false
+            }
+        }
+        return found
     }
 
     /// For DiskMounter, once the disk is unmounted, or its mount failed: the
@@ -692,6 +724,7 @@ final class DriveService: ObservableObject {
         server.fs.end(scope: id)
         onyxfsScopes.remove(id)
         mirrors[id] = nil
+        collectionFolders[id] = nil
         names[id] = nil
         if wantMounted.remove(id) != nil { defaults.set(Array(wantMounted), forKey: Keys.mounted) }
         await mounts.unmount(scope)

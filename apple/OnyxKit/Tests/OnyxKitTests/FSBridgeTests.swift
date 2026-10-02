@@ -55,6 +55,8 @@ struct FSBridgeTests {
         private(set) var revision: UInt64 = 1
         private var index: MirrorIndex
         private var overlay = FSOverlay.none
+        private var collections = FSCollections.none
+        private(set) var looked: [String] = []
         private var info: FSVolumeInfo
         private var kept: Set<String> = []
         private var copies: [String: URL] = [:]
@@ -76,6 +78,10 @@ struct FSBridgeTests {
 
         /// The source moves on, showing nothing new.
         func touch() { revision += 1 }
+        func showCollections(_ folders: FSCollections) {
+            collections = folders
+            revision += 1
+        }
         func keep(_ id: String, copy: URL?) {
             kept.insert(id)
             copies[id] = copy
@@ -84,7 +90,9 @@ struct FSBridgeTests {
         func setInfo(_ info: FSVolumeInfo) { self.info = info }
         func setIcon(_ icon: Data?) { self.icon = icon }
 
-        func snapshot() -> FSSnapshot { FSSnapshot(revision: revision, index: index, overlay: overlay) }
+        func snapshot() -> FSSnapshot { FSSnapshot(revision: revision, index: index, overlay: overlay, collections: collections) }
+
+        func listed(_ path: String) { looked.append(path) }
 
         func waitForChange(after seen: UInt64, timeout: Duration) async {
             let deadline = ContinuousClock.now + timeout

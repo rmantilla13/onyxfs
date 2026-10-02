@@ -35,19 +35,25 @@ public protocol FSSource: Sendable {
     func volumeInfo() async -> FSVolumeInfo
     /// The drive's disk icon, an .icns (DriveIcon); nil for none.
     func volumeIcon() async -> Data?
+    /// Finder is about to list `path` (mounted, "" for the drive): what is
+    /// fetched only when looked at — the Collections folder — is fetched now.
+    func listed(_ path: String) async
 }
 
 extension FSSource {
     public func volumeIcon() async -> Data? { nil }
+    public func listed(_ path: String) async {}
 }
 
 public struct FSSnapshot: Sendable {
     public var revision: UInt64
     public var index: MirrorIndex
     public var overlay: FSOverlay
+    /// The drive's collections as read-only folders (FSCollections).
+    public var collections: FSCollections
 
-    public init(revision: UInt64, index: MirrorIndex, overlay: FSOverlay = .none) {
-        self.revision = revision; self.index = index; self.overlay = overlay
+    public init(revision: UInt64, index: MirrorIndex, overlay: FSOverlay = .none, collections: FSCollections = .none) {
+        self.revision = revision; self.index = index; self.overlay = overlay; self.collections = collections
     }
 }
 
@@ -117,6 +123,7 @@ public struct FSResponder: Sendable {
     /// files, each by name. 404 when there is no such folder.
     func list(path raw: String?) async -> DAVResponse {
         guard let raw, let path = Self.mountedPath(raw) else { return Self.badPath }
+        await source.listed(path)
         let (generation, view) = await log.current()
         guard let kids = view.children(of: path) else { return Self.error(404, "There is no such folder.") }
         let local = await keptOffline(kids)
@@ -195,6 +202,15 @@ public struct FSResponder: Sendable {
         let answer = await log.changes(since: since, wait: .milliseconds(Int64(wait * 1000)))
         return Self.json(200, ChangesJSON(generation: answer.generation, all: answer.all,
                                           paths: answer.paths.map(Self.wirePath)))
+    }
+
+    /// Whether a write may not touch `raw` (a wire path): it, or the nearest
+    /// folder above it that exists, is locked (FSView.isLocked). An unreadable
+    /// path is not locked here; the write turns it down on its own.
+    func isLocked(_ raw: String) async -> Bool {
+        guard let path = Self.mountedPath(raw) else { return false }
+        let (_, view) = await log.current()
+        return view.isLocked(path)
     }
 
     /// `GET /fs/v1/volume`: the disk's figures, now.
@@ -340,6 +356,8 @@ public struct FSResponder: Sendable {
         let version: String
         let local: Bool
         let pending: Bool
+        /// Sent only when true, so every other entry reads as it always did.
+        let readOnly: Bool
 
         init(_ node: FSNode, local keptOffline: Set<String>) {
             name = FSResponder.wireName(node.name)
@@ -353,9 +371,10 @@ public struct FSResponder: Sendable {
             version = node.version
             local = !node.isFolder && (node.staged != nil || node.fileId.map(keptOffline.contains) == true)
             pending = node.pending
+            readOnly = node.readOnly
         }
 
-        enum CodingKeys: String, CodingKey { case name, type, id, size, mtime, btime, version, local, pending }
+        enum CodingKeys: String, CodingKey { case name, type, id, size, mtime, btime, version, local, pending, readOnly }
 
         func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -368,6 +387,7 @@ public struct FSResponder: Sendable {
             try c.encode(version, forKey: .version)
             try c.encode(local, forKey: .local)
             try c.encode(pending, forKey: .pending)
+            if readOnly { try c.encode(true, forKey: .readOnly) }
         }
     }
 
@@ -477,7 +497,7 @@ public actor FSChangeLog {
         // Another question may have got here first, with this or a later
         // revision, while this one waited for the snapshot.
         if let view, let seen = seenRevision, snapshot.revision <= seen { return (generation, view) }
-        let fresh = FSView(index: snapshot.index, overlay: snapshot.overlay)
+        let fresh = FSView(index: snapshot.index, overlay: snapshot.overlay, collections: snapshot.collections)
         if let view {
             let changed = FSView.changedFolders(from: view, to: fresh)
             if !changed.isEmpty {

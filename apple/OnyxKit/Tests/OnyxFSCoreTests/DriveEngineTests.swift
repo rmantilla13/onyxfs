@@ -12,6 +12,8 @@ private actor FakeBridge: EngineBridge {
     var dates: [String: (Date?, Date?)] = [:]
     var readsFrom: [String] = []
     var readOnly = false
+    /// Paths the app says are locked (BridgeEntry.readOnly): a collection's.
+    var locked: Set<String> = []
     var pendingChanges: [BridgeChanges] = []
     var nextID = 1
 
@@ -21,6 +23,7 @@ private actor FakeBridge: EngineBridge {
         nextID += 1
     }
     func setReadOnly(_ on: Bool) { readOnly = on }
+    func lock(_ path: String) { locked.insert(path) }
     func bytes(_ path: String) -> Data? { files[path]?.bytes }
     func push(_ changes: BridgeChanges) { pendingChanges.append(changes) }
 
@@ -53,11 +56,11 @@ private actor FakeBridge: EngineBridge {
         let prefix = path == "/" ? "/" : path + "/"
         var out: [BridgeEntry] = []
         for folder in folders where folder != path && folder.hasPrefix(prefix) && !folder.dropFirst(prefix.count).contains("/") {
-            out.append(BridgeEntry(name: String(folder.dropFirst(prefix.count)), isDirectory: true))
+            out.append(BridgeEntry(name: String(folder.dropFirst(prefix.count)), isDirectory: true, readOnly: locked.contains(folder)))
         }
         for (filePath, file) in files where filePath.hasPrefix(prefix) && !filePath.dropFirst(prefix.count).contains("/") {
             out.append(BridgeEntry(name: String(filePath.dropFirst(prefix.count)), isDirectory: false, id: file.id,
-                                   size: Int64(file.bytes.count), version: file.version))
+                                   size: Int64(file.bytes.count), version: file.version, readOnly: locked.contains(filePath)))
         }
         return out
     }
@@ -408,6 +411,43 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
         let a = try await engine.lookup("a.mov", in: DriveEngine.rootID)
         await #expect(throws: VolumeError.posix(EACCES)) { try await engine.remove(a.id, name: "a.mov", from: DriveEngine.rootID) }
         _ = try await engine.create(".DS_Store", in: DriveEngine.rootID, isDirectory: false) // Finder's window state still works
+    }
+
+    @Test func aLockedFolderRefusesEveryChangeOnAWritableDrive() async throws {
+        // The app's Collections folder: the drive's own files shown again.
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Collections")
+        await bridge.addFolder("/Collections/Picks")
+        await bridge.addFile("/Collections/Picks/a.mov", Data([1, 2, 3]))
+        await bridge.addFile("/b.mov", Data([4]))
+        for path in ["/Collections", "/Collections/Picks", "/Collections/Picks/a.mov"] { await bridge.lock(path) }
+        let engine = try await makeEngine(bridge)
+        let top = try await engine.lookup("Collections", in: DriveEngine.rootID)
+        let picks = try await engine.lookup("Picks", in: top.id)
+        let a = try await engine.lookup("a.mov", in: picks.id)
+        #expect(a.readOnly && picks.readOnly && top.readOnly)
+
+        let refused = VolumeError.posix(EACCES)
+        await #expect(throws: refused) { try await engine.create("new.txt", in: picks.id, isDirectory: false) }
+        await #expect(throws: refused) { try await engine.create("Sub", in: top.id, isDirectory: true) }
+        await #expect(throws: refused) { try await engine.beginWriting(a.id, truncating: true) }
+        await #expect(throws: refused) { try await engine.write(a.id, at: 0, data: Data([9])) }
+        await #expect(throws: refused) { _ = try await engine.setSize(a.id, to: 0) }
+        await #expect(throws: refused) { try await engine.remove(a.id, name: "a.mov", from: picks.id) }
+        // Out of it (the real file would move), and into it.
+        await #expect(throws: refused) {
+            _ = try await engine.rename(a.id, from: picks.id, name: "a.mov", to: DriveEngine.rootID, newName: "a.mov", replacing: nil)
+        }
+        let b = try await engine.lookup("b.mov", in: DriveEngine.rootID)
+        await #expect(throws: refused) {
+            _ = try await engine.rename(b.id, from: DriveEngine.rootID, name: "b.mov", to: picks.id, newName: "b.mov", replacing: nil)
+        }
+        #expect(await bridge.calls.allSatisfy { $0.hasPrefix("list") || $0.hasPrefix("volume") }, "nothing reached the app but listings")
+        // Reading still works, and the rest of the drive is writable.
+        #expect(try await engine.read(a.id, at: 0, count: 3) == Data([1, 2, 3]))
+        _ = try await engine.create("Selects", in: DriveEngine.rootID, isDirectory: true)
+        // Finder's own files still land, kept on this Mac.
+        _ = try await engine.create(".DS_Store", in: picks.id, isDirectory: false)
     }
 
     @Test func aChangeOnTheWebReachesTheKernel() async throws {

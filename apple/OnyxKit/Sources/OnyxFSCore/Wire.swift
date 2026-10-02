@@ -34,11 +34,17 @@ public struct FSEntry: Codable, Sendable, Hashable {
     public var local: Bool
     /// The bytes are still uploading from this Mac.
     public var pending: Bool
+    /// Nothing may be made, written, moved or deleted here, whatever the
+    /// drive allows: a collection's files, which are the drive's own files
+    /// shown again (the app's virtual Collections folder).
+    public var readOnly: Bool
 
     public init(name: String, type: Kind, id: String? = nil, size: Int64 = 0, mtime: Double = 0,
-                version: String = "", local: Bool = false, pending: Bool = false, btime: Double? = nil) {
+                version: String = "", local: Bool = false, pending: Bool = false, btime: Double? = nil,
+                readOnly: Bool = false) {
         self.name = name; self.type = type; self.id = id; self.size = size; self.mtime = mtime
         self.version = version; self.local = local; self.pending = pending; self.btime = btime
+        self.readOnly = readOnly
     }
 
     public var isDirectory: Bool { type == .dir }
@@ -46,7 +52,7 @@ public struct FSEntry: Codable, Sendable, Hashable {
     public var created: Date? { btime.map { Date(timeIntervalSince1970: $0) } }
 
     enum CodingKeys: String, CodingKey {
-        case name, type, id, size, mtime, btime, version, local, pending
+        case name, type, id, size, mtime, btime, version, local, pending, readOnly
     }
 
     /// Only the name and type are required. A field the app leaves out takes
@@ -63,6 +69,7 @@ public struct FSEntry: Codable, Sendable, Hashable {
         version = try c.decodeIfPresent(String.self, forKey: .version) ?? ""
         local = try c.decodeIfPresent(Bool.self, forKey: .local) ?? false
         pending = try c.decodeIfPresent(Bool.self, forKey: .pending) ?? false
+        readOnly = try c.decodeIfPresent(Bool.self, forKey: .readOnly) ?? false
     }
 }
 

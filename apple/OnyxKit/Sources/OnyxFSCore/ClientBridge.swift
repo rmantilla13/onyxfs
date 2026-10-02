@@ -74,7 +74,7 @@ public final class ClientBridge: EngineBridge {
 
     static func entry(_ e: FSEntry) -> BridgeEntry {
         BridgeEntry(name: e.name, isDirectory: e.isDirectory, id: e.id, size: e.size, modified: e.modified,
-                    version: e.version, pending: e.pending, local: e.local, created: e.created)
+                    version: e.version, pending: e.pending, local: e.local, created: e.created, readOnly: e.readOnly)
     }
 
     static func volume(_ info: FSVolumeInfo, generation: UInt64) -> BridgeVolume {

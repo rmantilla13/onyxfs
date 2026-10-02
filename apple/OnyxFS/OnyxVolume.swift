@@ -197,7 +197,7 @@ final class OnyxVolume: FSVolume, FSVolume.Handler, FSVolume.PathConfOperations,
 
     private func attributes(of node: VolumeNode) -> FSItem.Attributes {
         let a = FSItem.Attributes()
-        let writable = !engine.readOnly
+        let writable = !engine.readOnly && !node.readOnly
         a.type = node.isDirectory ? .directory : .file
         a.mode = node.isDirectory
             ? UInt32(S_IFDIR) | (writable ? 0o755 : 0o555)

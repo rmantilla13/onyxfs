@@ -60,9 +60,10 @@ public protocol VolumeEngine: AnyObject, Sendable {
 
 public struct VolumeNode: Sendable, Equatable {
     public init(id: UInt64, parent: UInt64, name: String, isDirectory: Bool, size: UInt64,
-                modified: Date, created: Date, localOnly: Bool) {
+                modified: Date, created: Date, localOnly: Bool, readOnly: Bool = false) {
         self.id = id; self.parent = parent; self.name = name; self.isDirectory = isDirectory
         self.size = size; self.modified = modified; self.created = created; self.localOnly = localOnly
+        self.readOnly = readOnly
     }
 
     public var id: UInt64
@@ -74,6 +75,8 @@ public struct VolumeNode: Sendable, Equatable {
     public var created: Date
     /// Only on this Mac (.DS_Store and the like): never on the web.
     public var localOnly: Bool
+    /// Locked whatever the volume allows: shown without write permission.
+    public var readOnly: Bool
 
     /// Hidden in Finder, as macOS's own files are on any disk. Most hide by
     /// their dot; the Time Machine marker at the root

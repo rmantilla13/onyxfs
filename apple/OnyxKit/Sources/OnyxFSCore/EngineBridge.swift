@@ -53,12 +53,15 @@ public struct BridgeEntry: Sendable, Equatable {
     public var pending: Bool
     /// Its bytes are on this Mac (kept offline, or still uploading).
     public var local: Bool
+    /// Locked, whatever the drive allows (FSEntry.readOnly).
+    public var readOnly: Bool
 
     public init(name: String, isDirectory: Bool, id: String? = nil, size: Int64 = 0, modified: Date = Date(timeIntervalSince1970: 0),
-                version: String = "", pending: Bool = false, local: Bool = false, created: Date? = nil) {
+                version: String = "", pending: Bool = false, local: Bool = false, created: Date? = nil,
+                readOnly: Bool = false) {
         self.name = name; self.isDirectory = isDirectory; self.id = id; self.size = size
         self.modified = modified; self.version = version; self.pending = pending; self.local = local
-        self.created = created
+        self.created = created; self.readOnly = readOnly
     }
 }
 

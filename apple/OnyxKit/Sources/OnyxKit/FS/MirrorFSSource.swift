@@ -16,6 +16,8 @@ public struct MirrorFSSource: FSSource {
     let overlay: (@Sendable () async -> (FSOverlay, UInt64))?
     /// The drive's disk icon (DriveIcon).
     let icon: (@Sendable () async -> Data?)?
+    /// The drive's collections, as its read-only Collections folder.
+    let collections: CollectionsFolder?
 
     /// `presign` signs a link to a file's bytes; by default the mirror's own
     /// (DriveMirror.contentLink), which reuses one while it has time left.
@@ -23,7 +25,8 @@ public struct MirrorFSSource: FSSource {
                 presign: (@Sendable (MirrorEntry) async throws -> FSRemoteLink)? = nil,
                 volume: @escaping @Sendable () async -> FSVolumeInfo,
                 overlay: (@Sendable () async -> (FSOverlay, UInt64))? = nil,
-                icon: (@Sendable () async -> Data?)? = nil) {
+                icon: (@Sendable () async -> Data?)? = nil,
+                collections: CollectionsFolder? = nil) {
         self.scope = scope
         self.mirror = mirror
         self.pins = pins
@@ -35,25 +38,55 @@ public struct MirrorFSSource: FSSource {
         self.volume = volume
         self.overlay = overlay
         self.icon = icon
+        self.collections = collections
     }
 
     /// The mirror, with this Mac's writes laid over it. Both revisions only
     /// ever go up, so their sum does too — and moves with either.
     public func snapshot() async -> FSSnapshot {
         let now = await mirror.snapshot
-        guard let overlay else { return FSSnapshot(revision: now.revision, index: now.index) }
-        let (written, revision) = await overlay()
-        return FSSnapshot(revision: now.revision &+ revision, index: now.index, overlay: written)
+        var snap = FSSnapshot(revision: now.revision, index: now.index)
+        if let overlay {
+            let (written, revision) = await overlay()
+            snap.overlay = written
+            snap.revision &+= revision
+        }
+        if let collections {
+            // Its revision before the folders: a change meanwhile is seen
+            // as one still to come, never missed.
+            let held = await collections.revision
+            snap.collections = await collections.folders(index: now.index, mirrorRevision: now.revision)
+            snap.revision &+= held
+        }
+        return snap
     }
 
-    /// `revision` is snapshot()'s, mirror and overlay summed: the mirror is
-    /// waited on past its own share. Had the overlay moved meanwhile, that
-    /// share is smaller than it was and this returns at once — which is
-    /// right, as there is something new to see.
+    /// `revision` is snapshot()'s, mirror, overlay and collections summed:
+    /// the mirror is waited on past its own share, the collections past
+    /// theirs, whichever moves first. Had the overlay or the collections
+    /// moved meanwhile, the mirror's share is smaller than it was and this
+    /// returns at once — which is right, as there is something new to see.
     public func waitForChange(after revision: UInt64, timeout: Duration) async {
-        guard let overlay else { return await mirror.waitForChange(after: revision, timeout: timeout) }
-        let (_, written) = await overlay()
-        await mirror.waitForChange(after: revision >= written ? revision - written : 0, timeout: timeout)
+        var rest = revision
+        if let overlay {
+            let (_, written) = await overlay()
+            rest = rest >= written ? rest - written : 0
+        }
+        guard let collections else { return await mirror.waitForChange(after: rest, timeout: timeout) }
+        let held = await collections.revision
+        let mirrorShare = rest >= held ? rest - held : 0
+        let mirror = mirror
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await mirror.waitForChange(after: mirrorShare, timeout: timeout) }
+            group.addTask { await collections.waitForChange(after: held, timeout: timeout) }
+            await group.next()
+            group.cancelAll()
+        }
+    }
+
+    public func listed(_ path: String) async {
+        guard let collections else { return }
+        await collections.listed(path, rootName: await collections.rootName)
     }
 
     public func keptOffline(_ entries: [MirrorEntry]) async -> Set<String> {

@@ -231,6 +231,13 @@ public final class FSBridge: @unchecked Sendable {
         }
         guard let query = Self.query(request.target) else { return FSResponder.error(400, "The query is not valid.") }
         let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] ?? [:]
+        // The Collections folder shows the drive's own files again: a write
+        // there would make real folders, or move or delete the real file. The
+        // extension refuses it already; this answers an older one, or anyone.
+        let touched = [query["path"], body["path"] as? String, body["from"] as? String, body["to"] as? String].compactMap { $0 }
+        for path in touched where await responder.isLocked(path) {
+            return FSResponder.error(403, "Collections are kept up to date by Onyx: their files can be opened and copied, not changed here.")
+        }
         do {
             switch route {
             case "file":

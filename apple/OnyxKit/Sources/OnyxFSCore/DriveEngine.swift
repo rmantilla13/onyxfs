@@ -39,6 +39,9 @@ public actor DriveEngine {
         /// Its bytes are on this Mac (kept offline, or still uploading): read
         /// through the app, not cached a second time.
         var local = false
+        /// Locked by the app whatever the drive allows: nothing is made in
+        /// it, and it is not written, moved or deleted (BridgeEntry.readOnly).
+        var readOnly = false
         var localOnly: Bool
         /// Made here and not yet handed to the app.
         var unsent: Bool
@@ -161,7 +164,7 @@ public actor DriveEngine {
             return Self.public(insert(name: name, parent: dir.id, isDirectory: isDirectory, size: 0,
                                       modified: now(), fileId: nil, version: "", localOnly: true, unsent: false))
         }
-        guard !readOnly else { throw VolumeError.posix(EACCES) }
+        guard !readOnly, !dir.readOnly else { throw VolumeError.posix(EACCES) }
         if isDirectory {
             let entry = try await wrap { try await self.bridge.mkdir(path) }
             return Self.public(insert(entry, parent: dir.id))
@@ -179,7 +182,7 @@ public actor DriveEngine {
     public func beginWriting(_ id: UInt64, truncating: Bool) async throws {
         guard let node = nodes[id], !node.isDirectory else { throw VolumeError.posix(EISDIR) }
         if node.localOnly { return }
-        guard !readOnly else { throw VolumeError.posix(EACCES) }
+        guard !readOnly, !node.readOnly else { throw VolumeError.posix(EACCES) }
         if writing[id] == nil { writing[id] = Writing() }
         if truncating { _ = try await setSize(id, to: 0) }
     }
@@ -193,7 +196,7 @@ public actor DriveEngine {
             nodes[id] = node
             return n
         }
-        guard !readOnly else { throw VolumeError.posix(EACCES) }
+        guard !readOnly, !node.readOnly else { throw VolumeError.posix(EACCES) }
         try await stage(id)
         let n = try await wrap { try await self.staging.write(id, at: offset, data) }
         bridge.count(.write, bytes: n)
@@ -209,7 +212,7 @@ public actor DriveEngine {
         if node.localOnly {
             try await wrap { try await self.local.truncate(node.path, to: size) }
         } else {
-            guard !readOnly else { throw VolumeError.posix(EACCES) }
+            guard !readOnly, !node.readOnly else { throw VolumeError.posix(EACCES) }
             if size == 0 {
                 // Emptied: no need for the old bytes at all.
                 try await wrap { _ = try await self.staging.create(id) }
@@ -291,7 +294,9 @@ public actor DriveEngine {
             }
             await self.local.move(node.path, to: newPath)
         } else {
-            guard !readOnly else { throw VolumeError.posix(EACCES) }
+            // Out of a locked folder, into one, or a locked item itself: the
+            // app would move the real file the locked one stands for.
+            guard !readOnly, !node.readOnly, !from.readOnly, !to.readOnly else { throw VolumeError.posix(EACCES) }
             if node.unsent {
                 // Not on the server yet: it goes up under the new name.
                 if let over, over.id != id { try await removeFromServer(over) }
@@ -310,7 +315,7 @@ public actor DriveEngine {
         if node.localOnly {
             await local.remove(node.path)
         } else {
-            guard !readOnly else { throw VolumeError.posix(EACCES) }
+            guard !readOnly, !node.readOnly else { throw VolumeError.posix(EACCES) }
             try await removeFromServer(node)
             await local.removeAttributes(under: node.path)
         }
@@ -483,6 +488,7 @@ public actor DriveEngine {
             node.fileId = entry.id
             node.version = entry.version
             node.local = entry.local
+            node.readOnly = entry.readOnly
             nodes[id] = node
             return id
         }
@@ -494,6 +500,7 @@ public actor DriveEngine {
         var node = insert(name: entry.name, parent: parent, isDirectory: entry.isDirectory, size: UInt64(max(0, entry.size)),
                           modified: entry.modified, fileId: entry.id, version: entry.version, localOnly: false, unsent: false)
         node.local = entry.local
+        node.readOnly = entry.readOnly
         node.created = entry.created ?? entry.modified
         nodes[node.id] = node
         return node
@@ -594,7 +601,7 @@ public actor DriveEngine {
 
     private static func `public`(_ node: Node) -> VolumeNode {
         VolumeNode(id: node.id, parent: node.parent, name: node.name, isDirectory: node.isDirectory, size: node.size,
-                   modified: node.modified, created: node.created, localOnly: node.localOnly)
+                   modified: node.modified, created: node.created, localOnly: node.localOnly, readOnly: node.readOnly)
     }
 
     private static func isRootMarker(_ node: Node) -> Bool {

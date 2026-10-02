@@ -423,6 +423,23 @@ never carry `.DS_Store`, `._*`, `.Trashes`, `.Spotlight-V100`, `.fseventsd`,
 on the storage key or path: a rename or move must not throw away the
 extension's cached chunks.
 
+Entry may also carry `"readOnly": true`, sent only when true: nothing may be
+made in it, nor it written, moved or deleted, whatever the drive allows. The
+app uses it for the **Collections** folder at the top of a drive
+(FSCollections): a folder per collection, each holding the files that
+collection gathers. Each is the drive's own file shown again, with the same
+id and `version`, so the chunk cache and an offline copy are shared. A
+missing key is false, so older apps decode unchanged. The extension refuses
+writes under it with EACCES (DriveEngine), and the bridge answers 403 to any
+write route whose path, or `from`/`to`, is at or under a locked entry
+(FSBridge): a move out of a collection would move the real file.
+Membership has no change feed of its own. The app fetches the collections
+when the drive's top is listed, and a collection's files when it is listed,
+then again at most every 30 s while it is being looked at
+(CollectionsFolder), and bumps the change feed when either changes. A drive
+with a real folder named Collections keeps it; the virtual one is then
+called "Collections (Onyx)".
+
 ### What the app does for a write (Mac upload engine)
 - The server's own routes, with the device's bearer token: `POST
   /api/files/presign` (small files) or `POST /api/files/upload/multipart`
