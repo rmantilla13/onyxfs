@@ -51,9 +51,13 @@ public enum Poster {
     /// No intermediate drawing bigger than this on a side.
     public static let maxIntermediateEdge = 4096
     /// An image original bigger than this is never decoded for a thumbnail
-    /// (lib/media.js THUMB_SOURCE_MAX_BYTES): a 60 MB PNG is several hundred
-    /// megabytes of pixels.
-    public static let thumbSourceMaxBytes: Int64 = 50 << 20
+    /// here. Far above a browser's cap (lib/media.js THUMB_SOURCE_MAX_BYTES,
+    /// 50 MB, where a tab holds every pixel): ImageIO makes a thumbnail
+    /// without the whole picture in memory, so what limits a Mac is the
+    /// pixels (ThumbnailRenderer.maxImagePixels) and the download, done one
+    /// file at a time at utility priority. The server draws up to 450 MB
+    /// (lib/server-previews.js); past that, it is this Mac's.
+    public static let thumbSourceMaxBytes: Int64 = 2 << 30
 
     /// Encoder qualities: the thumbnail and its siblings, and an image's
     /// large preview, in each of the two formats the server accepts.

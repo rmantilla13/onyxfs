@@ -2,6 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "crons": [
-    { "path": "/api/cron/maintenance", "schedule": "0 9 * * *" }
-  ]
+    { "path": "/api/cron/maintenance", "schedule": "0 9 * * *" },
+    { "path": "/api/cron/previews", "schedule": "* * * * *" }
+  ],
+  "functions": {
+    "app/api/cron/previews/route.js": { "memory": 3009 }
+  }
 }

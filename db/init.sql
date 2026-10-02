@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 150
+-- Statements: 153
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -207,6 +207,12 @@ ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_by TEXT;
 ALTER TABLE files ADD COLUMN IF NOT EXISTS thumb_status TEXT;
 
 CREATE INDEX IF NOT EXISTS brand_files_thumb_status_idx ON files (thumb_status);
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS preview_tries INT DEFAULT 0;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS preview_tried_at BIGINT;
+
+ALTER TABLE files ADD COLUMN IF NOT EXISTS preview_error TEXT;
 
 CREATE INDEX IF NOT EXISTS brand_files_kind_idx ON files (kind);
 

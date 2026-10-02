@@ -85,7 +85,9 @@ struct ThumbnailRulesTests {
         #expect(candidate(item("i", "a.jpg", mime: "image/jpeg"))?.need == .missing)
         #expect(candidate(item("i", "a.jpg", mime: "image/jpeg", thumbnail: thumb)) == nil,
                 "an image's old thumbnail is the browser's to remake: its original is read whole")
-        #expect(candidate(item("i", "big.jpg", mime: "image/jpeg", size: 60 << 20)) == nil, "past the web's decode limit")
+        #expect(candidate(item("i", "big.jpg", mime: "image/jpeg", size: 600 << 20))?.need == .missing,
+                "past what a browser decodes, but ImageIO draws it without holding every pixel")
+        #expect(candidate(item("i", "huge.tif", mime: "image/tiff", size: 3 << 30)) == nil, "past what a Mac downloads to draw")
         #expect(candidate(item("v", "huge.mov", size: 40 << 30))?.need == .missing, "a video is read a frame at a time")
         #expect(candidate(item("e", "empty.mov", size: 0)) == nil)
         #expect(candidate(item("d", "brief.pdf", mime: "application/pdf")) == nil)
