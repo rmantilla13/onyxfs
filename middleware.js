@@ -67,6 +67,12 @@ export const config = {
   // api/health     Has its own admin-or-CRON_SECRET check, and has to stay
   //                reachable when sign-in itself is broken so it can say why.
   // api/cron       Bearer-token authed.
+  // api/mcp        Claude's connector (lib/mcp): checks its own bearer token
+  //                and answers 401 with where to get one, as MCP clients
+  //                expect, never a redirect to a sign-in page.
+  // api/oauth,     How an MCP client registers and gets that token
+  // .well-known    (lib/oauth.js). The consent page, /oauth/authorize, stays
+  //                matched: a signed-out person is sent to sign in first.
   // signin, verify Must be reachable while signed out — that is the point.
   // download       The Mac app's download page and link. Getting the app
   //                comes before having an account on this machine.
@@ -87,6 +93,6 @@ export const config = {
   // unauthenticated user opening the desktop hand-off link SHOULD be sent to
   // sign in and bounced back afterwards.
   matcher: [
-    '/((?!api/auth|api/desktop|api/space|api/files/delta|api/files/[^/]+/transcript|api/transcripts|api/files/[^/]+/proxy|api/proxies|api/health|api/cron|signin|verify|download|s/|_next/static|_next/image|_vercel|favicon.ico|icon.png|thumb-sw\\.js$|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
+    '/((?!api/auth|api/desktop|api/mcp|api/oauth|\\.well-known|api/space|api/files/delta|api/files/[^/]+/transcript|api/transcripts|api/files/[^/]+/proxy|api/proxies|api/health|api/cron|signin|verify|download|s/|_next/static|_next/image|_vercel|favicon.ico|icon.png|thumb-sw\\.js$|.*\\.(?:png|jpg|jpeg|svg|ico|webp|gif|mp4|woff2?|ttf)$).*)',
   ],
 };

@@ -23,7 +23,7 @@ export const runtime = 'nodejs';
  * inherits an internal thread's audience, and carries no anchor of its own.
  */
 export async function POST(req, { params }) {
-  const g = await openReview(params.id, 'comment');
+  const g = await openReview(params.id, 'comment', { req });
   if (g.error) return g.error;
   let body;
   try { body = await req.json(); } catch { return reviewJson({ error: 'Bad request' }, 400); }

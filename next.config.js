@@ -18,6 +18,16 @@ const nextConfig = {
       { protocol: 'https', hostname: '**.digitaloceanspaces.com' },
     ],
   },
+  // OAuth discovery for MCP clients (lib/oauth.js) lives at fixed
+  // /.well-known paths — some clients append the resource's path to them.
+  async rewrites() {
+    return [
+      { source: '/.well-known/oauth-protected-resource/:rest*', destination: '/api/oauth/resource' },
+      { source: '/.well-known/oauth-protected-resource', destination: '/api/oauth/resource' },
+      { source: '/.well-known/oauth-authorization-server/:rest*', destination: '/api/oauth/server' },
+      { source: '/.well-known/oauth-authorization-server', destination: '/api/oauth/server' },
+    ];
+  },
   async headers() {
     // Conservative baseline. The full script/style CSP is deliberately not
     // here: the root layout inlines the brand's custom properties as a <style>

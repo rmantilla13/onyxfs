@@ -25,7 +25,7 @@ export const dynamic = 'force-dynamic';
  * (`readSeq`), for the unread dots; every delivery moves their marker on.
  */
 export async function GET(req, { params }) {
-  const g = await openReview(params.id, 'read');
+  const g = await openReview(params.id, 'read', { req });
   if (g.error) return g.error;
 
   const after = Math.max(0, Math.floor(Number(new URL(req.url).searchParams.get('after')) || 0));
