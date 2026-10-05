@@ -1,4 +1,5 @@
 import Foundation
+import IOKit.ps
 import SwiftUI
 import os
 import OnyxKit
@@ -9,10 +10,11 @@ private let log = Logger(subsystem: OnyxIdentifiers.app, category: "proxies")
 ///
 /// A 4K master streams badly from storage — an action camera's HEVC runs at
 /// 60 to 120 Mbps, more than a phone's connection carries — and a ProRes or
-/// HEVC clip of any size will not play in every browser, so the server asks
-/// for a proxy of every large video uploaded, and every one some browser
-/// will not play (lib/proxies.js): a 1080p H.264 copy the web and the iPhone
-/// play instead. It never transcodes; a Mac that is signed in, running and
+/// HEVC clip of any size will not play in every browser, so the server wants
+/// a proxy of every large video, and every one some browser will not play
+/// (lib/proxies.js): a 1080p H.264 copy the web and the iPhone play instead.
+/// A large one is asked for as it is uploaded; the rest the queue offers
+/// after everything asked for. It never transcodes; a Mac that is signed in, running and
 /// has this on (Settings › General) takes the jobs, one at a time, as it
 /// does transcripts:
 ///
@@ -38,6 +40,11 @@ private let log = Logger(subsystem: OnyxIdentifiers.app, category: "proxies")
 /// Mac might have added to it. A job taken back meanwhile (409 `lost`) is
 /// stopped and thrown away; one that fails is reported with a sentence that
 /// says why. Nothing is left on disk after a job, whatever its end.
+///
+/// On its battery, or in Low Power Mode, this Mac takes only jobs for videos
+/// big enough to be asked for by their size (ProxyRule.takesNow), and asks
+/// the queue for those alone: the ones there for how they are encoded —
+/// most phone clips, HEVC — wait until it is on power, or for another Mac.
 @MainActor
 final class ProxyService: ObservableObject {
     @Published var enabled: Bool {
@@ -91,12 +98,15 @@ final class ProxyService: ObservableObject {
     }
 
     /// An upload the server has now (DriveService, before the queue lets go
-    /// of its copy). A large video, or one some browser will not play by its
-    /// codec (read as it was recorded), will have a proxy asked for
+    /// of its copy). A large video will have a proxy asked for, and one some
+    /// browser will not play by its codec (read as it was recorded) offered
     /// (ProxyRule), and this Mac is likely to be the one to make it: its
     /// bytes are kept for that — linked now, while the queue's copy is still
-    /// there — and the queue is asked at once. New contents for a file are
-    /// not kept: the server asks for no proxy of those.
+    /// there — and the queue is asked at once, unless this Mac would not take
+    /// the job now (saving power, ProxyRule.takesNow): then the next look
+    /// once it is on power finds it, and the bytes are here for it. New
+    /// contents for a file are not kept: the server asks for no proxy of
+    /// those.
     func uploaded(_ job: UploadJob) {
         guard enabled, timer != nil, job.state == .done, job.replaceOf == nil,
               let fileId = job.fileId, let key = job.uploadedKey,
@@ -107,7 +117,9 @@ final class ProxyService: ObservableObject {
         Task {
             guard await sources.hold(link, fileId: fileId, key: key, size: size) else { return }
             log.info("keeping \(fileId, privacy: .public) here for its proxy")
-            pollNow()
+            // A bulk upload on battery is a queue request per phone clip for
+            // jobs this Mac would pass over.
+            if ProxyRule.takesNow(size: size, savingPower: Self.savingPower) { pollNow() }
         }
     }
 
@@ -175,8 +187,11 @@ final class ProxyService: ObservableObject {
         while started == generation, !Task.isCancelled, let api = model?.api {
             let jobs: [ProxyJob]
             let asked = Date()
+            // Saving power, only the jobs it takes: asked of the server, so a
+            // page of small ones cannot hide a large one behind them.
+            let saving = Self.savingPower
             do {
-                jobs = try await api.proxyQueue()
+                jobs = try await api.proxyQueue(largeOnly: saving)
             } catch {
                 // A server without proxies, or out of reach: quietly, until
                 // the next poll.
@@ -185,11 +200,17 @@ final class ProxyService: ObservableObject {
             }
             // The whole queue: a master kept for a job not in it has none
             // coming. (A server with proxies off answers with none at all.)
-            if jobs.count < Self.queuePage { await sources.queueSeen(Set(jobs.map(\.fileId)), askedAt: asked) }
+            // Not a queue asked for the large jobs alone: a small one's
+            // master is kept for when this Mac is on power.
+            if !saving, jobs.count < Self.queuePage {
+                await sources.queueSeen(Set(jobs.map(\.fileId)), askedAt: asked)
+            }
             // A job whose master is kept here goes first: there is nothing to
             // download, and the disk it holds comes back sooner.
             let kept = Set(await sources.all.keys)
-            let waiting = jobs.filter { !passed.contains($0.fileId) }
+            let waiting = jobs.filter {
+                !passed.contains($0.fileId) && ProxyRule.takesNow(size: $0.size, savingPower: saving)
+            }
             guard started == generation, let job = waiting.first(where: { kept.contains($0.fileId) }) ?? waiting.first
             else { return }
             passed.insert(job.fileId)
@@ -207,6 +228,15 @@ final class ProxyService: ObservableObject {
             guard started == generation, !Task.isCancelled else { return }
             await run(claim, api: api, generation: started)
         }
+    }
+
+    /// On its battery, or in Low Power Mode: asked as each pass looks at
+    /// the queue, which it does anyway, rather than watched.
+    nonisolated static var savingPower: Bool {
+        if ProcessInfo.processInfo.isLowPowerModeEnabled { return true }
+        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let source = IOPSGetProvidingPowerSourceType(info)?.takeUnretainedValue() else { return false }
+        return (source as String) == kIOPMBatteryPowerKey
     }
 
     // MARK: - One job

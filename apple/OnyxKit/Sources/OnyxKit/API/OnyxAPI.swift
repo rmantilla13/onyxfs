@@ -225,10 +225,20 @@ public actor OnyxAPI {
 
     /// Videos waiting for a streamable copy that this account may make:
     /// queued, or left by a Mac whose lease ran out. Oldest first.
-    public func proxyQueue() async throws -> [ProxyJob] {
+    ///
+    /// `largeOnly`: only the videos the size rule asks one of, for a Mac
+    /// saving power (ProxyRule.takesNow). The server leaves the rest out
+    /// before it cuts the page to ten, so a page of phone clips does not
+    /// hide the masters behind it; a server from before that lists them all,
+    /// and the Mac passes over them itself.
+    public func proxyQueue(largeOnly: Bool = false) async throws -> [ProxyJob] {
         struct Wrapper: Decodable { let jobs: [ProxyJob] }
-        let data = try await proxyRequest(config.url("api/proxies/queue"), method: "GET")
+        let data = try await proxyRequest(Self.proxyQueueURL(config, largeOnly: largeOnly), method: "GET")
         return try decode(Wrapper.self, from: data).jobs
+    }
+
+    static func proxyQueueURL(_ config: OnyxConfig, largeOnly: Bool) -> URL {
+        config.url("api/proxies/queue", query: largeOnly ? [URLQueryItem(name: "large", value: "1")] : [])
     }
 
     /// Take a job, for ten minutes that every progress report extends.

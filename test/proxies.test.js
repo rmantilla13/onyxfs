@@ -10,7 +10,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 const {
-  proxySpec, ffmpegArgs, keyframeInterval, shouldProxy, playsInEveryBrowser, isProxyKey, isStale, proxyJson,
+  proxySpec, ffmpegArgs, keyframeInterval, shouldProxy, asksAtUpload, playsInEveryBrowser, isProxyKey, isStale, proxyJson,
   PROXY_MAX_HEIGHT, PROXY_MIN_BYTES, PROXY_MIME, LEASE_SECONDS, PROXY_STATUSES, PROXY_KEYFRAME_SECONDS,
   EVERY_BROWSER_CODECS,
 } = await import('../lib/proxies.js');
@@ -49,6 +49,13 @@ describe('proxySpec', () => {
 
   test('it declares an mp4 the player can actually use', () => {
     assert.equal(proxySpec({ height: 1080 }).mime, PROXY_MIME);
+  });
+
+  test('it says how far apart the key frames are, so a worker need not', () => {
+    // The Mac reads this from its claim (OnyxKit ProxySpec) rather than
+    // keeping its own two seconds.
+    assert.equal(proxySpec({ height: 2160 }).keyframeSeconds, PROXY_KEYFRAME_SECONDS);
+    assert.equal(proxySpec().keyframeSeconds, PROXY_KEYFRAME_SECONDS);
   });
 });
 
@@ -159,6 +166,17 @@ describe('ffmpegArgs', () => {
     assert.equal(keyframeInterval(1), 2, 'one a second at the slowest rate kept');
   });
 
+  test('the GOP is the spec\'s seconds, counted at the source\'s rate', () => {
+    const spec = { ...proxySpec({ height: 1080 }), keyframeSeconds: 1 };
+    const at = (sourceFps, s = spec) => flag(ffmpegArgs({ input: '/in.mov', output: '/out.mp4', spec: s, sourceFps }), '-g');
+    assert.equal(at({ num: 30000, den: 1001 }), '30');
+    assert.equal(at(null), '30', 'counted at 30 when the rate is not known');
+    for (const odd of [0, -1, 'x', null, 3600]) {
+      assert.equal(at(25, { ...spec, keyframeSeconds: odd }), '50', `${odd}: the default two seconds`);
+    }
+    assert.equal(keyframeInterval(24, 0.5), 12);
+  });
+
   test('the GOP flags are encoder options, before the output', () => {
     const a = ffmpegArgs({ input: '/in.mov', output: '/out.mp4', sourceFps: { num: 25, den: 1 } });
     assert.ok(a.indexOf('-g') > a.indexOf('-c:v'), 'after the codec is chosen');
@@ -224,6 +242,19 @@ describe('shouldProxy by codec', () => {
         assert.equal(playsInEveryBrowser(videoCodec), plays, JSON.stringify(videoCodec));
       }
     }
+  });
+
+  test('only the size rule asks for one at upload; the codec\'s wait for the queue\'s offer', () => {
+    // A job per phone clip in the asked-for queue, served oldest first, would
+    // put a person's own request behind every clip uploaded before it.
+    for (const size of SIZES) {
+      for (const [videoCodec] of CODECS) {
+        const file = { kind: 'video', storage: 's3', size, metadata: videoCodec ? { videoCodec } : {} };
+        assert.equal(asksAtUpload(file), size >= PROXY_MIN_BYTES, `${size} bytes, ${JSON.stringify(videoCodec)}`);
+      }
+    }
+    assert.equal(asksAtUpload({ kind: 'video', storage: 'blob', size: PROXY_MIN_BYTES }), false, 'nowhere to put it');
+    assert.equal(asksAtUpload({ kind: 'image', storage: 's3', size: PROXY_MIN_BYTES }), false);
   });
 
   test('an unknown codec keeps the size rule exactly as it was', () => {
@@ -464,6 +495,16 @@ describe('the player and the queue agree on the words', () => {
     assert.match(player, /const heavy = !proxy && Number\(file\?\.size\) > HEAVY_BYTES;/);
     assert.match(player, /preload=\{started \|\| !heavy \? 'metadata' : 'none'\}/);
   });
+
+  test('a video this browser cannot decode is offered a streamable version, whatever its size', async () => {
+    // A file from before its codec was kept is in no queue: the browser that
+    // fails to play it is the first to know, and an editor can ask there.
+    const player = await src('app/components/video/VideoPlayer.js');
+    assert.match(player, /if \(!proxy && \(code === 3 \|\| code === 4\)\) setUndecodable\(true\);/, 'a format error, not a lapsed link');
+    assert.match(player, /if \(!e\.target\.videoWidth && !e\.target\.videoHeight && !proxy\) \{\s*setUndecodable\(true\);/, 'nor only the sound');
+    assert.match(player, /\{!heavy && !proxy && undecodable && \(making \|\| job\?\.canRequest\) && \(/);
+    assert.match(player, /useEffect\(\(\) => \{ setError\(null\); setUndecodable\(false\); \}, \[src\]\);/, 'tried afresh on the copy');
+  });
 });
 
 // Where the server-rendered and listed rows are played: what signs the
@@ -492,7 +533,9 @@ describe('a heavy upload is queued without being able to fail the upload', () =>
     assert.ok(i > route.indexOf('const file = await createFile('), 'queued before the row exists');
     assert.ok(i < route.indexOf('const [signed] = await presignFileUrls([file]);'), 'queued after the answer is built');
     assert.match(route.slice(i, i + 220), /\.catch\(\(e\) => console\.warn/, 'a failed queue write would fail the upload');
-    assert.match(route, /isFeatureEnabled\(principal\.flags, 'proxies'\) && shouldProxy\(file\)/);
+    // Asked for by size alone: one there for its codec waits for the queue's
+    // offer, behind what people asked for (lib/proxies.js asksAtUpload).
+    assert.match(route, /isFeatureEnabled\(principal\.flags, 'proxies'\) && asksAtUpload\(file\)/);
   });
 });
 
@@ -606,6 +649,30 @@ describe('large videos with no job are offered, after everything asked for', () 
     assert.doesNotMatch(buildProxyCandidateQuery({ principal: { isAdmin: true }, minBytes: 1, playable: [] }).text, /videoCodec/);
   });
 
+  test('only rows in drives the caller may change things in: a drive they view does not fill the pages', async () => {
+    const { buildProxyCandidateQuery } = await import('../lib/file-query.js');
+    const { principalFrom } = await import('../lib/authz.js');
+    const { DEFAULT_FLAGS } = await import('../lib/features.js');
+    const drives = [{ id: 'd1', prefix: 'secret' }, { id: 'd2', prefix: 'team' }, { id: 'd3', prefix: 'phones' }];
+    const member = (roles) => principalFrom({
+      email: 'm@x.test', person: { roleId: 'member' }, globalFlags: DEFAULT_FLAGS, grants: { drives, roles },
+    });
+    const q = buildProxyCandidateQuery({ principal: member({ d2: 'editor', d3: 'viewer' }), minBytes: PROXY_MIN_BYTES });
+    // The write patterns after the access clause's own: team, not phones.
+    assert.ok(q.params.some((v) => Array.isArray(v) && v.length === 1 && v[0] === 'team/%'), JSON.stringify(q.params));
+    assert.ok(!q.params.some((v) => Array.isArray(v) && v.length === 1 && v[0] === 'phones/%'));
+    assert.match(q.text, /a\.access IN \('editor', 'owner'\)/, 'or a file shared with them to edit');
+    // A viewer of every drive they are in: rows outside drives, or shared to edit.
+    const viewer = buildProxyCandidateQuery({ principal: member({ d2: 'viewer' }), minBytes: PROXY_MIN_BYTES });
+    assert.match(viewer.text, /a\.access IN \('editor', 'owner'\)/);
+    assert.equal(viewer.text.match(/LIKE ANY/g).length, 3, 'the access clause’s two, and the write rule’s NOT');
+    // Nothing for an admin, nor for a principal with no write patterns worked
+    // out — missing them must not hide a row.
+    assert.doesNotMatch(buildProxyCandidateQuery({ principal: { isAdmin: true }, minBytes: 1 }).text, /a\.access IN/);
+    const handMade = { email: 'm@x.test', drivePatterns: { all: ['team/%'], mine: ['team/%'] } };
+    assert.doesNotMatch(buildProxyCandidateQuery({ principal: handMade, minBytes: 1 }).text, /a\.access IN/);
+  });
+
   test('pages on (created_at, id), and will not run without a size floor', async () => {
     const { buildProxyCandidateQuery } = await import('../lib/file-query.js');
     const q = buildProxyCandidateQuery({ principal: { isAdmin: true }, minBytes: PROXY_MIN_BYTES, after: { createdAt: 1790000000000, id: 'f9' } });
@@ -620,7 +687,10 @@ describe('large videos with no job are offered, after everything asked for', () 
     const asked = fn.indexOf('buildProxyQueueQuery(');
     const offered = fn.indexOf('buildProxyCandidateQuery(');
     assert.ok(asked > 0 && offered > asked, 'what someone asked for comes first');
-    assert.match(fn.slice(offered), /minBytes: PROXY_MIN_BYTES, playable: EVERY_BROWSER_CODECS/);
+    // The codec widens the size rule, except for a Mac saving power, which
+    // asks for the large alone.
+    assert.match(fn.slice(offered), /minBytes: PROXY_MIN_BYTES, playable: large \? null : EVERY_BROWSER_CODECS/);
+    assert.match(fn.slice(0, offered), /if \(large && file\.size != null && Number\(file\.size\) < PROXY_MIN_BYTES\) return;/);
     assert.match(fn.slice(offered), /modifiableFileIds\(files, principal\)/);
     assert.match(fn.slice(offered), /mine\.has\(file\.id\) && shouldProxy\(file\)/);
     assert.match(fn.slice(offered), /requestedAt: null/);

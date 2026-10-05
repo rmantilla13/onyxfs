@@ -275,7 +275,8 @@ func settle(_ queue: UploadQueue) async {
     /// A video's codec is read from its staged bytes once they are up, sent
     /// with the record, and kept with the job — for ProxyService, which
     /// hears the finished job. Not for new contents of a file: the server
-    /// asks for no proxy of those.
+    /// asks for no proxy of those. Nor for anything that is not a video,
+    /// which goes on to its record without a pause.
     @Test func aVideosCodecIsReadOnceItsBytesAreUpAndSentWithTheRecord() async throws {
         let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
         let server = FakeServer()
@@ -295,13 +296,61 @@ func settle(_ queue: UploadQueue) async {
                                 folder: "Footage", name: "Cut.MOV", mime: "video/quicktime", replaceOf: "f9")
         await settle(queue)
         #expect(await server.codecs == ["/Footage/IMG_0042.MOV": hevc])
-        // Asked only once its bytes were in storage, and never for new contents.
-        #expect(await asked.jobs.map(\.name).sorted() == ["IMG_0042.MOV", "notes.txt"])
+        // Asked only once its bytes were in storage, and never for new
+        // contents, nor for what is not a video.
+        #expect(await asked.jobs.map(\.name) == ["IMG_0042.MOV"])
         #expect(await asked.jobs.allSatisfy { $0.uploadedKey != nil })
         try await Task.sleep(nanoseconds: 20_000_000)
         let done = await seen.jobs.filter { $0.state == .done }
         #expect(done.first { $0.name == "IMG_0042.MOV" }?.videoCodec == hevc, "ProxyService hears it with the upload")
         #expect(done.first { $0.name == "notes.txt" }?.videoCodec == nil)
+    }
+
+    /// Renamed, moved or deleted in Finder while its codec was read, it is
+    /// recorded as it is now, or not at all — whether or not the read found
+    /// anything. The read is a pause off the queue's actor, and the job
+    /// taken before it is not the one to record.
+    @Test(arguments: [true, false])
+    func renamedWhileItsCodecWasReadItLandsAtTheNewPlace(found: Bool) async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        let hevc = VideoCodec(fourcc: "hvc1", bitDepth: 10, chroma: "4:2:0", hdr: true)
+        let reading = Recorder()
+        let gate = Gate()
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 0, sleep: { _ in }, codecOf: { job in
+            await reading.add(job)
+            await gate.wait()
+            return found ? hevc : nil
+        })
+        let job = try await queue.enqueue(from: try source(Data("phone".utf8)), scope: "drive.d1", filespaceId: "d1",
+                                          folder: "Footage", name: "IMG_0042.MOV", mime: "video/quicktime")
+        for _ in 0..<500 where await reading.jobs.isEmpty { try await Task.sleep(nanoseconds: 2_000_000) }
+        #expect(await reading.jobs.count == 1)
+        await queue.retarget(job.id, folder: "Selects", name: "Sunset.MOV", replacing: nil)
+        await gate.open()
+        await settle(queue)
+        #expect(await server.calls.last == "record /Selects/Sunset.MOV")
+        #expect(await server.codecs == (found ? ["/Selects/Sunset.MOV": hevc] : [:]))
+    }
+
+    @Test func deletedWhileItsCodecWasReadItNeverArrives() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        let reading = Recorder()
+        let gate = Gate()
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 0, sleep: { _ in }, codecOf: { job in
+            await reading.add(job)
+            await gate.wait()
+            return nil
+        })
+        let job = try await queue.enqueue(from: try source(Data("phone".utf8)), scope: "drive.d1", filespaceId: "d1",
+                                          folder: "Footage", name: "IMG_0042.MOV", mime: "video/quicktime")
+        for _ in 0..<500 where await reading.jobs.isEmpty { try await Task.sleep(nanoseconds: 2_000_000) }
+        await queue.cancel(job.id)
+        await gate.open()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(!(await server.calls.contains { $0.hasPrefix("record") }))
+        #expect(await queue.all().isEmpty)
     }
 
     /// Kept on disk with the job: a record tried again, after a restart

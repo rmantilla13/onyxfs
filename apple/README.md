@@ -47,17 +47,20 @@ One Swift codebase. On the Mac it is **Onyx.app**:
   Settings › General (or View › Show Activity) hides it.
 - **Streamable versions of heavy videos.** A large video — an action
   camera's 4K HEVC runs at 60–120 Mbps — stalls on a phone, and a ProRes or
-  HEVC clip of any size will not play in every browser. The server asks for
-  a 1080p H.264 copy of each one (lib/proxies.js), knowing the second kind
-  by the codec this Mac reads from an upload's boxes as it records it
-  (`VideoCodec`); this Mac takes the
+  HEVC clip of any size will not play in every browser. The server wants
+  a 1080p H.264 copy of each one (lib/proxies.js) — the first kind asked
+  for at upload, the second offered after what people asked for — knowing
+  the second kind by the codec this Mac reads from an upload's boxes as it
+  records it (`VideoCodec`); this Mac takes the
   jobs from its queue while Onyx runs, downloads the master, re-encodes it on
   the media engine (`ProxyTranscoder`, about 7× real time for 4K60 on Apple
-  silicon) and uploads the copy, which the web and the iPhone then play. A
-  master this Mac uploaded itself, or keeps offline, is not downloaded
-  again: its own upload is kept for the job for up to a day
-  (`ProxySources`), and that job is taken first. Settings › General turns
-  it off.
+  silicon; HDR tone-mapped to SDR on the way) and uploads the copy, which
+  the web and the iPhone then play — the iPhone only for the first kind,
+  since it plays the second as it is. A master this Mac uploaded itself, or
+  keeps offline, is not downloaded again: its own upload is kept for the
+  job for up to a day (`ProxySources`), and that job is taken first. On
+  battery or in Low Power Mode it takes only the first kind. Settings ›
+  General turns it off.
 - **Thumbnails the web is missing**, made here: a 4K clip straight from a
   camera, or a HEIC or RAW a browser cannot draw, gets its thumbnail, the
   smaller sizes, the player's poster and the placeholder a tile shows

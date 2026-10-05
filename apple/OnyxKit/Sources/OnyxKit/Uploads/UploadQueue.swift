@@ -594,21 +594,29 @@ public actor UploadQueue {
             update(sent)
         }
         // As it is now: renamed while its bytes went up, it lands at the new name.
-        guard var job = jobs[id], let key = job.uploadedKey else { throw CancellationError() }
-        if job.replaceOf != nil {
-            return try await transport.replaceContent(job, key: key)
-        }
+        guard var job = jobs[id], job.uploadedKey != nil else { throw CancellationError() }
         // What its picture is encoded as, sent with the record: the server
         // asks for a proxy of a video some browser will not play whatever its
         // size, and has only this Mac's word for it until something probes
         // the file. Kept with the job, so ProxyService hears it with the
         // upload. Read once, off this actor, after the bytes are up — a
-        // header walk of a file on this disk, a few milliseconds.
-        if job.videoCodec == nil, let codec = await codecOf(job) {
-            guard running[id]?.token == token, var read = jobs[id] else { throw CancellationError() }
-            read.videoCodec = codec
-            update(read)
-            job = read
+        // header walk of a file on this disk, a few milliseconds — and only
+        // for a video: anything else goes on to its record without a pause.
+        if job.replaceOf == nil, job.videoCodec == nil, ProxyRule.isVideo(name: job.name, mime: job.mime) {
+            let codec = await codecOf(job)
+            // The job as it is now, whatever the read found: renamed, moved,
+            // made new contents of a file or cancelled while it ran, it is
+            // recorded as that, or not at all.
+            guard running[id]?.token == token, var now = jobs[id] else { throw CancellationError() }
+            if let codec, now.videoCodec == nil {
+                now.videoCodec = codec
+                update(now)
+            }
+            job = now
+        }
+        guard let key = job.uploadedKey else { throw CancellationError() }
+        if job.replaceOf != nil {
+            return try await transport.replaceContent(job, key: key)
         }
         do {
             return try await transport.record(job, key: key, publicUrl: job.uploadedUrl)
@@ -620,7 +628,8 @@ public actor UploadQueue {
     }
 
     /// A new video's codec, from its staged bytes; nil for anything that
-    /// is not a video by its name and type (ProxyRule.isVideo).
+    /// is not a video by its name and type (ProxyRule.isVideo), which the
+    /// queue does not ask about anyway.
     public static func videoCodec(of job: UploadJob) async -> VideoCodec? {
         guard ProxyRule.isVideo(name: job.name, mime: job.mime) else { return nil }
         return await VideoCodec.read(URL(fileURLWithPath: job.staged))

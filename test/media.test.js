@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  effectiveKind, drawableKind, isThumbKey, mediaFacts, uploadFields, fmtDuration, sharedFile, MEDIA_KEYS,
+  effectiveKind, drawableKind, isThumbKey, mediaFacts, uploadFields, fmtDuration, sharedFile, MEDIA_KEYS, wantsProbe,
 } from '../lib/media.js';
 
 const KEY = '_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.webp';
@@ -140,6 +140,30 @@ test('the codec comes only from the probe\'s `media`, never a registration\'s ow
   assert.deepEqual(uploadFields({ name: 'a.mov', media: { videoCodec: hevc } }).metadata, { videoCodec: hevc });
   // A library field called "Codec" is its own, not this.
   assert.deepEqual(uploadFields({ name: 'a.mov', metadata: { codec: 'ProRes 422 HQ' } }).metadata, { codec: 'ProRes 422 HQ' });
+});
+
+test('a video is probed for a rate it lacks, and in the bucket for a codec it lacks — once', () => {
+  const rate = { fps: { num: 25, den: 1 } };
+  const codec = { videoCodec: { fourcc: 'hvc1' } };
+  const s3 = (metadata) => ({ storage: 's3', metadata });
+  const blob = (metadata) => ({ storage: 'blob', metadata });
+  // No rate: read, wherever it is, until a probe finds none.
+  assert.equal(wantsProbe(s3({})), true);
+  assert.equal(wantsProbe(blob({})), true);
+  assert.equal(wantsProbe(blob(undefined)), true);
+  assert.equal(wantsProbe(s3({ fpsUnknown: true })), false);
+  // A rate and no codec: read in the bucket, where the codec decides a
+  // streamable version; not elsewhere, where there can be none.
+  assert.equal(wantsProbe(s3(rate)), true);
+  assert.equal(wantsProbe(blob(rate)), false);
+  assert.equal(wantsProbe({ metadata: rate }), false);
+  // Read once: found, or marked as not there.
+  assert.equal(wantsProbe(s3({ ...rate, ...codec })), false);
+  assert.equal(wantsProbe(s3({ ...rate, videoCodecUnknown: true })), false);
+  assert.equal(wantsProbe(s3({ ...rate, videoCodecUnknown: 'true' })), true, 'only the mark the probe writes');
+  // The marks are the probe's, never a client's.
+  assert.ok(MEDIA_KEYS.includes('videoCodecUnknown'));
+  assert.deepEqual(uploadFields({ name: 'a.mov', metadata: { videoCodecUnknown: true, fpsUnknown: true } }).metadata, {});
 });
 
 test('durations read like a player shows them', () => {

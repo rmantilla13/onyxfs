@@ -16,8 +16,9 @@ import Foundation
 /// AVFoundation. The queue keeps the bytes under a name with no extension,
 /// which AVFoundation will not open; and what CoreMedia makes of a format — a
 /// ProRes clip's 12 bits per component, say — is not what a browser's probe
-/// records for the same file. Only box headers and the `moov` are read: a few
-/// small reads, then the index, never the media.
+/// records for the same file. Only box headers are read, one small read
+/// apiece, down to the sample entry, and then the entry itself: never the
+/// index beside it (stsz, stco — megabytes, for a long clip), nor the media.
 public struct VideoCodec: Codable, Sendable, Equatable {
     public var fourcc: String
     public var bitDepth: Int?
@@ -56,67 +57,122 @@ public struct VideoCodec: Codable, Sendable, Equatable {
 
     /// The first video track's, from a QuickTime or ISO-BMFF file on disk;
     /// nil for any other file, or one this cannot make sense of.
-    public static func read(_ file: URL) async -> VideoCodec? {
-        guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
+    public static func read(_ url: URL) async -> VideoCodec? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
-        guard let size = try? handle.seekToEnd(), let moov = Self.moov(handle, size: size) else { return nil }
-        return Self(moov: Bytes(moov))
+        guard let size = try? handle.seekToEnd() else { return nil }
+        let file = File(handle: handle, size: size)
+        guard let moov = file.moov() else { return nil }
+        // The first video track with a sample entry, as the JS takes it.
+        var found: (type: String, bytes: [UInt8], body: Int)?
+        _ = file.first(in: moov) { trak in
+            guard trak.type == "trak", file.handler(trak) == "vide",
+                  let stbl = file.path(trak, "mdia", "minf", "stbl"),
+                  let entry = file.firstSampleEntry(stbl) else { return false }
+            found = entry
+            return true
+        }
+        guard let found, Self.isPrintable(found.type) else { return nil }
+        let b = Bytes(found.bytes)
+        return Self(entry: Box(type: found.type, start: 0, end: b.count, body: found.body), in: b)
     }
 
-    /// A moov bigger than this is not read (lib/mp4-probe.js MAX_MOOV_BYTES):
-    /// a day of footage, and past it a misread size is likelier than a real file.
-    static let maxMoovBytes: UInt64 = 64 << 20
-    /// Top-level boxes walked before giving up. A real file has a handful.
-    static let maxTopLevelBoxes = 256
+    /// Boxes walked at one level before giving up. A real file has a handful.
+    static let maxBoxes = 256
+    /// A sample entry is its own fields and a few small boxes — a few hundred
+    /// bytes. Past this much of one, the rest is not read.
+    static let maxEntryBytes: UInt64 = 64 << 10
 
-    /// The top-level `moov`'s contents, after its header: one 16-byte read per
-    /// box before it, so one at the tail of a 40 GB master costs three or four.
-    static func moov(_ handle: FileHandle, size: UInt64) -> [UInt8]? {
-        var at: UInt64 = 0
-        var walked = 0
-        while walked < maxTopLevelBoxes, at + 8 <= size {
-            walked += 1
-            guard let head = read(handle, at: at, count: Int(min(16, size - at))), head.count >= 8 else { return nil }
+    /// The file, a box header at a time.
+    struct File {
+        let handle: FileHandle
+        let size: UInt64
+
+        /// A box where it lies in the file.
+        struct Place {
+            let type: String
+            let start: UInt64
+            let end: UInt64
+            /// Where the contents begin, after the 8- or 16-byte header.
+            let body: UInt64
+        }
+
+        /// The top-level `moov`: one 16-byte read per box before it, so one
+        /// at the tail of a 40 GB master costs three or four.
+        func moov() -> Place? {
+            // The first box must look like one, or this is not an MP4 at all.
+            guard let head = box(at: 0, end: size), VideoCodec.isPrintable(head.type) else { return nil }
+            return first(from: 0, to: size) { $0.type == "moov" }
+        }
+
+        /// The first box among `parent`'s children that `match` takes.
+        func first(in parent: Place, where match: (Place) -> Bool) -> Place? {
+            first(from: parent.body, to: parent.end, where: match)
+        }
+
+        /// The first box in [start, end) that `match` takes, reading only the
+        /// headers of those before it. Stops at the first malformed header
+        /// rather than guessing past it.
+        func first(from start: UInt64, to end: UInt64, where match: (Place) -> Bool) -> Place? {
+            var at = start
+            for _ in 0..<VideoCodec.maxBoxes {
+                guard let box = box(at: at, end: end) else { return nil }
+                if match(box) { return box }
+                at = box.end
+            }
+            return nil
+        }
+
+        func path(_ box: Place, _ types: String...) -> Place? {
+            var current: Place? = box
+            for type in types { current = current.flatMap { parent in first(in: parent) { $0.type == type } } }
+            return current
+        }
+
+        func handler(_ trak: Place) -> String? {
+            // FullBox (4) + pre-defined (4), then the handler type.
+            guard let hdlr = path(trak, "mdia", "hdlr"), hdlr.body + 12 <= hdlr.end,
+                  let bytes = read(at: hdlr.body + 8, count: 4), bytes.count == 4 else { return nil }
+            return Bytes(bytes).type(0)
+        }
+
+        /// stsd's first entry, read whole (up to maxEntryBytes): FullBox (4)
+        /// and a count (4), then the entries. `body` is where its contents
+        /// begin in `bytes`.
+        func firstSampleEntry(_ stbl: Place) -> (type: String, bytes: [UInt8], body: Int)? {
+            guard let stsd = first(in: stbl, where: { $0.type == "stsd" }), stsd.body + 8 <= stsd.end,
+                  let head = read(at: stsd.body, count: 8), head.count == 8, Bytes(head).u32(4) >= 1,
+                  let entry = box(at: stsd.body + 8, end: stsd.end) else { return nil }
+            let count = Int(min(entry.end - entry.start, VideoCodec.maxEntryBytes))
+            guard let bytes = read(at: entry.start, count: count), bytes.count == count else { return nil }
+            return (entry.type, bytes, Int(entry.body - entry.start))
+        }
+
+        /// The box whose header is at `at`, inside [at, end): nil for one that
+        /// is malformed, or that says it runs past `end`.
+        func box(at: UInt64, end: UInt64) -> Place? {
+            guard at < end, end - at >= 8,
+                  let head = read(at: at, count: Int(min(16, end - at))), head.count >= 8 else { return nil }
             let b = Bytes(head)
             var length = UInt64(b.u32(0))
-            let type = b.type(4)
             var header: UInt64 = 8
             if length == 1 {
                 guard head.count >= 16 else { return nil }
                 length = b.u64(8)
                 header = 16
             } else if length == 0 {
-                length = size - at
+                length = end - at
             }
-            // The first box must look like one, or this is not an MP4 at all.
-            if walked == 1, !Self.isPrintable(type) { return nil }
             // Against what is left, not `at + length`: a 64-bit size that
             // lies would overflow the sum, and a trap is a crash.
-            guard length >= header, length <= size - at else { return nil }
-            if type == "moov" {
-                guard length - header <= maxMoovBytes,
-                      let body = read(handle, at: at + header, count: Int(length - header)),
-                      body.count == Int(length - header) else { return nil }
-                return body
-            }
-            at += length
+            guard length >= header, length <= end - at else { return nil }
+            return Place(type: b.type(4), start: at, end: at + length, body: at + header)
         }
-        return nil
-    }
 
-    private static func read(_ handle: FileHandle, at offset: UInt64, count: Int) -> [UInt8]? {
-        guard (try? handle.seek(toOffset: offset)) != nil, let data = try? handle.read(upToCount: count) else { return nil }
-        return [UInt8](data)
-    }
-
-    /// The first video track's sample entry, from a moov's contents.
-    init?(moov b: Bytes) {
-        let entry = Self.children(b, 0, b.count).lazy
-            .filter { $0.type == "trak" && Self.handler(b, $0) == "vide" }
-            .compactMap { Self.path(b, $0, "mdia", "minf", "stbl").flatMap { Self.firstSampleEntry(b, $0) } }
-            .first
-        guard let entry, Self.isPrintable(entry.type) else { return nil }
-        self.init(entry: entry, in: b)
+        private func read(at offset: UInt64, count: Int) -> [UInt8]? {
+            guard (try? handle.seek(toOffset: offset)) != nil, let data = try? handle.read(upToCount: count) else { return nil }
+            return [UInt8](data)
+        }
     }
 
     // MARK: - The sample entry
@@ -225,28 +281,6 @@ public struct VideoCodec: Codable, Sendable, Equatable {
             o += size
         }
         return out
-    }
-
-    static func child(_ b: Bytes, _ box: Box, _ type: String) -> Box? {
-        children(b, box.body, box.end).first { $0.type == type }
-    }
-
-    static func path(_ b: Bytes, _ box: Box, _ types: String...) -> Box? {
-        var current: Box? = box
-        for type in types { current = current.flatMap { child(b, $0, type) } }
-        return current
-    }
-
-    static func handler(_ b: Bytes, _ trak: Box) -> String? {
-        // FullBox (4) + pre-defined (4), then the handler type.
-        guard let hdlr = path(b, trak, "mdia", "hdlr"), hdlr.body + 12 <= hdlr.end else { return nil }
-        return b.type(hdlr.body + 8)
-    }
-
-    /// stsd's first entry: FullBox (4) and a count (4), then the entries.
-    static func firstSampleEntry(_ b: Bytes, _ stbl: Box) -> Box? {
-        guard let stsd = child(b, stbl, "stsd"), stsd.body + 8 <= stsd.end, b.u32(stsd.body + 4) >= 1 else { return nil }
-        return children(b, stsd.body + 8, stsd.end).first
     }
 
     static func isPrintable(_ type: String) -> Bool {

@@ -31,6 +31,40 @@ import Testing
         #expect(claim.sourceKey == nil && claim.contentHash == nil)
     }
 
+    /// How far apart the copy's key frames are is the server's to say, with
+    /// the rest of the rendition; two seconds from one that does not.
+    @Test func aClaimsSpecSaysHowFarApartKeyFramesAre() throws {
+        func spec(_ body: String) throws -> ProxySpec {
+            let json = #"{"fileId":"f1","name":"a.mov","downloadUrl":"https://s/a","uploadUrl":"https://s/b","spec":"#
+                + body + "}"
+            return try JSONDecoder().decode(ProxyClaim.self, from: Data(json.utf8)).spec
+        }
+        #expect(try spec(#"{"height":1080,"maxrateKbps":6000,"audioKbps":128,"keyframeSeconds":1}"#).keyframeSeconds == 1)
+        #expect(try spec(#"{"height":1080,"maxrateKbps":6000,"audioKbps":128}"#).keyframeSeconds == 2, "a server from before")
+        for odd in ["0", "-2", "3600", "\"soon\"", "null"] {
+            #expect(try spec(#"{"height":1080,"keyframeSeconds":"# + odd + "}").keyframeSeconds == 2, "\(odd)")
+        }
+    }
+
+    /// On battery or in Low Power Mode a Mac takes only what the size rule
+    /// asks for; a smaller video, there for its codec, waits for power.
+    @Test func aMacSavingPowerTakesOnlyTheJobsTheSizeRuleAsksFor() {
+        let small: Int64 = 150 << 20
+        #expect(ProxyRule.takesNow(size: small, savingPower: false))
+        #expect(!ProxyRule.takesNow(size: small, savingPower: true))
+        #expect(ProxyRule.takesNow(size: ProxyRule.minBytes, savingPower: true))
+        #expect(ProxyRule.takesNow(size: 40 << 30, savingPower: true))
+        #expect(ProxyRule.takesNow(size: nil, savingPower: true), "a size not said: taken, as every job was")
+    }
+
+    /// A Mac saving power asks for the large jobs alone, so the server can
+    /// leave the rest out before the page is cut (app/api/proxies/queue).
+    @Test func aMacSavingPowerAsksTheQueueForTheLargeJobsAlone() {
+        let config = OnyxConfig(baseURL: URL(string: "https://onyx.example.com")!)
+        #expect(OnyxAPI.proxyQueueURL(config, largeOnly: true).absoluteString == "https://onyx.example.com/api/proxies/queue?large=1")
+        #expect(OnyxAPI.proxyQueueURL(config, largeOnly: false).absoluteString == "https://onyx.example.com/api/proxies/queue")
+    }
+
     @Test func whatSaysWhichBytesTheMasterIsNeverFailsAClaim() throws {
         // Only a copy on this Mac is checked against them: odd ones mean a
         // download, as before, not a job that cannot start.

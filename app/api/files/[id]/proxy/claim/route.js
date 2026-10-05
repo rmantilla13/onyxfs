@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { claimProxy, failProxy, queueProxyIfMissing } from '@/lib/db';
 import { presignFileUrls, getStorageConfig, storageMode, s3PresignProxyPut } from '@/lib/storage';
 import { openProxy, readJson, json } from '@/lib/proxy-guard';
-import { proxyKeyFor } from '@/lib/media';
+import { proxyKeyFor, frameFacts } from '@/lib/media';
 import { normalizeDevice, proxySpec, shouldProxy, LEASE_SECONDS, PROXY_MAX_PUT_BYTES, PROXY_MIME } from '@/lib/proxies';
 
 export const runtime = 'nodejs';
@@ -16,8 +16,9 @@ const URL_TTL = 21600;
 
 /**
  * POST /api/files/[id]/proxy/claim  Body: { device: "Ricky's MacBook Pro" }
- *   → { fileId, name, mime, size, sourceKey, contentHash, sourceHeight, spec,
- *       maxBytes, downloadUrl, uploadUrl, proxyKey, leaseSeconds }
+ *   → { fileId, name, mime, size, sourceKey, contentHash, sourceHeight,
+ *       sourceFps, spec, maxBytes, downloadUrl, uploadUrl, proxyKey,
+ *       leaseSeconds }
  *
  * A Mac takes a job. Atomic (lib/db.js claimProxy): it succeeds only on a job
  * that is queued, or working on a lease that has run out, so two Macs asking at
@@ -37,8 +38,12 @@ const URL_TTL = 21600;
  *
  * `spec` is the rendition the server decided on (lib/proxies.js proxySpec) from
  * the source's own height, so the decision lives in one place and a worker
- * cannot quietly ship 4K. `maxBytes` is the single-PUT ceiling the upload URL
- * carries; over it the worker reports a failure rather than a truncated file.
+ * cannot quietly ship 4K — its key frame interval included, in seconds.
+ * `sourceFps` ({ num, den }, or null when nothing probed it) is the rate those
+ * seconds are counted in frames at by a worker that counts frames (ffmpegArgs);
+ * the Mac's encoder takes the seconds as they are. `maxBytes` is the
+ * single-PUT ceiling the upload URL carries; over it the worker reports a
+ * failure rather than a truncated file.
  */
 export async function POST(req, { params }) {
   const g = await openProxy(req, params.id, 'claim');
@@ -100,6 +105,7 @@ export async function POST(req, { params }) {
     // downloading it again, when it is these contents exactly.
     contentHash: g.file.contentHash || null,
     sourceHeight,
+    sourceFps: frameFacts({ fps: g.file.metadata?.fps }).fps || null,
     spec: proxySpec({ height: sourceHeight }),
     outputMime: PROXY_MIME,
     maxBytes: PROXY_MAX_PUT_BYTES,

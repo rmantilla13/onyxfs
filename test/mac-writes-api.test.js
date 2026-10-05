@@ -438,8 +438,8 @@ describe('the Mac’s writes', () => {
     assert.match(r.body.file.contentHash, /^[0-9a-f]{32}-3$/);
   });
 
-  test('a heavy video is queued for a proxy; a light one only when some browser will not play it', async () => {
-    const { PROXY_MIN_BYTES } = await import('../lib/proxies.js');
+  test('a heavy video is queued for a proxy; a light one some browser will not play is left for the queue to offer', async () => {
+    const { PROXY_MIN_BYTES, shouldProxy } = await import('../lib/proxies.js');
     const who = mac(ED);
     const queued = () => [...(globalThis.__mw.proxies || new Map()).keys()];
 
@@ -470,15 +470,21 @@ describe('the Mac’s writes', () => {
     await deleteFile(heavy.body.file.id);
     assert.deepEqual(queued(), []);
 
-    // A light video some browser will not play is queued all the same, by
-    // the codec the Mac read from its bytes and sent as it recorded it
-    // (OnyxKit VideoCodec); a light one every browser plays is not.
+    // A light video some browser will not play keeps the codec the Mac read
+    // from its bytes and sent as it recorded it (OnyxKit VideoCodec), which
+    // makes it one the queue offers the Macs once what people asked for is
+    // taken (lib/db.js listProxyJobs) — but asks for no job now: one per
+    // phone clip would put every request a person makes behind them
+    // (lib/proxies.js asksAtUpload). A light one every browser plays is
+    // neither.
     const hevc = { fourcc: 'hvc1', bitDepth: 10, chroma: '4:2:0', hdr: true };
     const phone = await upload(who, { name: 'IMG_0042.MOV', media: { videoCodec: hevc } });
     assert.deepEqual(row(phone.id).metadata.videoCodec, hevc);
-    assert.deepEqual(queued(), [phone.id]);
+    assert.equal(shouldProxy(row(phone.id)), true, 'offered by the queue');
+    assert.deepEqual(queued(), [], 'but not asked for at upload');
     const cut = await upload(who, { name: 'Export.mp4', mime: 'video/mp4', media: { videoCodec: { fourcc: 'avc1', bitDepth: 8, chroma: '4:2:0' } } });
-    assert.deepEqual(queued(), [phone.id], `an H.264 file queued a proxy: ${cut.id}`);
+    assert.equal(shouldProxy(row(cut.id)), false, `an H.264 file would be offered: ${cut.id}`);
+    assert.deepEqual(queued(), []);
     for (const id of [phone.id, cut.id]) {
       await trashFile(admin, id);
       await deleteFile(id);

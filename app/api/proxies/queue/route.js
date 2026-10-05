@@ -24,14 +24,22 @@ const json = (body, status = 200, headers = {}) => NextResponse.json(body, { sta
  * drives are boundaries here too. No URL is minted here; a claim does that, for
  * the one job it takes.
  *
- * Once everything someone asked for is listed, the page is filled with large
- * videos that have no job at all, newest first — every large video is meant
- * to have a streamable version, and these came before one was asked for at
- * upload. Their `requestedAt` is null; claiming one makes its job.
+ * Once everything someone asked for is listed, the page is filled with
+ * videos that have no job at all, newest first: large ones, and smaller ones
+ * some browser will not play (lib/proxies.js shouldProxy). Every such video is
+ * meant to have a streamable version; a large one from before one was asked
+ * for at upload has none, and a smaller one is never asked for there
+ * (asksAtUpload), so that it waits behind what people asked for. Their
+ * `requestedAt` is null; claiming one makes its job.
  *
  * `height` is the source's, from the file's own metadata, so a worker can see
  * what it is in for before claiming. Null when nothing probed it; the claim
  * sends the rendition either way.
+ *
+ * `?large=1` lists only the videos the size rule asks a proxy of: a Mac on
+ * its battery or in Low Power Mode takes no others (OnyxKit
+ * ProxyRule.takesNow), and asks the server to leave them out before the page
+ * is cut to ten, so a page of phone clips cannot hide the masters behind it.
  *
  * Nothing to do reads as an empty list, not a refusal: the flag off, or a role
  * that cannot change files (a Viewer's Mac simply never gets work).
@@ -51,7 +59,8 @@ export async function GET(req) {
 
   let jobs;
   try {
-    jobs = await listProxyJobs(principal, { limit: QUEUE_LIMIT });
+    const large = new URL(req.url).searchParams.get('large') === '1';
+    jobs = await listProxyJobs(principal, { limit: QUEUE_LIMIT, large });
   } catch (e) {
     console.warn('[proxies/queue] could not read the queue:', e.message);
     return json({ error: 'The queue could not be read right now.' }, 503, { 'retry-after': '30' });

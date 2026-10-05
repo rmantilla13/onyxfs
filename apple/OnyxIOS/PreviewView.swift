@@ -416,6 +416,12 @@ private struct MediaPage: View {
     private func play() async {
         var link = await PreviewLinks.ready(for: file)
         var fetched: Date?
+        // The streamable copy for a video big enough to have one by its size
+        // (StreamableCopy.mayHave). A smaller one has a copy only because
+        // some browser will not play how it is encoded — HEVC, HDR — which
+        // this iPhone plays as it is, at its own size and in its own
+        // colours: the original, then, and the copy only if that fails.
+        var copy = StreamableCopy.mayHave(file)
         while !Task.isCancelled {
             if link == nil {
                 do {
@@ -430,7 +436,7 @@ private struct MediaPage: View {
             // The streamable copy when there is one: an action camera's 4K
             // master runs at 60–120 Mbps, more than a phone's connection
             // carries, and stalls; its 1080p copy does not.
-            let item = AVPlayerItem(url: current.playable)
+            let item = AVPlayerItem(url: copy ? current.playable : current.url)
             if let player {
                 let at = player.currentTime()
                 player.replaceCurrentItem(with: item)
@@ -444,6 +450,12 @@ private struct MediaPage: View {
             }
             if current.proxyUrl == nil { PreviewLinks.askForCopy(of: file, api: session.api) }
             guard await PreviewLinks.failure(of: item) != nil, !Task.isCancelled else { return }
+            // An original this iPhone will not decode after all: its copy,
+            // from where it was.
+            if !copy, current.proxyUrl != nil {
+                copy = true
+                continue
+            }
             if let fetched, Date().timeIntervalSince(fetched) < 60 { return }
             await PreviewLinks.refused(file)
             link = nil

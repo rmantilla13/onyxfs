@@ -33,9 +33,14 @@ public struct ProxySpec: Codable, Sendable, Equatable {
     /// The bitrate ceiling, kilobits a second.
     public let maxrateKbps: Int
     public let audioKbps: Int
+    /// Seconds from one key frame to the next (lib/proxies.js
+    /// PROXY_KEYFRAME_SECONDS): how near a seek lands. Two from a server
+    /// that does not say.
+    public let keyframeSeconds: Double
 
-    public init(height: Int, maxrateKbps: Int, audioKbps: Int) {
+    public init(height: Int, maxrateKbps: Int, audioKbps: Int, keyframeSeconds: Double = 2) {
         self.height = height; self.maxrateKbps = maxrateKbps; self.audioKbps = audioKbps
+        self.keyframeSeconds = keyframeSeconds
     }
 
     public init(from decoder: Decoder) throws {
@@ -43,6 +48,10 @@ public struct ProxySpec: Codable, Sendable, Equatable {
         height = (try c.decodeLenientInt64(forKey: .height)).map { Int($0) } ?? 1080
         maxrateKbps = (try c.decodeLenientInt64(forKey: .maxrateKbps)).map { Int($0) } ?? 6000
         audioKbps = (try c.decodeLenientInt64(forKey: .audioKbps)).map { Int($0) } ?? 128
+        // A number of seconds a seek could stand to wait, or the default: a
+        // nonsense one is not a reason to fail the job.
+        let seconds = try? c.decodeIfPresent(Double.self, forKey: .keyframeSeconds)
+        keyframeSeconds = seconds.flatMap { $0.isFinite && $0 > 0 && $0 <= 60 ? $0 : nil } ?? 2
     }
 }
 
@@ -92,14 +101,15 @@ public struct ProxyClaim: Codable, Sendable, Equatable {
     }
 }
 
-/// Which files the server asks for a proxy of as they are uploaded
-/// (lib/proxies.js shouldProxy): a video, by its type and name as
-/// lib/media.js fileKind has it, in the bucket (every upload from this Mac
-/// is), of at least PROXY_MIN_BYTES — or of any size, encoded so that some
-/// browser will not play it (`codec`, VideoCodec.playsInEveryBrowser). A
-/// video whose codec is not known has only its size. The server decides;
-/// this only says which of this Mac's uploads a job will come for, so their
-/// bytes are worth keeping for it (ProxySources).
+/// Which files the server wants a proxy of (lib/proxies.js shouldProxy): a
+/// video, by its type and name as lib/media.js fileKind has it, in the
+/// bucket (every upload from this Mac is), of at least PROXY_MIN_BYTES — or
+/// of any size, encoded so that some browser will not play it (`codec`,
+/// VideoCodec.playsInEveryBrowser). A video whose codec is not known has only
+/// its size. The first are asked for as they are uploaded, the second offered
+/// by the queue after what people asked for (asksAtUpload). The server
+/// decides; this only says which of this Mac's uploads a job will come for,
+/// so their bytes are worth keeping for it (ProxySources).
 public enum ProxyRule {
     /// lib/proxies.js PROXY_MIN_BYTES.
     public static let minBytes: Int64 = 200 * 1024 * 1024
@@ -107,6 +117,16 @@ public enum ProxyRule {
     public static func asksForProxy(name: String, mime: String?, size: Int64, codec: VideoCodec? = nil) -> Bool {
         guard isVideo(name: name, mime: mime) else { return false }
         return size >= minBytes || codec?.playsInEveryBrowser == false
+    }
+
+    /// Whether a Mac takes a job for a video of `size` now. A Mac saving
+    /// power — on its battery, or in Low Power Mode — takes only one as big
+    /// as the size rule asks a proxy of: a smaller video is in the queue for
+    /// how it is encoded, which is most phone clips, and waits for a Mac on
+    /// power (this one, at its next look once it is plugged in). A job
+    /// whose size is not said is taken, as every job was.
+    public static func takesNow(size: Int64?, savingPower: Bool) -> Bool {
+        !savingPower || (size ?? minBytes) >= minBytes
     }
 
     /// lib/media.js fileKind: an image by its type or its extension is an

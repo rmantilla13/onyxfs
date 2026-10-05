@@ -12,11 +12,13 @@ const plural = (n, one, many = `${one}s`) => `${Number(n).toLocaleString()} ${n 
  * A video's exact rate, frame count and start timecode are read from its
  * container at upload; videos from before that have none until someone who
  * may edit one opens it. Until then its timecodes, and every comment pinned
- * to it, count an assumed 30fps. Probing runs the probe route (a few range
- * reads of each file's header, a few seconds a call) until it has seen every
- * video once, then reloads the page for the new counts.
+ * to it, count an assumed 30fps. Its codec likewise, from before that was
+ * kept: until it is read, a small video some browser will not play gets no
+ * streamable version. Probing runs the probe route (a few range reads of
+ * each file's header, a few seconds a call) until it has seen every video
+ * once, then reloads the page for the new counts.
  *
- * `summary` is frameModelSummary's: { videos, missing, unreadable }.
+ * `summary` is frameModelSummary's: { videos, missing, noCodec, unreadable }.
  */
 export default function FrameRates({ summary }) {
   const router = useRouter();
@@ -49,7 +51,7 @@ export default function FrameRates({ summary }) {
     }
   };
 
-  const { videos = 0, missing = 0, unreadable = 0 } = summary || {};
+  const { videos = 0, missing = 0, noCodec = 0, unreadable = 0 } = summary || {};
   return (
     <section className="card admin-card" aria-labelledby="st-rates">
       <h2 id="st-rates" className="admin-h2 admin-card-title">Frame rates</h2>
@@ -66,6 +68,7 @@ export default function FrameRates({ summary }) {
           ? 'Until one is read, timecodes and comments on these count an assumed 30 fps. Probing reads each file’s header — a few kilobytes — and changes nothing else.'
           : 'Each video’s rate, length in frames and start timecode are read from the file as it is uploaded.'}
         {unreadable > 0 && ` ${plural(unreadable, 'video')} could not be read (WebM, say) and ${unreadable === 1 ? 'uses' : 'use'} the assumed rate.`}
+        {noCodec > 0 && ` ${plural(noCodec, 'video')} ${noCodec === 1 ? 'has' : 'have'} a rate but no codec on record: probing reads that too, and a Mac with streamable versions on then makes one of each that some browser will not play.`}
       </p>
       {run && !run.running && !run.error && (
         <p className="small" role="status" style={{ margin: '0 0 var(--s3)' }}>
@@ -77,7 +80,7 @@ export default function FrameRates({ summary }) {
         </p>
       )}
       {run?.error && <p className="small" role="alert" style={{ margin: '0 0 var(--s3)', color: 'var(--danger)' }}>{run.error}</p>}
-      {missing > 0 && (
+      {(missing > 0 || noCodec > 0) && (
         <button type="button" className="btn btn-sm" onClick={probe} disabled={run?.running}>
           {run?.running ? `Probing… ${run.checked.toLocaleString()}` : run?.error ? 'Try again' : 'Probe all videos'}
         </button>

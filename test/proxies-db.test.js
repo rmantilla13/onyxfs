@@ -72,8 +72,8 @@ async function call(handler, id, method, body) {
   }), { params: { id } });
   return { status: res.status, body: await res.json().catch(() => null) };
 }
-const queue = async () => {
-  const res = await queueRoute.GET(new Request('http://app.test/api/proxies/queue'));
+const queue = async (query = '') => {
+  const res = await queueRoute.GET(new Request(`http://app.test/api/proxies/queue${query}`));
   return { status: res.status, body: await res.json().catch(() => null) };
 };
 const ids = (q) => q.body.jobs.map((j) => j.fileId);
@@ -193,6 +193,8 @@ describe('proxies against a real database', { skip }, () => {
     assert.match(won.body.uploadUrl, /X-Amz-Signature=/);
     assert.ok(won.body.uploadUrl.includes(encodeURIComponent(row.proxy_key).replace(/%2F/g, '/')));
     assert.equal(won.body.spec.height, PROXY_MAX_HEIGHT, 'a 2160p master is capped');
+    assert.equal(won.body.spec.keyframeSeconds, 2, 'the key frame interval is the server’s to say');
+    assert.equal(won.body.sourceFps, null, 'no rate on record: none sent, rather than a guess');
     assert.equal(won.body.maxBytes, PROXY_MAX_PUT_BYTES);
     assert.equal(won.body.leaseSeconds, 600);
 
@@ -386,13 +388,13 @@ describe('proxies against a real database', { skip }, () => {
   });
 
   test('a small video some browser will not play is offered too, by its probed codec', async () => {
-    const file = (name, videoCodec) => db.createFile({
+    const file = (name, videoCodec, more = {}) => db.createFile({
       name, url: `https://s3.px.test/onyx-px/${PREFIX}/${name}`, mime: 'video/quicktime', kind: 'video',
       size: 150_000_000, storage: 's3', storageKey: `${PREFIX}/${name}`, createdBy: OWNER,
-      metadata: { width: 3840, height: 2160, ...(videoCodec ? { videoCodec } : {}) },
+      metadata: { width: 3840, height: 2160, ...(videoCodec ? { videoCodec } : {}), ...more },
     });
     const hdr = await file('IMG_0042.MOV', { fourcc: 'hvc1', bitDepth: 10, chroma: '4:2:0', hdr: true });
-    const prores = await file('A001_C002.mov', { fourcc: 'apcn' });
+    const prores = await file('A001_C002.mov', { fourcc: 'apcn' }, { fps: { num: 24000, den: 1001 }, tcStart: 0, dropFrame: false });
     const xavc = await file('C0001.mp4', { fourcc: 'avc1', bitDepth: 10, chroma: '4:2:2' });
     const h264 = await file('export.mp4', { fourcc: 'avc1', bitDepth: 8, chroma: '4:2:0', hdr: false });
     const unknown = await file('before.mov', null);
@@ -408,9 +410,80 @@ describe('proxies against a real database', { skip }, () => {
     as(OTHER);
     const got = await call(claimRoute.POST, prores.id, 'POST', { device: 'Other’s Mac' });
     assert.equal(got.status, 200, JSON.stringify(got.body));
+    assert.deepEqual(got.body.sourceFps, { num: 24000, den: 1001 }, 'the rate a worker counts the key frame interval at');
     assert.equal((await db.getProxy(prores.id)).status, 'working');
     assert.equal((await call(claimRoute.POST, h264.id, 'POST', {})).status, 404);
     assert.equal(await db.getProxy(h264.id), null);
+  });
+
+  test('a Mac saving power is listed the large jobs alone, before the page is cut', async () => {
+    const { PROXY_MIN_BYTES } = await import('../lib/proxies.js');
+    const hevc = { fourcc: 'hvc1', bitDepth: 10, chroma: '4:2:0', hdr: true };
+    const file = (name, size) => db.createFile({
+      name, url: `https://s3.px.test/onyx-px/${PREFIX}/${name}`, mime: 'video/quicktime', kind: 'video',
+      size, storage: 's3', storageKey: `${PREFIX}/${name}`, createdBy: OWNER, metadata: { videoCodec: hevc },
+    });
+    // Eleven phone clips someone asked for, then a master: more than a page
+    // of small jobs ahead of the one a Mac on its battery would take.
+    const clips = [];
+    for (let i = 0; i < 11; i++) clips.push(await file(`IMG_2${String(i).padStart(3, '0')}.MOV`, 150_000_000));
+    made.push(...clips.map((f) => f.id));
+    for (const f of clips) await db.requestProxy(f.id, { requestedBy: OWNER });
+    const master = await file('A002_C001.mov', PROXY_MIN_BYTES + 1);
+    // And one with no job, which the offer would list for its codec.
+    const offeredClip = await file('IMG_2999.MOV', 150_000_000);
+    made.push(master.id, offeredClip.id);
+    await db.requestProxy(master.id, { requestedBy: OWNER });
+
+    as(OWNER);
+    const all = await queue();
+    assert.equal(all.status, 200);
+    assert.ok(!ids(all).includes(master.id), 'behind a page of clips, as a Mac on power sees it');
+    const large = await queue('?large=1');
+    assert.equal(large.status, 200);
+    const got = ids(large);
+    assert.ok(got.includes(master.id), 'the master, which the clips no longer hide');
+    for (const f of [...clips, offeredClip]) assert.ok(!got.includes(f.id), `${f.name}: small, there for its codec`);
+    assert.ok(large.body.jobs.every((j) => j.size == null || j.size >= PROXY_MIN_BYTES), JSON.stringify(large.body.jobs));
+    for (const f of clips) await db.deleteProxy(f.id);
+    await db.deleteProxy(master.id);
+  });
+
+  test('a drive they only view does not fill the offer: the query leaves its rows out', async () => {
+    const { buildProxyCandidateQuery } = await import('../lib/file-query.js');
+    const { getPrincipal } = await import('../lib/authz.js');
+    const { PROXY_MIN_BYTES, EVERY_BROWSER_CODECS } = await import('../lib/proxies.js');
+    const viewed = await db.createFilespace({ name: `Pxv ${tag}`, bucket: 'onyx-px', prefix: `pxv-${tag}`, createdBy: BOSS });
+    try {
+      await db.grantFilespaceAccess({ filespaceId: viewed.id, email: OWNER, role: 'viewer' });
+      const clip = (name, prefix) => db.createFile({
+        name, url: `https://s3.px.test/onyx-px/${prefix}/${name}`, mime: 'video/quicktime', kind: 'video',
+        size: 150_000_000, storage: 's3', storageKey: `${prefix}/${name}`, createdBy: BOSS,
+        metadata: { videoCodec: { fourcc: 'hvc1', bitDepth: 10, chroma: '4:2:0', hdr: true } },
+      });
+      const ours = await clip('IMG_1001.MOV', PREFIX);
+      const viewedOnly = await clip('IMG_1002.MOV', viewed.prefix);
+      const handed = await clip('IMG_1003.MOV', viewed.prefix);
+      made.push(ours.id, viewedOnly.id, handed.id);
+      await db.sql`
+        INSERT INTO file_acl (file_id, scope, principal, access, granted_by, granted_at)
+        VALUES (${handed.id}, 'user', ${OWNER}, 'editor', ${BOSS}, ${Date.now()})`;
+
+      const principal = await getPrincipal(OWNER);
+      const q = buildProxyCandidateQuery({ principal, minBytes: PROXY_MIN_BYTES, playable: EVERY_BROWSER_CODECS, limit: 500 });
+      const rows = (await db.sql.unsafe(q.text, q.params)).map((r) => r.id);
+      assert.ok(rows.includes(ours.id), 'their own drive’s');
+      assert.ok(rows.includes(handed.id), 'one shared with them to edit');
+      assert.ok(!rows.includes(viewedOnly.id), 'not one in a drive they only view');
+      assert.ok((await db.visibleFileIds([viewedOnly.id], principal)).has(viewedOnly.id), 'though they see it');
+
+      as(OWNER);
+      const offered = ids(await queue());
+      assert.ok(offered.includes(ours.id) && offered.includes(handed.id));
+      assert.ok(!offered.includes(viewedOnly.id));
+    } finally {
+      await db.deleteFilespace(viewed.id).catch(() => {});
+    }
   });
 
   test('a listing signs the finished, current rendition of a heavy video, and nothing else', async () => {

@@ -22,15 +22,20 @@ const PARALLEL = 6;
  *
  * Admin → Usage's "Probe all videos": the frame model (exact rate, frame
  * count, start timecode) for every video from before uploads were probed,
- * read from its container the way the detail page's backfill reads one
- * (lib/frame-probe.js). Until a file has one, its comments count frames at
- * an assumed 30fps. Resumable, like the duplicate scan: each call works for a
- * few seconds, then returns `after` (the last id it looked at) for the next
- * to carry on from, until `done`. One pass looks at each row once:
+ * and the codec for every one from before it was kept, read from its
+ * container the way the detail page's backfill reads one
+ * (lib/frame-probe.js). Until a file has a rate, its comments count frames
+ * at an assumed 30fps; until it has a codec, a small one some browser will
+ * not play is not offered to the Macs for a streamable version (lib/db.js
+ * listProxyJobs) — which pressing this then does, for every one it finds.
+ * Resumable, like the duplicate scan: each call works for a few seconds,
+ * then returns `after` (the last id it looked at) for the next to carry on
+ * from, until `done`. One pass looks at each row once:
  *
  *   found       recorded
  *   unreadable  read, with no rate in it (WebM, say) — marked, not retried
- *   skipped     not in storage the server can read
+ *   skipped     not in storage the server can read, or given new contents
+ *               while it was read (those are read another time)
  *   failed      the read failed; left as it was for another pass
  *
  * Admins only. It reads every video in the library, whoever may open it, so

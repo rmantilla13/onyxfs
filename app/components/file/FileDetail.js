@@ -14,7 +14,7 @@ import { useToast } from '@/app/components/ui/Toast';
 import { useConfirm } from '@/app/components/ui/Confirm';
 import { deriveAuto } from '@/lib/dam';
 import { whenCreated } from '@/lib/file-dates';
-import { effectiveKind, fmtSize, coverChangeable } from '@/lib/media';
+import { effectiveKind, fmtSize, coverChangeable, wantsProbe } from '@/lib/media';
 import { redrawOffered } from '@/lib/preview-jobs';
 import { probedNow } from '@/lib/decode-probe';
 import { toRate, rateLabel, timecode, ASSUMED_RATE } from '@/lib/video-time';
@@ -123,19 +123,22 @@ export default function FileDetail({
     dropFrame: md.dropFrame === true,
   }), [fpsKey, md.tcStart, md.dropFrame]);
 
-  // A video from before uploads were probed has no frame rate; an editor's
-  // visit reads it from the container once (POST …/probe) and the player
-  // switches to exact frames when it arrives. A file it could not read is
-  // marked, so it is not asked again.
+  // A video from before uploads were probed has no frame rate, and one from
+  // before the codec was kept has no codec; an editor's visit reads them
+  // from the container once (POST …/probe, lib/media.js wantsProbe) and the
+  // player switches to exact frames when they arrive — and a video some
+  // browser will not play is offered to the Macs for a streamable version.
+  // A file it could not read is marked, so it is not asked again.
   const probed = useRef(false);
+  const probeWanted = wantsProbe(file);
   useEffect(() => {
-    if (probed.current || !canWrite || kind !== 'video' || md.fps || md.fpsUnknown) return;
+    if (probed.current || !canWrite || kind !== 'video' || !probeWanted) return;
     probed.current = true;
     fetch(`/api/files/${encodeURIComponent(file.id)}/probe`, { method: 'POST' })
       .then((r) => (r.ok ? r.json() : null))
       .then((out) => { if (out?.metadata) setFile((f) => ({ ...f, metadata: out.metadata })); })
       .catch(() => { /* the assumed rate stands */ });
-  }, [canWrite, kind, md.fps, md.fpsUnknown, file.id]);
+  }, [canWrite, kind, probeWanted, file.id]);
 
   // A sound with no waveform gets one from an editor's visit, as its tile
   // would (lib/waveform-client.js): the player shows it the moment it is

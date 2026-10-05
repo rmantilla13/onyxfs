@@ -136,6 +136,12 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   const coverTimer = useRef(0);
   const restTimer = useRef(0);
   const [error, setError] = useState(null);
+  // What this file is encoded as is not something this browser decodes —
+  // Chrome with no HEVC decoder, Firefox and ProRes — so the element fails,
+  // or plays the sound alone. A streamable version plays everywhere: one is
+  // offered (below), whatever the file's size.
+  const [undecodable, setUndecodable] = useState(false);
+  const cannotDecode = 'This browser cannot decode this video. Download it to view.';
   // A proxy or a light clip is small enough to preload; a heavy master is
   // not, so it waits for a deliberate press. `started` is what flips preload
   // on for it.
@@ -184,6 +190,9 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   // queue's reads as "no proxy".
   const proxyStatus = row?.status || file?.proxyStatus || null;
   const making = proxyStatus === 'queued' || proxyStatus === 'working';
+  // A new source — the streamable version, landing while the page is open —
+  // is tried afresh.
+  useEffect(() => { setError(null); setUndecodable(false); }, [src]);
   const strip = useMemo(() => layoutFromMetadata(file?.metadata), [file?.metadata]);
   const stripUrl = file?.filmstripUrl || null;
 
@@ -620,6 +629,25 @@ const VideoPlayer = forwardRef(function VideoPlayer({
       transform: `scale(${k})`,
     };
   }
+  // Where the streamable version is, for the notes under a heavy master and
+  // under one this browser cannot play; null when nothing is under way.
+  const proxyNews = proxyStatus === 'queued' ? ' A streamable version is waiting for a Mac to make it.'
+    : proxyStatus === 'working'
+      ? ` A streamable version is being made${row?.progress > 0 ? ` — ${Math.round(row.progress * 100)}%` : ''}${row?.device ? ` on ${row.device}` : ''}.`
+      : null;
+  // Asking is only offered to someone who could act on the answer, and only
+  // when nothing is already in flight. A failure says why and offers the
+  // retry in the same breath — a red line with no way forward is where
+  // people give up.
+  const ask = job?.canRequest && !making && (
+    <>
+      {' '}
+      <button type="button" className="btn btn-ghost btn-sm" disabled={job.busy} onClick={job.request}>
+        {job.busy ? 'Asking…' : proxyStatus === 'failed' || row?.stale ? 'Try again' : 'Make a streamable version'}
+      </button>
+      {proxyStatus === 'failed' && row?.error ? ` Last attempt: ${row.error}` : ''}
+    </>
+  );
 
   return (
     <div
@@ -647,6 +675,12 @@ const VideoPlayer = forwardRef(function VideoPlayer({
           onClick={togglePlay}
           onLoadedMetadata={(e) => {
             setReady(true);
+            // A picture this browser cannot decode, beside a sound it can:
+            // Chrome plays the sound over the poster and says nothing.
+            if (!e.target.videoWidth && !e.target.videoHeight && !proxy) {
+              setUndecodable(true);
+              setError(cannotDecode);
+            }
             if (Number.isFinite(e.target.duration) && e.target.duration > 0) setDuration(e.target.duration);
             if (e.target.videoWidth && e.target.videoHeight) {
               setRatio(e.target.videoWidth / e.target.videoHeight);
@@ -681,7 +715,14 @@ const VideoPlayer = forwardRef(function VideoPlayer({
           onPause={() => setPlaying(false)}
           onEnded={() => setPlaying(false)}
           onVolumeChange={(e) => { setVolume(e.target.volume); setMuted(e.target.muted); }}
-          onError={() => { setCovered(false); setError('This browser cannot decode this video. Download it to view.'); }}
+          onError={(e) => {
+            setCovered(false);
+            setError(cannotDecode);
+            // Not a link that ran out (MEDIA_ERR_NETWORK, ABORTED): the
+            // format itself (MEDIA_ERR_DECODE, SRC_NOT_SUPPORTED).
+            const code = e.currentTarget.error?.code;
+            if (!proxy && (code === 3 || code === 4)) setUndecodable(true);
+          }}
           loop={loop && inPoint == null}
         >
           {captions?.src && (
@@ -839,23 +880,14 @@ const VideoPlayer = forwardRef(function VideoPlayer({
       {heavy && (
         <p className="small muted player-note">
           {Math.round(Number(file.size) / 1e9 * 10) / 10} GB original — seeking will buffer while it streams.
-          {proxyStatus === 'queued' ? ' A streamable version is waiting for a Mac to make it.'
-            : proxyStatus === 'working'
-              ? ` A streamable version is being made${row?.progress > 0 ? ` — ${Math.round(row.progress * 100)}%` : ''}${row?.device ? ` on ${row.device}` : ''}.`
-              : ' Downloading is faster if you need to scrub.'}
-          {/* Asking is only offered to someone who could act on the answer, and
-              only when nothing is already in flight. A failure says why and
-              offers the retry in the same breath — a red line with no way
-              forward is where people give up. */}
-          {job?.canRequest && !making && (
-            <>
-              {' '}
-              <button type="button" className="btn btn-ghost btn-sm" disabled={job.busy} onClick={job.request}>
-                {job.busy ? 'Asking…' : proxyStatus === 'failed' || row?.stale ? 'Try again' : 'Make a streamable version'}
-              </button>
-              {proxyStatus === 'failed' && row?.error ? ` Last attempt: ${row.error}` : ''}
-            </>
-          )}
+          {proxyNews ?? ' Downloading is faster if you need to scrub.'}
+          {ask}
+        </p>
+      )}
+      {!heavy && !proxy && undecodable && (making || job?.canRequest) && (
+        <p className="small muted player-note">
+          {proxyNews ?? ' A streamable version plays in every browser.'}
+          {ask}
         </p>
       )}
     </div>

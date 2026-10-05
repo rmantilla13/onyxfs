@@ -41,6 +41,8 @@ const db = await import('../lib/db.js');
 const { storageForKeys } = await import('../lib/drive-storage.js');
 const allRoute = await import('../app/api/admin/storage/probe/route.js');
 const oneRoute = await import('../app/api/files/[id]/probe/route.js');
+const { probeFrameModel } = await import('../lib/frame-probe.js');
+const { wantsProbe } = await import('../lib/media.js');
 
 const tag = Math.random().toString(36).slice(2, 8);
 const ADMIN = 'boss@probe.test';
@@ -96,6 +98,18 @@ before(async () => {
   rows.still = await video(`photo-${tag}.mov`, `${HOST}/cut.mp4`, { kind: 'other', mime: 'image/jpeg' });
   // One for the detail page's own backfill, which the full pass must not reach first.
   rows.single = await video(`single-${tag}.mov`, `${HOST}/old.mov`, { kind: 'video', mime: 'video/quicktime' });
+  // Browser uploads to the bucket from before the codec was kept: a rate,
+  // and no codec. Read here through sources of the test's own (the fixtures),
+  // as the deployment's bucket is not this test's to set; `pending` is left
+  // for the full pass, which cannot read it.
+  const rate = { fps: { num: 25, den: 1 }, tcStart: 0, dropFrame: false };
+  const inBucket = (name, extra = {}) => video(name, `https://s3.probe.test/b/probe-${tag}/${name}`, {
+    kind: 'video', mime: 'video/mp4', storage: 's3', storageKey: `probe-${tag}/${name}`, metadata: rate, ...extra,
+  });
+  rows.rated = await inBucket(`rated-${tag}.mp4`, { contentHash: 'a'.repeat(32) });
+  rows.blind = await inBucket(`blind-${tag}.mp4`);
+  rows.replaced = await inBucket(`replaced-${tag}.mp4`, { contentHash: 'b'.repeat(32) });
+  rows.pending = await inBucket(`pending-${tag}.mp4`);
   made.push(...Object.values(rows).map((f) => f.id));
 });
 
@@ -133,6 +147,66 @@ describe('probing videos for their frame rate', { skip }, () => {
     }
   });
 
+  // Each in-bucket row's object, served from the fixtures.
+  const from = (url) => ({ sourceFor: async () => url });
+
+  test('a video in the bucket with a rate and no codec is read for its codec, and its rate kept', async () => {
+    const real = globalThis.fetch;
+    globalThis.fetch = fakeFetch;
+    try {
+      assert.equal(wantsProbe(rows.rated), true);
+      const out = await probeFrameModel(rows.rated, { sources: from(`${HOST}/cut.mp4`) });
+      assert.equal(out.state, 'found');
+      assert.deepEqual(out.metadata.fps, { num: 25, den: 1 }, 'the rate on record stays');
+      assert.deepEqual(out.metadata.videoCodec, { fourcc: 'avc1', bitDepth: 8, chroma: '4:2:0' });
+      const now = await db.getFileById(rows.rated.id);
+      assert.equal(wantsProbe(now), false);
+      as(EDITOR);
+      const again = await post(oneRoute.POST, { id: rows.rated.id });
+      assert.equal(again.status, 200, JSON.stringify(again.body));
+      assert.equal(again.body.probed, false, 'nothing left to read');
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  test('a codec the probe cannot find is marked, and not looked for again', async () => {
+    const real = globalThis.fetch;
+    globalThis.fetch = fakeFetch;
+    try {
+      const out = await probeFrameModel(rows.blind, { sources: from(`${HOST}/clip.webm`) });
+      assert.equal(out.state, 'unreadable');
+      const now = await db.getFileById(rows.blind.id);
+      assert.equal(now.metadata.videoCodecUnknown, true);
+      assert.deepEqual(now.metadata.fps, { num: 25, den: 1 }, 'the rate on record stays');
+      assert.equal(now.metadata.fpsUnknown, undefined, 'the rate is not what was missing');
+      assert.equal(wantsProbe(now), false, 'the detail page does not ask again');
+      as(EDITOR);
+      const again = await post(oneRoute.POST, { id: rows.blind.id });
+      assert.equal(again.body.probed, false, 'nor does the route read it');
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  test('a file whose contents were replaced while it was read keeps nothing of the old ones', async () => {
+    const real = globalThis.fetch;
+    globalThis.fetch = fakeFetch;
+    try {
+      // The row as the probe took it, before new contents (another hash, and
+      // their media facts cleared) landed under it.
+      const taken = { ...rows.replaced, contentHash: 'c'.repeat(32) };
+      const out = await probeFrameModel(taken, { sources: from(`${HOST}/cut.mp4`) });
+      assert.equal(out.state, 'changed');
+      const now = await db.getFileById(rows.replaced.id);
+      assert.equal(now.metadata.videoCodec, undefined, 'the old contents\' codec is not the new ones\'');
+      assert.equal(now.metadata.videoCodecUnknown, undefined);
+      assert.equal(wantsProbe(now), true, 'the new contents are read another time');
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
   test('"Probe all videos" is for admins', async () => {
     as(null);
     assert.equal((await post(allRoute.POST, {})).status, 401);
@@ -140,8 +214,9 @@ describe('probing videos for their frame rate', { skip }, () => {
     assert.equal((await post(allRoute.POST, {})).status, 403);
   });
 
-  test('one pass reads every video without a rate, marks the unreadable, and leaves the rest alone', async () => {
+  test('one pass reads every video without a rate or a codec, marks the unreadable, and leaves the rest alone', async () => {
     const before = await db.getFileById(rows.old.id);
+    assert.ok((await db.frameModelSummary()).noCodec >= 1, 'counted: a rate and no codec, in the bucket (pending)');
     const real = globalThis.fetch;
     globalThis.fetch = fakeFetch;
     fetched.length = 0;
@@ -189,12 +264,16 @@ describe('probing videos for their frame rate', { skip }, () => {
     // A url that is not Blob's is never fetched, and nothing is recorded.
     assert.deepEqual(await get('elsewhere'), {});
     assert.ok(!fetched.some((u) => u.includes('169.254')), 'the planted address was not requested');
-    // Not a video, and already known: not read at all.
+    // Not a video: not read at all. Its rate known, outside the bucket: not
+    // read either — no streamable version is made of it, so its codec
+    // decides nothing.
     assert.equal((await get('still')).fps, undefined);
     assert.deepEqual((await get('known')).fps, { num: 25, den: 1 });
+    assert.equal((await get('known')).videoCodec, undefined);
 
-    // What is left for another pass: the failed read and the unreachable
-    // row — not the recorded, the marked, the known or the still.
+    // What is left for another pass: the failed read, the unreachable row,
+    // and the one in a bucket this deployment cannot read — not the
+    // recorded, the marked, the known or the still.
     const left = new Set();
     let after2 = '';
     for (;;) {
@@ -203,11 +282,11 @@ describe('probing videos for their frame rate', { skip }, () => {
       if (page.length < 500) break;
       after2 = page[page.length - 1].id;
     }
-    for (const k of ['down', 'elsewhere']) assert.ok(left.has(rows[k].id), k);
-    for (const k of ['old', 'cut', 'webm', 'known', 'still', 'single']) assert.ok(!left.has(rows[k].id), k);
+    for (const k of ['down', 'elsewhere', 'pending']) assert.ok(left.has(rows[k].id), k);
+    for (const k of ['old', 'cut', 'webm', 'known', 'still', 'single', 'rated', 'blind']) assert.ok(!left.has(rows[k].id), k);
 
     const summary = await db.frameModelSummary();
-    assert.ok(summary.videos >= 7 && summary.missing >= 2 && summary.unreadable >= 1, JSON.stringify(summary));
+    assert.ok(summary.videos >= 11 && summary.missing >= 2 && summary.noCodec >= 1 && summary.unreadable >= 1, JSON.stringify(summary));
   });
 });
 

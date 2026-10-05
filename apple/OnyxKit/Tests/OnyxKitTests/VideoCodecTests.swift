@@ -76,6 +76,32 @@ import Testing
         #expect(await VideoCodec.read(file) == VideoCodec(fourcc: "hvc1", bitDepth: 10, chroma: "4:2:0"))
     }
 
+    /// A long clip's moov is mostly its index (stsz, stco): megabytes that
+    /// say nothing of the codec. Only box headers are read on the way to the
+    /// sample entry, so an index of any size is passed over, not loaded —
+    /// here 80 MB of one, past what reading the whole moov ever allowed.
+    @Test func aLongClipsIndexIsPassedOverNotRead() async throws {
+        let index: UInt64 = 80 << 20
+        let entry = stsd(sampleEntry("hvc1", [hvcC(depth: 10)]))
+        let mdhd = box("mdhd", Data(count: 12), u32(30000), u32(30030), Data(count: 4))
+        let handler = hdlr("vide")
+        let stsz = 8 + index
+        let stbl = 8 + UInt64(entry.count) + stsz
+        let minf = 8 + stbl
+        let mdia = 8 + UInt64(mdhd.count + handler.count) + minf
+        let trak = 8 + mdia
+        func header(_ type: String, _ size: UInt64) -> Data { u32(UInt32(size)) + Data(type.utf8) }
+        let head = box("ftyp", Data("qt  ".utf8), Data(count: 4)) + header("moov", 8 + trak) + header("trak", trak)
+            + header("mdia", mdia) + mdhd + handler + header("minf", minf) + header("stbl", stbl) + entry + header("stsz", stsz)
+        let file = try write(head)
+        defer { try? FileManager.default.removeItem(at: file) }
+        // The index's bytes, as zeros the disk need not hold.
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.truncate(atOffset: UInt64(head.count) + index)
+        try handle.close()
+        #expect(await VideoCodec.read(file) == VideoCodec(fourcc: "hvc1", bitDepth: 10, chroma: "4:2:0"))
+    }
+
     @Test func theFirstVideoTrackIsReadNotTheTimecodeOrTheSound() async throws {
         let sound = box("trak", box("mdia", hdlr("soun"), box("minf", box("stbl", stsd(box("mp4a", Data(count: 28)))))))
         let ftyp = box("ftyp", Data("isom".utf8), Data(count: 4))

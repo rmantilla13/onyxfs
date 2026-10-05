@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Testing
+import VideoToolbox
 @testable import OnyxKit
 
 /// A heavy clip made into its proxy: H.264 no larger than the spec, sound
@@ -30,6 +31,39 @@ import Testing
         #expect(try await asset.loadTracks(withMediaType: .audio).count == 1, "the sound is kept")
         #expect(try Self.indexComesFirst(proxy), "a player can start before the last byte")
         #expect(seen.values.last == 1 && seen.values.contains { $0 > 0 && $0 < 1 }, "progress moves, then ends at 1")
+    }
+
+    /// An iPhone's HDR clip — 10-bit HEVC, HLG or PQ — or a camera's ProRes
+    /// in HLG becomes an SDR copy: tone-mapped to BT.709 and labelled so,
+    /// which every browser shows as it is. Kept as HLG or PQ in eight bits it
+    /// would band, and look washed out wherever the label is not read.
+    @Test(arguments: [
+        (AVVideoCodecType.hevc, AVVideoTransferFunction_ITU_R_2100_HLG, "hvc1"),
+        (AVVideoCodecType.hevc, AVVideoTransferFunction_SMPTE_ST_2084_PQ, "hvc1"),
+        (AVVideoCodecType.proRes422HQ, AVVideoTransferFunction_ITU_R_2100_HLG, "apch"),
+    ])
+    func anHDRClipBecomesAnSDRProxy(codec: AVVideoCodecType, transfer: String, fourcc: String) async throws {
+        let dir = try Self.folder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = dir.appendingPathComponent("IMG_0042.mov")
+        try await Clip.make(at: source, width: 1920, height: 1080, fps: 30, seconds: 1, codec: codec, audio: false,
+                            color: Clip.hdr(transfer), tenBit: codec == .hevc)
+        let before = try #require(await VideoCodec.read(source))
+        #expect(before.fourcc == fourcc && before.hdr == true, "the source is HDR: \(before)")
+
+        let proxy = dir.appendingPathComponent("proxy.mp4")
+        _ = try await ProxyTranscoder.transcode(source, to: proxy, spec: Self.spec)
+        // As lib/mp4-probe.js reads it, and so as the server decides whether
+        // every browser plays it (lib/proxies.js playsInEveryBrowser).
+        let after = try #require(await VideoCodec.read(proxy))
+        #expect(after == VideoCodec(fourcc: "avc1", bitDepth: 8, chroma: "4:2:0", hdr: false))
+        #expect(after.playsInEveryBrowser)
+        let video = try #require(try await AVURLAsset(url: proxy).loadTracks(withMediaType: .video).first)
+        let format = try #require(try await video.load(.formatDescriptions).first)
+        let said = { (key: CFString) in CMFormatDescriptionGetExtension(format, extensionKey: key) as? String }
+        #expect(said(kCMFormatDescriptionExtension_TransferFunction) == (kCMFormatDescriptionTransferFunction_ITU_R_709_2 as String))
+        #expect(said(kCMFormatDescriptionExtension_ColorPrimaries) == (kCMFormatDescriptionColorPrimaries_ITU_R_709_2 as String))
+        #expect(said(kCMFormatDescriptionExtension_YCbCrMatrix) == (kCMFormatDescriptionYCbCrMatrix_ITU_R_709_2 as String))
     }
 
     @Test func aClipShotUprightStays1080Wide() async throws {
@@ -136,16 +170,23 @@ import Testing
 
 /// A clip made for a test: frames that change, and a tone.
 enum Clip {
+    /// `color`: the clip's colour properties (`hdr`); `tenBit`: HEVC's
+    /// Main 10 profile, as an iPhone shoots HDR in.
     static func make(at url: URL, width: Int, height: Int, fps: Int32, seconds: Double, codec: AVVideoCodecType,
-                     transform: CGAffineTransform = .identity, audio: Bool) async throws {
+                     transform: CGAffineTransform = .identity, audio: Bool,
+                     color: [String: Any]? = nil, tenBit: Bool = false) async throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: url.pathExtension == "mov" ? .mov : .mp4)
-        let video = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: codec, AVVideoWidthKey: width, AVVideoHeightKey: height,
-        ])
+        var settings: [String: Any] = [AVVideoCodecKey: codec, AVVideoWidthKey: width, AVVideoHeightKey: height]
+        if let color { settings[AVVideoColorPropertiesKey] = color }
+        if tenBit { settings[AVVideoCompressionPropertiesKey] = [AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main10_AutoLevel] }
+        let video = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
         video.transform = transform
         video.expectsMediaDataInRealTime = false
+        // Ten bits in, for ten bits out: HEVC Main 10 in HLG will not take
+        // 8-bit frames (the encoder refuses its parameters, -12902).
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: video, sourcePixelBufferAttributes: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferPixelFormatTypeKey as String: tenBit ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+                : kCVPixelFormatType_32BGRA,
             kCVPixelBufferWidthKey as String: width, kCVPixelBufferHeightKey as String: height,
         ])
         writer.add(video)
@@ -192,9 +233,28 @@ enum Clip {
         if writer.status != .completed { throw writer.error ?? CancellationError() }
     }
 
+    /// BT.2020 colour with an HDR transfer: HLG or PQ.
+    static func hdr(_ transfer: String) -> [String: Any] {
+        [AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_2020,
+         AVVideoTransferFunctionKey: transfer,
+         AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_2020]
+    }
+
     private static func fill(_ buffer: CVPixelBuffer, shade: UInt8) {
         CVPixelBufferLockBaseAddress(buffer, [])
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        if CVPixelBufferIsPlanar(buffer) {
+            // 10-bit Y'CbCr, each sample in the high bits of 16: the luma
+            // a shade of grey that moves, the chroma neutral.
+            for plane in 0..<CVPixelBufferGetPlaneCount(buffer) {
+                guard let base = CVPixelBufferGetBaseAddressOfPlane(buffer, plane) else { continue }
+                let samples = CVPixelBufferGetBytesPerRowOfPlane(buffer, plane) * CVPixelBufferGetHeightOfPlane(buffer, plane) / 2
+                let value: UInt16 = plane == 0 ? UInt16(64 + Int(shade) * 876 / 255) << 6 : 512 << 6
+                let words = base.assumingMemoryBound(to: UInt16.self)
+                for i in 0..<samples { words[i] = value }
+            }
+            return
+        }
         guard let base = CVPixelBufferGetBaseAddress(buffer) else { return }
         let rows = CVPixelBufferGetHeight(buffer), stride = CVPixelBufferGetBytesPerRow(buffer)
         let bytes = base.assumingMemoryBound(to: UInt8.self)

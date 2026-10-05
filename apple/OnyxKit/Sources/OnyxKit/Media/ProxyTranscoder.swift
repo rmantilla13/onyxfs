@@ -11,6 +11,12 @@ import Foundation
 /// format H.264 plays everywhere (8-bit 4:2:0 — a 10-bit or 4:2:2 master
 /// would otherwise make a file that encodes and then will not play), and
 /// scaled on the way in to the writer.
+///
+/// And in SDR's colours, BT.709 (`sdr`): an HLG or PQ master — every iPhone
+/// clip shot in HDR — is tone-mapped by the decoder on the way out of the
+/// reader, and the copy is labelled as what it then is. Eight bits cannot
+/// carry an HDR picture: kept as HLG or PQ, the copy bands, and anything
+/// that ignores the label shows it washed out.
 public enum ProxyTranscoder {
     public struct Output: Sendable, Equatable {
         /// As a player shows it: after the clip's rotation.
@@ -60,6 +66,8 @@ public enum ProxyTranscoder {
 
         let videoOut = AVAssetReaderTrackOutput(track: video, outputSettings: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            // HDR made SDR by the decoder, SDR left as it is.
+            AVVideoColorPropertiesKey: sdr,
         ])
         videoOut.alwaysCopiesSampleData = false
         let videoIn = AVAssetWriterInput(mediaType: .video, outputSettings: [
@@ -67,12 +75,14 @@ public enum ProxyTranscoder {
             AVVideoWidthKey: size.width,
             AVVideoHeightKey: size.height,
             AVVideoScalingModeKey: AVVideoScalingModeResizeAspect,
+            AVVideoColorPropertiesKey: sdr,
             AVVideoCompressionPropertiesKey: [
                 AVVideoAverageBitRateKey: bitrate,
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-                // A key frame every two seconds: a seek lands near where it
-                // was asked for, rather than decoding up to ten seconds in.
-                AVVideoMaxKeyFrameIntervalDurationKey: 2.0,
+                // A key frame every two seconds (the server's spec): a seek
+                // lands near where it was asked for, rather than decoding up
+                // to ten seconds in.
+                AVVideoMaxKeyFrameIntervalDurationKey: spec.keyframeSeconds,
                 AVVideoExpectedSourceFrameRateKey: max(1, Int(fps.rounded())),
             ] as [String: Any],
         ])
@@ -178,6 +188,15 @@ public enum ProxyTranscoder {
             group.notify(queue: .global()) { done.resume() }
         }
     }
+
+    /// BT.709 primaries, transfer and matrix: what an H.264 copy that plays
+    /// everywhere is. Asked of the reader, it is a conversion — HLG and PQ
+    /// tone-mapped to it — and of the writer, the copy's label.
+    static let sdr: [String: Any] = [
+        AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+        AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+        AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+    ]
 
     /// The source's frame, its short side at `shortSide` (or smaller, never
     /// larger than the source), both sides even as H.264 needs. The short

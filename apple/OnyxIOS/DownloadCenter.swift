@@ -78,7 +78,9 @@ struct StreamableCopy: Equatable {
     /// Only a video this large is looked for one (lib/proxies.js
     /// PROXY_MIN_BYTES). The server makes one of a smaller video too when
     /// some browser will not play it — HEVC, HDR (ProxyRule) — but this
-    /// iPhone plays those as they are, and better than the copy.
+    /// iPhone plays those as they are, and better than the copy: the
+    /// preview plays the original, and the copy only if that fails
+    /// (MediaPage).
     static let minimumSize: Int64 = 200 * 1024 * 1024
 
     static func mayHave(_ file: FileItem) -> Bool {

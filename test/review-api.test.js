@@ -432,8 +432,16 @@ describe('the review API', { skip }, () => {
     assert.equal((await call(probeRoute.POST, '/x', { id: cut.id }, { method: 'POST' })).status, 403);
     as(OWNER);
     assert.equal((await call(probeRoute.POST, '/x', { id: still.id }, { method: 'POST' })).status, 400);
-    // Already probed: answered from the row, with no read of the object.
-    const known = await call(probeRoute.POST, '/x', { id: cut.id }, { method: 'POST' });
+    // Already probed — its rate and its codec on record: answered from the
+    // row, with no read of the object. (One with a rate and no codec, as
+    // `cut`, is read for its codec.)
+    const probed = await db.createFile({
+      name: 'probed.mp4', url: `http://s3.test/b/${PREFIX}/probed.mp4`, mime: 'video/mp4', kind: 'video', size: 1000,
+      storage: 's3', storageKey: `${PREFIX}/probed.mp4`, createdBy: OWNER,
+      metadata: { fps: FPS, tcStart: 0, dropFrame: false, videoCodec: { fourcc: 'avc1', bitDepth: 8, chroma: '4:2:0' } },
+    });
+    made.files.push(probed.id);
+    const known = await call(probeRoute.POST, '/x', { id: probed.id }, { method: 'POST' });
     assert.equal(known.status, 200);
     assert.deepEqual(known.body.metadata.fps, FPS);
     assert.equal(known.body.probed, false);
