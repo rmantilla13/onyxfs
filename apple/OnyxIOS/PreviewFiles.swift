@@ -8,11 +8,14 @@ import OnyxKit
 /// opens at once, and a file whose bytes changed is fetched anew; the name
 /// is the file's own, which Quick Look and the share sheet go by. The
 /// system may clear them; signing out does.
+///
+/// Held under 500 MB, back to 400 once past it: the least recently opened
+/// go first (CacheFolder), each opening marking its file used, and a file on
+/// screen (`hold`) stays whatever its age.
 enum PreviewFiles {
-    static var folder: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Previews", isDirectory: true)
-    }
+    static let kept = CacheFolder("Previews", cap: CacheTrim(limit: 500 << 20, trimTo: 400 << 20))
+
+    static var folder: URL { kept.url }
 
     /// The file on this device, downloaded first if need be: through a link
     /// that is here already when one will do — the listing's, good for
@@ -23,7 +26,10 @@ enum PreviewFiles {
                       progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> URL {
         let versions = folder.appendingPathComponent(file.id, isDirectory: true)
         let target = location(of: file)
-        if FileManager.default.fileExists(atPath: target.path) { return target }
+        if FileManager.default.fileExists(atPath: target.path) {
+            touch(target)
+            return target
+        }
 
         // A download needs its link only as it starts.
         var source = await PreviewLinks.ready(for: file, needed: 60)?.url
@@ -51,6 +57,11 @@ enum PreviewFiles {
             try? FileManager.default.removeItem(at: versions)
             try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.moveItem(at: downloaded, to: target)
+            let allocated = (try? target.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize
+            kept.wrote(allocated.map { Int64($0) } ?? file.size ?? 0)
+            // An original is tens of megabytes: this one may have taken the
+            // folder past its cap. The page that asked for it holds it.
+            CacheFolder.trimAll()
             return target
         }
     }
@@ -59,7 +70,25 @@ enum PreviewFiles {
     /// save, which then need not download it again.
     static func cached(for file: FileItem) -> URL? {
         let target = location(of: file)
-        return FileManager.default.fileExists(atPath: target.path) ? target : nil
+        guard FileManager.default.fileExists(atPath: target.path) else { return nil }
+        touch(target)
+        return target
+    }
+
+    /// `file` is on screen — a document in Quick Look, an original being
+    /// decoded — and no trim takes it until it is released.
+    static func hold(_ file: FileItem) {
+        kept.hold(file.id)
+    }
+
+    static func release(_ file: FileItem) {
+        kept.release(file.id)
+    }
+
+    /// Marks it used, so a trim keeps what is still being opened: its date
+    /// changed, nothing written.
+    private static func touch(_ url: URL) {
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
     }
 
     private static func location(of file: FileItem) -> URL {
@@ -70,6 +99,7 @@ enum PreviewFiles {
 
     static func removeAll() {
         try? FileManager.default.removeItem(at: folder)
+        kept.emptied()
     }
 
     /// The name as a file on this device may have it: no path separators,

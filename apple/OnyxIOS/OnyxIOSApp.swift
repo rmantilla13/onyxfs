@@ -12,12 +12,15 @@ import UIKit
 struct OnyxIOSApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var session = Session()
+    @Environment(\.scenePhase) private var phase
 
     init() {
         // Sound from a video or a song plays with the ring switch off, as
         // in any player.
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-        ThumbnailStore.trimInBackground()
+        // The pictures and previews kept, back under their caps, where
+        // nothing waits on it.
+        CacheFolder.trimAll(priority: .background)
         // Downloads the system carried on with while the app was away are
         // picked up, and taken where they were going.
         _ = DownloadCenter.shared
@@ -35,6 +38,11 @@ struct OnyxIOSApp: App {
                 // link opened from Mail into Safari — comes back here.
                 .onOpenURL { session.handle(callback: $0) }
                 .task { await session.start(arguments: ProcessInfo.processInfo.arguments) }
+        }
+        // Out of sight, before the system may suspend the app or clear
+        // caches for room: what was kept while browsing, trimmed.
+        .onChange(of: phase) { _, now in
+            if now == .background { CacheFolder.trimBeforeSuspending() }
         }
     }
 }

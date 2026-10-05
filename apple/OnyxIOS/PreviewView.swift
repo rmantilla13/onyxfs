@@ -215,7 +215,9 @@ private struct PreviewPage: View {
 
 /// The picture at up to 2400 pixels — its preview, made at upload — which
 /// fills any phone or iPad screen; the original only for a picture that has
-/// none, and then decoded down to that size.
+/// none, and then decoded down to the screen's size, off the main actor
+/// (Originals), and not at all once the page has been swiped away or the
+/// preview closed.
 ///
 /// Until it comes, the tile's picture, stretched; or, when that is not in
 /// memory either, the placeholder from the file's row (PlaceholderImages),
@@ -261,15 +263,44 @@ private struct ImagePage: View {
             image = picture
             return
         }
-        // No preview: the original, if it is small enough to be worth it.
-        guard (file.size ?? .max) <= 60 << 20,
-              let url = try? await PreviewFiles.local(for: file, api: session.api),
-              let data = try? Data(contentsOf: url, options: .mappedIfSafe),
-              let picture = ThumbnailStore.decode(data, maxPixels: 2400) else {
+        // No preview: the original, if it is small enough to be worth it,
+        // kept through any trim of the previews until it is decoded.
+        guard (file.size ?? .max) <= 60 << 20 else {
+            failed = true
+            return
+        }
+        PreviewFiles.hold(file)
+        defer { PreviewFiles.release(file) }
+        guard let url = try? await PreviewFiles.local(for: file, api: session.api),
+              let picture = await Originals.shared.picture(at: url, maxPixels: Self.screenPixels) else {
             if !Task.isCancelled { failed = true }
             return
         }
+        // Swiped away while it was decoded: not kept by a page off screen.
+        guard !Task.isCancelled else { return }
         image = picture
+    }
+
+    /// The longest side of the screen, in pixels: an original decoded any
+    /// larger would only be scaled down to be seen.
+    private static var screenPixels: Int {
+        let screen = UIApplication.shared.connectedScenes.lazy.compactMap { ($0 as? UIWindowScene)?.screen }.first
+        guard let size = screen?.nativeBounds.size else { return 2400 }
+        return Int(max(size.width, size.height))
+    }
+}
+
+/// Originals decoded for pictures that have no preview: off the main actor,
+/// and one at a time — a big PNG is decoded whole before it is scaled, and a
+/// few at once on a quick swipe would be hundreds of megabytes. One whose
+/// page has gone before its turn comes is never decoded; one under way when
+/// it goes is finished, ImageIO having no way to stop, and dropped.
+private actor Originals {
+    static let shared = Originals()
+
+    func picture(at url: URL, maxPixels: Int) -> UIImage? {
+        guard !Task.isCancelled else { return nil }
+        return ThumbnailStore.decode(contentsOf: url, maxPixels: maxPixels)
     }
 }
 
@@ -520,6 +551,10 @@ private struct DocumentPage: View {
         .task(id: active) {
             if active, local == nil, wantsDownload { await download() }
         }
+        // Quick Look reads the file as long as it shows it: no trim of the
+        // previews takes it meanwhile, however long ago it was opened.
+        .onAppear { PreviewFiles.hold(file) }
+        .onDisappear { PreviewFiles.release(file) }
     }
 
     private var wantsDownload: Bool { asked || (file.size ?? .max) <= Self.automatic }

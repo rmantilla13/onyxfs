@@ -50,10 +50,9 @@ final class ThumbnailStore: @unchecked Sendable {
     private let warm: WarmSet
     private let planning = PlanSlot()
 
-    /// On disk, trimmed back to `trimTo` once past `limit`, the least
-    /// recently shown first.
-    static let limit: Int64 = 300 << 20
-    static let trimTo: Int64 = 200 << 20
+    /// On disk, trimmed back to 200 MB once past 300 MB, the least recently
+    /// shown first.
+    static let kept = CacheFolder("Thumbnails", cap: CacheTrim(limit: 300 << 20, trimTo: 200 << 20))
 
     private init() {
         let configuration = URLSessionConfiguration.default
@@ -63,7 +62,7 @@ final class ThumbnailStore: @unchecked Sendable {
         configuration.timeoutIntervalForRequest = 30
         configuration.httpMaximumConnectionsPerHost = Self.connections
         let session = URLSession(configuration: configuration)
-        let disk = ThumbnailDisk(directory: Self.folder)
+        let disk = ThumbnailDisk(kept: Self.kept)
         let warm = WarmSet()
         let memory = self.memory
         self.disk = disk
@@ -96,11 +95,6 @@ final class ThumbnailStore: @unchecked Sendable {
         frames = PictureQueue(limit: 2, aheadLimit: 0, fetch: { url, _ in
             try await LocalFrames.draw(url)
         }, store: store, trace: trace)
-    }
-
-    private static var folder: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Thumbnails", isDirectory: true)
     }
 
     /// The picture if it is in memory now: for the first frame of a cell.
@@ -172,6 +166,18 @@ final class ThumbnailStore: @unchecked Sendable {
     static func decode(_ data: Data, maxPixels: Int) -> UIImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary)
         else { return nil }
+        return decode(source, maxPixels: maxPixels)
+    }
+
+    /// The same for a file, read as ImageIO needs it rather than whole first:
+    /// an original of tens of megabytes, for a preview.
+    static func decode(contentsOf url: URL, maxPixels: Int) -> UIImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+        else { return nil }
+        return decode(source, maxPixels: maxPixels)
+    }
+
+    private static func decode(_ source: CGImageSource, maxPixels: Int) -> UIImage? {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -198,38 +204,20 @@ final class ThumbnailStore: @unchecked Sendable {
     /// What is on disk now, for Settings.
     static func bytesOnDisk() -> Int64 {
         let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey]
-        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys)) ?? []
+        let files = (try? FileManager.default.contentsOfDirectory(at: kept.url, includingPropertiesForKeys: keys)) ?? []
         return files.reduce(0) { $0 + Int64((try? $1.resourceValues(forKeys: Set(keys)).totalFileAllocatedSize) ?? 0) }
-    }
-
-    /// Past `limit`, the least recently shown go until `trimTo` is left. At
-    /// launch, in the background, where nothing waits on it.
-    static func trimInBackground() {
-        Task.detached(priority: .background) {
-            let keys: [URLResourceKey] = [.contentModificationDateKey, .totalFileAllocatedSizeKey]
-            guard let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys)
-            else { return }
-            var entries = files.compactMap { url -> (URL, Date, Int64)? in
-                guard let values = try? url.resourceValues(forKeys: Set(keys)) else { return nil }
-                return (url, values.contentModificationDate ?? .distantPast, Int64(values.totalFileAllocatedSize ?? 0))
-            }
-            var total = entries.reduce(0) { $0 + $1.2 }
-            guard total > limit else { return }
-            entries.sort { $0.1 < $1.1 }
-            for (url, _, size) in entries where total > trimTo {
-                try? FileManager.default.removeItem(at: url)
-                total -= size
-            }
-        }
     }
 }
 
-/// The pictures on disk: the bytes as they came, a file a key.
+/// The pictures on disk: the bytes as they came, a file a key, in a folder
+/// held under its cap.
 final class ThumbnailDisk: @unchecked Sendable {
     let directory: URL
+    private let kept: CacheFolder
 
-    init(directory: URL) {
-        self.directory = directory
+    init(kept: CacheFolder) {
+        self.kept = kept
+        directory = kept.url
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
@@ -251,12 +239,14 @@ final class ThumbnailDisk: @unchecked Sendable {
     }
 
     func write(_ key: String, _ data: Data) {
-        try? data.write(to: file(key), options: .atomic)
+        guard (try? data.write(to: file(key), options: .atomic)) != nil else { return }
+        kept.wrote(Int64(data.count))
     }
 
     func removeAll() {
         try? FileManager.default.removeItem(at: directory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        kept.emptied()
     }
 }
 
