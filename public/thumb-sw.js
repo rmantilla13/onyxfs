@@ -194,7 +194,8 @@ function newQueue(name, max, to) {
     name, max, to, kept: 0, held: null,
     loading: null, unsaved: false, saving: null, trimming: null,
     // Pictures on their way to the back, by key, and, while a trim runs,
-    // those that set off after it began to read the line.
+    // those that were on their way when it began to read the line or set off
+    // after.
     moving: new Map(), moved: null,
   };
 }
@@ -318,9 +319,11 @@ function trim(queue) {
 
 async function readAndTrim(queue) {
   const cache = await caches.open(queue.name);
-  // A picture set off for the back while this runs may be listed at its old
-  // place, at the front; it is not taken.
-  const moved = new Set();
+  // A picture on its way to the back may be listed at its old place, at the
+  // front, and be at the back by the time the deletes reach it, so it is not
+  // taken: one already on its way when this begins to read the line, and one
+  // set off while it runs.
+  const moved = new Set(queue.moving.keys());
   queue.moved = moved;
   try {
     const keys = await cache.keys();

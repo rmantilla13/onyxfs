@@ -757,6 +757,43 @@ describe('the worker never costs a picture', () => {
     assert.equal(tallyOf(store).held, pictures(store).length);
   });
 
+  test('a picture already on its way to the back when a trim lists the cache is not taken by that trim', async () => {
+    // The listing is answered at once, or only once the picture is back.
+    for (const listingWaits of [false, true]) {
+      const at = (i) => `${B2}/onyx-files/_thumbs/${uuidN(i)}.webp`;
+      // Among the first to go, but in a later batch of deletes than the first.
+      const target = at(250);
+      let listed = null;
+      const listing = new Promise((resolve) => { listed = resolve; });
+      let putBack = null;
+      const back = new Promise((resolve) => { putBack = resolve; });
+      let matches = 0;
+      const caches = memoryCaches({ gate: {
+        // The hit's own read goes by; the move's read is held until the trim has listed the cache.
+        match: (url) => (url === target && ++matches === 2 ? listing : undefined),
+        put: (url) => { if (url === target) putBack(); },
+        keys: () => { listed(); return listingWaits ? back.then(() => new Promise((r) => setImmediate(r))) : undefined; },
+      } });
+      const store = fill(caches, PREVIEW_CACHE, PREVIEW_CACHE_MAX, (i) => `${uuidN(i)}.webp`);
+      const w = loadWorker({ caches, fetch: recordingFetch(() => corsResponse()) });
+      // Seen, and set off for the back.
+      const hit = dispatch(w, `${target}?X-Amz-Signature=a`);
+      await until(() => matches === 2);
+      // A new picture takes the cache past its cap. The trim lists the cache
+      // with the picture at its old place, and the move is done before the
+      // deletes reach it.
+      await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.webp?X-Amz-Signature=a`);
+      assert.equal(await (await hit).response.text(), 'pixels');
+      assert.equal(store.has(target), true, `listed at its old place, but on its way to the back (listing waits: ${listingWaits})`);
+      assert.equal(pictures(store).at(-1), target);
+      assert.equal(store.has(at(249)), false);
+      assert.equal(store.has(at(251)), false);
+      assert.equal(pictures(store).length, PREVIEW_CACHE_TRIM_TO + 1);
+      assert.equal(queue(w).held, pictures(store).length);
+      assert.equal(tallyOf(store).held, pictures(store).length);
+    }
+  });
+
   test('where a replaced entry keeps its place, as in WebKit, a picture put again still goes to the back', async () => {
     const caches = memoryCaches({ inPlace: true });
     const store = fill(caches, PREVIEW_CACHE, PREVIEW_CACHE_MAX, (i) => `${uuidN(i)}.webp`);
