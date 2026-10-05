@@ -15,6 +15,7 @@ import ShareDialog from '@/app/components/ShareDialog';
 import { useDownloadAs } from '@/app/components/download/DownloadAs';
 import { DriveList, DriveMembersDialog } from '@/app/components/Drives';
 import { LAST_DRIVE_COOKIE } from '@/lib/drive-access';
+import { heldList } from '@/lib/held-list';
 import NewDriveDialog from '@/app/components/drives/NewDriveDialog';
 import { useDeleteDrive } from '@/app/components/drives/DeleteDriveConfirm';
 import { modKey, isTyping } from '@/lib/keys';
@@ -50,6 +51,7 @@ import FolderDrop, { DRAG_FILES, DRAG_FOLDER, startFolderDrag } from './FolderDr
 import StarredFolders from './StarredFolders';
 import CollectionsList from './CollectionsList';
 import CollectionEditor from './CollectionEditor';
+import StrandedCollection from './StrandedCollection';
 import FolderMetaDialog from './FolderMetaDialog';
 import CollectionBar from './CollectionBar';
 import DragLayer, { beginDrag, paneDrop } from './DragPreview';
@@ -197,6 +199,15 @@ async function fetchListing({ filespaceId, folder, query, kinds, sort, flat = fa
 }
 
 /**
+ * The collections this page last knew, held for the document rather than
+ * the mount (lib/held-list.js — in the browser only): the router remounts
+ * the page on Back from a file with the props of an earlier render, and a
+ * list from that would drop every collection made since. A mount starts
+ * from what is held and asks again, and only the newest answer is shown.
+ */
+const heldCollections = heldList();
+
+/**
  * `drives` are the filespaces this person may open (listFilespacesForSpace);
  * `filespaceId` is the drive being shown ('' is All files). `library` says
  * whether there is an All files at all (lib/authz.js libraryOpen); without
@@ -219,7 +230,7 @@ async function fetchListing({ filespaceId, folder, query, kinds, sort, flat = fa
  */
 export default function FilesClient({
   flags, canWrite, reviewLinks = false, folderLinks = false, schema: initialSchema, filespaceId, isAdmin = false,
-  library = true, noDrive = false,
+  library = true, noDrive = false, canMakeCollections: canMakeCollectionsHere = false, viewer = null,
   drives = [], initial = null, initialFiltersOpen = false, initialSidebarOpen = true, initialStars = [], initialCollections = [],
   view: initialViewDef = null, views: initialViews = [], initialLocal = {}, initialLegacy = null, initialQuery = '',
 }) {
@@ -1720,24 +1731,85 @@ export default function FilesClient({
   // ── Collections ───────────────────────────────────────────────────────────
   // The files that meet rules on their kind, tags and metadata — a folder's
   // count for the files inside it (lib/collections.js). Shared with everyone
-  // who can open the drive; the sidebar lists the ones of the drive on
-  // screen. Opening one lists its files from the whole drive, through the
-  // same listing (GET /api/files?collection=), so search, sort, the layouts
-  // and everything a file can do work as in a folder.
-  const [collections, setCollections] = useState(initialCollections);
-  const [editingCollection, setEditingCollection] = useState(null); // { collection } | { driveId }
-  const scopeCollections = useMemo(
-    () => collections.filter((c) => c.driveId === (filespaceId || '')),
-    [collections, filespaceId],
+  // who can open the drive. The sidebar lists every one this person can see:
+  // the drive on screen's first, then each other drive's under its name, so
+  // none seems gone for being made elsewhere; and, to whoever may tidy them,
+  // the ones made in All files while there is none (`stranded`). Opening one
+  // lists its files from the whole drive, through the same listing (GET
+  // /api/files?collection=), so search, sort, the layouts and everything a
+  // file can do work as in a folder.
+  const [collections, showCollections] = useState(() => heldCollections.get(viewer) || initialCollections || []);
+  // Whether this mount's list is this render's own, fresh from the server:
+  // the first page of a document. Then there is nothing to ask again.
+  const [ownList] = useState(() => !heldCollections.get(viewer) && Array.isArray(initialCollections));
+  const setCollections = useCallback(
+    (next) => showCollections((was) => heldCollections.set(typeof next === 'function' ? next(was) : next, viewer)),
+    [viewer],
   );
-  const activeCollection = collectionId ? collections.find((c) => c.id === collectionId) || null : null;
-  // Making one takes the right to edit files here; the server checks it again.
-  const canMakeCollections = canWrite && flags.metadata !== false;
-  const reloadCollections = useCallback(async () => {
-    const r = await fetch('/api/collections').catch(() => null);
-    const data = r?.ok ? await r.json().catch(() => null) : null;
-    if (data?.collections) setCollections(data.collections);
+  useEffect(() => {
+    if (!heldCollections.get(viewer) && ownList) heldCollections.set(collections, viewer);
+  // Once, as this document's first mount found it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  const [editingCollection, setEditingCollection] = useState(null); // { collection } | { driveId }
+  const [strandedOf, setStrandedOf] = useState(null);
+  const collectionGroups = useMemo(() => {
+    const here = filespaceId || '';
+    const named = new Map(drives.map((d) => [d.id, d.name]));
+    const others = new Map();
+    for (const c of collections) {
+      if (c.stranded || c.driveId === here) continue;
+      if (!others.has(c.driveId)) others.set(c.driveId, []);
+      others.get(c.driveId).push(c);
+    }
+    const stranded = collections.filter((c) => c.stranded);
+    return [
+      { key: 'here', title: null, collections: collections.filter((c) => !c.stranded && c.driveId === here) },
+      ...[...others.entries()]
+        .map(([id, list]) => ({ key: id || 'library', title: id ? named.get(id) || 'Another drive' : 'All files', collections: list }))
+        .sort((a, b) => a.title.localeCompare(b.title)),
+      ...(stranded.length ? [{ key: 'stranded', title: 'Not in a drive', stranded: true, collections: stranded }] : []),
+    ];
+  }, [collections, filespaceId, drives]);
+  const activeCollection = collectionId ? collections.find((c) => c.id === collectionId) || null : null;
+  // Making one takes the right to edit files here (the page says, as
+  // POST /api/collections decides); the server checks it again.
+  const canMakeCollections = canMakeCollectionsHere && flags.metadata !== false;
+  // Only the newest answer counts, and one that failed changes nothing: a
+  // list is kept whole, and a short one would read as deletions.
+  const reloadCollections = useCallback(async () => {
+    const mine = heldCollections.ask();
+    const r = await fetch('/api/collections?stranded=1', { cache: 'no-store' }).catch(() => null);
+    const data = r?.ok ? await r.json().catch(() => null) : null;
+    if (heldCollections.newest(mine) && Array.isArray(data?.collections)) setCollections(data.collections);
+  }, [setCollections]);
+  // Kept current: asked again when the page mounts (Back from a file brings
+  // the router's copy of an earlier render, whose list is never taken over
+  // the one held) — not the first page of a document, whose list is fresh —
+  // when another drive opens, and when the page comes back into view, after
+  // a change on another device or by someone else.
+  const skipAsking = useRef(ownList);
+  useEffect(() => {
+    if (skipAsking.current) { skipAsking.current = false; return; }
+    reloadCollections();
+  }, [filespaceId, reloadCollections]);
+  useEffect(() => {
+    let last = Date.now();
+    const back = () => {
+      if (document.visibilityState !== 'visible' || Date.now() - last < 30_000) return;
+      last = Date.now();
+      reloadCollections();
+    };
+    const restored = (e) => { if (e.persisted) { last = Date.now(); reloadCollections(); } };
+    document.addEventListener('visibilitychange', back);
+    window.addEventListener('focus', back);
+    window.addEventListener('pageshow', restored);
+    return () => {
+      document.removeEventListener('visibilitychange', back);
+      window.removeEventListener('focus', back);
+      window.removeEventListener('pageshow', restored);
+    };
+  }, [reloadCollections]);
   const openCollection = useCallback((c) => {
     if (c.driveId !== (filespaceId || '')) {
       setPendingDrive(c.driveId);
@@ -1764,6 +1836,8 @@ export default function FilesClient({
     const data = r ? await r.json().catch(() => ({})) : {};
     if (!r?.ok) return data.error || 'Could not save the collection.';
     setEditingCollection(null);
+    // On the list at once, as saved; the whole list follows.
+    if (data.collection) setCollections((was) => [...was.filter((c) => c.id !== data.collection.id), data.collection]);
     await reloadCollections();
     if (editing) {
       if (collectionId === editing.id) load();
@@ -1772,7 +1846,7 @@ export default function FilesClient({
       openCollection(data.collection);
     }
     return null;
-  }, [editingCollection, reloadCollections, collectionId, load, openCollection, toast]);
+  }, [editingCollection, reloadCollections, setCollections, collectionId, load, openCollection, toast]);
   const deleteCollectionUI = useCallback(async () => {
     const c = editingCollection?.collection;
     if (!c) return;
@@ -1783,12 +1857,59 @@ export default function FilesClient({
     });
     if (!ok) return;
     const r = await fetch(`/api/collections/${encodeURIComponent(c.id)}`, { method: 'DELETE' }).catch(() => null);
-    if (!r?.ok) { toast.error((await r?.json().catch(() => ({})))?.error || 'Could not delete the collection.'); return; }
+    if (!r?.ok) {
+      toast.error((await r?.json().catch(() => ({})))?.error || 'Could not delete the collection.');
+      // Refused for being changed or gone meanwhile: show how it stands now.
+      reloadCollections();
+      return;
+    }
     setEditingCollection(null);
     await reloadCollections();
     if (collectionId === c.id) navigate('');
     toast.success(`Deleted “${c.name}”.`);
   }, [editingCollection, confirm, reloadCollections, collectionId, navigate, toast]);
+  // One made in All files while there is none: into the drive on screen —
+  // under a free name there when its own is taken — or deleted.
+  const moveStranded = useCallback(async (c) => {
+    const r = await fetch(`/api/collections/${encodeURIComponent(c.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ driveId: filespaceId }),
+    }).catch(() => null);
+    const data = r ? await r.json().catch(() => ({})) : {};
+    if (!r?.ok) {
+      toast.error(data.error || 'Could not move the collection.');
+      // Moved or deleted meanwhile: show how it stands now.
+      setStrandedOf(null);
+      reloadCollections();
+      return;
+    }
+    setStrandedOf(null);
+    // In its drive at once, as moved; the whole list follows.
+    setCollections((was) => was.map((x) => (x.id === data.collection.id ? data.collection : x)));
+    await reloadCollections();
+    toast.success(`Moved “${c.name}” into ${activeDrive?.name || 'this drive'}${data.renamed ? `, as “${data.collection.name}”` : ''}.`);
+    openCollection(data.collection);
+  }, [filespaceId, activeDrive, reloadCollections, setCollections, openCollection, toast]);
+  const deleteStranded = useCallback(async (c) => {
+    const ok = await confirm({
+      title: `Delete “${c.name}”?`,
+      body: 'The collection goes for everyone. Its files stay where they are.',
+      confirmLabel: 'Delete collection',
+    });
+    if (!ok) return;
+    const r = await fetch(`/api/collections/${encodeURIComponent(c.id)}`, { method: 'DELETE' }).catch(() => null);
+    setStrandedOf(null);
+    if (!r?.ok) {
+      toast.error((await r?.json().catch(() => ({})))?.error || 'Could not delete the collection.');
+      reloadCollections();
+      return;
+    }
+    // Off the list at once; the whole list follows.
+    setCollections((was) => was.filter((x) => x.id !== c.id));
+    await reloadCollections();
+    toast.success(`Deleted “${c.name}”.`);
+  }, [confirm, reloadCollections, setCollections, toast]);
 
   // A folder's own tags and metadata, which its files inherit in collections.
   const [taggingFolder, setTaggingFolder] = useState(null);
@@ -1932,6 +2053,9 @@ export default function FilesClient({
     const coll = target?.closest?.('[data-collection]');
     if (coll) {
       const c = collections.find((x) => x.id === coll.dataset.collection);
+      if (c?.stranded) {
+        return { el: coll, items: [{ heading: c.name }, { label: 'Move or delete…', onSelect: () => setStrandedOf(c) }] };
+      }
       if (c) {
         return {
           el: coll,
@@ -2575,11 +2699,12 @@ export default function FilesClient({
             onDrop={onItemDrop}
           />
           <CollectionsList
-            collections={scopeCollections}
+            groups={collectionGroups}
             activeId={collectionId}
             schema={schema}
             canCreate={canMakeCollections}
             onOpen={openCollection}
+            onStranded={setStrandedOf}
             onNew={() => setEditingCollection({ driveId: filespaceId || '' })}
           />
           <div className="side-folders">
@@ -2881,10 +3006,18 @@ export default function FilesClient({
       {pickerElement}
       {contextMenuElement}
       {downloadAs.element}
+      <StrandedCollection
+        collection={strandedOf}
+        driveName={activeDrive?.name || ''}
+        canMove={canMakeCollections}
+        onClose={() => setStrandedOf(null)}
+        onMove={moveStranded}
+        onDelete={deleteStranded}
+      />
       <CollectionEditor
         open={!!editingCollection}
         collection={editingCollection?.collection || null}
-        driveName={(editingCollection?.collection?.driveId ?? editingCollection?.driveId) ? activeDrive?.name || '' : ''}
+        driveName={drives.find((d) => d.id === (editingCollection?.collection?.driveId ?? editingCollection?.driveId))?.name || ''}
         schema={schema}
         onClose={() => setEditingCollection(null)}
         onSave={saveCollection}

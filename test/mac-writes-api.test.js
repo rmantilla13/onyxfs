@@ -124,6 +124,8 @@ const filmstripRoute = await import('../app/api/files/[id]/filmstrip/route.js');
 const foldersRoute = await import('../app/api/files/folders/route.js');
 const { _setFolderMoveBudgetMs, _setFolderRenameLimits } = await import('../lib/folder-ops.js');
 const restoreRoute = await import('../app/api/admin/trash/restore/route.js');
+const collectionsRoute = await import('../app/api/collections/route.js');
+const collectionRoute = await import('../app/api/collections/[id]/route.js');
 // What a route finishes after it answers: a trashed file's object moving to the trash.
 const { afterResponseSettled } = await import('../lib/after-response.js');
 
@@ -1806,5 +1808,137 @@ describe('with no All files (the `library` flag, off by default)', () => {
   test('with drives off, the library is the only place there is, so it stays', async () => {
     globalThis.__mw.settings.set('features.flags', { filespaces: false });
     assert.equal((await listing(web(ED))).status, 200);
+  });
+});
+
+describe('collections: none goes missing', () => {
+  const rule = [{ field: 'tag', op: 'any', values: ['hero'] }];
+  const keep = (...cs) => { globalThis.__mw.collections = cs.map((c) => ({ match: 'all', rules: rule, createdAt: 1, updatedAt: 1, ...c })); };
+  const list = (who, query = '') => call(collectionsRoute.GET, `/api/collections${query}`, who);
+  const patch = (who, id, body) => call(collectionRoute.PATCH, `/api/collections/${id}`, { method: 'PATCH', body, params: { id }, ...who });
+  const remove = (who, id) => call(collectionRoute.DELETE, `/api/collections/${id}`, { method: 'DELETE', params: { id }, ...who });
+  const names = (r) => r.body.collections.map((c) => `${c.driveId || '-'}:${c.name}${c.stranded ? ' (stranded)' : ''}`).sort();
+
+  test('every drive’s collections that one can open come back, the others never', async () => {
+    keep({ id: 'a', driveId: 'd1', name: 'Heroes' }, { id: 'b', driveId: 'd2', name: 'Studio picks' });
+    assert.deepEqual(names(await list(web(ED))), ['d1:Heroes', 'd2:Studio picks'], 'an editor of both');
+    assert.deepEqual(names(await list(web(DV))), ['d1:Heroes'], 'a viewer of the first alone');
+  });
+
+  test('one made in All files is listed, marked, for whoever may tidy it — when asked, and to nobody else', async () => {
+    keep({ id: 'lib', driveId: '', name: 'Models' }, { id: 'a', driveId: 'd1', name: 'Heroes' });
+    assert.deepEqual(names(await list(web(ED))), ['d1:Heroes'], 'not to a client that does not ask (the iPhone, the Mac)');
+    const asked = await list(web(ED), '?stranded=1');
+    assert.deepEqual(names(asked), ['-:Models (stranded)', 'd1:Heroes']);
+    assert.equal(asked.body.collections.find((c) => c.id === 'lib').canEdit, true);
+    assert.deepEqual(names(await list(web(VR), '?stranded=1')), ['d1:Heroes'], 'a role that may not edit files is not shown it');
+  });
+
+  test('its files are not listed: it says to move it first', async () => {
+    keep({ id: 'lib', driveId: '', name: 'Models' });
+    const r = await call(filesRoute.GET, '/api/files?collection=lib', web(ED));
+    assert.equal(r.status, 409);
+    assert.equal(r.body.code, 'drive_required');
+    assert.match(r.body.error, /no drive/);
+  });
+
+  test('moved into a drive, under a free name where its own is taken', async () => {
+    keep({ id: 'lib', driveId: '', name: 'Models' }, { id: 'm', driveId: 'd1', name: 'Models' });
+    const r = await patch(web(ED), 'lib', { driveId: 'd1' });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.collection.driveId, 'd1');
+    assert.notEqual(r.body.collection.name, 'Models');
+    assert.match(r.body.collection.name, /^Models/);
+    assert.equal(r.body.renamed, true);
+    assert.equal(r.body.collection.stranded, undefined);
+    assert.deepEqual(names(await list(web(ED), '?stranded=1')).length, 2, 'both in the drive now, none stranded');
+    assert.ok(names(await list(web(ED), '?stranded=1')).every((n) => n.startsWith('d1:')));
+
+    keep({ id: 'lib2', driveId: '', name: 'Fresh' });
+    const same = await patch(web(ED), 'lib2', { driveId: 'd1' });
+    assert.equal(same.body.collection.name, 'Fresh');
+    assert.equal(same.body.renamed, false);
+  });
+
+  test('only into a drive they may change, only alone, and only if it is in no drive', async () => {
+    keep({ id: 'lib', driveId: '', name: 'Models' }, { id: 'a', driveId: 'd1', name: 'Heroes' });
+    const viewer = await patch(web(DV), 'lib', { driveId: 'd1' });
+    assert.equal(viewer.status, 403, 'a viewer of the drive');
+    assert.equal((await patch(web(DV), 'lib', { driveId: 'd2' })).status, 400, 'a drive they cannot open');
+    assert.equal((await patch(web(VR), 'lib', { driveId: 'd1' })).status, 404, 'a role that may not edit files');
+    assert.equal((await patch(web(ED), 'lib', { driveId: 'd1', name: 'X' })).status, 400, 'with anything else');
+    assert.equal((await patch(web(ED), 'lib', { driveId: '' })).status, 400, 'into nowhere');
+    const inDrive = await patch(web(ED), 'a', { driveId: 'd2' });
+    assert.equal(inDrive.status, 400, 'one in a drive stays in it');
+    assert.match(inDrive.body.error, /stays in the drive/);
+    assert.equal(globalThis.__mw.collections.find((c) => c.id === 'a').driveId, 'd1');
+    const edit = await patch(web(ED), 'lib', { name: 'Renamed' });
+    assert.equal(edit.status, 409, 'its rules and name wait until it is in a drive');
+    assert.equal(globalThis.__mw.collections.find((c) => c.id === 'lib').name, 'Models');
+  });
+
+  test('deleted by whoever may tidy it', async () => {
+    keep({ id: 'lib', driveId: '', name: 'Models' });
+    assert.equal((await remove(web(VR), 'lib')).status, 404);
+    assert.equal((await remove(web(ED), 'lib')).status, 200);
+    assert.deepEqual(globalThis.__mw.collections, []);
+  });
+
+  test('with an All files, one made there is an ordinary collection again', async () => {
+    globalThis.__mw.settings.set('features.flags', { library: true });
+    keep({ id: 'lib', driveId: '', name: 'Models' });
+    const r = await list(web(ED), '?stranded=1');
+    assert.deepEqual(names(r), ['-:Models']);
+    assert.equal((await patch(web(ED), 'lib', { driveId: 'd1' })).status, 400, 'nothing to move it out of');
+  });
+
+  test('moved by two people at once: one move, and the other told', async () => {
+    keep({ id: 'lib', driveId: '', name: 'Models' });
+    const [a, b] = await Promise.all([patch(web(ED), 'lib', { driveId: 'd1' }), patch(web(ED2), 'lib', { driveId: 'd2' })]);
+    const won = [a, b].filter((r) => r.status === 200);
+    assert.equal(won.length, 1, JSON.stringify([a.status, b.status]));
+    assert.ok([400, 409].includes((a.status === 200 ? b : a).status));
+    assert.equal(globalThis.__mw.collections[0].driveId, won[0].body.collection.driveId, 'where the one that moved it said');
+  });
+
+  test('a name taken in the drive between choosing it and moving: the next free one', async () => {
+    keep({ id: 'lib', driveId: '', name: 'Models' });
+    let once = true;
+    globalThis.__mw.beforeMove = () => {
+      if (!once) return;
+      once = false;
+      globalThis.__mw.collections.push({ id: 'new', driveId: 'd1', name: 'Models', match: 'all', rules: rule });
+    };
+    try {
+      const r = await patch(web(ED), 'lib', { driveId: 'd1' });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.equal(r.body.collection.name, 'Models (2)');
+      assert.equal(r.body.renamed, true);
+      assert.deepEqual(globalThis.__mw.collections.filter((c) => c.driveId === 'd1').map((c) => c.name).sort(), ['Models', 'Models (2)']);
+    } finally {
+      delete globalThis.__mw.beforeMove;
+    }
+  });
+
+  test('deleted only where it was allowed: one moved meanwhile is not', async () => {
+    keep({ id: 'lib', driveId: '', name: 'Models' });
+    const real = globalThis.__mw.collections;
+    // Moved into a drive between the check and the delete.
+    globalThis.__mw.beforeDelete = () => { real[0].driveId = 'd2'; };
+    try {
+      const r = await remove(web(ED), 'lib');
+      assert.equal(r.status, 409);
+      assert.equal(real.length, 1, 'still there, in the drive it went to');
+    } finally {
+      delete globalThis.__mw.beforeDelete;
+    }
+  });
+
+  test('a list that cannot be read in full is a 503, never a short one', async () => {
+    keep({ id: 'a', driveId: 'd1', name: 'Heroes' });
+    globalThis.__mw.drivesUnreadable = true;
+    const r = await list(web(ED), '?stranded=1');
+    assert.equal(r.status, 503);
+    assert.equal(r.body.collections, undefined);
   });
 });

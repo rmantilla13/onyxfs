@@ -141,4 +141,24 @@ describe('collections, against a real database', { skip }, () => {
     assert.equal(await db.deleteCollection(c.id), true);
     assert.equal(await db.getCollection(c.id), null);
   });
+
+  test('a move only from where it was, only to a name free there; a delete only where it was allowed', async () => {
+    const dA = `dA-${T}`, dB = `dB-${T}`;
+    const rules = [{ field: 'kind', op: 'any', values: ['image'] }];
+    const lib = await db.createCollection({ name: `Models ${T}`, driveId: '', rules });
+    const taken = await db.createCollection({ name: `models ${T}`, driveId: dA, rules });
+    try {
+      assert.equal(await db.moveCollection(lib.id, { driveId: dA, name: `Models ${T}`, from: '', free: true }), null, 'the name is taken there, in any case');
+      assert.equal((await db.getCollection(lib.id)).driveId, '', 'and nothing moved');
+      const moved = await db.moveCollection(lib.id, { driveId: dA, name: `Models (2) ${T}`, from: '', free: true });
+      assert.equal(moved.driveId, dA);
+      assert.equal(moved.name, `Models (2) ${T}`);
+      assert.equal(await db.moveCollection(lib.id, { driveId: dB, name: `X ${T}`, from: '' }), null, 'no longer in All files');
+      assert.equal(await db.deleteCollection(lib.id, { driveId: '' }), false, 'not where the delete was allowed');
+      assert.ok(await db.getCollection(lib.id));
+      assert.equal(await db.deleteCollection(lib.id, { driveId: dA }), true);
+    } finally {
+      for (const c of [lib, taken]) await db.deleteCollection(c.id).catch(() => {});
+    }
+  });
 });

@@ -43,6 +43,8 @@ struct OnyxIOSApp: App {
         // caches for room: what was kept while browsing, trimmed.
         .onChange(of: phase) { _, now in
             if now == .background { CacheFolder.trimBeforeSuspending() }
+            // Back in front: what changed on another device meanwhile.
+            if now == .active { Task { await session.refreshOnReturn() } }
         }
     }
 }

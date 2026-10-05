@@ -21,6 +21,7 @@
 
 import { fileWriteDecision, folderRoleAllows, strongestFolderRole } from '../../lib/db.js';
 import { driveAccess, canWriteDrive, DRIVE_WRITE_ROLES } from '../../lib/drive-access.js';
+import { randomUUID } from 'node:crypto';
 import { MEDIA_KEYS } from '../../lib/media.js';
 import { fileInLink, RESERVED_SEGMENT_RE } from '../../lib/folder-links.js';
 import { THUMB_ARTIFACT_RE, SYSTEM_KEY_RE } from '../../lib/file-query.js';
@@ -578,16 +579,52 @@ export async function visibleFileIds(ids, principal = {}) {
 }
 
 // Collections: s().collections, when a test keeps any ({ id, driveId, name,
-// … }); the listing route resolves one only when asked (?collection=), which
-// these tests never do.
-export async function getCollection() { return null; }
-export async function listCollections() { return (s().collections || []).map(copy); }
-export async function moveCollection(id, { driveId, name }) {
-  const c = (s().collections || []).find((x) => x.id === String(id));
-  if (c) Object.assign(c, { driveId: String(driveId || ''), name });
-  return copy(c || null);
+// match, rules, … }), as lib/db.js's table keeps them.
+const collectionsOf = () => (s().collections ||= []);
+const collectionById = (id) => collectionsOf().find((x) => x.id === String(id)) || null;
+export async function getCollection(id) { return copy(collectionById(id)); }
+export async function listCollections() { return collectionsOf().map(copy); }
+export async function createCollection({ name, driveId = '', match = 'all', rules = [] }, { createdBy = null } = {}) {
+  const c = { id: randomUUID(), driveId: driveId || '', name, match, rules, createdBy, createdAt: s().now, updatedAt: s().now };
+  collectionsOf().push(c);
+  return copy(c);
 }
-export async function listFilespacesForSpace() { return []; }
+export async function updateCollection(id, { name, match, rules }) {
+  const c = collectionById(id);
+  if (c) Object.assign(c, { name, match, rules, updatedAt: s().now });
+  return copy(c);
+}
+export async function deleteCollection(id, { driveId = null } = {}) {
+  s().beforeDelete?.(); // a test's change landing between the check and the delete
+  const list = collectionsOf();
+  const i = list.findIndex((x) => x.id === String(id) && (driveId === null || x.driveId === driveId));
+  if (i < 0) return false;
+  list.splice(i, 1);
+  return true;
+}
+// With `from`, only while it is still there; with `free`, only while the
+// name is free in the drive (lib/db.js moveCollection).
+export async function moveCollection(id, { driveId, name, from = null, free = false }) {
+  s().beforeMove?.(); // a test's change landing between choosing the name and the move
+  const c = collectionById(id);
+  if (!c || (from !== null && c.driveId !== from)) return null;
+  const to = String(driveId || '');
+  if (free && collectionsOf().some((o) => o.id !== c.id && o.driveId === to && o.name.toLowerCase() === String(name).toLowerCase())) return null;
+  Object.assign(c, { driveId: to, name });
+  return copy(c);
+}
+// The drives a person may pick, as lib/db.js answers: every one for an
+// admin, as owner; a member's by grant. `drivesUnreadable` makes the read
+// fail, which `strict` throws and the forgiving read hides as none.
+export async function listFilespacesForSpace(email, principal = null, { strict = false } = {}) {
+  if (s().drivesUnreadable) {
+    if (strict) throw new Error('the drives could not be read');
+    return [];
+  }
+  if (principal?.isAdmin) return s().drives.map((d) => ({ ...copy(d), role: 'owner' }));
+  const roles = principal?.driveScope?.roles || {};
+  return s().drives.filter((d) => roles[d.id]).map((d) => ({ ...copy(d), role: roles[d.id] }));
+}
 export async function getFilespace(id) { return copy(drive(id)); }
 
 // ── moving the files outside every drive into one (app/api/admin/library/move) ──

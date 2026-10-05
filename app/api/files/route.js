@@ -74,8 +74,12 @@ export async function GET(req) {
   // sent with it. One the caller cannot see is a 404, the same as none.
   const collectionId = url.searchParams.get('collection');
   if (collectionId) {
-    const c = await collectionFor(collectionId, principal);
+    const c = await collectionFor(collectionId, principal, null, { stranded: true });
     if (!c) return NextResponse.json({ error: 'No such collection.' }, { status: 404 });
+    // Made in All files while there is none: its rules ask of no place.
+    if (c.stranded) {
+      return NextResponse.json({ error: 'This collection is in no drive. Move it into a drive to open it.', code: 'drive_required' }, { status: 409 });
+    }
     const scope = await collectionListing(c);
     const page = await listFilesPage({
       principal,

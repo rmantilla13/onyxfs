@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { requirePrincipal, libraryOpen, NO_LIBRARY } from '@/lib/authz';
 import { listCollections, createCollection, listFilespacesForSpace, getFileMetadataSchema } from '@/lib/db';
-import { validateCollectionInput, collectionVisible, sameName, LIMITS } from '@/lib/collections';
-import { canEditCollections } from '@/lib/collection-scope';
+import { validateCollectionInput, sameName, LIMITS } from '@/lib/collections';
+import { canEditCollections, collectionForClient, visibleCollections } from '@/lib/collection-scope';
 import { normalizeSchema } from '@/lib/dam';
 import { readJsonBody } from '@/lib/request-body';
 
@@ -21,14 +21,6 @@ export const dynamic = 'force-dynamic';
 
 const json = (body, status = 200) => NextResponse.json(body, { status });
 
-const toClient = (c, principal, drives) => {
-  const drive = c.driveId ? drives.find((d) => d.id === c.driveId) : null;
-  return {
-    id: c.id, driveId: c.driveId, name: c.name, match: c.match, rules: c.rules,
-    updatedAt: c.updatedAt, canEdit: canEditCollections(principal, drive),
-  };
-};
-
 /**
  * GET → { collections: [{ id, driveId, name, match, rules, updatedAt, canEdit }], fields, canCreate }
  *
@@ -37,16 +29,32 @@ const toClient = (c, principal, drives) => {
  * way to read: the workspace's metadata fields (lib/dam.js; their names and
  * choices, which every member sees on the web anyway), and where this caller
  * may make a collection — drive ids, '' for All Files.
+ *
+ * `?stranded=1` adds the collections made in All files while there is none
+ * (lib/collection-scope.js isStranded), marked `stranded`, for whoever may
+ * move or delete them: the web does; a client that cannot is not sent them.
+ * A list it cannot read in full is a 503 rather than a short one: a client
+ * keeps this as the whole list, and a short one reads as deletions.
  */
 export async function GET(req) {
   const g = await requirePrincipal(req);
   if (g.error) return g.error;
-  const [all, drives, rawSchema] = await Promise.all([
-    listCollections(), listFilespacesForSpace(g.email, g.principal), getFileMetadataSchema(),
-  ]);
+  // The flags unread: whether there is an All files is not known, so which
+  // collections are its is not either. A short list would read as deletions.
+  if (g.principal.degraded) return json({ error: 'Collections could not be read just now. Try again.' }, 503);
+  let all, drives, rawSchema;
+  try {
+    [all, drives, rawSchema] = await Promise.all([
+      listCollections(), listFilespacesForSpace(g.email, g.principal, { strict: true }), getFileMetadataSchema(),
+    ]);
+  } catch (e) {
+    console.warn('[collections] could not be read:', e.message);
+    return json({ error: 'Collections could not be read just now. Try again.' }, 503);
+  }
   const canCreate = [null, ...drives].filter((d) => canEditCollections(g.principal, d)).map((d) => (d ? d.id : ''));
+  const stranded = new URL(req.url).searchParams.get('stranded') === '1';
   return json({
-    collections: all.filter((c) => collectionVisible(c, drives, { library: libraryOpen(g.principal) })).map((c) => toClient(c, g.principal, drives)),
+    collections: visibleCollections(all, g.principal, drives, { stranded }),
     fields: normalizeSchema(rawSchema).fields.map(({ key, label, type, options }) => ({ key, label, type, ...(options?.length ? { options } : {}) })),
     canCreate,
   });
@@ -83,5 +91,5 @@ export async function POST(req) {
     return json({ error: `There is already a collection called “${v.value.name}” here.` }, 409);
   }
   const made = await createCollection(v.value, { createdBy: g.email });
-  return json({ collection: toClient(made, g.principal, drives) }, 201);
+  return json({ collection: collectionForClient(made, g.principal, drives) }, 201);
 }

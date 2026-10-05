@@ -2,8 +2,7 @@ import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
 import { loadBrand } from '@/lib/brand-config';
 import { listFilespacesForSpace, getFileMetadataSchema, listSavedViews, listFolderStars, listCollections } from '@/lib/db';
-import { collectionVisible } from '@/lib/collections';
-import { canEditCollections } from '@/lib/collection-scope';
+import { canEditCollections, visibleCollections } from '@/lib/collection-scope';
 import { getSessionUser } from '@/lib/session';
 import { getPrincipal, can, libraryOpen } from '@/lib/authz';
 import { listFilesPage, listFolderTree } from '@/lib/file-listing';
@@ -61,12 +60,13 @@ export default async function FilesPage({ searchParams }) {
   // capped by their platform role.
   const principal = await getPrincipal(email, { person: user.person });
   const admin = principal.isAdmin;
-  const [brand, filespaces, rawSchema, savedViews, savedStars, allCollections] = await Promise.all([
+  const [brand, drivesRead, rawSchema, savedViews, savedStars, allCollections] = await Promise.all([
     loadBrand(),
     // Admins see every filespace (as owner), others their grants. The old
     // listFilespacesForUser left admins with an empty switcher: an env-admin
-    // holds a grant row only for a drive that is theirs.
-    listFilespacesForSpace(email, principal),
+    // holds a grant row only for a drive that is theirs. A failed read shows
+    // no drives (null here), and leaves the collections unknown, below.
+    listFilespacesForSpace(email, principal, { strict: true }).catch(() => null),
     getFileMetadataSchema(),
     // Their own views; one whose drive they can no longer open is left out
     // below, as GET /api/views leaves it out. A failed read is no views, not
@@ -74,19 +74,23 @@ export default async function FilesPage({ searchParams }) {
     listSavedViews(email).catch(() => []),
     // Their starred folders, left out in the same way (GET /api/stars).
     listFolderStars(email).catch(() => []),
-    // Collections of All Files and of the drives they can open (GET /api/collections).
-    listCollections().catch(() => []),
+    // Collections of the drives they can open, and of All Files while there
+    // is one (GET /api/collections ?stranded=1, as the page asks it again).
+    // A failed read is unknown, not none: the page asks again itself.
+    listCollections().catch(() => null),
   ]);
+  const filespaces = drivesRead || [];
   const { flags } = principal;
   // Whether there is an All files (the `library` flag): without one, this
   // page is always one drive's.
   const library = libraryOpen(principal);
   const views = visibleViews(savedViews, filespaces).map(toClientView);
   const driveIds = new Set(filespaces.map((f) => f.id));
-  const collections = allCollections.filter((c) => collectionVisible(c, filespaces, { library })).map((c) => ({
-    id: c.id, driveId: c.driveId, name: c.name, match: c.match, rules: c.rules, updatedAt: c.updatedAt,
-    canEdit: canEditCollections(principal, c.driveId ? filespaces.find((d) => d.id === c.driveId) : null),
-  }));
+  // Only from a full read, with the flags read: a short list would be taken
+  // as the whole one (GET /api/collections answers 503 rather than send it).
+  const collections = allCollections && drivesRead && !principal.degraded
+    ? visibleCollections(allCollections, principal, filespaces, { stranded: true })
+    : null;
   const stars = savedStars
     .filter((s) => (s.driveId ? driveIds.has(s.driveId) : library))
     .map(({ driveId, folder }) => ({ driveId, folder }));
@@ -102,14 +106,21 @@ export default async function FilesPage({ searchParams }) {
   // drive at all is told so (`noDrive`), and nothing is listed.
   const noDrive = !library && !activeDrive && !filespaces.length;
   if (!library && !activeDrive && filespaces.length) {
+    // A link to a collection opens in the collection's drive.
+    const linked = collections?.find((c) => c.id === searchParams?.collection && c.driveId);
     const last = jar.get(LAST_DRIVE_COOKIE)?.value;
-    const to = filespaces.find((f) => f.id === last)
+    const to = (linked && filespaces.find((f) => f.id === linked.driveId))
+      || filespaces.find((f) => f.id === last)
       || [...filespaces].sort((a, b) => String(a.name).localeCompare(String(b.name)))[0];
     const params = new URLSearchParams({ filespace: to.id });
     for (const k of ['view', 'q']) if (searchParams?.[k]) params.set(k, String(searchParams[k]));
+    if (linked) params.set('collection', linked.id);
     redirect(`/files?${params}`);
   }
   const canWrite = !noDrive && can(principal, 'files.upload').ok && (!activeDrive || canWriteDrive(activeDrive.role, admin));
+  // Whether a collection may be made here: the same rule POST /api/collections
+  // keeps — editing files in this drive, or in All files while there is one.
+  const canMakeCollections = (!noDrive && (activeDrive || library)) ? canEditCollections(principal, activeDrive) : false;
   // Whether their role may make a link that takes comments — a public or
   // password link that is also a review link. The Share dialog offers it for
   // photos and videos; the route checks it, the file and its drive again.
@@ -188,6 +199,8 @@ export default async function FilesPage({ searchParams }) {
         filespaceId={activeDrive ? filespaceId : ''}
         library={library}
         noDrive={noDrive}
+        canMakeCollections={canMakeCollections}
+        viewer={email}
         isAdmin={admin}
         drives={filespaces}
         initial={initial}

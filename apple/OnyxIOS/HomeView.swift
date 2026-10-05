@@ -62,7 +62,9 @@ struct HomeView: View {
     private static let recentShown = 6
 
     private func load(refresh: Bool = false) async {
-        if refresh { await session.loadPlaces() }
+        // Recent asks each drive when there is no All Files, which only the
+        // places say: they come first.
+        if refresh || !session.placesLoaded { await session.loadPlaces() }
         async let overview: Void = session.loadOverview(refresh: refresh)
         async let files: Void = loadRecent()
         _ = await (overview, files)

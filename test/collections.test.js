@@ -152,3 +152,34 @@ describe('the predicate', () => {
     assert.match(text, /f\.visibility = 'org'/);
   });
 });
+
+describe('collections made in All files while there is none (lib/collection-scope.js)', async () => {
+  const { principalFrom } = await import('../lib/authz.js');
+  const { isStranded, visibleCollections, collectionForClient } = await import('../lib/collection-scope.js');
+  const drives = [{ id: 'd1', name: 'Team', role: 'editor' }];
+  const lib = { id: 'lib', driveId: '', name: 'Models', match: 'all', rules: [] };
+  const inDrive = { id: 'a', driveId: 'd1', name: 'Heroes', match: 'all', rules: [] };
+  const who = (over = {}) => principalFrom({ email: 'ed@x.test', globalFlags: {}, grants: { drives, roles: { d1: 'editor' } }, ...over });
+
+  test('stranded with no All files, ordinary with one', () => {
+    assert.equal(isStranded(lib, who()), true);
+    assert.equal(isStranded(lib, who({ globalFlags: { library: true } })), false);
+    assert.equal(isStranded(inDrive, who()), false);
+  });
+
+  test('never while the flags are unread: their defaults have no All files, and a live one would be offered to move', () => {
+    const admin = principalFrom({ email: 'boss@x.test', isAdmin: true, globalFlags: null, degraded: true });
+    assert.equal(admin.degraded, true);
+    assert.equal(isStranded(lib, admin), false);
+    assert.equal(visibleCollections([lib, inDrive], admin, [{ id: 'd1', name: 'Team', role: 'owner' }], { stranded: true }).some((c) => c.stranded), false);
+  });
+
+  test('listed only when asked for, only to whoever may edit files, and marked', () => {
+    assert.deepEqual(visibleCollections([lib, inDrive], who(), drives).map((c) => c.id), ['a']);
+    const asked = visibleCollections([lib, inDrive], who(), drives, { stranded: true });
+    assert.deepEqual(asked.map((c) => [c.id, !!c.stranded]), [['lib', true], ['a', false]]);
+    const viewerRole = who({ person: { roleId: 'viewer' } });
+    assert.deepEqual(visibleCollections([lib, inDrive], viewerRole, drives, { stranded: true }).map((c) => c.id), ['a']);
+    assert.equal(collectionForClient(lib, who(), drives).canEdit, true);
+  });
+});

@@ -240,8 +240,23 @@ final class Session {
 
     // MARK: - Places
 
+    /// The load under way, for a second caller to wait on: Home asks for
+    /// Recent, which reads `drivesOnly`, only once the places are in.
+    @ObservationIgnored private var placesLoad: Task<Void, Never>?
+
     func loadPlaces() async {
-        guard phase == .signedIn, !loadingPlaces else { return }
+        guard phase == .signedIn else { return }
+        if let running = placesLoad {
+            await running.value
+            return
+        }
+        let load = Task { await fetchPlaces() }
+        placesLoad = load
+        await load.value
+        placesLoad = nil
+    }
+
+    private func fetchPlaces() async {
         loadingPlaces = true
         defer { loadingPlaces = false }
         do {
@@ -264,8 +279,22 @@ final class Session {
         }
         // Stars are shortcuts: without them the drives still open, so a
         // failure here keeps the last list rather than saying anything.
-        if let list = try? await api.stars() { stars = list }
-        await loadCollections()
+        async let starred = try? api.stars()
+        async let gathered: Void = loadCollections()
+        if let list = await starred { stars = list }
+        _ = await gathered
+    }
+
+    /// Back in front: collections and stars made or changed on another
+    /// device since, at most every 30 seconds.
+    @ObservationIgnored private var refreshedOnReturn = Date.distantPast
+    func refreshOnReturn() async {
+        guard phase == .signedIn, placesLoaded, Date().timeIntervalSince(refreshedOnReturn) > 30 else { return }
+        refreshedOnReturn = Date()
+        async let starred = try? api.stars()
+        async let gathered: Void = loadCollections()
+        if let list = await starred { stars = list }
+        _ = await gathered
     }
 
     // MARK: - Collections
@@ -273,11 +302,19 @@ final class Session {
     /// The collections, with the metadata fields and where new ones may go.
     /// A failure keeps what was shown: the drives open all the same.
     func loadCollections() async {
+        collectionsAsked += 1
+        let mine = collectionsAsked
         guard let index = try? await api.collectionsIndex() else { return }
+        // A save or another ask since: this answer is older than the list.
+        guard mine == collectionsAsked else { return }
         collections = index.collections
         metadataFields = index.fields
         collectionPlaces = index.canCreate
     }
+
+    /// Numbers the asks for the list, so an answer older than a save, a
+    /// delete or a newer ask never replaces what they left.
+    @ObservationIgnored private var collectionsAsked = 0
 
     /// Every place there is, in Browse's order: the drives, then All Files
     /// where there is one.
@@ -309,6 +346,9 @@ final class Session {
             let saved = existing == nil
                 ? try await api.createCollection(in: place.scope, name: name, match: match, rules: rules)
                 : try await api.updateCollection(existing!.id, name: name, match: match, rules: rules)
+            // On the list at once, as saved; the whole list follows.
+            collectionsAsked += 1
+            collections = collections.filter { $0.id != saved.id } + [saved]
             await loadCollections()
             return .success(saved)
         } catch {
@@ -319,6 +359,7 @@ final class Session {
     func deleteCollection(_ collection: FileCollection) async -> String? {
         do {
             try await api.deleteCollection(collection.id)
+            collectionsAsked += 1
             collections.removeAll { $0.id == collection.id }
             return nil
         } catch {

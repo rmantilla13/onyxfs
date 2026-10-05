@@ -12,9 +12,17 @@ struct PlacesView: View {
     var open: (FolderRoute) -> Void = { _ in }
     @State private var makingCollection = false
 
-    /// Collections in a place this account can open, each with that place.
+    /// Collections in a place this account can open, each with that place,
+    /// by place then name: a new one takes its place among its drive's.
     private var gathered: [(collection: FileCollection, place: Place)] {
         session.collections.compactMap { c in session.place(for: c.scope).map { (c, $0) } }
+            .sorted {
+                let byPlace = $0.place.name.localizedStandardCompare($1.place.name)
+                if byPlace != .orderedSame { return byPlace == .orderedAscending }
+                // Two drives of one name stay apart.
+                if $0.place.id != $1.place.id { return $0.place.id < $1.place.id }
+                return $0.collection.name.localizedStandardCompare($1.collection.name) == .orderedAscending
+            }
     }
 
     /// Stars in a place this account can open, each with that place.
@@ -139,7 +147,9 @@ struct PlacesView: View {
     private var subtitle: String? {
         guard session.placesLoaded else { return nil }
         let count = session.drives.count
-        return count == 0 ? "All Files" : (count == 1 ? "1 drive, and All Files" : "\(count) drives, and All Files")
+        let drives = count == 1 ? "1 drive" : "\(count) drives"
+        if session.drivesOnly { return count == 0 ? "No drives yet" : drives }
+        return count == 0 ? "All Files" : "\(drives), and All Files"
     }
 
     /// Side by side (an iPad), the place open beside the list is marked in

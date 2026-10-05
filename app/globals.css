@@ -1143,6 +1143,10 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 .side-empty { margin: var(--s1) 6px 0; }
 .collection-list .folder-link { align-items: center; }
 .collection-glyph { flex: none; color: var(--accent); }
+/* Another drive's collections, under its name; the ones in no drive, muted. */
+.collection-group + .collection-group { margin-top: var(--s2); }
+.collection-group-title { margin: 0 6px 2px; font-size: 11px; letter-spacing: 0.02em; }
+.collection-list .folder-link.is-stranded, .folder-link.is-stranded .collection-glyph { color: var(--muted); }
 .collection-bar {
   display: flex; align-items: center; gap: var(--s2);
   margin-bottom: var(--s3); padding: var(--s2) var(--s3);
@@ -1808,6 +1812,8 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   .starred-remove, .starred-where { display: none; }
   .side-collections h3, .side-collections .side-add, .side-empty { display: none; }
   .side-collections { margin-bottom: var(--s2); }
+  .collection-group { display: contents; }
+  .collection-group-title { display: none; }
   .collection-list { overflow-x: auto; }
   .collection-rule { grid-template-columns: 1fr 1fr auto; }
   .collection-rule .collection-values { grid-column: 1 / -1; grid-row: 2; }

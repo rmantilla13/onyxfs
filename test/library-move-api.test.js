@@ -571,6 +571,18 @@ describe('what follows the files', () => {
     assert.equal(out.body.collections, 1);
   });
 
+  test('a collection moved out of All files meanwhile (from the sidebar) stays where it went', async () => {
+    const g = globalThis.__mw;
+    g.collections.push({ id: 'c1', driveId: '', name: 'Selects' }, { id: 'c2', driveId: '', name: 'Picks' });
+    // c1 is moved into the other drive as the run gets to the collections.
+    g.beforeMove = () => { g.collections[0].driveId = 'd2'; delete g.beforeMove; };
+    await file('files/a.jpg');
+    const out = await move({ driveId: 'd1' });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.deepEqual(g.collections.map((c) => [c.id, c.driveId]), [['c1', 'd2'], ['c2', 'd1']]);
+    assert.equal(out.body.collections, 1, 'only the one it moved is counted');
+  });
+
   test('empty folders’ markers move with them', async () => {
     globalThis.__mw.s3.objects.set('onyx/files/Empty/', { size: 0, etag: md5(Buffer.alloc(0)) });
     globalThis.__mw.s3.objects.set('onyx/team/Kept/', { size: 0, etag: md5(Buffer.alloc(0)) });

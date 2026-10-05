@@ -147,10 +147,18 @@ export default function CollectionEditor({ open, collection = null, driveName = 
   );
 }
 
+const splitValues = (text) => text.split(',').map((s) => s.trim()).filter(Boolean);
+
 /** A rule's values: kinds and listed choices as toggles, a day as a date, the rest as words. */
 function RuleValues({ rule, schema, onChange, index }) {
   const [draft, setDraft] = useState(rule.values.join(', '));
-  useEffect(() => { setDraft(rule.values.join(', ')); }, [rule.field, rule.op]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Values changed from outside — the dialog opened again (it stays mounted
+  // while shut), a new field, a rule above removed — show; what is being
+  // typed, a trailing comma and all, stays as typed.
+  const values = rule.values.join(',');
+  useEffect(() => {
+    setDraft((d) => (splitValues(d).join(',') === values ? d : rule.values.join(', ')));
+  }, [values]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (takesDay(rule.op)) {
     return (
@@ -181,7 +189,7 @@ function RuleValues({ rule, schema, onChange, index }) {
       placeholder={rule.field === 'tag' ? 'hero, spring' : 'One value, or several with commas'}
       onChange={(e) => {
         setDraft(e.target.value);
-        onChange(e.target.value.split(',').map((s) => s.trim()).filter(Boolean));
+        onChange(splitValues(e.target.value));
       }} />
   );
 }

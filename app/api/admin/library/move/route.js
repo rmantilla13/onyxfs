@@ -607,8 +607,10 @@ async function moveFiles({ gate, base, drive, drives, way, prefix, under, after,
     });
     carried.linksLeft = library.links.length - carried.links;
     const moves = collectionMoves(await listCollections(), { driveId: drive.id });
-    for (const c of moves) await moveCollection(c.id, { driveId: drive.id, name: c.name });
-    carried.collections = moves.length;
+    // Only from All files: one moved meanwhile (from the sidebar) stays put.
+    let collectionsMoved = 0;
+    for (const c of moves) if (await moveCollection(c.id, { driveId: drive.id, name: c.name, from: '' })) collectionsMoved++;
+    carried.collections = collectionsMoved;
     await updateLibraryMove(call, { run: null });
   } catch (e) {
     if (count.moved) await audit(gate.email, 'library.move', subject, { ...details, stays });
