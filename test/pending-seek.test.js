@@ -7,10 +7,11 @@
 //
 // The player wires it as VideoPlayer.js does: every seek goes through
 // seek(), loadedmetadata calls loaded(), seeking and play call shown(), and
-// hold() loads the frame when presented() is false. A drag along the scrub
-// bar goes through scrub() instead, and letting go through seek(); that part
-// is tested against a stand-in that seeks as a loaded element does — busy
-// until it fires `seeked`, a new seek overtaking the one in flight.
+// hold() loads the frame when presented() is false. On the scrub bar the press
+// goes through seek(), each move after it through scrub(), a held drag that
+// stops through rest() and letting go through release(); that part is tested
+// against a stand-in that seeks as a loaded element does — busy until it
+// fires `seeked`, a new seek overtaking the one in flight.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -175,33 +176,53 @@ describe('whether the stage shows a frame, or still the poster', () => {
  * seek and `seeking` is true until land() fires `seeked`; a seek made while
  * one is in flight overtakes it, with one `seeked` for both. With `fast` it
  * has fastSeek, which lands on the keyframe at or before the time (one every
- * `gop` seconds), as Safari's and Firefox's approximate seeks do.
+ * `gop` seconds), as Safari's and Firefox's approximate seeks do. `picture`
+ * is the time of the frame on screen.
+ *
+ * With `webkit` it does as WebKit does (measured in a WKWebView, macOS 27, on
+ * a clip with a keyframe every 20 s, by the frame number drawn into it):
+ * after a fastSeek currentTime reads the time asked for, not the frame on
+ * screen, and a seek to the time currentTime reads is no seek at all — it
+ * fires `seeking` and `seeked`, the picture stays, and currentTime then reads
+ * the picture's time.
  */
 class SeekingVideo extends EventTarget {
-  constructor({ fast = false, gop = 2, readyState = 1 } = {}) {
+  constructor({ fast = false, gop = 2, readyState = 1, webkit = false } = {}) {
     super();
     this.readyState = readyState;
+    this.webkit = webkit;
     this.seeking = false;
     this.t = 0;
+    this.picture = 0;
     this.writes = [];      // currentTime set: an exact seek, a decode to the frame
     this.fastSeeks = [];   // fastSeek called
     if (fast) {
       this.fastSeek = (t) => {
         this.fastSeeks.push(t);
-        if (this.readyState > 0) this.begin(Math.floor(t / gop) * gop);
+        const key = Math.floor(t / gop) * gop;
+        if (this.readyState > 0) this.begin(webkit ? t : key, key);
       };
     }
   }
   get currentTime() { return this.t; }
   set currentTime(t) {
     this.writes.push(t);
-    if (this.readyState > 0) this.begin(t);
+    if (this.readyState === 0) return;
+    if (this.webkit && !this.seeking && t === this.t) this.begin(t, this.picture, true);
+    else this.begin(t, t);
   }
-  begin(t) { this.t = t; this.seeking = true; }
+  begin(reads, shows, reread = false) {
+    this.t = reads;
+    this.shows = shows;
+    this.reread = reread;
+    this.seeking = true;
+  }
   /** The seek in flight is done. False when there was none. */
   land() {
     if (!this.seeking) return false;
     this.seeking = false;
+    this.picture = this.shows;
+    if (this.reread) this.t = this.picture;
     // Chrome keeps where a seek landed to the microsecond (a TimeDelta),
     // not the double it was given.
     this.t = Math.round(this.t * 1e6) / 1e6;
@@ -275,17 +296,16 @@ describe('a drag along the scrub bar', () => {
   test('letting go mid-flight with fastSeek: exact, though currentTime reads the drag\'s target', () => {
     // Safari's currentTime is the time asked for while a seek is out, not the
     // keyframe the approximate one will land on.
-    const v = new SeekingVideo({ fast: true });
+    const v = new SeekingVideo({ fast: true, webkit: true });
     const intent = pendingSeek();
     intent.scrub(v, 7.75);
-    v.t = 7.75;
     intent.release(v, 7.75);
     v.settle();
-    assert.deepEqual(v.writes, [7.75]);
-    assert.equal(v.currentTime, 7.75);
+    assert.equal(v.writes.length, 1);
+    assert.equal(frameAt(v.picture, FPS), frameAt(7.75, FPS));
   });
 
-  test('without fastSeek, letting go where the last exact seek went makes no second one', () => {
+  test('letting go where the last exact seek went makes no second one', () => {
     const v = new SeekingVideo();
     const intent = pendingSeek();
     // A click on the bar: down and up at the same place.
@@ -364,6 +384,132 @@ describe('a drag along the scrub bar', () => {
     v.settle();
     assert.equal(v.currentTime, 3);
     assert.equal(v.writes.length, 2, 'the target the lost seek was holding is dropped, not made late');
+  });
+
+  test('a click is one exact seek, with fastSeek or without', () => {
+    // The player's wiring: the press is seek(), letting go release().
+    for (const fast of [false, true]) {
+      const v = new SeekingVideo({ fast });
+      const intent = pendingSeek();
+      intent.seek(v, 12);
+      intent.release(v, 12);
+      v.settle();
+      assert.deepEqual(v.writes, [12], fast ? 'with fastSeek' : 'without');
+      assert.deepEqual(v.fastSeeks ?? [], [], 'no approximate seek to flash a keyframe first');
+      assert.equal(intent.landed(v), true);
+    }
+  });
+
+  test('a press and a drag: exact, then approximate, then exact where it is let go', () => {
+    const v = new SeekingVideo({ fast: true });
+    const intent = pendingSeek();
+    intent.seek(v, BURST[0]);
+    for (const t of BURST.slice(1)) intent.scrub(v, t);
+    v.settle();
+    assert.deepEqual(v.writes, [BURST[0]]);
+    assert.deepEqual(v.fastSeeks, [BURST.at(-1)], 'the moves waited for the press, and only the last was made');
+    intent.release(v, BURST.at(-1));
+    v.settle();
+    assert.deepEqual(v.writes, [BURST[0], BURST.at(-1)]);
+    assert.equal(v.currentTime, BURST.at(-1));
+  });
+
+  // A long-GOP original: a 600-frame GOP at 30 fps is a keyframe every 20 s.
+  const LONG_GOP = 20;
+
+  test('a keyframe short of where the drag asked has not landed there', () => {
+    for (const webkit of [false, true]) {
+      const v = new SeekingVideo({ fast: true, gop: LONG_GOP, webkit });
+      const intent = pendingSeek();
+      intent.scrub(v, 37);
+      v.settle();
+      assert.equal(v.picture, 20, 'the keyframe, 17 s short of the pointer');
+      assert.equal(v.currentTime, webkit ? 37 : 20, 'what the element says');
+      assert.equal(intent.onTarget(v), false);
+      assert.equal(intent.landed(v), false, webkit ? 'in WebKit' : 'elsewhere');
+      intent.release(v, 37);
+      assert.equal(intent.landed(v), false, 'letting go: in flight');
+      v.settle();
+      assert.equal(frameAt(v.picture, FPS), frameAt(37, FPS));
+      assert.equal(intent.landed(v), true, 'the exact seek put the frame on screen');
+    }
+  });
+
+  test('in WebKit, letting go where the last move went shows that frame, not its keyframe', () => {
+    // WebKit reads currentTime as 37 once the fastSeek is done, and makes no
+    // seek to 37: the keyframe stayed, and the label read 20.
+    const v = new SeekingVideo({ fast: true, gop: LONG_GOP, webkit: true });
+    const intent = pendingSeek();
+    intent.seek(v, 21);
+    v.settle();
+    for (const t of [26, 31, 37]) { intent.scrub(v, t); v.settle(); }
+    assert.equal(v.picture, 20);
+    intent.release(v, 37);
+    v.settle();
+    assert.equal(frameAt(v.picture, FPS), frameAt(37, FPS), 'the frame let go on');
+    assert.ok(Math.abs(v.writes.at(-1) - 37) <= 1e-6, 'a microsecond on at most');
+    assert.equal(intent.landed(v), true);
+  });
+
+  test('a drag that stops, still held, is sought exactly there, once; letting go there makes no other', () => {
+    for (const webkit of [false, true]) {
+      const v = new SeekingVideo({ fast: true, gop: LONG_GOP, webkit });
+      const intent = pendingSeek();
+      for (const t of [21, 26, 31, 39]) intent.scrub(v, t);
+      v.settle();
+      assert.equal(v.picture, 20, 'resting on a keyframe 19 s short');
+      intent.rest(v, 39);
+      v.settle();
+      assert.equal(v.writes.length, 1);
+      assert.equal(frameAt(v.picture, FPS), frameAt(39, FPS), 'the frame it stopped on');
+      assert.equal(intent.landed(v), true);
+      intent.rest(v, 39);
+      intent.release(v, 39);
+      v.settle();
+      assert.equal(v.writes.length, 1, 'one exact seek for the rest and the release');
+    }
+  });
+
+  test('a drag that stops while its latest is still waiting: that one is made exactly, now', () => {
+    const v = new SeekingVideo({ fast: true, gop: LONG_GOP });
+    const intent = pendingSeek();
+    for (const t of BURST) intent.scrub(v, t);     // one in flight, the last kept
+    intent.rest(v, BURST.at(-1));
+    v.settle();
+    assert.deepEqual(v.fastSeeks, [BURST[0]], 'the kept target is never made approximately');
+    assert.deepEqual(v.writes, [BURST.at(-1)]);
+    assert.equal(v.picture, BURST.at(-1));
+    assert.equal(intent.landed(v), true);
+  });
+
+  test('without fastSeek a drag that stops makes nothing more: its own seeks are exact', () => {
+    const v = new SeekingVideo();
+    const intent = pendingSeek();
+    for (const t of BURST) intent.scrub(v, t);
+    intent.rest(v, BURST.at(-1));
+    assert.deepEqual(v.writes, [BURST[0]], 'the kept target waits for `seeked`, as before');
+    v.settle();
+    intent.rest(v, BURST.at(-1));
+    assert.deepEqual(v.writes, [BURST[0], BURST.at(-1)]);
+  });
+
+  test('what `seeked` hears: an exact landing is on target, an approximate one is not', () => {
+    for (const fast of [false, true]) {
+      const v = new SeekingVideo({ fast, gop: LONG_GOP, webkit: fast });
+      const intent = pendingSeek();
+      // The player's onSeeked: React adds its listener when the element is
+      // made, so it hears `seeked` before pending-seek makes the next seek.
+      const heard = [];
+      v.addEventListener('seeked', () => heard.push([intent.onTarget(v), intent.landed(v)]));
+      intent.scrub(v, 9);
+      intent.scrub(v, 30);            // kept behind the one in flight
+      v.settle();
+      intent.release(v, 30);
+      v.settle();
+      assert.deepEqual(heard, fast
+        ? [[false, false], [false, false], [true, true]]   // 0, 20, then 30 exactly
+        : [[true, false], [true, true]]);                  // 9 with 30 to come, then 30
+    }
   });
 
   test('before the source loads, a drag keeps its latest for load, and letting go its own', () => {

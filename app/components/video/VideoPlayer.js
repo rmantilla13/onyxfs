@@ -63,14 +63,16 @@ import Icon from '@/app/components/ui/Icon';
  * is kept and made when the metadata arrives — the latest one, not the deep
  * link's (lib/pending-seek.js).
  *
- * SCRUBBING. A drag along the bar keeps at most one seek in flight and makes
- * only the latest of the moves that came while it was out, approximately
- * (fastSeek) where the browser can; letting go seeks exactly to where the
- * pointer was (lib/pending-seek.js). While the video trails the drag, the
- * filmstrip's tile for the drag position stands in for the picture, so the
- * stage follows the finger even before the video catches up. The sheet is
- * fetched when the pointer comes onto the player, or once the page is idle —
- * not on the first hover over the bar, which then showed an empty box.
+ * SCRUBBING. A press on the bar seeks exactly, as a click always did. A drag
+ * from there keeps at most one seek in flight and makes only the latest of
+ * the moves that came while it was out, approximately (fastSeek) where the
+ * browser can; a drag that stops, still held, and letting go seek exactly to
+ * where the pointer is (lib/pending-seek.js). While the video trails the drag,
+ * or shows only what its approximate seeks find, the filmstrip's tile for the
+ * drag position stands in for the picture, so the stage follows the finger
+ * even before the video catches up. The sheet is fetched when the pointer
+ * comes onto the player, or once the page is idle — not on the first hover
+ * over the bar, which then showed an empty box.
  *
  * HEAVY FILES. A multi-gigabyte master streamed from object storage seeks
  * badly, and every byte is egress. So while no proxy rendition exists the
@@ -86,10 +88,15 @@ const HEAVY_BYTES = 500 * 1024 * 1024;
 const VOLUME_KEY = 'onyx.player.volume';
 const SPEEDS = [0.25, 0.5, 1, 1.5, 2];
 // How long a drag's picture may go without landing before the filmstrip
-// stands in for it. A drag the video keeps up with — a proxy, a stretch
-// already buffered — lands every few frames and keeps its own pictures,
-// which are exact where a tile is the nearest of forty.
+// stands in for it. A drag the video keeps up with exactly — a proxy, a
+// stretch already buffered, in a browser without fastSeek — lands every few
+// frames and keeps its own pictures, which are exact where a tile is the
+// nearest of forty.
 const COVER_AFTER_MS = 150;
+// How long a held drag stays still before, where its seeks are approximate,
+// the frame under the pointer is sought exactly: a drag that stops to look
+// shows the frame it stopped on, not a keyframe up to a GOP away.
+const REST_MS = 150;
 
 const VideoPlayer = forwardRef(function VideoPlayer({
   file, startAt = 0, onRangeChange, markers = null, onMarkerClick, onFrameChange, overlay = null, onComment,
@@ -127,6 +134,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   // was last asked — after letting go, too.
   const [covered, setCovered] = useState(false);
   const coverTimer = useRef(0);
+  const restTimer = useRef(0);
   const [error, setError] = useState(null);
   // A proxy or a light clip is small enough to preload; a heavy master is
   // not, so it waits for a deliberate press. `started` is what flips preload
@@ -492,8 +500,11 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   }, [togglePlay, doShuttle, seek, position, step, duration, setIn, setOut, clearRange, toggleFullscreen, onComment, comment]);
 
   // The filmstrip stands in for the picture once a drag has gone
-  // COVER_AFTER_MS without the video landing. Each landing starts the wait
-  // again (onSeeked), so a video that keeps up is never covered.
+  // COVER_AFTER_MS without the video landing on a frame it was sent to. Each
+  // exact landing starts the wait again (onSeeked), so a video that keeps up
+  // is never covered. An approximate one does not: what it found can be a
+  // GOP from the pointer, twenty seconds on a long-GOP original, where the
+  // tile is never more than half the time between two tiles from it.
   const armCover = () => {
     if (!strip || !stripUrl || covered || coverTimer.current) return;
     coverTimer.current = setTimeout(() => {
@@ -502,22 +513,34 @@ const VideoPlayer = forwardRef(function VideoPlayer({
       if (v && !intent.current.landed(v)) setCovered(true);
     }, COVER_AFTER_MS);
   };
-  useEffect(() => () => clearTimeout(coverTimer.current), []);
+  useEffect(() => () => {
+    clearTimeout(coverTimer.current);
+    clearTimeout(restTimer.current);
+  }, []);
 
   // Scrubbing uses pointer capture so a drag continues outside the bar — which
-  // is most drags, because the bar is a few pixels tall.
-  const scrubTo = (clientX) => {
+  // is most drags, because the bar is a few pixels tall. `how` is 'seek' for
+  // the press, exact, and 'scrub' for each move after it.
+  const scrubTo = (clientX, how = 'scrub') => {
     if (!bar.current) return;
     scrubbed.current = timeFromPointer(clientX, bar.current.getBoundingClientRect(), duration);
-    seek(scrubbed.current, 'scrub');
+    seek(scrubbed.current, how);
     armCover();
+    clearTimeout(restTimer.current);
+    restTimer.current = setTimeout(() => {
+      restTimer.current = 0;
+      seek(scrubbed.current, 'rest');
+    }, REST_MS);
   };
 
+  // The press is an exact seek, as a click on the bar always was: a click is
+  // a press that never moved, and letting go where it was pressed makes no
+  // second seek. Only the moves after it are approximate.
   const onPointerDown = (e) => {
     e.currentTarget.setPointerCapture?.(e.pointerId);
     setScrubbing(true);
     setStarted(true);
-    scrubTo(e.clientX);
+    scrubTo(e.clientX, 'seek');
   };
   const onPointerMove = (e) => {
     if (bar.current) {
@@ -528,29 +551,45 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   // Letting go lands exactly where the pointer was: the drag's own seeks were
   // approximate, and the ones it outran were never made. A drag the system
   // cancels (the touch taken for a gesture) lands where it last asked to be.
+  // That exact seek can be a long decode from a keyframe far off, so the
+  // filmstrip stands in for it as for the drag, until it lands.
   const onPointerUp = (e) => {
     // Released by the browser anyway once a pointer is up or cancelled, and
     // a cancelled one may already be gone, which throws.
     try { e.currentTarget.releasePointerCapture?.(e.pointerId); } catch { /* already released */ }
     setScrubbing(false);
+    clearTimeout(restTimer.current);
+    restTimer.current = 0;
     if (!scrubbing) return;
     if (e.type === 'pointerup' && bar.current) {
       scrubbed.current = timeFromPointer(e.clientX, bar.current.getBoundingClientRect(), duration);
     }
     seek(scrubbed.current, 'release');
+    armCover();
   };
 
   // A seek landed. While a drag is on, the bar and the transcript stay with
   // the pointer rather than the seeks it has outrun. The filmstrip goes once
-  // the video is where it was last asked to be; until then the next seek has
-  // COVER_AFTER_MS of its own to land.
+  // the video is where it was last asked to be; until then an exact landing
+  // gives the next seek COVER_AFTER_MS of its own, and an approximate one
+  // does not. React's listener was added when the element was made, so it
+  // runs before pending-seek's own: the seek asked about is the one that has
+  // just landed, not the one the drag makes next.
   const onSeeked = (e) => {
     const v = e.target;
     if (!scrubbing) onTime?.(v.currentTime);
-    clearTimeout(coverTimer.current);
-    coverTimer.current = 0;
-    if (intent.current.landed(v)) setCovered(false);
-    else if (scrubbing) armCover();
+    if (intent.current.landed(v)) {
+      clearTimeout(coverTimer.current);
+      coverTimer.current = 0;
+      setCovered(false);
+      return;
+    }
+    if (!scrubbing) return;
+    if (intent.current.onTarget(v)) {
+      clearTimeout(coverTimer.current);
+      coverTimer.current = 0;
+    }
+    armCover();
   };
 
   if (!src) {
