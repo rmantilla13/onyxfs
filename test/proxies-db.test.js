@@ -66,8 +66,8 @@ const STORAGE = {
   accessKeyId: 'AKIAPXTEST', secretAccessKey: 'px-secret', prefix: 'files',
 };
 
-async function call(handler, id, method, body) {
-  const res = await handler(new Request(`http://app.test/api/files/${id}/proxy`, {
+async function call(handler, id, method, body, query = '') {
+  const res = await handler(new Request(`http://app.test/api/files/${id}/proxy${query}`, {
     method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
   }), { params: { id } });
   return { status: res.status, body: await res.json().catch(() => null) };
@@ -401,19 +401,62 @@ describe('proxies against a real database', { skip }, () => {
     made.push(hdr.id, prores.id, xavc.id, h264.id, unknown.id);
 
     as(OWNER);
-    const offered = ids(await queue());
+    const offered = ids(await queue('?codecs=1'));
     for (const f of [hdr, prores, xavc]) assert.ok(offered.includes(f.id), `${f.name} is offered`);
     assert.ok(!offered.includes(h264.id), 'H.264 every browser plays is not worth one at this size');
     assert.ok(!offered.includes(unknown.id), 'nor a file whose codec no probe has read: its size decides');
 
     // The claim's own check agrees with the offer.
     as(OTHER);
-    const got = await call(claimRoute.POST, prores.id, 'POST', { device: 'Other’s Mac' });
+    const got = await call(claimRoute.POST, prores.id, 'POST', { device: 'Other’s Mac' }, '?codecs=1');
     assert.equal(got.status, 200, JSON.stringify(got.body));
     assert.deepEqual(got.body.sourceFps, { num: 24000, den: 1001 }, 'the rate a worker counts the key frame interval at');
     assert.equal((await db.getProxy(prores.id)).status, 'working');
-    assert.equal((await call(claimRoute.POST, h264.id, 'POST', {})).status, 404);
+    assert.equal((await call(claimRoute.POST, h264.id, 'POST', {}, '?codecs=1')).status, 404);
     assert.equal(await db.getProxy(h264.id), null);
+  });
+
+  test('a Mac from before ?codecs=1 is offered no video wanted for its codec alone, and may not claim one', async () => {
+    const hdr = { fourcc: 'hvc1', bitDepth: 10, chroma: '4:2:0', hdr: true };
+    const file = (name, size) => db.createFile({
+      name, url: `https://s3.px.test/onyx-px/${PREFIX}/${name}`, mime: 'video/quicktime', kind: 'video',
+      size, storage: 's3', storageKey: `${PREFIX}/${name}`, createdBy: OWNER, metadata: { videoCodec: hdr },
+    });
+    // A phone clip with no job, which the offer would list for its codec;
+    // one someone asked for (the web offers that where the browser cannot
+    // play it); and a large HDR master, which the size rule asks for.
+    const offeredClip = await file('IMG_3001.MOV', 150_000_000);
+    const askedClip = await file('IMG_3002.MOV', 150_000_000);
+    const master = await file('A003_C001.mov', 3_000_000_000);
+    made.push(offeredClip.id, askedClip.id, master.id);
+    as(OWNER);
+    assert.equal((await call(route.POST, askedClip.id, 'POST', {})).status, 200);
+    await db.requestProxy(master.id, { requestedBy: OWNER });
+
+    as(OTHER);
+    const old = ids(await queue());
+    assert.ok(!old.includes(offeredClip.id), 'not offered: that Mac would copy HDR into SDR’s eight bits still labelled HDR');
+    assert.ok(!old.includes(askedClip.id), 'nor listed when someone asked for it');
+    assert.ok(old.includes(master.id), 'what the size rule asks for, as it always was');
+    assert.ok(!ids(await queue('?large=1')).includes(askedClip.id));
+
+    for (const f of [offeredClip, askedClip]) {
+      const r = await call(claimRoute.POST, f.id, 'POST', { device: 'An old Mac' });
+      assert.equal(r.status, 404, `${f.name}: the status such a Mac passes over`);
+      assert.equal(r.body.code, 'update');
+    }
+    assert.equal(await db.getProxy(offeredClip.id), null, 'no job made for it');
+    assert.equal((await db.getProxy(askedClip.id)).status, 'queued', 'the one asked for still waits');
+
+    // A Mac that says it makes them right is listed both, and claims them.
+    const now = ids(await queue('?codecs=1'));
+    for (const f of [offeredClip, askedClip, master]) assert.ok(now.includes(f.id), `${f.name} is listed`);
+    for (const f of [offeredClip, askedClip]) {
+      const r = await call(claimRoute.POST, f.id, 'POST', { device: 'Other’s Mac' }, '?codecs=1');
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.equal((await db.getProxy(f.id)).status, 'working');
+    }
+    for (const f of [offeredClip, askedClip, master]) await db.deleteProxy(f.id);
   });
 
   test('a Mac saving power is listed the large jobs alone, before the page is cut', async () => {
@@ -436,10 +479,10 @@ describe('proxies against a real database', { skip }, () => {
     await db.requestProxy(master.id, { requestedBy: OWNER });
 
     as(OWNER);
-    const all = await queue();
+    const all = await queue('?codecs=1');
     assert.equal(all.status, 200);
     assert.ok(!ids(all).includes(master.id), 'behind a page of clips, as a Mac on power sees it');
-    const large = await queue('?large=1');
+    const large = await queue('?codecs=1&large=1');
     assert.equal(large.status, 200);
     const got = ids(large);
     assert.ok(got.includes(master.id), 'the master, which the clips no longer hide');
@@ -478,7 +521,7 @@ describe('proxies against a real database', { skip }, () => {
       assert.ok((await db.visibleFileIds([viewedOnly.id], principal)).has(viewedOnly.id), 'though they see it');
 
       as(OWNER);
-      const offered = ids(await queue());
+      const offered = ids(await queue('?codecs=1'));
       assert.ok(offered.includes(ours.id) && offered.includes(handed.id));
       assert.ok(!offered.includes(viewedOnly.id));
     } finally {

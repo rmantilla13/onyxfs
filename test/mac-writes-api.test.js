@@ -439,7 +439,7 @@ describe('the Mac’s writes', () => {
   });
 
   test('a heavy video is queued for a proxy; a light one some browser will not play is left for the queue to offer', async () => {
-    const { PROXY_MIN_BYTES, shouldProxy } = await import('../lib/proxies.js');
+    const { PROXY_MIN_BYTES, shouldProxy, wantedForCodec } = await import('../lib/proxies.js');
     const who = mac(ED);
     const queued = () => [...(globalThis.__mw.proxies || new Map()).keys()];
 
@@ -472,8 +472,9 @@ describe('the Mac’s writes', () => {
 
     // A light video some browser will not play keeps the codec the Mac read
     // from its bytes and sent as it recorded it (OnyxKit VideoCodec), which
-    // makes it one the queue offers the Macs once what people asked for is
-    // taken (lib/db.js listProxyJobs) — but asks for no job now: one per
+    // makes it one the queue offers the Macs that take such videos
+    // (?codecs=1, lib/proxies.js wantedForCodec) once what people asked for
+    // is taken (lib/db.js listProxyJobs) — but asks for no job now: one per
     // phone clip would put every request a person makes behind them
     // (lib/proxies.js asksAtUpload). A light one every browser plays is
     // neither.
@@ -481,6 +482,7 @@ describe('the Mac’s writes', () => {
     const phone = await upload(who, { name: 'IMG_0042.MOV', media: { videoCodec: hevc } });
     assert.deepEqual(row(phone.id).metadata.videoCodec, hevc);
     assert.equal(shouldProxy(row(phone.id)), true, 'offered by the queue');
+    assert.equal(wantedForCodec(row(phone.id)), true, 'to a Mac that says ?codecs=1 alone');
     assert.deepEqual(queued(), [], 'but not asked for at upload');
     const cut = await upload(who, { name: 'Export.mp4', mime: 'video/mp4', media: { videoCodec: { fourcc: 'avc1', bitDepth: 8, chroma: '4:2:0' } } });
     assert.equal(shouldProxy(row(cut.id)), false, `an H.264 file would be offered: ${cut.id}`);

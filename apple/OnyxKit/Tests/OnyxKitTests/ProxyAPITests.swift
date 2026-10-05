@@ -61,8 +61,22 @@ import Testing
     /// leave the rest out before the page is cut (app/api/proxies/queue).
     @Test func aMacSavingPowerAsksTheQueueForTheLargeJobsAlone() {
         let config = OnyxConfig(baseURL: URL(string: "https://onyx.example.com")!)
-        #expect(OnyxAPI.proxyQueueURL(config, largeOnly: true).absoluteString == "https://onyx.example.com/api/proxies/queue?large=1")
-        #expect(OnyxAPI.proxyQueueURL(config, largeOnly: false).absoluteString == "https://onyx.example.com/api/proxies/queue")
+        #expect(OnyxAPI.proxyQueueURL(config, largeOnly: true).absoluteString == "https://onyx.example.com/api/proxies/queue?codecs=1&large=1")
+        #expect(OnyxAPI.proxyQueueURL(config, largeOnly: false).absoluteString == "https://onyx.example.com/api/proxies/queue?codecs=1")
+    }
+
+    /// The server offers a video it wants a copy of for its codec alone only
+    /// to a Mac that makes that copy in SDR and not on its battery, which
+    /// this one says on the queue and on the claim; one from before says
+    /// neither, and is offered only what the size rule asks for.
+    @Test func thisMacSaysItTakesTheVideosWantedForTheirCodec() {
+        let config = OnyxConfig(baseURL: URL(string: "https://onyx.example.com")!)
+        for large in [false, true] {
+            let query = URLComponents(url: OnyxAPI.proxyQueueURL(config, largeOnly: large), resolvingAgainstBaseURL: false)?.queryItems
+            #expect(query?.contains(URLQueryItem(name: "codecs", value: "1")) == true, "large: \(large)")
+        }
+        #expect(OnyxAPI.proxyClaimURL(config, fileId: "f 1/2").absoluteString
+            == "https://onyx.example.com/api/files/f%201%2F2/proxy/claim?codecs=1", "the id still one path component")
     }
 
     @Test func whatSaysWhichBytesTheMasterIsNeverFailsAClaim() throws {

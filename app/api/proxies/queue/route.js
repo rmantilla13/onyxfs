@@ -41,6 +41,12 @@ const json = (body, status = 200, headers = {}) => NextResponse.json(body, { sta
  * ProxyRule.takesNow), and asks the server to leave them out before the page
  * is cut to ten, so a page of phone clips cannot hide the masters behind it.
  *
+ * `?codecs=1` is a worker that makes a right copy of a video wanted for its
+ * codec alone (lib/proxies.js wantedForCodec): in SDR, and not on a
+ * battery. Only it is listed those, asked for or not, and offered the
+ * smaller ones above. Onyx for Mac from before it does neither, and goes on
+ * being listed what the size rule asks for, as it always was.
+ *
  * Nothing to do reads as an empty list, not a refusal: the flag off, or a role
  * that cannot change files (a Viewer's Mac simply never gets work).
  */
@@ -59,8 +65,10 @@ export async function GET(req) {
 
   let jobs;
   try {
-    const large = new URL(req.url).searchParams.get('large') === '1';
-    jobs = await listProxyJobs(principal, { limit: QUEUE_LIMIT, large });
+    const query = new URL(req.url).searchParams;
+    jobs = await listProxyJobs(principal, {
+      limit: QUEUE_LIMIT, large: query.get('large') === '1', codecs: query.get('codecs') === '1',
+    });
   } catch (e) {
     console.warn('[proxies/queue] could not read the queue:', e.message);
     return json({ error: 'The queue could not be read right now.' }, 503, { 'retry-after': '30' });

@@ -10,7 +10,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 const {
-  proxySpec, ffmpegArgs, keyframeInterval, shouldProxy, asksAtUpload, playsInEveryBrowser, isProxyKey, isStale, proxyJson,
+  proxySpec, ffmpegArgs, keyframeInterval, shouldProxy, asksAtUpload, wantedForCodec, playsInEveryBrowser, isProxyKey, isStale, proxyJson,
   PROXY_MAX_HEIGHT, PROXY_MIN_BYTES, PROXY_MIME, LEASE_SECONDS, PROXY_STATUSES, PROXY_KEYFRAME_SECONDS,
   EVERY_BROWSER_CODECS,
 } = await import('../lib/proxies.js');
@@ -255,6 +255,36 @@ describe('shouldProxy by codec', () => {
     }
     assert.equal(asksAtUpload({ kind: 'video', storage: 'blob', size: PROXY_MIN_BYTES }), false, 'nowhere to put it');
     assert.equal(asksAtUpload({ kind: 'image', storage: 's3', size: PROXY_MIN_BYTES }), false);
+  });
+
+  test('what is wanted for its codec alone is what the size rule leaves: a worker must say it takes those', () => {
+    // A Mac from before ?codecs=1 copies HDR into eight bits still labelled
+    // HDR, and on its battery; it is offered the rest, as it always was.
+    for (const size of SIZES) {
+      for (const [videoCodec, plays] of CODECS) {
+        const file = { kind: 'video', storage: 's3', size, metadata: videoCodec ? { videoCodec } : {} };
+        const want = size < PROXY_MIN_BYTES && plays === false;
+        assert.equal(wantedForCodec(file), want, `${size} bytes, ${JSON.stringify(videoCodec)}`);
+        assert.equal(shouldProxy(file), want || asksAtUpload(file), 'the two halves of the rule, and nothing between');
+      }
+    }
+    const hdr = { metadata: { videoCodec: { fourcc: 'hvc1', bitDepth: 10, hdr: true } } };
+    assert.equal(wantedForCodec({ ...hdr, kind: 'video', storage: 's3' }), true, 'a size not on record is not large');
+    assert.equal(wantedForCodec({ ...hdr, kind: 'video', storage: 'blob', size: 150 * MB }), false, 'nowhere to put it');
+    assert.equal(wantedForCodec({ ...hdr, kind: 'image', storage: 's3', size: 150 * MB }), false);
+    assert.equal(wantedForCodec(null), false);
+  });
+
+  test('the queue and the claim hold such a video back from a worker that does not say ?codecs=1', async () => {
+    const db = await src('lib/db.js');
+    const fn = db.slice(db.indexOf('export async function listProxyJobs'), db.indexOf('export async function queueProxyIfMissing'));
+    assert.match(fn.slice(0, fn.indexOf('buildProxyCandidateQuery(')), /if \(!codecs && wantedForCodec\(file\)\) return;/, 'asked for or not');
+    const queue = await src('app/api/proxies/queue/route.js');
+    assert.match(queue, /codecs: query\.get\('codecs'\) === '1'/);
+    const claim = await src('app/api/files/[id]/proxy/claim/route.js');
+    const check = claim.indexOf("wantedForCodec(g.file) && new URL(req.url).searchParams.get('codecs') !== '1'");
+    assert.ok(check > 0, 'the claim reads it itself');
+    assert.ok(check < claim.indexOf('let claimed = await claim()'), 'before anything is written');
   });
 
   test('an unknown codec keeps the size rule exactly as it was', () => {
@@ -687,9 +717,9 @@ describe('large videos with no job are offered, after everything asked for', () 
     const asked = fn.indexOf('buildProxyQueueQuery(');
     const offered = fn.indexOf('buildProxyCandidateQuery(');
     assert.ok(asked > 0 && offered > asked, 'what someone asked for comes first');
-    // The codec widens the size rule, except for a Mac saving power, which
-    // asks for the large alone.
-    assert.match(fn.slice(offered), /minBytes: PROXY_MIN_BYTES, playable: large \? null : EVERY_BROWSER_CODECS/);
+    // The codec widens the size rule, for a worker that takes such videos
+    // (?codecs=1) — except a Mac saving power, which asks for the large alone.
+    assert.match(fn.slice(offered), /minBytes: PROXY_MIN_BYTES, playable: codecs && !large \? EVERY_BROWSER_CODECS : null/);
     assert.match(fn.slice(0, offered), /if \(large && file\.size != null && Number\(file\.size\) < PROXY_MIN_BYTES\) return;/);
     assert.match(fn.slice(offered), /modifiableFileIds\(files, principal\)/);
     assert.match(fn.slice(offered), /mine\.has\(file\.id\) && shouldProxy\(file\)/);

@@ -3,7 +3,7 @@ import { claimProxy, failProxy, queueProxyIfMissing } from '@/lib/db';
 import { presignFileUrls, getStorageConfig, storageMode, s3PresignProxyPut } from '@/lib/storage';
 import { openProxy, readJson, json } from '@/lib/proxy-guard';
 import { proxyKeyFor, frameFacts } from '@/lib/media';
-import { normalizeDevice, proxySpec, shouldProxy, LEASE_SECONDS, PROXY_MAX_PUT_BYTES, PROXY_MIME } from '@/lib/proxies';
+import { normalizeDevice, proxySpec, shouldProxy, wantedForCodec, LEASE_SECONDS, PROXY_MAX_PUT_BYTES, PROXY_MIME } from '@/lib/proxies';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,6 +30,12 @@ const URL_TTL = 21600;
  * whoever claims it, and the claim goes ahead. Only one that should have a
  * proxy (lib/proxies.js shouldProxy), and only after the same checks.
  *
+ * A video wanted for its codec alone (lib/proxies.js wantedForCodec) is
+ * claimed only with `?codecs=1`, as the queue lists it only with that: from
+ * a worker that makes its copy in SDR, and not on a battery. Anything else
+ * is told 404 { code: 'update' }, which a Mac from before that passes over
+ * as it does a job that is gone, whether or not one was asked for.
+ *
  * AUTHORIZE → FILTER → PRESIGN. The caller is held to the same checks as a
  * request (files.edit, write access to the file, drives included); the job is
  * claimed, which is where the proxy's key is minted; and only then are the two
@@ -55,6 +61,10 @@ export async function POST(req, { params }) {
   const cfg = await getStorageConfig();
   if (storageMode(cfg) !== 's3') {
     return json({ error: 'No custom bucket configured, so there is nowhere to put a proxy.', code: 'no_bucket' }, 409);
+  }
+  // Before the claim, so nothing is written for a worker that cannot have it.
+  if (wantedForCodec(g.file) && new URL(req.url).searchParams.get('codecs') !== '1') {
+    return json({ error: 'This video’s streamable version is made by an up-to-date Mac.', code: 'update' }, 404);
   }
 
   // Named before the claim so the claim can record it, but from a uuid and

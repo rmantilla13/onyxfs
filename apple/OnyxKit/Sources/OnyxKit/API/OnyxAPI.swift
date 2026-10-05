@@ -238,14 +238,28 @@ public actor OnyxAPI {
     }
 
     static func proxyQueueURL(_ config: OnyxConfig, largeOnly: Bool) -> URL {
-        config.url("api/proxies/queue", query: largeOnly ? [URLQueryItem(name: "large", value: "1")] : [])
+        config.url("api/proxies/queue", query: [codecWorker] + (largeOnly ? [URLQueryItem(name: "large", value: "1")] : []))
     }
+
+    /// On the queue and the claim: this Mac makes a right copy of a video
+    /// the server wants one of for its codec alone (lib/proxies.js
+    /// wantedForCodec) — in SDR (ProxyTranscoder), and not on its battery
+    /// (ProxyRule.takesNow). The server offers such a video only to a Mac
+    /// that says so: one from before did neither.
+    static let codecWorker = URLQueryItem(name: "codecs", value: "1")
 
     /// Take a job, for ten minutes that every progress report extends.
     /// Throws `ProxyConflict.taken` when another Mac got there first.
     public func claimProxy(fileId: String, device: String) async throws -> ProxyClaim {
         let body = try JSONSerialization.data(withJSONObject: ["device": String(device.prefix(80))])
-        return try decode(ProxyClaim.self, from: try await proxyRequest(proxyURL(fileId, "claim"), method: "POST", body: body))
+        let url = Self.proxyClaimURL(config, fileId: fileId)
+        return try decode(ProxyClaim.self, from: try await proxyRequest(url, method: "POST", body: body))
+    }
+
+    static func proxyClaimURL(_ config: OnyxConfig, fileId: String) -> URL {
+        var url = proxyURL(config, fileId, "claim")
+        url.append(queryItems: [codecWorker])
+        return url
     }
 
     /// How far along, 0…1; also keeps the lease. Throws `ProxyConflict.lost`
@@ -270,6 +284,10 @@ public actor OnyxAPI {
 
     /// `api/files/<id>/proxy[/<tail>]`, the id escaped as one path component.
     private func proxyURL(_ fileId: String, _ tail: String? = nil) -> URL {
+        Self.proxyURL(config, fileId, tail)
+    }
+
+    private static func proxyURL(_ config: OnyxConfig, _ fileId: String, _ tail: String? = nil) -> URL {
         var url = config.url("api/files").appending(component: fileId).appending(path: "proxy")
         if let tail { url.append(path: tail) }
         return url
