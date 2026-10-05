@@ -15,6 +15,8 @@ struct SearchView: View {
     @State private var previewing: FileItem?
     @State private var inspecting: FileItem?
     @State private var linking: LinkSubject?
+    /// What the results' pictures are prefetched by, ahead of the scroll.
+    @State private var listing = ThumbnailPrefetcher.Owner()
     @FocusState private var typing: Bool
     @Namespace private var zoom
 
@@ -181,8 +183,11 @@ struct SearchView: View {
         }
     }
 
+    /// Lazy, as a folder's are: each row comes into view as it is scrolled
+    /// to, which is where the prefetch plans from and when the next page is
+    /// asked for — not every row, and so every page, at once.
     private var rows: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        LazyVStack(alignment: .leading, spacing: 12) {
             SectionHeading(title: ask.kind?.title ?? "Files")
                 .padding(.top, 6)
             ForEach(results) { file in
@@ -213,6 +218,7 @@ struct SearchView: View {
             let page = try await session.findEverywhere(query: asked.query, kinds: asked.kind.map { [$0.rawValue] } ?? [], limit: 40)
             guard !Task.isCancelled, asked == ask else { return }
             results = page.files
+            ThumbnailPrefetcher.shared.listed(results, by: listing)
             cursor = page.cursor
             phase = .done
         } catch {
@@ -232,6 +238,7 @@ struct SearchView: View {
             guard asked == ask else { return }
             let known = Set(results.map(\.id))
             results += page.files.filter { !known.contains($0.id) }
+            ThumbnailPrefetcher.shared.listed(results, by: listing)
             self.cursor = page.cursor
         } catch {
             // The page on screen stays; the next scroll tries again.

@@ -22,6 +22,8 @@ struct HomeView: View {
     @State private var linking: LinkSubject?
     @State private var showingAccount = false
     @State private var showingAll = false
+    /// What the rows' pictures are prefetched by (ThumbnailPrefetcher).
+    @State private var listing = ThumbnailPrefetcher.Owner()
     @Namespace private var zoom
 
     var body: some View {
@@ -56,6 +58,9 @@ struct HomeView: View {
         .sheet(isPresented: $showingAccount) { AccountView() }
     }
 
+    /// The rows Recent Files shows; See All has the rest.
+    private static let recentShown = 6
+
     private func load(refresh: Bool = false) async {
         if refresh { await session.loadPlaces() }
         async let overview: Void = session.loadOverview(refresh: refresh)
@@ -66,6 +71,7 @@ struct HomeView: View {
     private func loadRecent() async {
         do {
             recent = try await session.findEverywhere(limit: 8).files
+            ThumbnailPrefetcher.shared.listed(Array(recent.prefix(Self.recentShown)), by: listing)
             recentProblem = nil
         } catch {
             if !Session.isCancel(error) { recentProblem = session.explain(error) }
@@ -157,7 +163,7 @@ struct HomeView: View {
                     .foregroundStyle(.secondary)
             } else {
                 VStack(spacing: 12) {
-                    ForEach(recent.prefix(6)) { file in
+                    ForEach(recent.prefix(Self.recentShown)) { file in
                         FileListRow(file: file, open: { previewing = file }, info: { inspecting = file },
                                     share: session.mayLink(file) ? { linking = .file(file) } : nil)
                             .matchedTransitionSource(id: file.id, in: zoom)
@@ -440,6 +446,8 @@ struct RecentFilesView: View {
     @State private var previewing: FileItem?
     @State private var inspecting: FileItem?
     @State private var linking: LinkSubject?
+    /// What the rows' pictures are prefetched by, a page ahead of the scroll.
+    @State private var listing = ThumbnailPrefetcher.Owner()
     @Namespace private var zoom
 
     var body: some View {
@@ -493,6 +501,7 @@ struct RecentFilesView: View {
             let page = try await session.findEverywhere(limit: 40, cursor: cursor)
             let known = Set(files.map(\.id))
             files += page.files.filter { !known.contains($0.id) }
+            ThumbnailPrefetcher.shared.listed(files, by: listing)
             cursor = page.cursor
             problem = nil
         } catch {

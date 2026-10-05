@@ -1,7 +1,9 @@
 import OnyxKit
 import SwiftUI
 
-/// Keeps a folder's next pictures ready before they are scrolled to.
+/// Keeps a folder's next pictures ready before they are scrolled to — and
+/// those of the lists that are not folders: Home's Recent Files and Search's
+/// results.
 ///
 /// A folder's listing says what is in it, in order (`listed`); its cells say
 /// where the eye is as they come into view (`appeared`). From the two, each
@@ -21,6 +23,10 @@ final class ThumbnailPrefetcher {
     static let shared = ThumbnailPrefetcher()
 
     let window = PrefetchWindow()
+
+    /// What a list that is not a folder's lists its files by: an object its
+    /// view keeps (in `@State`), so the list is forgotten when the view goes.
+    final class Owner {}
 
     private final class Listing {
         weak var owner: AnyObject?
@@ -92,7 +98,10 @@ final class ThumbnailPrefetcher {
         if ThumbnailTrace.enabled, let key = file.picture(size)?.key {
             ThumbnailTrace.event("appear", "key=\(key)")
         }
-        guard let listing = listings.last(where: { $0.index[file.id] != nil }), let at = listing.index[file.id] else { return }
+        // The same file may be in several lists — Recent, Search, a folder —
+        // and the one looked at last, still on screen, is where the eye is.
+        guard let listing = listings.last(where: { $0.owner != nil && $0.index[file.id] != nil }),
+              let at = listing.index[file.id] else { return }
         // One cell of another size is a sheet (Get Info), not the folder;
         // a run of them is the folder shown the other way.
         if listing.size == nil {
