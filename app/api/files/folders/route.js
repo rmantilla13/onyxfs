@@ -3,7 +3,7 @@ import {
   getFilespaceForUser, getFilespaceForWrite,
   createFolder, renameFolder, deleteFolderRows, listFolderSubtreeFiles, folderPathInUse, renameSpreadsGrants,
   canModifyFolder, softDeleteFile, deleteFile, listFolderRowsUnder, listFilespaces, visibleFileIds, canonicalFolder,
-  storageKeysInUse, noteFolderMoveCopies, folderMoveCopiesAt, forgetFolderMoveCopies,
+  storageKeysInUse, noteFolderMoveCopies, claimFolderMoveCopies, folderMoveCopiesAt, forgetFolderMoveCopies,
   renameFolderStars, deleteFolderStars,
 } from '@/lib/db';
 import { requirePrincipal, can, refusal } from '@/lib/authz';
@@ -287,6 +287,23 @@ export async function PATCH(req) {
     //   - something else — a move that didn't finish before copies were
     //     noted, a mounted drive, another tool: refused, unless the caller
     //     says to `replace` it (the web asks first).
+    // A new key noted as the copy of a file from outside this drive is one
+    // the files outside every drive are being moved to (POST
+    // /api/admin/library/move), whether or not its copy has landed yet: that
+    // move points a row at it once it has, so it is never copied over. The
+    // rename waits for the move instead — asked here, and again when this
+    // rename notes its own copies, which never take over such a key
+    // (claimFolderMoveCopies), so a move that notes one in between is not
+    // missed.
+    const movingIn = () => answer(409, {
+      error: `Files from outside every drive are being moved into “${to}”, or a move of them stopped part-way. Once that move has finished — run it again from Admin → Usage if it stopped — try again. Nothing was renamed.`,
+    });
+    if (scope.scoped && plan.moves.length) {
+      const noted = await folderMoveCopiesAt(plan.moves.map((m) => m.toKey));
+      const theirs = [...noted.values()].some((fromKey) => !String(fromKey).startsWith(`${scope.prefix}/`));
+      if (theirs) return movingIn();
+    }
+
     let looked = 0;
     report('check', 0, plan.moves.length);
     const heads = await settleLimit(plan.moves, S3_LOOKUPS, async (m) => {
@@ -339,7 +356,11 @@ export async function PATCH(req) {
       const stuck = new Set(drop.filter((k, i) => !gone[i].ok || gone[i].value === false));
       await forgetFolderMoveCopies(allKeys.filter((k) => !stuck.has(k))).catch(() => {});
     };
-    if (todo.length) await noteFolderMoveCopies(todo);
+    if (todo.length && scope.scoped) {
+      if ((await claimFolderMoveCopies(todo, { within: `${scope.prefix}/` })).length) return movingIn();
+    } else if (todo.length) {
+      await noteFolderMoveCopies(todo);
+    }
     const inPlace = () => reused.length + copied.length;
     report('copy', inPlace(), plan.moves.length);
     // A long video past 5 GiB is copied in parts (lib/storage.js copyObjectWithin).

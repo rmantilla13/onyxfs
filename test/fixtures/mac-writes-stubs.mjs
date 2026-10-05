@@ -333,6 +333,17 @@ const moveCopies = () => (s().moveCopies ||= new Map());
 export async function noteFolderMoveCopies(moves = []) {
   for (const m of moves) if (m?.fromKey && m?.toKey) moveCopies().set(m.toKey, m.fromKey);
 }
+// As lib/db.js: a key noted for a key outside the drive (`within`) is left be.
+export async function claimFolderMoveCopies(moves = [], { within } = {}) {
+  const refused = [];
+  for (const m of moves) {
+    if (!m?.fromKey || !m?.toKey) continue;
+    const was = moveCopies().get(m.toKey);
+    if (was != null && was !== m.fromKey && !String(was).startsWith(within)) { refused.push(m.toKey); continue; }
+    moveCopies().set(m.toKey, m.fromKey);
+  }
+  return refused;
+}
 export async function folderMoveCopiesAt(toKeys = []) {
   return new Map(toKeys.filter((k) => moveCopies().has(k)).map((k) => [k, moveCopies().get(k)]));
 }
@@ -445,6 +456,11 @@ export async function folderPathInUse(path, { tag = '', prefix = null } = {}) {
   const within = prefix ? `${clean(prefix)}/` : null;
   return rowsOf().some((r) => r.tag === tag && under(r.name, path))
     || live().some((f) => under(f.folder, path) && (!within || String(f.storageKey || '').startsWith(within)));
+}
+export async function folderPathsInUse(paths = [], scope = {}) {
+  const out = new Set();
+  for (const p of paths) if (p && await folderPathInUse(p, scope)) out.add(p);
+  return out;
 }
 export async function renameSpreadsGrants(from, to, { tag = '', outside = 0 } = {}) {
   if (tag && (outside > 0 || rowsOf().some((r) => r.tag !== tag && under(r.name, from)))) return false;
@@ -573,23 +589,26 @@ export async function getFilespace(id) { return copy(drive(id)); }
 
 // ── moving the files outside every drive into one (app/api/admin/library/move) ──
 // lib/db.js's rule for which files the move takes (looseFile), from the same
-// patterns; the re-key with its WHERE clause; and the library's folders,
-// folder links and stars following the files as the one statement moves them.
-// The SQL itself is test/library-move-db.test.js's, against a real database.
+// patterns; the re-key with its WHERE clause; the notes and the lease; and
+// the library's folders, folder links and stars following the files as the
+// one statement moves them. The SQL itself is test/library-move-db.test.js's,
+// against a real database.
 const inDrives = (key, prefixes) => (prefixes || []).some((p) => clean(p) && String(key || '').startsWith(`${clean(p)}/`));
-const looseRows = (prefixes) => live().filter((f) => f.storage === 's3' && f.storageKey
+const looseRows = (prefixes, visibility = null) => live().filter((f) => f.storage === 's3' && f.storageKey
   && !inDrives(f.storageKey, prefixes)
   && !new RegExp(RESERVED_SEGMENT_RE, 'i').test(f.storageKey)
   && !new RegExp(THUMB_ARTIFACT_RE).test(f.storageKey)
   && !new RegExp(SYSTEM_KEY_RE).test(f.storageKey)
-  && ![...s().files.values()].some((t) => t.thumbnailKey === f.storageKey));
+  && ![...s().files.values()].some((t) => t.thumbnailKey === f.storageKey)
+  && (visibility == null || (f.visibility === 'org') === (visibility === 'org')));
 const usage = (rows) => ({ files: rows.length, bytes: rows.reduce((n, f) => n + (Number(f.size) || 0), 0) });
+export async function listDrivePrefixes() { return s().drives.map((d) => ({ id: d.id, name: d.name || '', prefix: d.prefix || '' })); }
 export async function libraryUsage({ drivePrefixes = null } = {}) {
   return usage(live().filter((f) => !Array.isArray(drivePrefixes) || !inDrives(f.storageKey, drivePrefixes)));
 }
-export async function countLooseFiles({ drivePrefixes = [] } = {}) { return usage(looseRows(drivePrefixes)); }
-export async function listLooseFiles({ drivePrefixes = [], after = '', limit = 200 } = {}) {
-  return looseRows(drivePrefixes)
+export async function countLooseFiles({ drivePrefixes = [], visibility = null } = {}) { return usage(looseRows(drivePrefixes, visibility)); }
+export async function listLooseFiles({ drivePrefixes = [], after = '', limit = 200, visibility = null } = {}) {
+  return looseRows(drivePrefixes, visibility)
     .filter((f) => f.id > String(after || ''))
     .sort((a, b) => (a.id < b.id ? -1 : 1))
     .slice(0, limit)
@@ -598,6 +617,8 @@ export async function listLooseFiles({ drivePrefixes = [], after = '', limit = 2
 export async function moveLooseFile(id, { fromKey, toKey, folder = '', name = null, url = null } = {}) {
   const row = s().files.get(String(id));
   if (!row || row.deletedAt || row.storageKey !== fromKey) return false;
+  // As the SQL: never onto a key another file holds.
+  if ([...s().files.values()].some((o) => o.id !== row.id && holds(o, toKey))) return false;
   followTranscripts(row.id, toKey);
   const proxy = s().proxies?.get(row.id);
   if (proxy && proxy.sourceKey === fromKey) proxy.sourceKey = toKey;
@@ -605,46 +626,105 @@ export async function moveLooseFile(id, { fromKey, toKey, folder = '', name = nu
   touch(row);
   return true;
 }
-export async function folderMoveCopiesInto(prefix) {
-  const p = `${clean(prefix)}/`;
-  return [...moveCopies()].filter(([to]) => to.startsWith(p)).map(([toKey, fromKey]) => ({ toKey, fromKey }));
+export async function foldersOutsideDrives({ drivePrefixes = [] } = {}) {
+  return [...new Set(live().filter((f) => f.folder && !inDrives(f.storageKey, drivePrefixes)
+    && !new RegExp(RESERVED_SEGMENT_RE, 'i').test(f.storageKey || '')
+    && !new RegExp(THUMB_ARTIFACT_RE).test(f.storageKey || '')
+    && !new RegExp(SYSTEM_KEY_RE).test(f.storageKey || '')).map((f) => f.folder))];
+}
+export async function libraryMoveNotes({ drivePrefixes = [], after = '', limit = 500 } = {}) {
+  return [...moveCopies()]
+    .filter(([to, from]) => inDrives(to, drivePrefixes) && !inDrives(from, drivePrefixes) && to > String(after || ''))
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .slice(0, limit)
+    .map(([toKey, fromKey]) => ({ toKey, fromKey, notedAt: 0 }));
+}
+export async function claimFolderMoveCopy({ fromKey, toKey } = {}) {
+  const was = moveCopies().get(toKey);
+  if (was != null && was !== fromKey) return false;
+  moveCopies().set(toKey, fromKey);
+  return true;
+}
+// The lease, in s().settings as lib/db.js keeps it.
+export async function claimLibraryMove({ call, by = null, ms } = {}) {
+  const was = s().settings.get('library.move') || null;
+  if (was && Number(was.until) >= now()) return null;
+  s().settings.set('library.move', { ...(was || {}), call, by: by ? norm(by) : null, until: now() + ms });
+  return copy(was || {});
+}
+export async function updateLibraryMove(call, { until, run } = {}) {
+  const v = s().settings.get('library.move');
+  if (!v || v.call !== call) return false;
+  if (until !== undefined) v.until = Number(until) || 0;
+  if (run === null) delete v.run;
+  else if (run) v.run = copy(run);
+  return true;
+}
+export async function libraryMoveRun() {
+  const v = s().settings.get('library.move');
+  return v && v.run ? copy(v.run) : null;
 }
 // s().stars: [{ owner, driveId, folder }]; s().shares: token → a link's row, snake_case.
-export async function moveFoldersIntoDrive({ tag, driveId, under = '', from = { tag: '', driveId: '' } } = {}) {
+export async function libraryFolderState({ from = { tag: '', driveId: '' } } = {}) {
+  const fromTag = clean(from.tag);
+  return {
+    rows: rowsOf().filter((r) => r.tag === fromTag).sort((a, b) => (a.name < b.name ? -1 : 1))
+      .map((r) => ({ name: r.name, tags: r.tags || [], metadata: r.metadata || {} })),
+    links: [...(s().shares?.values() || [])].filter((l) => l.kind === 'folder' && (l.storage_prefix ?? null) === (fromTag || null))
+      .map((l) => ({ token: l.token, folder: l.folder })),
+    stars: [...new Set((s().stars || []).filter((st) => st.driveId === String(from.driveId || '')).map((st) => st.folder))].sort(),
+  };
+}
+export async function moveFoldersIntoDrive({ tag, driveId, folders = [], links = [], stars = [], under = '', from = { tag: '', driveId: '' } } = {}) {
   const to = clean(tag);
   const fromTag = clean(from.tag);
   const u = clean(under);
-  const dest = (n) => (u ? `${u}/${n}` : n);
-  let folders = 0;
-  for (const r of rowsOf().filter((x) => x.tag === fromTag)) {
-    const twin = s().folders.get(fkey(to, dest(r.name)));
+  let moved = 0;
+  let copied = 0;
+  for (const g of folders.filter((x) => x?.dest && x?.keep)) {
+    const twin = s().folders.get(fkey(to, g.dest));
+    const mine = [...new Set([g.keep, ...(g.names || [])])].filter((n) => s().folders.has(fkey(fromTag, n)));
+    if (!mine.length) continue;
     if (twin) {
       // The drive's row stays, taking on the library's tags and metadata; its own values win.
-      if (r.tags?.length || Object.keys(r.metadata || {}).length) {
-        twin.tags = [...new Set([...(twin.tags || []), ...(r.tags || [])])].sort();
-        twin.metadata = { ...(r.metadata || {}), ...(twin.metadata || {}) };
+      if (g.tags?.length || Object.keys(g.metadata || {}).length) {
+        twin.tags = [...new Set([...(twin.tags || []), ...(g.tags || [])])].sort();
+        twin.metadata = { ...(g.metadata || {}), ...(twin.metadata || {}) };
+        if (g.copy) copied++;
       }
-    } else {
-      s().folders.set(fkey(to, dest(r.name)), { ...r, tag: to, name: dest(r.name) });
+    } else if (mine.includes(g.keep)) {
+      const r = s().folders.get(fkey(fromTag, g.keep));
+      const { tags: _t, metadata: _m, ...rest } = r;
+      s().folders.set(fkey(to, g.dest), {
+        ...rest, tag: to, name: g.dest,
+        ...(g.tags?.length && { tags: [...g.tags] }),
+        ...(Object.keys(g.metadata || {}).length && { metadata: { ...g.metadata } }),
+      });
+      if (g.copy) copied++;
     }
-    s().folders.delete(fkey(fromTag, r.name));
-    folders++;
+    // A copied group's rows stay: files outside every drive are still in them.
+    if (g.copy) continue;
+    for (const n of mine) s().folders.delete(fkey(fromTag, n));
+    moved += mine.length;
   }
   if (u) addFolder(u, to);
-  let links = 0;
-  for (const row of s().shares?.values() || []) {
-    if (row.kind !== 'folder' || (row.storage_prefix ?? null) !== (fromTag || null)) continue;
-    Object.assign(row, { storage_prefix: to, folder: dest(row.folder) });
-    links++;
+  let carried = 0;
+  for (const l of links.filter((x) => x?.token && x?.dest)) {
+    const row = s().shares?.get(l.token);
+    if (!row || row.kind !== 'folder' || (row.storage_prefix ?? null) !== (fromTag || null)) continue;
+    Object.assign(row, { storage_prefix: to, folder: l.dest });
+    carried++;
   }
-  let stars = 0;
+  let starred = 0;
   const list = s().stars || [];
-  for (const st of [...list]) {
-    if (st.driveId !== String(from.driveId || '')) continue;
-    const kept = list.some((t) => t.owner === st.owner && t.driveId === driveId && t.folder === dest(st.folder));
+  const destOf = new Map(stars.filter((x) => x?.folder && x?.dest).map((x) => [x.folder, x.dest]));
+  for (const st of [...list].sort((a, b) => (a.folder < b.folder ? -1 : 1))) {
+    if (st.driveId !== String(from.driveId || '') || !destOf.has(st.folder)) continue;
+    const dest = destOf.get(st.folder);
+    const kept = list.some((t) => t.owner === st.owner && t.driveId === driveId && t.folder === dest);
     if (kept) list.splice(list.indexOf(st), 1);
-    else Object.assign(st, { driveId, folder: dest(st.folder) });
-    stars++;
+    else Object.assign(st, { driveId, folder: dest });
+    starred++;
   }
-  return { folders, links, stars };
+  return { folders: moved, copied, links: carried, stars: starred };
 }

@@ -40,6 +40,10 @@ sdk.S3Client.prototype.send = async function send(cmd) {
   b.calls.push(cmd.constructor.name);
   switch (cmd.constructor.name) {
     case 'HeadObjectCommand': {
+      // A test failing HEADs (b.failHead) sees what a throttled or broken bucket leaves;
+      // one watching them (b.onHead) can act between a look and what follows it.
+      if (b.failHead?.(i.Key)) throw Object.assign(new Error('SlowDown'), { name: 'SlowDown', $metadata: { httpStatusCode: 503 } });
+      b.onHead?.(i.Key);
       const o = b.objects.get(at(i.Key));
       if (!o) throw missing('NotFound');
       return { ContentLength: o.size, ETag: `"${o.etag}"`, ...(o.modified != null && { LastModified: new Date(o.modified) }) };
@@ -62,16 +66,60 @@ sdk.S3Client.prototype.send = async function send(cmd) {
     }
     case 'ListObjectsV2Command': {
       const pre = at(i.Prefix || '');
-      const Contents = [...b.objects.keys()].filter((k) => k.startsWith(pre)).map((k) => ({ Key: k.slice(i.Bucket.length + 1), Size: b.objects.get(k).size }));
-      return { Contents, IsTruncated: false };
+      b.lists.push(i.Prefix || '');
+      const keys = [...b.objects.keys()].filter((k) => k.startsWith(pre)).map((k) => k.slice(i.Bucket.length + 1));
+      if (!i.Delimiter) return { Contents: keys.map((k) => ({ Key: k, Size: b.objects.get(`${i.Bucket}/${k}`).size })), IsTruncated: false };
+      // With a delimiter, one level: what is at it, and the folders below it once each.
+      const p = i.Prefix || '';
+      const here = keys.filter((k) => !k.slice(p.length).includes('/') || k === p);
+      const below = [...new Set(keys.map((k) => k.slice(p.length)).filter((r) => r.includes('/')).map((r) => `${p}${r.slice(0, r.indexOf('/') + 1)}`))];
+      return { Contents: here.map((k) => ({ Key: k })), CommonPrefixes: below.filter((c) => c !== p).map((Prefix) => ({ Prefix })), IsTruncated: false };
     }
+    // A copy in parts: b.multipart is UploadId → `<bucket>/<key>`, b.parted what each copies,
+    // b.begun when each began (none for one a test put there), b.parts its parts.
+    case 'CreateMultipartUploadCommand': {
+      const id = randomUUID();
+      (b.multipart ||= new Map()).set(id, at(i.Key));
+      (b.begun ||= new Map()).set(id, Date.now());
+      return { UploadId: id };
+    }
+    case 'UploadPartCopyCommand': {
+      (b.parted ||= new Map()).set(i.UploadId, decodeURIComponent(String(i.CopySource).replace(/^\//, '')));
+      const [first, last] = String(i.CopySourceRange).replace('bytes=', '').split('-').map(Number);
+      const parts = (b.parts ||= new Map()).get(i.UploadId) || new Map();
+      parts.set(i.PartNumber, { ETag: `"${md5(String(i.PartNumber))}"`, Size: last - first + 1 });
+      b.parts.set(i.UploadId, parts);
+      return { CopyPartResult: { ETag: `"${md5(String(i.PartNumber))}"` } };
+    }
+    case 'ListPartsCommand': {
+      const parts = [...(b.parts?.get(i.UploadId) || new Map())].sort(([x], [y]) => x - y);
+      return { Parts: parts.map(([PartNumber, p]) => ({ PartNumber, ...p })), IsTruncated: false };
+    }
+    case 'CompleteMultipartUploadCommand': {
+      const o = b.objects.get(b.parted?.get(i.UploadId));
+      if (!o || b.multipart?.get(i.UploadId) !== at(i.Key)) throw missing('NoSuchUpload');
+      b.objects.set(at(i.Key), { ...o });
+      b.copies.push(at(i.Key));
+      b.multipart.delete(i.UploadId);
+      return {};
+    }
+    case 'ListMultipartUploadsCommand': {
+      const Uploads = [...(b.multipart || new Map())].filter(([, k]) => k.startsWith(at(i.Prefix || ''))).map(([UploadId, k]) => ({
+        UploadId, Key: k.slice(i.Bucket.length + 1), ...(b.begun?.has(UploadId) && { Initiated: new Date(b.begun.get(UploadId)) }),
+      }));
+      return { Uploads, IsTruncated: false };
+    }
+    case 'AbortMultipartUploadCommand': b.multipart?.delete(i.UploadId); return {};
     default: throw new Error(`unexpected ${cmd.constructor.name}`);
   }
 };
 
 const store = await import(DB_STUB);
 const moveRoute = await import('../app/api/admin/library/move/route.js');
+const presignRoute = await import('../app/api/files/presign/route.js');
+const foldersRoute = await import('../app/api/files/folders/route.js');
 const { _setFolderMoveBudgetMs } = await import('../lib/folder-ops.js');
+const { MOVE_HOLDER } = await import('../lib/library-move.js');
 
 // ── the world ──
 const STORAGE = { provider: 's3', bucket: 'onyx', accessKeyId: 'k', secretAccessKey: 's', region: 'us-east-1', endpoint: 'http://s3.test', prefix: 'files' };
@@ -91,7 +139,7 @@ function reset() {
     people: new Map(), invites: new Set(), tokens: new Map(), drives: [D1, D2, D3, D4], grants: new Map([['d1|' + ED, 'editor']]), acl: new Map(),
     files: new Map(), folders: new Map(), uploads: new Map(), uploadKeys: new Map(), transcripts: new Map(),
     audit: [], tombstones: [], stars: [], shares: new Map(), collections: [],
-    s3: { objects: new Map(), calls: [], copies: [] },
+    s3: { objects: new Map(), calls: [], copies: [], lists: [] },
   };
   for (const email of [BOSS, ED]) {
     globalThis.__mw.people.set(email, { id: randomUUID(), email, roleId: 'member', status: 'active', quotaBytes: null, maxUploadBytes: null });
@@ -110,6 +158,24 @@ async function call(handler, method, { body, cookie } = {}) {
 }
 const look = (who = BOSS) => call(moveRoute.GET, 'GET', { cookie: who });
 const move = (body, who = BOSS) => call(moveRoute.POST, 'POST', { body, cookie: who });
+/** Another route, as `who` signed in on the web. */
+async function as(who, handler, path, method, body) {
+  globalThis.__mw.session = { user: { email: who } };
+  const res = await handler(new Request(`http://app.test${path}`, {
+    method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  }), { params: {} });
+  return { status: res.status, body: await res.json().catch(() => null) };
+}
+/** Until the bucket has been asked to copy (b.copyGate holding it there). */
+async function copying() {
+  while (!globalThis.__mw.s3.calls.includes('CopyObjectCommand')) await new Promise((r) => setTimeout(r, 1));
+}
+/** Hold every copy until the returned function is called. */
+function holdCopies() {
+  let open;
+  globalThis.__mw.s3.copyGate = new Promise((r) => { open = r; });
+  return () => { globalThis.__mw.s3.copyGate = null; open(); };
+}
 /** Calls until the move answers anything but 202 `more`, carrying `after` along. → { last, calls, moved } */
 async function moveAll(body) {
   let after = '';
@@ -166,6 +232,8 @@ describe('what is outside every drive', () => {
     assert.deepEqual(r.body.movable, { files: 2, bytes: 10 });
     assert.equal(r.body.problem, null);
     assert.deepEqual(r.body.drives.map((d) => [d.name, !!d.problem]), [['Client', true], ['Studio', false], ['Team', false], ['Vault', false]]);
+    assert.deepEqual(r.body.drives.map((d) => d.warning), [null, null, null, null]);
+    assert.equal(r.body.run, null);
     assert.ok(!JSON.stringify(r.body).includes('cs'), 'no drive’s secret');
   });
 });
@@ -330,19 +398,33 @@ describe('stopping and carrying on', () => {
   test('stopped after its key was spoken for and before the copy, the next call keeps the name', async () => {
     const f = await file('files/a.jpg');
     globalThis.__mw.moveCopies = new Map([['team/a.jpg', 'files/a.jpg']]);
-    await store.issueUploadKey('team/a.jpg', BOSS, { bucket: 'onyx' });
+    await store.issueUploadKey('team/a.jpg', MOVE_HOLDER, { bucket: 'onyx' });
     assert.equal((await move({ driveId: 'd1' })).status, 200);
     assert.equal(row(f.id).storageKey, 'team/a.jpg', 'not “a (2).jpg”');
     assert.deepEqual([...globalThis.__mw.uploadKeys.keys()], [], 'and the key is given back');
   });
 
-  test('a noted copy of an original written since is made again over itself', async () => {
+  test('what is at a noted key and is not a copy of the original is never written over: the file takes the next name', async () => {
     const f = await file('files/a.jpg', { bytes: 'new bytes' });
     globalThis.__mw.moveCopies = new Map([['team/a.jpg', 'files/a.jpg']]);
+    // A copy of bytes the original has since been rewritten from, or a
+    // mounted drive's file of that name written since: it cannot be told which.
     globalThis.__mw.s3.objects.set('onyx/team/a.jpg', { size: 3, etag: md5(Buffer.from('old')) });
     assert.equal((await move({ driveId: 'd1' })).status, 200);
-    assert.equal(row(f.id).storageKey, 'team/a.jpg');
-    assert.equal(stored('team/a.jpg').etag, md5(Buffer.from('new bytes')));
+    assert.equal(row(f.id).storageKey, 'team/a (2).jpg');
+    assert.equal(stored('team/a (2).jpg').etag, md5(Buffer.from('new bytes')));
+    assert.equal(stored('team/a.jpg').etag, md5(Buffer.from('old')), 'left as it is');
+    assert.deepEqual([...globalThis.__mw.moveCopies.keys()], [], 'and the note forgotten');
+  });
+
+  test('a noted copy of a file renamed since is not carried on from, which would undo the rename', async () => {
+    const f = await file('files/new.jpg', { bytes: 'same bytes' });
+    // An earlier call copied it as "old.jpg", then the row was renamed without its object moving.
+    globalThis.__mw.moveCopies = new Map([['team/old.jpg', 'files/new.jpg']]);
+    globalThis.__mw.s3.objects.set('onyx/team/old.jpg', { ...stored('files/new.jpg') });
+    assert.equal((await move({ driveId: 'd1' })).status, 200);
+    assert.deepEqual([row(f.id).storageKey, row(f.id).name], ['team/new.jpg', 'new.jpg']);
+    assert.equal(stored('team/old.jpg'), null, 'the copy at the old name is gone');
   });
 
   test('stopped after the row and before the original went, the next call deletes the original', async () => {
@@ -356,6 +438,21 @@ describe('stopping and carrying on', () => {
     assert.equal(stored('files/a.jpg'), null);
     assert.ok(stored('team/a.jpg'));
     assert.deepEqual([...globalThis.__mw.moveCopies.keys()], []);
+  });
+
+  test('a noted key whose file has gone is tidied only while it holds the move’s copy: a file written there since stays', async () => {
+    const g = globalThis.__mw;
+    // Neither original is any file's now; both objects are still in the bucket.
+    g.s3.objects.set('onyx/files/x.jpg', { size: 4, etag: md5(Buffer.from('orig')) });
+    g.s3.objects.set('onyx/files/y.jpg', { size: 4, etag: md5(Buffer.from('ours')) });
+    g.s3.objects.set('onyx/team/x.jpg', { size: 5, etag: md5(Buffer.from('mount')) }); // a mounted drive's, written since
+    g.s3.objects.set('onyx/team/y.jpg', { size: 4, etag: md5(Buffer.from('ours')) }); // the move's copy
+    g.moveCopies = new Map([['team/x.jpg', 'files/x.jpg'], ['team/y.jpg', 'files/y.jpg']]);
+    await file('files/a.jpg');
+    assert.equal((await move({ driveId: 'd1' })).status, 200);
+    assert.equal(stored('team/x.jpg').etag, md5(Buffer.from('mount')), 'never the move’s to delete');
+    assert.equal(stored('team/y.jpg'), null);
+    assert.deepEqual([...g.moveCopies.keys()], [], 'both notes forgotten');
   });
 
   test('a noted copy whose file has gone since is deleted; one of a file still held elsewhere is left be', async () => {
@@ -442,6 +539,16 @@ describe('where the bytes can go', () => {
     assert.equal(stored('archive/Shoot/a.jpg'), null, 'not in the Storage bucket');
   });
 
+  test('one in another region says so before anything moves, and is still copied into', async () => {
+    globalThis.__mw.drives.push({ id: 'd7', name: 'Europe', bucket: 'eu-files', prefix: 'eu', region: 'eu-west-1' });
+    const f = await file('files/a.jpg');
+    const got = await look();
+    assert.match(got.body.drives.find((d) => d.id === 'd7').warning, /“Europe” keeps its files in a bucket in eu-west-1, and these are in us-east-1/);
+    assert.equal((await move({ driveId: 'd7' })).status, 200);
+    assert.equal(row(f.id).storageKey, 'eu/a.jpg');
+    assert.ok(obj('eu-files', 'eu/a.jpg'));
+  });
+
   test('a drive with keys of its own elsewhere is refused, with why, and nothing moves', async () => {
     const f = await file('files/a.jpg');
     const out = await move({ driveId: 'd4' });
@@ -461,5 +568,383 @@ describe('where the bytes can go', () => {
     assert.deepEqual([off.status, off.body.error], [409, 'Drives are turned off, so there is no drive to move files into.']);
     assert.equal((await look()).body.problem, 'Drives are turned off, so there is no drive to move files into.');
     assert.deepEqual(globalThis.__mw.s3.copies, []);
+  });
+});
+
+describe('one call at a time', () => {
+  test('a second call while one is copying is refused; two names that make one key each land, with their own bytes', async () => {
+    // "Café" and "Cafè" are both "Caf_" to the bucket (safeObjectName).
+    const one = await file('files/Café.jpg', { name: 'Café.jpg', bytes: 'eleven byte' });
+    const two = await file('files/Cafè.jpg', { name: 'Cafè.jpg', bytes: 'seven b' });
+    const release = holdCopies();
+    const first = move({ driveId: 'd1' });
+    await copying();
+    const second = await move({ driveId: 'd1', folder: 'Imports' });
+    assert.deepEqual([second.status, second.body.code], [409, 'busy']);
+    release();
+    const out = await first;
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.equal(out.body.moved, 2);
+    assert.deepEqual([row(one.id).storageKey, row(two.id).storageKey].sort(), ['team/Caf_ (2).jpg', 'team/Caf_.jpg']);
+    assert.equal(stored(row(one.id).storageKey).etag, md5(Buffer.from('eleven byte')));
+    assert.equal(stored(row(two.id).storageKey).etag, md5(Buffer.from('seven b')));
+    assert.deepEqual(underPrefix('onyx', 'files'), []);
+    const again = await move({ driveId: 'd1', folder: 'Imports' });
+    assert.deepEqual([again.status, again.body.moved], [200, 0], 'once the first has answered, the next may run');
+  });
+
+  test('a lease a cut-off call left is taken once it has run out, and not before; each call gives its own back', async () => {
+    await file('files/a.jpg');
+    const g = globalThis.__mw;
+    g.settings.set('library.move', { call: 'gone', by: BOSS, until: g.now + 60_000 });
+    const held = await move({ driveId: 'd1' });
+    assert.deepEqual([held.status, held.body.code], [409, 'busy']);
+    assert.deepEqual(g.s3.copies, []);
+    g.settings.set('library.move', { call: 'gone', by: BOSS, until: g.now - 1 });
+    const out = await move({ driveId: 'd1' });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.equal(g.settings.get('library.move').until, 0);
+  });
+
+  test('an upload by the admin running the move, to the same name in the same folder, is given the next name', async () => {
+    const f = await file('files/a.jpg');
+    const release = holdCopies();
+    const running = move({ driveId: 'd1' });
+    await copying();
+    const p = await as(BOSS, presignRoute.POST, '/api/files/presign', 'POST', { filename: 'a.jpg', contentType: 'image/jpeg', size: 5, folder: '', filespaceId: 'd1' });
+    assert.equal(p.status, 200, JSON.stringify(p.body));
+    assert.equal(p.body.key, 'team/a (2).jpg');
+    release();
+    const out = await running;
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.equal(row(f.id).storageKey, 'team/a.jpg');
+    assert.ok(globalThis.__mw.uploadKeys.has(`team/a (2).jpg|${BOSS}`), 'the upload keeps its key');
+  });
+
+  test('a noted key someone has been handed since is given up for the next name', async () => {
+    const f = await file('files/a.jpg');
+    globalThis.__mw.moveCopies = new Map([['team/a.jpg', 'files/a.jpg']]);
+    await store.issueUploadKey('team/a.jpg', BOSS, { bucket: 'onyx' });
+    assert.equal((await move({ driveId: 'd1' })).status, 200);
+    assert.equal(row(f.id).storageKey, 'team/a (2).jpg');
+    assert.ok(globalThis.__mw.uploadKeys.has(`team/a.jpg|${BOSS}`));
+  });
+
+  test('a move that notes a key while a rename onto it is looking is not written over', async () => {
+    const g = globalThis.__mw;
+    await file('team/A/x.jpg', { folder: 'A' });
+    // Between the rename's first look at its notes and its own: the move notes the key.
+    g.s3.onHead = (key) => { if (key === 'team/B/x.jpg') (g.moveCopies ||= new Map()).set(key, 'files/B/x.jpg'); };
+    const r = await as(ED, foldersRoute.PATCH, '/api/files/folders', 'PATCH', { from: 'A', to: 'B', filespaceId: 'd1', resumable: true });
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.match(r.body.error, /stopped part-way/);
+    assert.equal(g.moveCopies.get('team/B/x.jpg'), 'files/B/x.jpg', 'the move’s note is its own still');
+    assert.equal(stored('team/B/x.jpg'), null, 'nothing copied there');
+  });
+
+  test('a folder rename in the drive onto keys the move has noted waits for it', async () => {
+    await file('team/A/x.jpg', { folder: 'A' });
+    globalThis.__mw.moveCopies = new Map([['team/B/x.jpg', 'files/B/x.jpg']]);
+    const r = await as(ED, foldersRoute.PATCH, '/api/files/folders', 'PATCH', { from: 'A', to: 'B', filespaceId: 'd1', resumable: true });
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.match(r.body.error, /being moved into “B”/);
+    assert.ok(stored('team/A/x.jpg'));
+    assert.equal(stored('team/B/x.jpg'), null);
+  });
+});
+
+describe('what is left part-way, and what the bucket says', () => {
+  test('a copy an earlier run made into another drive goes once the file has moved', async () => {
+    const f = await file('files/a.jpg');
+    globalThis.__mw.moveCopies = new Map([['studio/a.jpg', 'files/a.jpg']]);
+    globalThis.__mw.s3.objects.set('onyx/studio/a.jpg', { ...stored('files/a.jpg') });
+    const out = await move({ driveId: 'd1' });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.equal(row(f.id).storageKey, 'team/a.jpg');
+    assert.deepEqual(underPrefix('onyx', 'studio'), []);
+    assert.deepEqual([...globalThis.__mw.moveCopies.keys()], []);
+  });
+
+  test('a key the bucket could not be asked about is not taken for free: the file waits for the next run', async () => {
+    // A mounted drive's object the catalog does not know of yet.
+    globalThis.__mw.s3.objects.set('onyx/team/a.jpg', { size: 5, etag: md5(Buffer.from('mount')) });
+    const f = await file('files/a.jpg');
+    globalThis.__mw.s3.failHead = (key) => key === 'team/a.jpg';
+    const first = await move({ driveId: 'd1' });
+    assert.deepEqual([first.status, first.body.failed, first.body.moved], [200, 1, 0]);
+    assert.equal(stored('team/a.jpg').etag, md5(Buffer.from('mount')), 'not written over');
+    assert.equal(row(f.id).storageKey, 'files/a.jpg');
+    globalThis.__mw.s3.failHead = null;
+    assert.equal((await move({ driveId: 'd1' })).status, 200);
+    assert.equal(row(f.id).storageKey, 'team/a (2).jpg');
+  });
+
+  test('a copy in parts cut off part-way: its open parts are aborted, and it is made again', async () => {
+    const f = await file('files/big.mov', { size: 6 * 1024 ** 3 });
+    globalThis.__mw.moveCopies = new Map([['team/big.mov', 'files/big.mov']]);
+    globalThis.__mw.s3.multipart = new Map([['cut-off', 'onyx/team/big.mov']]);
+    const out = await move({ driveId: 'd1' });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.equal(row(f.id).storageKey, 'team/big.mov');
+    assert.ok(globalThis.__mw.s3.calls.includes('AbortMultipartUploadCommand'));
+    assert.deepEqual([...globalThis.__mw.s3.multipart.keys()], [], 'none left open');
+    assert.equal(stored('team/big.mov').etag, md5(Buffer.from('bytes of files/big.mov')));
+    assert.equal(stored('files/big.mov'), null);
+  });
+});
+
+describe('private files', () => {
+  test('stay outside unless the admin says to move them, counted apart, and keep their folder meanwhile', async () => {
+    const g = globalThis.__mw;
+    g.folders.set('\u0000Shoot', { tag: '', name: 'Shoot', tags: ['spring'] });
+    const open = await file('files/Shoot/open.jpg', { folder: 'Shoot' });
+    const mine = await file('files/mine.jpg', { visibility: 'owner' });
+    const theirs = await file('files/Shoot/theirs.jpg', { folder: 'Shoot', visibility: 'custom' });
+    const got = await look();
+    assert.deepEqual([got.body.movable.files, got.body.private.files], [1, 2]);
+
+    const out = await move({ driveId: 'd1' });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.deepEqual([out.body.moved, out.body.left, out.body.stays], [1, 0, 2]);
+    assert.equal(row(open.id).storageKey, 'team/Shoot/open.jpg');
+    assert.deepEqual([row(mine.id).storageKey, row(theirs.id).storageKey], ['files/mine.jpg', 'files/Shoot/theirs.jpg']);
+    assert.deepEqual(rowsIn('').map((r) => [r.name, r.tags]), [['Shoot', ['spring']]], 'the private file keeps its folder');
+    assert.deepEqual(rowsIn('team').map((r) => [r.name, r.tags]), [['Shoot', ['spring']]], 'and so does the file that moved');
+    assert.equal(g.audit.at(-1).detail.private, false);
+    assert.equal(g.audit.at(-1).detail.stays, 2);
+
+    const all = await move({ driveId: 'd1', private: true });
+    assert.deepEqual([all.status, all.body.moved, all.body.stays], [200, 2, 0]);
+    assert.deepEqual([row(mine.id).storageKey, row(theirs.id).storageKey], ['team/mine.jpg', 'team/Shoot/theirs.jpg']);
+    assert.deepEqual(rowsIn(''), [], 'once nothing is left in it, the folder follows');
+    assert.deepEqual(rowsIn('team').map((r) => [r.name, r.tags]), [['Shoot', ['spring']]]);
+    assert.equal(g.audit.at(-1).detail.private, true, 'the choice that opened them to the drive is on record');
+  });
+});
+
+describe('one destination a run', () => {
+  test('a run stopped part-way carries on only where it was going, until it has finished', async () => {
+    _setFolderMoveBudgetMs(0); // a file a call
+    const a = await file('files/Shoot/a.jpg', { folder: 'Shoot' });
+    const b = await file('files/Shoot/b.jpg', { folder: 'Shoot' });
+    const first = await move({ driveId: 'd1' });
+    assert.equal(first.status, 202, JSON.stringify(first.body));
+    // The dialog closed and opened again, and another folder chosen.
+    assert.deepEqual((await look()).body.run, { driveId: 'd1', folder: '' });
+    for (const elsewhere of [{ driveId: 'd1', folder: 'Archive' }, { driveId: 'd2' }]) {
+      const r = await move(elsewhere);
+      assert.deepEqual([r.status, r.body.code, r.body.run], [409, 'elsewhere', { driveId: 'd1', folder: '' }], JSON.stringify(r.body));
+      assert.match(r.body.error, /A move into “Team” stopped part-way/);
+    }
+    const rest = await moveAll({ driveId: 'd1' });
+    assert.equal(rest.last.status, 200, JSON.stringify(rest.last.body));
+    assert.deepEqual([row(a.id).storageKey, row(b.id).storageKey], ['team/Shoot/a.jpg', 'team/Shoot/b.jpg']);
+    assert.equal((await look()).body.run, null);
+    await file('files/c.jpg');
+    const next = await move({ driveId: 'd1', folder: 'Archive' });
+    assert.equal(next.status, 200, 'once it has finished, the next goes anywhere');
+  });
+
+  test('a run whose drive has gone since leaves the next free to go elsewhere', async () => {
+    _setFolderMoveBudgetMs(0);
+    await file('files/a.jpg');
+    await file('files/b.jpg');
+    globalThis.__mw.drives.push({ id: 'd9', name: 'Temp', bucket: 'onyx', prefix: 'temp', region: 'us-east-1' });
+    assert.equal((await move({ driveId: 'd9' })).status, 202);
+    globalThis.__mw.drives.pop();
+    const r = await moveAll({ driveId: 'd1' });
+    assert.equal(r.last.status, 200, JSON.stringify(r.last.body));
+  });
+
+  test('the run keeps a fingerprint of each link it will carry, never the link’s token', async () => {
+    _setFolderMoveBudgetMs(0);
+    const g = globalThis.__mw;
+    g.shares.set('the-secret-token', { token: 'the-secret-token', kind: 'folder', folder: 'Fresh', storage_prefix: null, mode: 'public' });
+    await file('files/Fresh/a.jpg', { folder: 'Fresh' });
+    await file('files/Fresh/b.jpg', { folder: 'Fresh' });
+    assert.equal((await move({ driveId: 'd1' })).status, 202);
+    const kept = JSON.stringify(g.settings.get('library.move'));
+    assert.ok(!kept.includes('the-secret-token'), kept);
+    assert.equal(g.settings.get('library.move').run.carry.length, 1);
+    const done = await moveAll({ driveId: 'd1' });
+    assert.equal(done.last.body.links, 1);
+    assert.equal(g.shares.get('the-secret-token').storage_prefix, 'team');
+    assert.equal(g.settings.get('library.move').run, undefined, 'and forgets it when the run ends');
+  });
+});
+
+describe('a video past what one copy takes', () => {
+  const GiB = 1024 ** 3;
+  const calls = (name) => globalThis.__mw.s3.calls.filter((c) => c === name).length;
+
+  /** The row of `f` under the id `id`: files are taken in id order, and the store's ids are random. */
+  function withId(f, id) {
+    const g = globalThis.__mw;
+    const r = g.files.get(f.id);
+    g.files.delete(f.id);
+    g.files.set(id, Object.assign(r, { id }));
+    return r;
+  }
+
+  test('is copied in parts over as many calls as it takes, none made twice, and lands once', async () => {
+    const f = withId(await file('files/big.mov', { size: 6 * GiB }), '00000000-big');
+    // 6 GiB in the bucket: twelve parts of 512 MiB, written a minute ago.
+    Object.assign(stored('files/big.mov'), { size: 6 * GiB, modified: Date.now() - 60_000 });
+    const after = withId(await file('files/zz.jpg'), 'ffffffff-after');
+    _setFolderMoveBudgetMs(0); // the parts at once, then the time is up
+    const first = await move({ driveId: 'd1' });
+    assert.equal(first.status, 202, JSON.stringify(first.body));
+    assert.equal(row(f.id).storageKey, 'files/big.mov', 'not yet');
+    assert.equal(calls('UploadPartCopyCommand'), 8);
+    assert.ok(globalThis.__mw.uploadKeys.has(`team/big.mov|${MOVE_HOLDER}`), 'its key held between calls');
+    assert.equal(row(after.id).storageKey, 'files/zz.jpg', 'what follows it waits for it');
+
+    const rest = await moveAll({ driveId: 'd1' });
+    assert.equal(rest.last.status, 200, JSON.stringify(rest.last.body));
+    assert.equal(calls('CreateMultipartUploadCommand'), 1, 'carried on, not begun again');
+    assert.equal(calls('UploadPartCopyCommand'), 12, 'each part once');
+    assert.equal(row(f.id).storageKey, 'team/big.mov');
+    assert.equal(stored('team/big.mov').size, 6 * GiB);
+    assert.equal(stored('files/big.mov'), null);
+    assert.equal(row(after.id).storageKey, 'team/zz.jpg');
+    assert.deepEqual([...globalThis.__mw.s3.multipart.keys()], [], 'none left open');
+    assert.deepEqual([...globalThis.__mw.uploadKeys.keys()], []);
+  });
+
+  test('parts of an original written since they began are not carried on from', async () => {
+    const f = await file('files/big.mov', { size: 6 * GiB });
+    Object.assign(stored('files/big.mov'), { size: 6 * GiB, modified: Date.now() + 60_000 });
+    globalThis.__mw.moveCopies = new Map([['team/big.mov', 'files/big.mov']]);
+    globalThis.__mw.s3.multipart = new Map([['stale', 'onyx/team/big.mov']]);
+    globalThis.__mw.s3.begun = new Map([['stale', Date.now()]]);
+    const out = await moveAll({ driveId: 'd1' });
+    assert.equal(out.last.status, 200, JSON.stringify(out.last.body));
+    assert.ok(!globalThis.__mw.s3.multipart.has('stale'), 'aborted');
+    assert.equal(calls('UploadPartCopyCommand'), 12);
+    assert.equal(row(f.id).storageKey, 'team/big.mov');
+  });
+});
+
+describe('a drive inside the one chosen', () => {
+  const ACME = { id: 'd5', name: 'Acme', bucket: 'onyx', prefix: 'team/Clients/Acme', region: 'us-east-1' };
+
+  test('a file that would land inside it stays outside, saying where; the rest move, and the folders wait', async () => {
+    globalThis.__mw.drives.push(ACME);
+    globalThis.__mw.folders.set('\u0000Clients/Acme', { tag: '', name: 'Clients/Acme', tags: ['acme'] });
+    globalThis.__mw.s3.objects.set('onyx/files/Clients/Acme/Empty/', { size: 0, etag: md5(Buffer.alloc(0)) });
+    const plan = await file('files/Clients/Acme/plan.pdf', { folder: 'Clients/Acme' });
+    const other = await file('files/Clients/other.pdf', { folder: 'Clients' });
+    const out = await move({ driveId: 'd1' });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.deepEqual([out.body.moved, out.body.blocked, out.body.folders], [1, 1, 0]);
+    assert.match(out.body.error, /inside “Acme”/);
+    assert.equal(row(plan.id).storageKey, 'files/Clients/Acme/plan.pdf');
+    assert.equal(row(other.id).storageKey, 'team/Clients/other.pdf');
+    assert.deepEqual(underPrefix('onyx', 'team/Clients/Acme'), []);
+    assert.deepEqual(rowsIn('').map((r) => r.name), ['Clients/Acme']);
+  });
+
+  test('a folder inside it is refused before anything moves', async () => {
+    globalThis.__mw.drives.push(ACME);
+    await file('files/a.jpg');
+    const out = await move({ driveId: 'd1', folder: 'Clients/Acme/In' });
+    assert.equal(out.status, 409);
+    assert.match(out.body.error, /inside the drive “Acme”/);
+    assert.deepEqual(globalThis.__mw.s3.copies, []);
+  });
+});
+
+describe('the folders, once every file is in', () => {
+  test('a folder still holding a file that could not be moved is copied: both keep its tags, and it moves with the last of them', async () => {
+    globalThis.__mw.folders.set('\u0000Shoot', { tag: '', name: 'Shoot', tags: ['spring'] });
+    await file('files/Shoot/a.jpg', { folder: 'Shoot' });
+    const b = await file('files/Shoot/b.jpg', { folder: 'Shoot' });
+    globalThis.__mw.s3.failCopy = (key) => key === 'team/Shoot/a.jpg';
+    const first = await move({ driveId: 'd1' });
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.deepEqual([first.body.moved, first.body.failed, first.body.left, first.body.copied], [1, 1, 1, 1]);
+    assert.match(first.body.error, /“a\.jpg” \(InternalError\)/, 'the file named');
+    assert.equal(row(b.id).storageKey, 'team/Shoot/b.jpg');
+    assert.deepEqual(rowsIn('').map((r) => [r.name, r.tags]), [['Shoot', ['spring']]], 'the library keeps it');
+    assert.deepEqual(rowsIn('team').map((r) => [r.name, r.tags]), [['Shoot', ['spring']]], 'and the drive has it');
+    assert.equal((await look()).body.run, null, 'the run has ended');
+    globalThis.__mw.s3.failCopy = null;
+    const again = await move({ driveId: 'd1' });
+    assert.deepEqual([again.status, again.body.moved, again.body.folders, again.body.copied], [200, 1, 1, 0]);
+    assert.deepEqual(rowsIn(''), []);
+    assert.deepEqual(rowsIn('team').map((r) => [r.name, r.tags]), [['Shoot', ['spring']]]);
+  });
+
+  test('a file with nothing stored to move is named, stays, and holds nothing up', async () => {
+    const g = globalThis.__mw;
+    g.folders.set('\u0000Shoot', { tag: '', name: 'Shoot', tags: ['spring'] });
+    const a = await file('files/Shoot/a.jpg', { folder: 'Shoot' });
+    // Gone from the bucket outside the app, and one of a drive since deleted
+    // whose own bucket kept it: neither is in the Storage bucket.
+    const gone = await file('files/Shoot/gone.jpg', { folder: 'Shoot' });
+    g.s3.objects.delete('onyx/files/Shoot/gone.jpg');
+    const vaulted = await file('old-drive/Shoot/v.jpg', { folder: 'Shoot' });
+    g.s3.objects.set('vault/old-drive/Shoot/v.jpg', g.s3.objects.get('onyx/old-drive/Shoot/v.jpg'));
+    g.s3.objects.delete('onyx/old-drive/Shoot/v.jpg');
+    for (let n = 0; n < 2; n++) {
+      const out = await move({ driveId: 'd1' });
+      assert.equal(out.status, 200, JSON.stringify(out.body));
+      assert.deepEqual([out.body.moved, out.body.missing, out.body.failed, out.body.left], [n ? 0 : 1, 2, 0, 2]);
+      assert.deepEqual(out.body.missingNames.sort(), ['gone.jpg', 'v.jpg']);
+      assert.equal(out.body.error, null);
+    }
+    assert.equal(row(a.id).storageKey, 'team/Shoot/a.jpg');
+    assert.deepEqual([row(gone.id).storageKey, row(vaulted.id).storageKey], ['files/Shoot/gone.jpg', 'old-drive/Shoot/v.jpg']);
+    assert.deepEqual(underPrefix('onyx', 'team'), ['team/Shoot/a.jpg'], 'nothing half-made for them');
+    assert.deepEqual(rowsIn('').map((r) => r.name), ['Shoot'], 'their folder stays with them');
+    assert.deepEqual(rowsIn('team').map((r) => [r.name, r.tags]), [['Shoot', ['spring']]], 'and the moved file has its tags');
+    assert.deepEqual([...(g.moveCopies || new Map()).keys()], []);
+    assert.deepEqual([...g.uploadKeys.keys()], []);
+  });
+
+  test('a folder the library stored decomposed lands where its files did, composed, with its tags and its twin’s', async () => {
+    const NFD = 'Café';
+    const NFC = 'Café';
+    const g = globalThis.__mw;
+    g.folders.set(`\u0000${NFD}`, { tag: '', name: NFD, tags: ['paris'] });
+    g.folders.set(`\u0000${NFC}`, { tag: '', name: NFC, tags: ['lyon'], metadata: { city: 'Lyon' } });
+    const f = await file(`files/${NFD}/a.jpg`, { folder: NFD });
+    const out = await move({ driveId: 'd1' });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.equal(row(f.id).folder, NFC);
+    assert.deepEqual(rowsIn(''), []);
+    assert.deepEqual(rowsIn('team'), [{ tag: 'team', name: NFC, tags: ['paris', 'lyon'], metadata: { city: 'Lyon' } }]);
+  });
+
+  test('a link follows its folder only where the drive had no folder of that name: it never opens the drive’s own files', async () => {
+    const g = globalThis.__mw;
+    _setFolderMoveBudgetMs(0); // a file a call: what the first decided holds for the rest
+    await file('team/Shoot/secret.jpg', { folder: 'Shoot', bytes: 'the drive’s own' });
+    await file('files/Shoot/a.jpg', { folder: 'Shoot' });
+    await file('files/Fresh/b.jpg', { folder: 'Fresh' });
+    g.shares.set('shoot', { token: 'shoot', kind: 'folder', folder: 'Shoot', storage_prefix: null, mode: 'public' });
+    g.shares.set('fresh', { token: 'fresh', kind: 'folder', folder: 'Fresh', storage_prefix: null, mode: 'public' });
+    const done = await moveAll({ driveId: 'd1' });
+    assert.equal(done.last.status, 200, JSON.stringify(done.last.body));
+    assert.equal(done.moved, 2);
+    assert.deepEqual([done.last.body.links, done.last.body.linksLeft], [1, 1]);
+    assert.deepEqual([g.shares.get('fresh').storage_prefix, g.shares.get('fresh').folder], ['team', 'Fresh']);
+    assert.deepEqual([g.shares.get('shoot').storage_prefix, g.shares.get('shoot').folder], [null, 'Shoot'], 'left with the library');
+  });
+
+  test('empty folders’ markers are found a level at a time, never reading inside a drive', async () => {
+    const g = globalThis.__mw;
+    // A drive under the library's own prefix: its objects are its own, and not listed.
+    g.drives.push({ id: 'd6', name: 'Marketing', bucket: 'onyx', prefix: 'files/Marketing', region: 'us-east-1' });
+    for (let i = 0; i < 3; i++) g.s3.objects.set(`onyx/files/Marketing/deep/${i}.jpg`, { size: 1, etag: md5(Buffer.from(String(i))) });
+    g.s3.objects.set('onyx/files/Marketing/Kept/', { size: 0, etag: md5(Buffer.alloc(0)) });
+    g.s3.objects.set('onyx/files/Empty/Inner/', { size: 0, etag: md5(Buffer.alloc(0)) });
+    await file('files/a.jpg');
+    const out = await move({ driveId: 'd1' });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.ok(stored('team/Empty/Inner/'));
+    assert.equal(stored('files/Empty/Inner/'), null);
+    assert.ok(stored('files/Marketing/Kept/'), 'the drive’s own stay');
+    assert.ok(!g.s3.lists.some((p) => p.startsWith('files/Marketing/')), 'and are never listed');
   });
 });
