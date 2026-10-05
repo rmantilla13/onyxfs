@@ -6,13 +6,16 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { handleMessage, handleBody, PROTOCOL_VERSIONS } from '../lib/mcp/server.js';
-import { TOOLS, listTools } from '../lib/mcp/tools.js';
+import { TOOLS, listTools, driveOf } from '../lib/mcp/tools.js';
 import { refusalText } from '../lib/mcp/call.js';
 
 const ORIGIN = 'https://onyx.test';
 
 /** A ctx whose routes are `routes[`${method} ${path}`]` → { status, body }, recording each call. */
-function fakeCtx(routes) {
+const DRIVES = { filespaces: [{ id: 'd1', name: 'Footage', role: 'editor', prefix: 'footage' }] };
+
+function fakeCtx(given) {
+  const routes = { 'GET /api/space/filespaces': DRIVES, ...given };
   const calls = [];
   return {
     origin: ORIGIN,
@@ -36,7 +39,7 @@ const resultJson = (res) => JSON.parse(res.result.content[0].text);
 const file = (over = {}) => ({
   id: 'f1', name: 'shot.jpg', folder: 'Shoots/Day 1', kind: 'image', mime: 'image/jpeg', size: 1234,
   tags: ['hero'], metadata: { client: 'Acme', placeholder: 'data:…' }, createdAt: 1_700_000_000_000,
-  reviewStatus: 'approved', openComments: 2, thumbnailKey: '_thumbs/x.webp', ...over,
+  reviewStatus: 'approved', openComments: 2, thumbnailKey: '_thumbs/x.webp', storageKey: 'footage/Shoots/Day 1/shot.jpg', ...over,
 });
 
 describe('the protocol', () => {
@@ -101,7 +104,7 @@ describe('finding and reading', () => {
   test('search: the query, scope and filters go to /api/files, and files come back compact', async () => {
     const ctx = fakeCtx({ 'GET /api/files': { files: [file()], cursor: 'c2', total: 41 } });
     const out = resultJson(await callTool('onyx_search_files', { query: 'beach', drive_id: 'd1', folder: 'Shoots', kinds: ['image', 'video'], tags: ['hero'] }, ctx));
-    const q = ctx.calls[0].query;
+    const q = ctx.calls.find((c) => c.path === '/api/files').query;
     assert.equal(q.q, 'beach');
     assert.equal(q.filespace, 'd1');
     assert.equal(q.folderPrefix, 'Shoots');
@@ -126,8 +129,9 @@ describe('finding and reading', () => {
         { folder: 'Shoots/Day 1/Raw', name: 'Raw', parent: 'Shoots/Day 1', count: 9 },
       ] },
     });
-    const out = resultJson(await callTool('onyx_browse_folder', { folder: '/Shoots/' }, ctx));
+    const out = resultJson(await callTool('onyx_browse_folder', { drive_id: 'd1', folder: '/Shoots/' }, ctx));
     assert.equal(ctx.calls.find((c) => c.path === '/api/files').query.folder, 'Shoots');
+    assert.equal(ctx.calls.find((c) => c.path === '/api/files').query.filespace, 'd1');
     assert.deepEqual(out.subfolders, [{ path: 'Shoots/Day 1', name: 'Day 1', files: 2, tags: ['wedding'] }]);
   });
 
@@ -165,7 +169,7 @@ describe('finding and reading', () => {
     const realFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response('hello world, a long note');
     try {
-      const ctx2 = fakeCtx({ 'GET /api/files/n1': { file: file({ id: 'n1', name: 'notes.md', mime: 'text/markdown', url: 'https://bucket/n' }) } });
+      const ctx2 = fakeCtx({ 'GET /api/files/n1': { file: file({ id: 'n1', name: 'notes.md', mime: 'text/markdown', url: 'https://bucket/n', storageKey: 'footage/notes.md' }) } });
       const out = resultJson(await callTool('onyx_read_text', { file_id: 'n1', max_chars: 100 }, ctx2));
       assert.equal(out.text, 'hello world, a long note');
       assert.equal(out.truncated, false);
@@ -173,7 +177,7 @@ describe('finding and reading', () => {
   });
 
   test('a transcript\'s segments, as { start, end, text }', async () => {
-    const ctx = fakeCtx({ 'GET /api/files/v1/transcript': { transcript: { status: 'done', language: 'en', segments: [{ s: 0, e: 1.5, t: 'Hi.' }] } } });
+    const ctx = fakeCtx({ 'GET /api/files/v1': { file: file({ id: 'v1', kind: 'video' }) }, 'GET /api/files/v1/transcript': { transcript: { status: 'done', language: 'en', segments: [{ s: 0, e: 1.5, t: 'Hi.' }] } } });
     const out = resultJson(await callTool('onyx_get_transcript', { file_id: 'v1' }, ctx));
     assert.deepEqual(out.segments, [{ start: 0, end: 1.5, text: 'Hi.' }]);
   });
@@ -184,7 +188,7 @@ describe('collections and organizing', () => {
     const rules = [{ field: 'tag', op: 'any', values: ['hero'] }];
     const ctx = fakeCtx({ 'POST /api/collections': { status: 201, body: { collection: { id: 'c1', name: 'Heroes' } } } });
     const out = resultJson(await callTool('onyx_create_collection', { name: 'Heroes', drive_id: 'd1', rules }, ctx));
-    assert.deepEqual(ctx.calls[0].body, { name: 'Heroes', driveId: 'd1', match: 'all', rules });
+    assert.deepEqual(ctx.calls.at(-1).body, { name: 'Heroes', driveId: 'd1', match: 'all', rules });
     assert.equal(out.collection.id, 'c1');
   });
 
@@ -212,8 +216,9 @@ describe('collections and organizing', () => {
       'PATCH /api/files/folders': () => (++n < 3 ? { status: 202, body: { more: true } } : { body: { ok: true, files: 2885, folders: 4 } }),
     });
     const out = resultJson(await callTool('onyx_move_folder', { from: 'A', to: 'B', drive_id: 'd1' }, ctx));
-    assert.equal(ctx.calls.length, 3);
-    assert.ok(ctx.calls.every((c) => c.body.resumable === true && c.body.filespaceId === 'd1'));
+    const steps = ctx.calls.filter((c) => c.path === '/api/files/folders');
+    assert.equal(steps.length, 3);
+    assert.ok(steps.every((c) => c.body.resumable === true && c.body.filespaceId === 'd1'));
     assert.equal(out.files_moved, 2885);
   });
 
@@ -227,13 +232,14 @@ describe('collections and organizing', () => {
 
 describe('sharing and review', () => {
   test('a share link is asked for as the web asks', async () => {
-    const ctx = fakeCtx({ 'POST /api/files/f1/shares': { body: { share: { url: 'https://onyx.test/s/abc' } } } });
+    const ctx = fakeCtx({ 'GET /api/files/f1': { file: file() }, 'POST /api/files/f1/shares': { body: { share: { url: 'https://onyx.test/s/abc' } } } });
     await callTool('onyx_create_share_link', { file_id: 'f1', kind: 'public', review: 'comment' }, ctx);
-    assert.deepEqual(ctx.calls[0].body, { kind: 'public', password: undefined, expires: '7', review: 'comment' });
+    assert.deepEqual(ctx.calls.at(-1).body, { kind: 'public', password: undefined, expires: '7', review: 'comment' });
   });
 
   test('comments: the thread, without deleted ones; a reply names its parent', async () => {
     const ctx = fakeCtx({
+      'GET /api/files/f1': { file: file() },
       'GET /api/files/f1/review': { body: { comments: [
         { id: 'c1', body: 'Brighter?', author: { name: 'Sam' }, createdAt: 1, frameIn: 48 },
         { id: 'c2', body: '', deletedAt: 5, author: {} },
@@ -254,4 +260,59 @@ test('refusalText', () => {
   assert.equal(refusalText({ status: 400, body: { error: 'Nope.' } }), 'Nope.');
   assert.match(refusalText({ status: 404, body: null }), /Not found/);
   assert.match(refusalText({ status: 403 }), /not allowed/);
+});
+
+describe('drives are the boundary', () => {
+  test('a listing, search or change names a drive this account can open', async () => {
+    for (const [name, args] of [
+      ['onyx_search_files', { query: 'x' }],
+      ['onyx_browse_folder', { folder: '' }],
+      ['onyx_create_collection', { name: 'X', rules: [{ field: 'kind', values: ['image'] }] }],
+      ['onyx_tag_folder', { folder: 'A', tags: [] }],
+      ['onyx_move_folder', { from: 'A', to: 'B' }],
+    ]) {
+      const ctx = fakeCtx({});
+      const none = await callTool(name, args, ctx);
+      assert.equal(none.result.isError, true, name);
+      assert.match(none.result.content[0].text, /drive/);
+      const other = await callTool(name, { ...args, drive_id: 'someone-elses' }, fakeCtx({}));
+      assert.equal(other.result.isError, true, name);
+      assert.ok(!ctx.calls.some((c) => c.path !== '/api/space/filespaces'), `${name}: nothing else asked`);
+    }
+    const listed = (await handleMessage(rpc('tools/list'), fakeCtx({}))).result.tools;
+    for (const t of listed.filter((x) => 'drive_id' in (x.inputSchema.properties || {}))) {
+      assert.ok(t.inputSchema.required.includes('drive_id'), t.name);
+    }
+  });
+
+  test('a file in no drive is not reachable, by any tool', async () => {
+    const loose = file({ storageKey: 'uploads/shot.jpg' });
+    for (const name of ['onyx_get_file', 'onyx_view_image', 'onyx_list_comments', 'onyx_get_transcript', 'onyx_create_share_link']) {
+      const ctx = fakeCtx({ 'GET /api/files/f1': { file: loose } });
+      const res = await callTool(name, { file_id: 'f1', kind: 'private' }, ctx);
+      assert.equal(res.result.isError, true, name);
+      assert.match(res.result.content[0].text, /not in a drive/);
+      assert.equal(ctx.calls.filter((c) => c.path !== '/api/space/filespaces' && c.path !== '/api/files/f1').length, 0, name);
+    }
+    const ctx = fakeCtx({ 'GET /api/files/f1': { file: loose } });
+    await callTool('onyx_update_file', { file_id: 'f1', name: 'x.jpg' }, ctx);
+    assert.ok(!ctx.calls.some((c) => c.method === 'PATCH'), 'nothing changed');
+  });
+
+  test('a drive whose prefix only starts the same is not the file\'s drive', () => {
+    assert.equal(driveOf({ storageKey: 'footage-old/a.jpg' }, [{ id: 'd1', prefix: 'footage' }]), null);
+    assert.equal(driveOf({ storageKey: 'footage/a.jpg' }, [{ id: 'd1', prefix: 'footage' }]).id, 'd1');
+    assert.equal(driveOf({ storageKey: null }, [{ id: 'd1', prefix: 'footage' }]), null);
+  });
+
+  test('collections outside drives are neither listed nor opened', async () => {
+    const all = { collections: [{ id: 'lib', driveId: null, name: 'Loose' }, { id: 'c1', driveId: 'd1', name: 'Heroes' }], fields: [], canCreate: ['', 'd1'] };
+    const out = resultJson(await callTool('onyx_list_collections', {}, fakeCtx({ 'GET /api/collections': all })));
+    assert.deepEqual(out.collections.map((c) => c.id), ['c1']);
+    assert.deepEqual(out.can_create_in, ['d1']);
+    const ctx = fakeCtx({ 'GET /api/collections': all, 'GET /api/files': { files: [] } });
+    const res = await callTool('onyx_list_collection_files', { collection_id: 'lib' }, ctx);
+    assert.equal(res.result.isError, true);
+    assert.ok(!ctx.calls.some((c) => c.path === '/api/files'));
+  });
 });
