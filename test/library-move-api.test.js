@@ -41,10 +41,13 @@ sdk.S3Client.prototype.send = async function send(cmd) {
   switch (cmd.constructor.name) {
     case 'HeadObjectCommand': {
       // A test failing HEADs (b.failHead) sees what a throttled or broken bucket leaves;
-      // one watching them (b.onHead) can act between a look and what follows it.
+      // one watching them (b.onHead) can act between a look and what follows it; one
+      // holding them (b.holdHead) lets other work run after the bucket has answered
+      // and before the caller hears it.
       if (b.failHead?.(i.Key)) throw Object.assign(new Error('SlowDown'), { name: 'SlowDown', $metadata: { httpStatusCode: 503 } });
       b.onHead?.(i.Key);
       const o = b.objects.get(at(i.Key));
+      await b.holdHead?.(i.Key);
       if (!o) throw missing('NotFound');
       return { ContentLength: o.size, ETag: `"${o.etag}"`, ...(o.modified != null && { LastModified: new Date(o.modified) }) };
     }
@@ -62,6 +65,8 @@ sdk.S3Client.prototype.send = async function send(cmd) {
       if (!o) throw missing('NoSuchKey');
       b.objects.set(at(i.Key), { ...o });
       b.copies.push(at(i.Key));
+      // One watching them (b.onCopy) can act once a copy has landed.
+      b.onCopy?.(i.Key);
       return {};
     }
     case 'ListObjectsV2Command': {
@@ -465,6 +470,55 @@ describe('stopping and carrying on', () => {
     assert.equal(stored('team/orphan.jpg'), null);
     assert.ok(stored('files/kept.jpg'), 'the trashed file’s object waits at its key');
   });
+
+  test('two rows sharing an original carry on from their own copies: neither tidies away the other’s', async () => {
+    const g = globalThis.__mw;
+    const a = await file('files/shared.jpg', { name: 'a.jpg', bytes: 'shared' });
+    const b = await store.createFile({ name: 'b.jpg', size: 6, storage: 's3', storageKey: 'files/shared.jpg' });
+    // An earlier call, cut off, left a noted copy for each.
+    g.moveCopies = new Map([['team/a.jpg', 'files/shared.jpg'], ['team/b.jpg', 'files/shared.jpg']]);
+    for (const k of ['team/a.jpg', 'team/b.jpg']) g.s3.objects.set(`onyx/${k}`, { ...stored('files/shared.jpg') });
+    // b has been told its copy is there; before it hears so, a moves and tidies what it may.
+    let held = false;
+    g.s3.holdHead = async (key) => {
+      if (key !== 'team/b.jpg' || held) return;
+      held = true;
+      while (row(a.id).storageKey !== 'team/a.jpg') await new Promise((r) => setTimeout(r, 1));
+      for (let i = 0; i < 50 && stored('team/b.jpg'); i++) await new Promise((r) => setTimeout(r, 1));
+    };
+    const out = await move({ driveId: 'd1' });
+    assert.equal(out.status, 200, JSON.stringify(out.body));
+    assert.deepEqual([out.body.moved, out.body.error], [2, null]);
+    assert.ok(held, 'b carried on from its copy');
+    assert.deepEqual([row(a.id).storageKey, row(b.id).storageKey], ['team/a.jpg', 'team/b.jpg']);
+    for (const k of ['team/a.jpg', 'team/b.jpg']) assert.equal(stored(k)?.etag, md5(Buffer.from('shared')), `${k} is there`);
+    assert.equal(stored('files/shared.jpg'), null, 'the original goes once neither holds it');
+    assert.equal(g.s3.copies.length, 0, 'no copy made again');
+    assert.deepEqual([...g.moveCopies.keys()], []);
+  });
+
+  test('a copy made for a row still at a shared original stays until that row has moved, and goes then', async () => {
+    const g = globalThis.__mw;
+    const a = await file('files/shared.jpg', { name: 'a.jpg', bytes: 'shared' });
+    const b = await store.createFile({ name: 'b.jpg', size: 6, storage: 's3', storageKey: 'files/shared.jpg', visibility: 'owner' });
+    // An earlier run into Studio copied b there and was cut off; a call of it
+    // that lost its lease could still point b at that copy.
+    g.moveCopies = new Map([['studio/b.jpg', 'files/shared.jpg']]);
+    g.s3.objects.set('onyx/studio/b.jpg', { ...stored('files/shared.jpg') });
+    const first = await move({ driveId: 'd1' });
+    assert.deepEqual([first.status, first.body.moved, first.body.stays], [200, 1, 1], JSON.stringify(first.body));
+    assert.equal(row(a.id).storageKey, 'team/a.jpg');
+    assert.ok(stored('studio/b.jpg'), 'b’s copy stays while b is at the original');
+    assert.ok(stored('files/shared.jpg'));
+    assert.equal(g.moveCopies.get('studio/b.jpg'), 'files/shared.jpg');
+
+    const second = await move({ driveId: 'd1', private: true });
+    assert.deepEqual([second.status, second.body.moved], [200, 1], JSON.stringify(second.body));
+    assert.equal(row(b.id).storageKey, 'team/b.jpg');
+    assert.deepEqual(underPrefix('onyx', 'studio'), [], 'and goes once b has moved');
+    assert.equal(stored('files/shared.jpg'), null);
+    assert.deepEqual([...g.moveCopies.keys()], []);
+  });
 });
 
 describe('what follows the files', () => {
@@ -650,6 +704,51 @@ describe('one call at a time', () => {
     assert.match(r.body.error, /being moved into “B”/);
     assert.ok(stored('team/A/x.jpg'));
     assert.equal(stored('team/B/x.jpg'), null);
+  });
+
+  test('a move that finishes a file at a key while a rename onto it is looking is not written over', async () => {
+    const g = globalThis.__mw;
+    const mine = await file('team/A/x.jpg', { folder: 'A', bytes: 'drive bytes' });
+    const loose = await file('files/B/x.jpg', { folder: 'B', bytes: 'library bytes' });
+    // The rename has asked the bucket and been told nothing is there; before it
+    // hears so, a whole move runs: noted, copied, re-keyed, original gone, note forgotten.
+    let moving = null;
+    g.s3.holdHead = async (key) => {
+      if (key !== 'team/B/x.jpg' || moving) return;
+      moving = move({ driveId: 'd1' });
+      await moving;
+    };
+    const r = await as(ED, foldersRoute.PATCH, '/api/files/folders', 'PATCH', { from: 'A', to: 'B', filespaceId: 'd1', resumable: true });
+    const moved = await moving;
+    assert.deepEqual([moved.status, moved.body.moved], [200, 1], JSON.stringify(moved.body));
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.match(r.body.error, /already stored at team\/B\/x\.jpg/);
+    assert.equal(row(loose.id).storageKey, 'team/B/x.jpg');
+    assert.equal(stored('team/B/x.jpg').etag, md5(Buffer.from('library bytes')), 'the moved file keeps its bytes');
+    assert.deepEqual([row(mine.id).storageKey, row(mine.id).folder], ['team/A/x.jpg', 'A']);
+    assert.equal(stored('team/A/x.jpg').etag, md5(Buffer.from('drive bytes')));
+    assert.equal(g.moveCopies.has('team/B/x.jpg'), false, 'the rename’s note on it is forgotten');
+  });
+
+  test('a file that comes to a new key while a rename copies is never pointed at twice: nothing is renamed', async () => {
+    const g = globalThis.__mw;
+    const mine = await file('team/A/x.jpg', { folder: 'A', bytes: 'drive bytes' });
+    let other = null;
+    // Once the rename's copy has landed, something else records a file at that key
+    // (an upload, a file moved there) before the catalog moves.
+    g.s3.onCopy = (key) => {
+      if (key !== 'team/B/x.jpg' || other) return;
+      g.s3.objects.set('onyx/team/B/x.jpg', { size: 12, etag: md5(Buffer.from('upload bytes')) });
+      other = store.createFile({ name: 'x.jpg', folder: 'Elsewhere', size: 12, storage: 's3', storageKey: 'team/B/x.jpg' });
+    };
+    const r = await as(ED, foldersRoute.PATCH, '/api/files/folders', 'PATCH', { from: 'A', to: 'B', filespaceId: 'd1' });
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    assert.match(r.body.error, /already stored at team\/B\/x\.jpg.*Nothing was renamed/);
+    assert.deepEqual([row(mine.id).storageKey, row(mine.id).folder], ['team/A/x.jpg', 'A']);
+    assert.equal(stored('team/A/x.jpg').etag, md5(Buffer.from('drive bytes')));
+    assert.equal(row((await other).id).storageKey, 'team/B/x.jpg');
+    assert.equal(stored('team/B/x.jpg').etag, md5(Buffer.from('upload bytes')), 'what that file holds is not undone');
+    assert.deepEqual([...g.moveCopies.keys()], []);
   });
 });
 

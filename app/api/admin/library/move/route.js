@@ -341,9 +341,10 @@ async function moveFiles({ gate, base, drive, drives, way, prefix, under, after,
   // originals to delete, copies to carry on from, and copies nothing will use
   // (noteState) — with any copy in parts still open at one. A copy of a file
   // still at its original, made for another drive or folder than this run's,
-  // waits until the file has moved, and goes then (moveOne): until the row
-  // has left the original, a call that made it — one that lost its lease and
-  // runs on — could still be about to point the row at it.
+  // waits until every file at that original has moved, and goes with the
+  // last of them (moveOne): until a row has left the original, a call that
+  // made it — one that lost its lease and runs on — could still be about to
+  // point the row at it.
   const reuse = new Map();
   for (let at = ''; ;) {
     const notes = await libraryMoveNotes({ drivePrefixes, after: at, limit: NOTES_PAGE });
@@ -487,15 +488,22 @@ async function moveFiles({ gate, base, drive, drives, way, prefix, under, after,
     // The original goes once nothing holds it — another row may share it —
     // and the note with it. A failure leaves both, for the next call. So do
     // copies an earlier run made of it elsewhere, now nothing can point at
-    // them — each only while it is still the file's bytes (ourCopy).
-    const others = noted.filter((n) => n.toKey !== to.key);
-    const landedAs = others.length ? await s3HeadObject(dest, to.key) : null;
+    // them — each only while it is still the file's bytes (ourCopy). While
+    // another row is still at the original, they all stay: that row may be
+    // carrying on from one of them in this very call, its copy found and
+    // its row not yet pointed there, and the last of them to move tidies
+    // the rest. Nor is a key this call has held for a file (`claimed`) ever
+    // tidied here: only the file it was held for gives it up.
+    let shared = true;
     try {
-      if (!(await storageKeyInUse(fromKey))) await s3DeleteObject(base, fromKey);
+      shared = await storageKeyInUse(fromKey);
+      if (!shared) await s3DeleteObject(base, fromKey);
       await forgetFolderMoveCopies([to.key]);
     } catch {
       count.leftovers += 1;
     }
+    const others = shared ? [] : noted.filter((n) => n.toKey !== to.key && !claimed.has(n.toKey));
+    const landedAs = others.length ? await s3HeadObject(dest, to.key) : null;
     for (const n of others) {
       try {
         if (await ourCopy(n.cfg, n.toKey, { of: landedAs, notedAt: n.notedAt }) !== false) await dropCopy(n.cfg, n.toKey);

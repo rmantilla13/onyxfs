@@ -105,6 +105,44 @@ test('folders: a rename that cannot commit changes nothing', { skip }, async () 
   assert.equal(row.n, 1);
 });
 
+test('folders: a rename onto a key another file holds changes nothing, and says which', { skip }, async () => {
+  const x = await file(`${T}/Hold`, `files/${T}/Hold/x.txt`);
+  const blob = await file(`${T}/Hold`, null, 'blob');
+  await db.createFolder(`${T}/Hold/Sub`, {});
+  await db.grantFolderAccess({ folder: `${T}/Hold`, subjectType: 'user', subject: 'h@example.com', role: 'editor' });
+  const plan = (key) => ({
+    moves: [{ id: x.id, folder: `${T}/Held`, toKey: key }],
+    catalog: [{ id: blob.id, folder: `${T}/Held` }],
+  });
+  const unchanged = async () => {
+    const still = await db.getFileById(x.id);
+    assert.deepEqual([still.folder, still.storageKey], [`${T}/Hold`, `files/${T}/Hold/x.txt`]);
+    assert.equal((await db.getFileById(blob.id)).folder, `${T}/Hold`);
+    const dirs = await db.sql`SELECT name FROM folders WHERE name LIKE ${`${T}/Hel%`} OR name LIKE ${`${T}/Hold%`} ORDER BY name`;
+    assert.deepEqual(dirs.map((d) => d.name), [`${T}/Hold`, `${T}/Hold/Sub`]);
+    const grants = await db.sql`SELECT folder FROM folder_access WHERE subject = 'h@example.com'`;
+    assert.deepEqual(grants.map((g) => g.folder), [`${T}/Hold`]);
+  };
+
+  // A live file at the new key, in a folder of its own.
+  const live = await file(`${T}/Other`, `files/${T}/Held/x.txt`);
+  await assert.rejects(db.renameFolder(`${T}/Hold`, `${T}/Held`, plan(`files/${T}/Held/x.txt`)),
+    (e) => e.code === 'taken' && e.key === `files/${T}/Held/x.txt`);
+  await unchanged();
+
+  // A file in the trash whose object was moved aside there, at the new key.
+  const trashed = await file(`${T}/Other`, `files/${T}/Other/t.txt`);
+  await db.sql`UPDATE files SET deleted_at = ${Date.now()}, trash_key = ${`files/${T}/Held/y.txt`} WHERE id = ${trashed.id}`;
+  await assert.rejects(db.renameFolder(`${T}/Hold`, `${T}/Held`, plan(`files/${T}/Held/y.txt`)), (e) => e.code === 'taken');
+  await unchanged();
+
+  // A key nobody holds: the rename goes through.
+  const out = await db.renameFolder(`${T}/Hold`, `${T}/Held`, plan(`files/${T}/Held/z.txt`));
+  assert.equal(out.files, 2);
+  assert.equal((await db.getFileById(x.id)).storageKey, `files/${T}/Held/z.txt`);
+  assert.equal((await db.getFileById(live.id)).storageKey, `files/${T}/Held/x.txt`);
+});
+
 test('folders: grants are copied, not moved, when another scope keeps files at the old path', { skip }, async () => {
   await file(`${T}/Shared`, `files/${T}/Shared/s.txt`);
   await db.grantFolderAccess({ folder: `${T}/Shared`, subjectType: 'role', subject: 'member', role: 'viewer' });

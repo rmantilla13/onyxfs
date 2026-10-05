@@ -294,7 +294,12 @@ export async function PATCH(req) {
     // rename waits for the move instead — asked here, and again when this
     // rename notes its own copies, which never take over such a key
     // (claimFolderMoveCopies), so a move that notes one in between is not
-    // missed.
+    // missed. One that finishes a file at a key in between — noted, copied,
+    // its row pointed there, its note forgotten, all while this rename was
+    // looking — is seen once this rename's notes are in, by asking which of
+    // the keys a file holds: a move points its row before it forgets its
+    // note, so one or the other is always there to see, and a key a file
+    // holds is never copied to.
     const movingIn = () => answer(409, {
       error: `Files from outside every drive are being moved into “${to}”, or a move of them stopped part-way. Once that move has finished — run it again from Admin → Usage if it stopped — try again. Nothing was renamed.`,
     });
@@ -361,6 +366,17 @@ export async function PATCH(req) {
     } else if (todo.length) {
       await noteFolderMoveCopies(todo);
     }
+    if (todo.length) {
+      const held = await storageKeysInUse(todo.map((m) => m.toKey));
+      const kept = todo.find((m) => held.has(m.toKey));
+      if (kept) {
+        // The notes just made go again: on a key a file holds, and on keys
+        // with nothing at them. One on a copy an earlier call made stays,
+        // for the next call to carry on from.
+        await forgetFolderMoveCopies(todo.filter((m) => held.has(m.toKey) || !there.get(m.toKey)).map((m) => m.toKey)).catch(() => {});
+        return answer(409, { error: `A file the library keeps is already stored at ${kept.toKey}. Nothing was renamed.` });
+      }
+    }
     const inPlace = () => reused.length + copied.length;
     report('copy', inPlace(), plan.moves.length);
     // A long video past 5 GiB is copied in parts (lib/storage.js copyObjectWithin).
@@ -398,6 +414,10 @@ export async function PATCH(req) {
       });
     } catch (e) {
       await undo();
+      // A new key a file came to hold while the copies were made — an
+      // upload recorded there, a file moved there: the statement moved
+      // nothing (lib/db.js renameFolder), and undo kept what that file holds.
+      if (e.code === 'taken') return answer(409, { error: `A file the library keeps is already stored at ${e.key}. Nothing was renamed.` });
       // A row landed on: this scope's own, made since the check above, or —
       // while the old primary key on folder names alone stands — another's.
       const clash = /duplicate key|unique/i.test(e.message || '');

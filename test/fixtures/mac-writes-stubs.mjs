@@ -475,6 +475,9 @@ export async function listFolderSubtreeFiles(folder) {
   }));
 }
 export async function renameFolder(from, to, { tag = '', moves = [], catalog = [] } = {}) {
+  // As the one statement: a new key another file holds, and nothing moves.
+  const taken = moves.find((m) => m.toKey && [...s().files.values()].some((o) => o.id !== m.id && holds(o, m.toKey)));
+  if (taken) throw Object.assign(new Error(`A file is already stored at ${taken.toKey}.`), { code: 'taken', key: taken.toKey });
   const mine = rowsOf().filter((r) => r.tag === tag && under(r.name, from));
   // As the one statement: every row lands, or the whole rename fails.
   for (const r of mine) {
