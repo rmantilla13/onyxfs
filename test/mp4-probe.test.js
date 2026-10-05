@@ -45,6 +45,10 @@ describe('real files', () => {
     assert.equal(p.width, 64);
     assert.equal(p.height, 36);
     assert.equal(p.codec, 'avc1');
+    // libx264 at yuv420p: High or below, 8-bit 4:2:0, and no colr to say more.
+    assert.equal(p.bitDepth, 8);
+    assert.equal(p.chroma, '4:2:0');
+    assert.equal(p.hdr, null);
     assert.equal(p.tcStart, 0);
     assert.equal(p.dropFrame, false);
     assert.ok(Math.abs(p.duration - 12 * 1001 / 24000) < 1e-9);
@@ -79,10 +83,17 @@ describe('real files', () => {
     assert.ok(f.calls.length <= 3, `${f.calls.length} reads`);
   });
 
-  test('metadata carries the frame model and nothing a probe does not own', async () => {
+  test('metadata carries the frame model and the codec, and nothing a probe does not own', async () => {
     const f = reader(fixture('prores-2997df-tc.mov'));
     const meta = probeMetadata(await probeMp4(f.readRange, { size: f.size }));
-    assert.deepEqual(meta, { fps: { num: 30000, den: 1001 }, tcStart: 107892, dropFrame: true, frames: 6 });
+    // ProRes Proxy: no avcC or hvcC to give a depth, no colr to say HDR —
+    // the codec alone, which is what decides that no browser but Safari plays it.
+    assert.deepEqual(meta, {
+      fps: { num: 30000, den: 1001 }, tcStart: 107892, dropFrame: true, frames: 6, videoCodec: { fourcc: 'apco' },
+    });
+    const h264 = reader(fixture('h264-25-head.mp4'));
+    assert.deepEqual(probeMetadata(await probeMp4(h264.readRange, { size: h264.size })).videoCodec,
+      { fourcc: 'avc1', bitDepth: 8, chroma: '4:2:0' });
     assert.deepEqual(probeMetadata(null), {});
     assert.deepEqual(probeMetadata({ fps: null, frames: 9 }), {}, 'a count without a rate means nothing');
   });
@@ -107,14 +118,14 @@ const full = (type, ...body) => box(type, zeros(4), ...body);
 const mdhd = (timescale, duration) => full('mdhd', zeros(8), u32(timescale), u32(duration), zeros(4));
 const hdlr = (kind) => full('hdlr', zeros(4), enc.encode(kind), zeros(12));
 const stts = (...entries) => full('stts', u32(entries.length), ...entries.flatMap(([n, d]) => [u32(n), u32(d)]));
-const visual = (codec, w, h) => box(codec, zeros(8), zeros(16), u16(w), u16(h), zeros(50));
+const visual = (codec, w, h, ...boxes) => box(codec, zeros(8), zeros(16), u16(w), u16(h), zeros(50), ...boxes);
 const stsd = (entry) => full('stsd', u32(1), entry);
 const tmcdEntry = ({ drop, timescale, frameDuration, base }) =>
   box('tmcd', zeros(8), zeros(4), u32(drop ? 1 : 0), u32(timescale), u32(frameDuration), new Uint8Array([base, 0]));
 
-function videoTrak({ timescale, delta, frames, codec = 'avc1', w = 1920, h = 1080, sttsEntries }) {
+function videoTrak({ timescale, delta, frames, codec = 'avc1', w = 1920, h = 1080, sttsEntries, entryBoxes = [] }) {
   return box('trak', box('mdia', mdhd(timescale, delta * frames), hdlr('vide'),
-    box('minf', box('stbl', stsd(visual(codec, w, h)), stts(...(sttsEntries || [[frames, delta]]))))));
+    box('minf', box('stbl', stsd(visual(codec, w, h, ...entryBoxes)), stts(...(sttsEntries || [[frames, delta]]))))));
 }
 function tmcdTrak({ drop, timescale, frameDuration, base, offset, wide = false }) {
   const chunk = wide ? full('co64', u32(1), u64(offset)) : full('stco', u32(1), u32(offset));
@@ -208,7 +219,91 @@ describe('built boxes', () => {
     const f = reader(cat(box('ftyp', enc.encode('isom')), moov));
     const p = await probeMp4(f.readRange, { size: f.size });
     assert.equal(p.fps, null);
-    assert.deepEqual(probeMetadata(p), {});
+    assert.deepEqual(probeMetadata(p), { videoCodec: { fourcc: 'avc1' } }, 'no frame model without its rate; the codec all the same');
+  });
+});
+
+// ── What the picture is encoded as ───────────────────────────────────────────
+// The sample entry's own boxes, as cameras and phones write them: avcC or
+// hvcC for the bit depth and chroma, colr for whether the picture is HDR.
+
+const bytes = (...n) => new Uint8Array(n);
+/** AVCDecoderConfigurationRecord: one SPS and one PPS, then the High-profile extension when given. */
+const avcC = ({ profile, ext = null }) => box('avcC',
+  bytes(1, profile, 0, 40, 0xff, 0xe1), u16(4), bytes(0x67, profile, 0, 40), bytes(1), u16(2), bytes(0x68, 0xce),
+  ...(ext ? [bytes(0xfc | ext.chroma, 0xf8 | (ext.depth - 8), 0xf8 | (ext.depth - 8), 0)] : []));
+/** HEVCDecoderConfigurationRecord with no parameter-set arrays: 23 bytes, the depth and chroma at 16 and 17. */
+const hvcC = ({ profile = 2, chroma = 1, depth = 10 }) => box('hvcC',
+  bytes(1, profile), zeros(4), zeros(6), bytes(153), u16(0xf000), bytes(0xfc), bytes(0xfc | chroma),
+  bytes(0xf8 | (depth - 8)), bytes(0xf8 | (depth - 8)), u16(0), bytes(0x0f), bytes(0));
+const nclx = (primaries, transfer, matrix) => box('colr', enc.encode('nclx'), u16(primaries), u16(transfer), u16(matrix), bytes(0));
+const nclc = (primaries, transfer, matrix) => box('colr', enc.encode('nclc'), u16(primaries), u16(transfer), u16(matrix));
+
+async function picture(codec, ...entryBoxes) {
+  const moov = box('moov', videoTrak({ timescale: 30000, delta: 1001, frames: 30, codec, entryBoxes }));
+  const f = reader(cat(box('ftyp', enc.encode('isom'), zeros(4)), moov));
+  const p = await probeMp4(f.readRange, { size: f.size });
+  return { codec: p.codec, bitDepth: p.bitDepth, chroma: p.chroma, hdr: p.hdr };
+}
+
+describe('what the picture is encoded as', () => {
+  test('an iPhone\'s HDR clip: 10-bit HEVC, HLG', async () => {
+    assert.deepEqual(await picture('hvc1', hvcC({ depth: 10 }), nclx(9, 18, 9)),
+      { codec: 'hvc1', bitDepth: 10, chroma: '4:2:0', hdr: true });
+  });
+
+  test('8-bit HEVC in BT.709 is not HDR, and says so', async () => {
+    assert.deepEqual(await picture('hev1', hvcC({ profile: 1, depth: 8 }), nclx(1, 1, 1)),
+      { codec: 'hev1', bitDepth: 8, chroma: '4:2:0', hdr: false });
+  });
+
+  test('a camera\'s 10-bit 4:2:2 HEVC, PQ', async () => {
+    assert.deepEqual(await picture('hvc1', hvcC({ chroma: 2, depth: 10 }), nclx(9, 16, 9)),
+      { codec: 'hvc1', bitDepth: 10, chroma: '4:2:2', hdr: true });
+  });
+
+  test('H.264 High with its extension: 8-bit 4:2:0', async () => {
+    assert.deepEqual(await picture('avc1', avcC({ profile: 100, ext: { chroma: 1, depth: 8 } })),
+      { codec: 'avc1', bitDepth: 8, chroma: '4:2:0', hdr: null });
+  });
+
+  test('H.264 High 4:2:2 at 10 bits, as XAVC writes it', async () => {
+    assert.deepEqual(await picture('avc1', avcC({ profile: 122, ext: { chroma: 2, depth: 10 } }), nclc(1, 1, 1)),
+      { codec: 'avc1', bitDepth: 10, chroma: '4:2:2', hdr: false });
+  });
+
+  test('an avcC without the extension: the profile\'s own depth and chroma', async () => {
+    assert.deepEqual(await picture('avc1', avcC({ profile: 77 })), { codec: 'avc1', bitDepth: 8, chroma: '4:2:0', hdr: null });
+    assert.deepEqual(await picture('avc1', avcC({ profile: 110 })), { codec: 'avc1', bitDepth: 10, chroma: '4:2:0', hdr: null });
+    assert.deepEqual(await picture('avc1', avcC({ profile: 244 })), { codec: 'avc1', bitDepth: null, chroma: '4:4:4', hdr: null });
+    assert.deepEqual(await picture('avc1', avcC({ profile: 1 })), { codec: 'avc1', bitDepth: null, chroma: null, hdr: null });
+  });
+
+  test('ProRes says only its colour, in QuickTime\'s nclc', async () => {
+    assert.deepEqual(await picture('apch', nclc(1, 1, 1)), { codec: 'apch', bitDepth: null, chroma: null, hdr: false });
+    assert.deepEqual(await picture('ap4h', nclc(9, 16, 9)), { codec: 'ap4h', bitDepth: null, chroma: null, hdr: true });
+  });
+
+  test('a colr that does not say is no answer: unspecified, an ICC profile, too short', async () => {
+    assert.equal((await picture('apcn', nclc(2, 2, 2))).hdr, null);
+    assert.equal((await picture('apcn', box('colr', enc.encode('prof'), zeros(64)))).hdr, null);
+    assert.equal((await picture('apcn', box('colr', enc.encode('nclx'), u16(9)))).hdr, null);
+  });
+
+  test('records cut short leave the depth unknown, and the codec read', async () => {
+    assert.deepEqual(await picture('hvc1', box('hvcC', bytes(1, 2, 0, 0))), { codec: 'hvc1', bitDepth: null, chroma: null, hdr: null });
+    assert.deepEqual(await picture('avc1', box('avcC', bytes(1, 100))), { codec: 'avc1', bitDepth: null, chroma: null, hdr: null });
+    // High with an SPS length that runs past the record: the profile's own.
+    const runaway = box('avcC', bytes(1, 100, 0, 40, 0xff, 0xe1), u16(400), bytes(0x67));
+    assert.deepEqual(await picture('avc1', runaway), { codec: 'avc1', bitDepth: 8, chroma: '4:2:0', hdr: null });
+  });
+
+  test('probeMetadata keeps what was read and leaves out what was not', async () => {
+    const moov = box('moov', videoTrak({ timescale: 25, delta: 1, frames: 10, codec: 'hvc1', entryBoxes: [hvcC({ depth: 10 })] }));
+    const f = reader(cat(box('ftyp', enc.encode('isom'), zeros(4)), moov));
+    const meta = probeMetadata(await probeMp4(f.readRange, { size: f.size }));
+    assert.deepEqual(meta.videoCodec, { fourcc: 'hvc1', bitDepth: 10, chroma: '4:2:0' });
+    assert.ok(!('hdr' in meta.videoCodec), 'no colr, no word on HDR');
   });
 });
 

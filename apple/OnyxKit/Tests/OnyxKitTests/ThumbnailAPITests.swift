@@ -182,6 +182,28 @@ struct ThumbnailAPITests {
         #expect(second["placeholder"] == nil)
     }
 
+    /// The record of an upload carries what its picture is encoded as, in
+    /// `media` as the thumbnail's facts go, and nothing when it is not known:
+    /// the server asks for a proxy by it (lib/proxies.js shouldProxy).
+    @Test func anUploadIsRecordedWithItsVideoCodec() async throws {
+        let stub = try ThumbStub { _ in (200, #"{"file":{"id":"f1","name":"IMG_0042.MOV","folder":"Footage","size":1000}}"#) }
+        defer { stub.tearDown() }
+        let codec = VideoCodec(fourcc: "hvc1", bitDepth: 10, chroma: "4:2:0", hdr: true)
+        let file = try await stub.api.recordFile(key: "team/Footage/IMG_0042.MOV", publicUrl: nil, name: "IMG_0042.MOV",
+                                                 size: 1000, mime: "video/quicktime", folder: "Footage", filespaceId: "d1",
+                                                 videoCodec: codec)
+        #expect(file.id == "f1")
+        let asked = try #require(stub.requests.first)
+        #expect(asked.method == "POST" && asked.path == "/api/files")
+        let media = try #require(asked.json?["media"] as? [String: Any])
+        let sent = try #require(media["videoCodec"] as? [String: Any])
+        #expect(sent["fourcc"] as? String == "hvc1" && sent["bitDepth"] as? Int == 10)
+        #expect(sent["chroma"] as? String == "4:2:0" && sent["hdr"] as? Bool == true)
+        _ = try await stub.api.recordFile(key: "team/Footage/notes.txt", publicUrl: nil, name: "notes.txt", size: 5,
+                                          mime: "text/plain", folder: "Footage", filespaceId: "d1")
+        #expect(stub.requests.last?.json?["media"] == nil)
+    }
+
     @Test func picturesGoToStorageWithTheHeadersItKeeps() async throws {
         let status = OSAllocatedUnfairLock(initialState: 200)
         let stub = try ThumbStub { _ in (status.withLock { $0 }, "") }

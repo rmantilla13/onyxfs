@@ -40,6 +40,10 @@ public struct UploadJob: Codable, Identifiable, Sendable, Equatable {
     /// file's), sent when it is recorded; nil when the writer did not say.
     public var fileCreatedAt: Date? = nil
     public var fileModifiedAt: Date? = nil
+    /// A video's codec (VideoCodec), read from the staged bytes just before
+    /// it is recorded and sent with the record; nil until then, and for
+    /// anything that is not a video this can read.
+    public var videoCodec: VideoCodec? = nil
 
     public var path: String { folder.isEmpty ? "/\(name)" : "/\(folder)/\(name)" }
 }
@@ -159,6 +163,8 @@ public actor UploadQueue {
     private var retained: [UUID: String] = [:]
     private var onChange: (@Sendable (UploadJob) -> Void)?
     private var sleep: @Sendable (Double) async -> Void
+    /// What a job's picture is encoded as (`videoCodec(of:)`; a stub in tests).
+    private let codecOf: @Sendable (UploadJob) async -> VideoCodec?
 
     /// Every job in the order it came, for jobs.json and `all`: a restart
     /// goes on in the same order. Ids of jobs that have left stay until the
@@ -204,11 +210,13 @@ public actor UploadQueue {
     private(set) var disk = DiskWrites()
 
     public init(directory: URL, transport: any UploadTransport, settle: Double = 2,
-                sleep: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(nanoseconds: UInt64($0 * 1e9)) }) throws {
+                sleep: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(nanoseconds: UInt64($0 * 1e9)) },
+                codecOf: @escaping @Sendable (UploadJob) async -> VideoCodec? = { await UploadQueue.videoCodec(of: $0) }) throws {
         self.directory = directory
         self.transport = transport
         self.settle = settle
         self.sleep = sleep
+        self.codecOf = codecOf
         let files = directory.appendingPathComponent("files")
         try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
         let (saved, logged) = Self.load(directory)
@@ -586,9 +594,21 @@ public actor UploadQueue {
             update(sent)
         }
         // As it is now: renamed while its bytes went up, it lands at the new name.
-        guard let job = jobs[id], let key = job.uploadedKey else { throw CancellationError() }
+        guard var job = jobs[id], let key = job.uploadedKey else { throw CancellationError() }
         if job.replaceOf != nil {
             return try await transport.replaceContent(job, key: key)
+        }
+        // What its picture is encoded as, sent with the record: the server
+        // asks for a proxy of a video some browser will not play whatever its
+        // size, and has only this Mac's word for it until something probes
+        // the file. Kept with the job, so ProxyService hears it with the
+        // upload. Read once, off this actor, after the bytes are up — a
+        // header walk of a file on this disk, a few milliseconds.
+        if job.videoCodec == nil, let codec = await codecOf(job) {
+            guard running[id]?.token == token, var read = jobs[id] else { throw CancellationError() }
+            read.videoCodec = codec
+            update(read)
+            job = read
         }
         do {
             return try await transport.record(job, key: key, publicUrl: job.uploadedUrl)
@@ -597,6 +617,13 @@ public actor UploadQueue {
             // recorded by the attempt before, whose answer never came back.
             return nil
         }
+    }
+
+    /// A new video's codec, from its staged bytes; nil for anything that
+    /// is not a video by its name and type (ProxyRule.isVideo).
+    public static func videoCodec(of job: UploadJob) async -> VideoCodec? {
+        guard ProxyRule.isVideo(name: job.name, mime: job.mime) else { return nil }
+        return await VideoCodec.read(URL(fileURLWithPath: job.staged))
     }
 
     /// One presigned PUT, or parts; the key the bytes are at.

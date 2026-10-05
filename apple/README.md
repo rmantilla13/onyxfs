@@ -46,8 +46,11 @@ One Swift codebase. On the Mac it is **Onyx.app**:
   Finder. It costs nothing while nothing moves (ONYXFS.md, "Activity"), and
   Settings › General (or View › Show Activity) hides it.
 - **Streamable versions of heavy videos.** A large video — an action
-  camera's 4K HEVC runs at 60–120 Mbps — stalls on a phone. The server asks
-  for a 1080p H.264 copy of each one (lib/proxies.js); this Mac takes the
+  camera's 4K HEVC runs at 60–120 Mbps — stalls on a phone, and a ProRes or
+  HEVC clip of any size will not play in every browser. The server asks for
+  a 1080p H.264 copy of each one (lib/proxies.js), knowing the second kind
+  by the codec this Mac reads from an upload's boxes as it records it
+  (`VideoCodec`); this Mac takes the
   jobs from its queue while Onyx runs, downloads the master, re-encodes it on
   the media engine (`ProxyTranscoder`, about 7× real time for 4K60 on Apple
   silicon) and uploads the copy, which the web and the iPhone then play. A

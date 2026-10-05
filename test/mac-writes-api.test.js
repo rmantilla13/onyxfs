@@ -208,12 +208,13 @@ const folders = {
 };
 
 /** The Mac's small-file upload: presign, PUT, record. Resolves the new row. */
-async function upload(who, { name = 'Take 1.mov', folder = 'Cuts', filespaceId = 'd1', bytes = Buffer.alloc(1000, 1), mime = 'video/quicktime' } = {}) {
+async function upload(who, { name = 'Take 1.mov', folder = 'Cuts', filespaceId = 'd1', bytes = Buffer.alloc(1000, 1), mime = 'video/quicktime', media } = {}) {
   const p = await presign(who, { filename: name, contentType: mime, size: bytes.length, folder, filespaceId: filespaceId || undefined });
   assert.equal(p.status, 200, JSON.stringify(p.body));
   put(p.body.putUrl, bytes);
   const r = await record(who, {
     name: p.body.name, url: p.body.publicUrl, mime, size: bytes.length, folder, storage: 's3', storageKey: p.body.key, filespace: filespaceId || undefined,
+    ...(media ? { media } : {}),
   });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   return r.body.file;
@@ -437,7 +438,7 @@ describe('the Mac’s writes', () => {
     assert.match(r.body.file.contentHash, /^[0-9a-f]{32}-3$/);
   });
 
-  test('a heavy video is queued for a proxy; a light one is not', async () => {
+  test('a heavy video is queued for a proxy; a light one only when some browser will not play it', async () => {
     const { PROXY_MIN_BYTES } = await import('../lib/proxies.js');
     const who = mac(ED);
     const queued = () => [...(globalThis.__mw.proxies || new Map()).keys()];
@@ -467,6 +468,21 @@ describe('the Mac’s writes', () => {
     await trashFile(admin, heavy.body.file.id);
     const { deleteFile } = await import('@/lib/db');
     await deleteFile(heavy.body.file.id);
+    assert.deepEqual(queued(), []);
+
+    // A light video some browser will not play is queued all the same, by
+    // the codec the Mac read from its bytes and sent as it recorded it
+    // (OnyxKit VideoCodec); a light one every browser plays is not.
+    const hevc = { fourcc: 'hvc1', bitDepth: 10, chroma: '4:2:0', hdr: true };
+    const phone = await upload(who, { name: 'IMG_0042.MOV', media: { videoCodec: hevc } });
+    assert.deepEqual(row(phone.id).metadata.videoCodec, hevc);
+    assert.deepEqual(queued(), [phone.id]);
+    const cut = await upload(who, { name: 'Export.mp4', mime: 'video/mp4', media: { videoCodec: { fourcc: 'avc1', bitDepth: 8, chroma: '4:2:0' } } });
+    assert.deepEqual(queued(), [phone.id], `an H.264 file queued a proxy: ${cut.id}`);
+    for (const id of [phone.id, cut.id]) {
+      await trashFile(admin, id);
+      await deleteFile(id);
+    }
     assert.deepEqual(queued(), []);
   });
 

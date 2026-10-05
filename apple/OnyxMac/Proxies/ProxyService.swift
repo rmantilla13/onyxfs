@@ -8,11 +8,13 @@ private let log = Logger(subsystem: OnyxIdentifiers.app, category: "proxies")
 /// Streamable versions of heavy videos, made on this Mac.
 ///
 /// A 4K master streams badly from storage — an action camera's HEVC runs at
-/// 60 to 120 Mbps, more than a phone's connection carries — so the server
-/// asks for a proxy of every large video uploaded (lib/proxies.js): a 1080p
-/// H.264 copy the web and the iPhone play instead. It never transcodes;
-/// a Mac that is signed in, running and has this on (Settings › General)
-/// takes the jobs, one at a time, as it does transcripts:
+/// 60 to 120 Mbps, more than a phone's connection carries — and a ProRes or
+/// HEVC clip of any size will not play in every browser, so the server asks
+/// for a proxy of every large video uploaded, and every one some browser
+/// will not play (lib/proxies.js): a 1080p H.264 copy the web and the iPhone
+/// play instead. It never transcodes; a Mac that is signed in, running and
+/// has this on (Settings › General) takes the jobs, one at a time, as it
+/// does transcripts:
 ///
 ///   claim      the job is this Mac's for 10 minutes; each progress report
 ///              extends that, so a Mac that quits or sleeps loses it
@@ -89,15 +91,16 @@ final class ProxyService: ObservableObject {
     }
 
     /// An upload the server has now (DriveService, before the queue lets go
-    /// of its copy). A large video will have a proxy asked for (ProxyRule),
-    /// and this Mac is likely to be the one to make it: its bytes are kept
-    /// for that — linked now, while the queue's copy is still there — and
-    /// the queue is asked at once. New contents for a file are not kept: the
-    /// server asks for no proxy of those.
+    /// of its copy). A large video, or one some browser will not play by its
+    /// codec (read as it was recorded), will have a proxy asked for
+    /// (ProxyRule), and this Mac is likely to be the one to make it: its
+    /// bytes are kept for that — linked now, while the queue's copy is still
+    /// there — and the queue is asked at once. New contents for a file are
+    /// not kept: the server asks for no proxy of those.
     func uploaded(_ job: UploadJob) {
         guard enabled, timer != nil, job.state == .done, job.replaceOf == nil,
               let fileId = job.fileId, let key = job.uploadedKey,
-              ProxyRule.asksForProxy(name: job.name, mime: job.mime, size: job.size),
+              ProxyRule.asksForProxy(name: job.name, mime: job.mime, size: job.size, codec: job.videoCodec),
               Poster.Kind.of(name: job.name, mime: job.mime) == .video,
               let link = sources.link(URL(fileURLWithPath: job.staged), name: job.name) else { return }
         let size = job.size

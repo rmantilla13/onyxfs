@@ -66,7 +66,7 @@ public struct APIUploadTransport: UploadTransport {
     public func record(_ job: UploadJob, key: String, publicUrl: String?) async throws -> OnyxAPI.RecordedFile {
         try await api.recordFile(key: key, publicUrl: publicUrl, name: job.name, size: job.size, mime: job.mime,
                                  folder: job.folder, filespaceId: job.filespaceId,
-                                 created: job.fileCreatedAt, modified: job.fileModifiedAt)
+                                 created: job.fileCreatedAt, modified: job.fileModifiedAt, videoCodec: job.videoCodec)
     }
 
     public func replaceContent(_ job: UploadJob, key: String) async throws -> OnyxAPI.RecordedFile {

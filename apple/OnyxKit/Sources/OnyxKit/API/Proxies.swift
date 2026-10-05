@@ -94,16 +94,19 @@ public struct ProxyClaim: Codable, Sendable, Equatable {
 
 /// Which files the server asks for a proxy of as they are uploaded
 /// (lib/proxies.js shouldProxy): a video, by its type and name as
-/// lib/media.js fileKind has it, of at least PROXY_MIN_BYTES, in the bucket
-/// (every upload from this Mac is). The server decides; this only says
-/// which of this Mac's uploads a job will come for, so their bytes are
-/// worth keeping for it (ProxySources).
+/// lib/media.js fileKind has it, in the bucket (every upload from this Mac
+/// is), of at least PROXY_MIN_BYTES — or of any size, encoded so that some
+/// browser will not play it (`codec`, VideoCodec.playsInEveryBrowser). A
+/// video whose codec is not known has only its size. The server decides;
+/// this only says which of this Mac's uploads a job will come for, so their
+/// bytes are worth keeping for it (ProxySources).
 public enum ProxyRule {
     /// lib/proxies.js PROXY_MIN_BYTES.
     public static let minBytes: Int64 = 200 * 1024 * 1024
 
-    public static func asksForProxy(name: String, mime: String?, size: Int64) -> Bool {
-        size >= minBytes && isVideo(name: name, mime: mime)
+    public static func asksForProxy(name: String, mime: String?, size: Int64, codec: VideoCodec? = nil) -> Bool {
+        guard isVideo(name: name, mime: mime) else { return false }
+        return size >= minBytes || codec?.playsInEveryBrowser == false
     }
 
     /// lib/media.js fileKind: an image by its type or its extension is an

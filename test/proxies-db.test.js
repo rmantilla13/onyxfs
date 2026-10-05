@@ -385,6 +385,34 @@ describe('proxies against a real database', { skip }, () => {
     assert.equal(await db.getProxy(short.id), null);
   });
 
+  test('a small video some browser will not play is offered too, by its probed codec', async () => {
+    const file = (name, videoCodec) => db.createFile({
+      name, url: `https://s3.px.test/onyx-px/${PREFIX}/${name}`, mime: 'video/quicktime', kind: 'video',
+      size: 150_000_000, storage: 's3', storageKey: `${PREFIX}/${name}`, createdBy: OWNER,
+      metadata: { width: 3840, height: 2160, ...(videoCodec ? { videoCodec } : {}) },
+    });
+    const hdr = await file('IMG_0042.MOV', { fourcc: 'hvc1', bitDepth: 10, chroma: '4:2:0', hdr: true });
+    const prores = await file('A001_C002.mov', { fourcc: 'apcn' });
+    const xavc = await file('C0001.mp4', { fourcc: 'avc1', bitDepth: 10, chroma: '4:2:2' });
+    const h264 = await file('export.mp4', { fourcc: 'avc1', bitDepth: 8, chroma: '4:2:0', hdr: false });
+    const unknown = await file('before.mov', null);
+    made.push(hdr.id, prores.id, xavc.id, h264.id, unknown.id);
+
+    as(OWNER);
+    const offered = ids(await queue());
+    for (const f of [hdr, prores, xavc]) assert.ok(offered.includes(f.id), `${f.name} is offered`);
+    assert.ok(!offered.includes(h264.id), 'H.264 every browser plays is not worth one at this size');
+    assert.ok(!offered.includes(unknown.id), 'nor a file whose codec no probe has read: its size decides');
+
+    // The claim's own check agrees with the offer.
+    as(OTHER);
+    const got = await call(claimRoute.POST, prores.id, 'POST', { device: 'Other’s Mac' });
+    assert.equal(got.status, 200, JSON.stringify(got.body));
+    assert.equal((await db.getProxy(prores.id)).status, 'working');
+    assert.equal((await call(claimRoute.POST, h264.id, 'POST', {})).status, 404);
+    assert.equal(await db.getProxy(h264.id), null);
+  });
+
   test('a listing signs the finished, current rendition of a heavy video, and nothing else', async () => {
     const { proxyKeyFor } = await import('../lib/media.js');
     const { listFilesPage } = await import('../lib/file-listing.js');

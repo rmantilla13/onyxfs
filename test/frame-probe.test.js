@@ -172,14 +172,18 @@ describe('probing videos for their frame rate', { skip }, () => {
     assert.equal(old.dropFrame, true);
     assert.equal(old.frames, 6);
     assert.equal(old.width, 64, 'the browser\'s size is kept');
+    // And what it is encoded as: ProRes, which no browser but Safari plays.
+    assert.deepEqual(old.videoCodec, { fourcc: 'apco' });
     const after = await db.getFileById(rows.old.id);
     assert.equal(after.version, before.version, 'reading a header is not an edit');
     assert.equal(after.updatedAt, before.updatedAt);
     assert.equal(after.seq, before.seq, 'nor something a device hears about');
     assert.deepEqual((await get('cut')).fps, { num: 24000, den: 1001 });
+    assert.deepEqual((await get('cut')).videoCodec, { fourcc: 'avc1', bitDepth: 8, chroma: '4:2:0' });
     // Unreadable: marked, so it is not tried on every visit.
     assert.equal((await get('webm')).fpsUnknown, true);
     assert.equal((await get('webm')).fps, undefined);
+    assert.equal((await get('webm')).videoCodec, undefined, 'not a container this reads: no codec either');
     // A read that failed says nothing about the file: nothing recorded.
     assert.deepEqual(await get('down'), {});
     // A url that is not Blob's is never fetched, and nothing is recorded.

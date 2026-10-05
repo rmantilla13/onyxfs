@@ -173,9 +173,12 @@ extension OnyxAPI {
     ///
     /// `created` and `modified` are the file's own dates (what Finder showed
     /// for it here), kept beside when it was added (lib/file-record.js).
+    /// `videoCodec`: what a video's picture is encoded as (VideoCodec), by
+    /// which the server asks for a proxy of one some browser will not play
+    /// (lib/proxies.js shouldProxy); a server from before reads past it.
     public func recordFile(key: String, publicUrl: String?, name: String, size: Int64, mime: String,
                            folder: String, filespaceId: String?, created: Date? = nil,
-                           modified: Date? = nil) async throws -> RecordedFile {
+                           modified: Date? = nil, videoCodec: VideoCodec? = nil) async throws -> RecordedFile {
         var body: [String: Any] = [
             "storage": "s3", "storageKey": key, "url": publicUrl ?? key, "name": name,
             "size": size, "mime": mime, "folder": folder,
@@ -183,6 +186,7 @@ extension OnyxAPI {
         if let filespaceId { body["filespace"] = filespaceId }
         if let created { body["fileCreatedAt"] = Self.millis(created) }
         if let modified { body["fileModifiedAt"] = Self.millis(modified) }
+        if let videoCodec { body["media"] = ["videoCodec": videoCodec.json] }
         return try decode(FileAnswer.self, from: try await coded(config.url("api/files"), json: body)).file
     }
 

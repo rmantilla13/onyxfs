@@ -24,7 +24,7 @@ const URL_TTL = 21600;
  * once cannot both have it. 409 { code: 'taken' } when another holds it; 404
  * when there is no job.
  *
- * A large video with no job at all — one the queue offered because nothing
+ * A video with no job at all — one the queue offered because nothing
  * asked for was waiting (lib/db.js listProxyJobs) — gets its job here, from
  * whoever claims it, and the claim goes ahead. Only one that should have a
  * proxy (lib/proxies.js shouldProxy), and only after the same checks.

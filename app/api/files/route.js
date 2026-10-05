@@ -194,11 +194,12 @@ export async function POST(req) {
       contentHash: s3 ? facts?.etag || null : null,
       createdBy: email,
     });
-    // A heavy video gets a proxy asked for now, so a Mac can start on it
-    // before anyone opens the file. Best effort and after the row exists: the
-    // upload succeeded, and a queue that could not be written is not a reason
-    // to tell someone their file did not save. The flag is this person's own,
-    // and the queue and claim read it again for themselves.
+    // A heavy video, or one some browser will not play (its codec, as the
+    // uploader's probe read it), gets a proxy asked for now, so a Mac can
+    // start on it before anyone opens the file. Best effort and after the row
+    // exists: the upload succeeded, and a queue that could not be written is
+    // not a reason to tell someone their file did not save. The flag is this
+    // person's own, and the queue and claim read it again for themselves.
     if (isFeatureEnabled(principal.flags, 'proxies') && shouldProxy(file)) {
       await requestProxy(file.id, { requestedBy: email })
         .catch((e) => console.warn('[files] could not queue a proxy:', e.message));

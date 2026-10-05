@@ -10,8 +10,9 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 const {
-  proxySpec, ffmpegArgs, shouldProxy, isProxyKey, isStale, proxyJson,
-  PROXY_MAX_HEIGHT, PROXY_MIN_BYTES, PROXY_MIME, LEASE_SECONDS, PROXY_STATUSES,
+  proxySpec, ffmpegArgs, keyframeInterval, shouldProxy, playsInEveryBrowser, isProxyKey, isStale, proxyJson,
+  PROXY_MAX_HEIGHT, PROXY_MIN_BYTES, PROXY_MIME, LEASE_SECONDS, PROXY_STATUSES, PROXY_KEYFRAME_SECONDS,
+  EVERY_BROWSER_CODECS,
 } = await import('../lib/proxies.js');
 
 const flag = (args, name) => {
@@ -132,6 +133,38 @@ describe('ffmpegArgs', () => {
     assert.throws(() => ffmpegArgs({ input: '/in.mov' }), /output/);
     assert.throws(() => ffmpegArgs({ input: '', output: '/out.mp4' }), /input/);
   });
+
+  test('a key frame every two seconds at the source\'s rate, and none at a cut', () => {
+    // x264 left to itself puts them 250 frames apart and adds one at every
+    // scene cut: a seek decodes from up to ten seconds back. The Mac's
+    // rendition keys every 2 s (ProxyTranscoder); this one must match it.
+    assert.equal(PROXY_KEYFRAME_SECONDS, 2);
+    const at = (sourceFps) => ffmpegArgs({ input: '/in.mov', output: '/out.mp4', sourceHeight: 2160, sourceFps });
+    for (const [fps, gop] of [
+      [{ num: 24000, den: 1001 }, '48'], [{ num: 24, den: 1 }, '48'], [{ num: 25, den: 1 }, '50'],
+      [{ num: 30000, den: 1001 }, '60'], [{ num: 60000, den: 1001 }, '120'], [50, '100'], [120, '240'],
+    ]) {
+      const a = at(fps);
+      assert.equal(flag(a, '-g'), gop, JSON.stringify(fps));
+      assert.equal(flag(a, '-keyint_min'), gop, JSON.stringify(fps));
+      assert.equal(flag(a, '-sc_threshold'), '0', JSON.stringify(fps));
+    }
+  });
+
+  test('an unknown or nonsense rate still gets a GOP, counted at 30', () => {
+    for (const fps of [undefined, null, {}, { num: 0, den: 1 }, { num: 24, den: 0 }, 'fast', -5, 0.5, 5000, NaN]) {
+      assert.equal(flag(ffmpegArgs({ input: '/in.mov', output: '/out.mp4', sourceFps: fps }), '-g'), '60', JSON.stringify(fps));
+    }
+    assert.equal(keyframeInterval(), 60);
+    assert.equal(keyframeInterval(1), 2, 'one a second at the slowest rate kept');
+  });
+
+  test('the GOP flags are encoder options, before the output', () => {
+    const a = ffmpegArgs({ input: '/in.mov', output: '/out.mp4', sourceFps: { num: 25, den: 1 } });
+    assert.ok(a.indexOf('-g') > a.indexOf('-c:v'), 'after the codec is chosen');
+    assert.ok(a.indexOf('-sc_threshold') < a.length - 1);
+    assert.equal(a[a.length - 1], '/out.mp4');
+  });
 });
 
 describe('shouldProxy', () => {
@@ -152,9 +185,68 @@ describe('shouldProxy', () => {
   });
 
   test('nonsense is false, not a thrown error on the upload path', () => {
-    for (const bad of [null, undefined, {}, { kind: 'video' }]) {
+    for (const bad of [null, undefined, {}, { kind: 'video' }, { kind: 'video', storage: 's3', metadata: null }]) {
       assert.equal(shouldProxy(bad), false, JSON.stringify(bad));
     }
+  });
+});
+
+// What a video is encoded with decides as much as its size: a 150 MB ProRes or
+// 10-bit HEVC clip streams well enough, and plays in no browser but Safari.
+describe('shouldProxy by codec', () => {
+  const MB = 1024 * 1024;
+  const SIZES = [1 * MB, 150 * MB, PROXY_MIN_BYTES - 1, PROXY_MIN_BYTES, 40 * 1024 * MB];
+  // [videoCodec, plays in every browser]
+  const CODECS = [
+    [undefined, null],                                                         // never probed: an old row
+    [{ fourcc: 'avc1' }, true],                                                // H.264, nothing more said
+    [{ fourcc: 'avc1', bitDepth: 8, chroma: '4:2:0', hdr: false }, true],
+    [{ fourcc: 'avc3', bitDepth: 8, chroma: '4:2:0' }, true],
+    [{ fourcc: 'avc1', bitDepth: 10, chroma: '4:2:0' }, false],                // High 10
+    [{ fourcc: 'avc1', bitDepth: 10, chroma: '4:2:2' }, false],                // XAVC 4:2:2
+    [{ fourcc: 'avc1', bitDepth: 8, chroma: '4:2:2' }, false],
+    [{ fourcc: 'avc1', bitDepth: 8, chroma: '4:2:0', hdr: true }, false],      // HLG in H.264
+    [{ fourcc: 'hvc1', bitDepth: 8, chroma: '4:2:0', hdr: false }, false],     // 8-bit SDR HEVC: see playsInEveryBrowser
+    [{ fourcc: 'hvc1', bitDepth: 10, chroma: '4:2:0', hdr: true }, false],     // an iPhone's HDR
+    [{ fourcc: 'hev1' }, false],
+    [{ fourcc: 'dvh1', bitDepth: 10 }, false],                                 // Dolby Vision
+    [{ fourcc: 'apcn' }, false], [{ fourcc: 'apch' }, false], [{ fourcc: 'ap4h' }, false], [{ fourcc: 'apco' }, false],
+    [{ fourcc: 'AVdh' }, false],                                               // DNxHR
+    [{ fourcc: 'av01', bitDepth: 8 }, false], [{ fourcc: 'vp09' }, false], [{ fourcc: 'mp4v' }, false],
+  ];
+
+  test('every size against every codec', () => {
+    for (const size of SIZES) {
+      for (const [videoCodec, plays] of CODECS) {
+        const file = { kind: 'video', storage: 's3', size, metadata: videoCodec ? { videoCodec } : {} };
+        const want = size >= PROXY_MIN_BYTES || plays === false;
+        assert.equal(shouldProxy(file), want, `${size} bytes, ${JSON.stringify(videoCodec)}`);
+        assert.equal(playsInEveryBrowser(videoCodec), plays, JSON.stringify(videoCodec));
+      }
+    }
+  });
+
+  test('an unknown codec keeps the size rule exactly as it was', () => {
+    for (const metadata of [undefined, null, {}, { width: 3840 }, { videoCodec: null }, { videoCodec: {} },
+      { videoCodec: { fourcc: '' } }, { videoCodec: { fourcc: 7 } }, { videoCodec: 'hvc1' }, { videoCodec: ['hvc1'] },
+      { videoCodec: { bitDepth: 10, hdr: true } }]) {
+      const small = { kind: 'video', storage: 's3', size: 150 * MB, metadata };
+      assert.equal(shouldProxy(small), false, JSON.stringify(metadata));
+      assert.equal(shouldProxy({ ...small, size: PROXY_MIN_BYTES }), true, JSON.stringify(metadata));
+    }
+  });
+
+  test('the codec does not make a proxy of anything that cannot have one', () => {
+    const hevc = { metadata: { videoCodec: { fourcc: 'hvc1', bitDepth: 10 } }, size: 150 * MB };
+    assert.equal(shouldProxy({ ...hevc, kind: 'video', storage: 'blob' }), false, 'nowhere to put it');
+    assert.equal(shouldProxy({ ...hevc, kind: 'image', storage: 's3' }), false);
+    assert.equal(shouldProxy({ ...hevc, kind: 'audio', storage: 's3' }), false);
+    // A row stored as 'other' is still a video by its name.
+    assert.equal(shouldProxy({ ...hevc, kind: 'other', name: 'IMG_0042.MOV', storage: 's3' }), true);
+  });
+
+  test('H.264 is the only codec every browser plays', () => {
+    assert.deepEqual([...EVERY_BROWSER_CODECS], ['avc1', 'avc3']);
   });
 });
 
@@ -496,6 +588,24 @@ describe('large videos with no job are offered, after everything asked for', () 
     assert.doesNotMatch(admin.text, /LIKE ANY/);
   });
 
+  test('with the codecs every browser plays, a smaller video some browser will not play is a candidate too', async () => {
+    const { buildProxyCandidateQuery } = await import('../lib/file-query.js');
+    const q = buildProxyCandidateQuery({ principal: { isAdmin: true }, minBytes: PROXY_MIN_BYTES, playable: EVERY_BROWSER_CODECS });
+    assert.equal(q.params[0], PROXY_MIN_BYTES);
+    assert.match(q.text, /\(f\.size >= \$1 OR \(jsonb_typeof\(f\.metadata -> 'videoCodec' -> 'fourcc'\) = 'string' AND/);
+    assert.match(q.text, /<> ALL\(\$2::text\[\]\)/);
+    assert.deepEqual(q.params[1], ['avc1', 'avc3']);
+    // playsInEveryBrowser's other three, as SQL.
+    assert.match(q.text, /-> 'bitDepth'\) > '8'::jsonb/);
+    assert.match(q.text, /coalesce\(f\.metadata -> 'videoCodec' ->> 'chroma', '4:2:0'\) <> '4:2:0'/);
+    assert.match(q.text, /-> 'hdr'\) = 'true'::jsonb/);
+    // Without them, the size alone, as before.
+    const bare = buildProxyCandidateQuery({ principal: { isAdmin: true }, minBytes: PROXY_MIN_BYTES });
+    assert.doesNotMatch(bare.text, /videoCodec/);
+    assert.match(bare.text, /AND f\.size >= \$1\n/);
+    assert.doesNotMatch(buildProxyCandidateQuery({ principal: { isAdmin: true }, minBytes: 1, playable: [] }).text, /videoCodec/);
+  });
+
   test('pages on (created_at, id), and will not run without a size floor', async () => {
     const { buildProxyCandidateQuery } = await import('../lib/file-query.js');
     const q = buildProxyCandidateQuery({ principal: { isAdmin: true }, minBytes: PROXY_MIN_BYTES, after: { createdAt: 1790000000000, id: 'f9' } });
@@ -510,7 +620,7 @@ describe('large videos with no job are offered, after everything asked for', () 
     const asked = fn.indexOf('buildProxyQueueQuery(');
     const offered = fn.indexOf('buildProxyCandidateQuery(');
     assert.ok(asked > 0 && offered > asked, 'what someone asked for comes first');
-    assert.match(fn.slice(offered), /minBytes: PROXY_MIN_BYTES/);
+    assert.match(fn.slice(offered), /minBytes: PROXY_MIN_BYTES, playable: EVERY_BROWSER_CODECS/);
     assert.match(fn.slice(offered), /modifiableFileIds\(files, principal\)/);
     assert.match(fn.slice(offered), /mine\.has\(file\.id\) && shouldProxy\(file\)/);
     assert.match(fn.slice(offered), /requestedAt: null/);

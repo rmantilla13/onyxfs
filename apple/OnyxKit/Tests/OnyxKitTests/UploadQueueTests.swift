@@ -9,6 +9,8 @@ actor FakeServer: UploadTransport {
     /// What each recorded or swapped job said of the file's own dates:
     /// (created, modified), by path.
     var dates: [String: (Date?, Date?)] = [:]
+    /// What each recorded job said its picture is encoded as, by path.
+    var codecs: [String: VideoCodec] = [:]
     var objects: [String: Data] = [:]
     /// Large uploads open, by id: their parts.
     var uploads: [String: [Int: Data]] = [:]
@@ -125,6 +127,7 @@ actor FakeServer: UploadTransport {
         try log("record \(job.path)")
         await recordTurnstile?.pass()
         dates[job.path] = (job.fileCreatedAt, job.fileModifiedAt)
+        if let codec = job.videoCodec { codecs[job.path] = codec }
         return .init(id: "file-\(job.name)", name: job.name, folder: job.folder, size: job.size)
     }
 
@@ -262,10 +265,71 @@ func settle(_ queue: UploadQueue) async {
     }
 
     @Test func aJobSavedBeforeDatesWereKeptStillLoads() throws {
-        // A queue written by an older build: no fileCreatedAt, no fileModifiedAt.
+        // A queue written by an older build: no fileCreatedAt, no fileModifiedAt, no videoCodec.
         let json = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","scope":"drive.d1","filespaceId":"d1","folder":"","name":"a.mov","staged":"/tmp/a","size":1,"mime":"video/quicktime","state":"queued","attempts":0}"#
         let job = try JSONDecoder().decode(UploadJob.self, from: Data(json.utf8))
         #expect(job.fileCreatedAt == nil && job.fileModifiedAt == nil && job.name == "a.mov")
+        #expect(job.videoCodec == nil)
+    }
+
+    /// A video's codec is read from its staged bytes once they are up, sent
+    /// with the record, and kept with the job — for ProxyService, which
+    /// hears the finished job. Not for new contents of a file: the server
+    /// asks for no proxy of those.
+    @Test func aVideosCodecIsReadOnceItsBytesAreUpAndSentWithTheRecord() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let server = FakeServer()
+        let hevc = VideoCodec(fourcc: "hvc1", bitDepth: 10, chroma: "4:2:0", hdr: true)
+        let asked = Recorder()
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 0, sleep: { _ in }, codecOf: { job in
+            await asked.add(job)
+            return job.name.hasSuffix(".MOV") ? hevc : nil
+        })
+        let seen = Recorder()
+        await queue.observe { job in Task { await seen.add(job) } }
+        try await queue.enqueue(from: try source(Data("phone".utf8)), scope: "drive.d1", filespaceId: "d1",
+                                folder: "Footage", name: "IMG_0042.MOV", mime: "video/quicktime")
+        try await queue.enqueue(from: try source(Data("notes".utf8)), scope: "drive.d1", filespaceId: "d1",
+                                folder: "Footage", name: "notes.txt", mime: "text/plain")
+        try await queue.enqueue(from: try source(Data("cut".utf8)), scope: "drive.d1", filespaceId: "d1",
+                                folder: "Footage", name: "Cut.MOV", mime: "video/quicktime", replaceOf: "f9")
+        await settle(queue)
+        #expect(await server.codecs == ["/Footage/IMG_0042.MOV": hevc])
+        // Asked only once its bytes were in storage, and never for new contents.
+        #expect(await asked.jobs.map(\.name).sorted() == ["IMG_0042.MOV", "notes.txt"])
+        #expect(await asked.jobs.allSatisfy { $0.uploadedKey != nil })
+        try await Task.sleep(nanoseconds: 20_000_000)
+        let done = await seen.jobs.filter { $0.state == .done }
+        #expect(done.first { $0.name == "IMG_0042.MOV" }?.videoCodec == hevc, "ProxyService hears it with the upload")
+        #expect(done.first { $0.name == "notes.txt" }?.videoCodec == nil)
+    }
+
+    /// Kept on disk with the job: a record tried again, after a restart
+    /// even, sends what was read and does not read it again.
+    @Test func aCodecReadBeforeARestartIsNotReadAgain() async throws {
+        let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
+        let hevc = VideoCodec(fourcc: "hvc1", bitDepth: 10)
+        let offline = FakeServer()
+        await offline.setFailure("record /Footage/IMG_0042.MOV", URLError(.notConnectedToInternet))
+        let gate = Gate()
+        let reads = Recorder()
+        let first = try UploadQueue(directory: dir, transport: offline, settle: 0, sleep: { _ in await gate.wait() },
+                                    codecOf: { job in await reads.add(job); return hevc })
+        try await first.enqueue(from: try source(Data("phone".utf8)), scope: "drive.d1", filespaceId: "d1",
+                                folder: "Footage", name: "IMG_0042.MOV", mime: "video/quicktime")
+        #expect(await offline.until { $0.calls.contains("record /Footage/IMG_0042.MOV") })
+        #expect(await first.all().first?.videoCodec == hevc, "kept with the job")
+
+        // The app quits and starts again, the network back.
+        let online = FakeServer()
+        let second = try UploadQueue(directory: dir, transport: online, settle: 0, sleep: { _ in },
+                                     codecOf: { job in await reads.add(job); return nil })
+        #expect(await second.all().first?.videoCodec == hevc, "and on disk")
+        await second.resume()
+        await settle(second)
+        #expect(await online.codecs == ["/Footage/IMG_0042.MOV": hevc], "sent from what was kept")
+        #expect(await reads.jobs.count == 1, "read once")
+        await gate.open()
     }
 
     @Test func aLargeFileGoesInPartsAndResumesWhereItStopped() async throws {

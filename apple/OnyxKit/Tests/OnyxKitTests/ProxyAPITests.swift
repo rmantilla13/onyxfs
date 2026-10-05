@@ -66,6 +66,34 @@ import Testing
         }
     }
 
+    /// And by what it is encoded as, at any size: lib/proxies.js shouldProxy
+    /// over playsInEveryBrowser. A codec not known leaves the size to decide.
+    @Test func theServerAsksForAProxyOfAVideoSomeBrowserWillNotPlayWhateverItsSize() {
+        let big = ProxyRule.minBytes
+        let small: Int64 = 150 << 20
+        let hdr = VideoCodec(fourcc: "hvc1", bitDepth: 10, chroma: "4:2:0", hdr: true)
+        let sdr = VideoCodec(fourcc: "hvc1", bitDepth: 8, chroma: "4:2:0", hdr: false)
+        let prores = VideoCodec(fourcc: "apcn")
+        let xavc = VideoCodec(fourcc: "avc1", bitDepth: 10, chroma: "4:2:2")
+        let h264 = VideoCodec(fourcc: "avc1", bitDepth: 8, chroma: "4:2:0", hdr: false)
+        let rows: [(name: String, mime: String?, size: Int64, codec: VideoCodec?, asked: Bool)] = [
+            ("IMG_0042.MOV", "video/quicktime", small, hdr, true),
+            ("IMG_0042.MOV", "video/quicktime", 1 << 20, hdr, true),
+            ("DJI_0001.MP4", "video/mp4", small, sdr, true),
+            ("A001_C002.mov", "video/quicktime", small, prores, true),
+            ("C0001.MP4", "video/mp4", small, xavc, true),
+            ("Export.mp4", "video/mp4", small, h264, false),           // every browser plays it
+            ("Export.mp4", "video/mp4", big, h264, true),              // and it is big
+            ("Before.mov", "video/quicktime", small, nil, false),      // not known: its size decides
+            ("Before.mov", "video/quicktime", big, nil, true),
+            ("still.heic", "image/heic", small, hdr, false),           // not a video, whatever it says
+        ]
+        for row in rows {
+            #expect(ProxyRule.asksForProxy(name: row.name, mime: row.mime, size: row.size, codec: row.codec) == row.asked,
+                    "\(row.name) \(row.size) \(String(describing: row.codec))")
+        }
+    }
+
     @Test func theQueueListsJobsWithTheSourcesHeightWhenKnown() throws {
         struct Wrapper: Decodable { let jobs: [ProxyJob] }
         let json = #"{"jobs":[{"fileId":"f1","name":"a.mp4","mime":"video/mp4","size":1073741824,"height":2160,"requestedAt":"2026-09-29T01:00:00Z"},{"fileId":"f2","name":"b.mov","size":"300000000","height":null}]}"#

@@ -103,6 +103,45 @@ test('a registration\'s own metadata cannot set the frame model, only the librar
   assert.deepEqual(mixed, { fps: probed.fps, tcStart: 0, dropFrame: false });
 });
 
+test('the probed codec is kept anchored on its four characters, each other field on its own', () => {
+  const hevc = { fourcc: 'hvc1', bitDepth: 10, chroma: '4:2:0', hdr: true };
+  assert.deepEqual(mediaFacts({ videoCodec: hevc }), { videoCodec: hevc });
+  // A codec that says nothing more is still a codec.
+  assert.deepEqual(mediaFacts({ videoCodec: { fourcc: 'apcn' } }), { videoCodec: { fourcc: 'apcn' } });
+  // A space is one of the four (QuickTime's 'raw ').
+  assert.deepEqual(mediaFacts({ videoCodec: { fourcc: 'raw ' } }), { videoCodec: { fourcc: 'raw ' } });
+  // No codec, no set: a bit depth or HDR flag on its own is not what a probe read.
+  for (const fourcc of [undefined, null, '', 'avc', 'avc1x', 7, 'avé1', ['avc1']]) {
+    assert.deepEqual(mediaFacts({ videoCodec: { ...hevc, fourcc } }), {}, JSON.stringify(fourcc));
+  }
+  for (const bad of [null, 'hvc1', ['hvc1'], 42]) assert.deepEqual(mediaFacts({ videoCodec: bad }), {}, JSON.stringify(bad));
+  // The rest dropped, not guessed, when not sane.
+  assert.deepEqual(
+    mediaFacts({ videoCodec: { fourcc: 'hvc1', bitDepth: 10.5, chroma: '420', hdr: 'yes' } }),
+    { videoCodec: { fourcc: 'hvc1' } },
+  );
+  for (const bitDepth of [7, 17, '10x', -10, null]) {
+    assert.equal(mediaFacts({ videoCodec: { fourcc: 'hvc1', bitDepth } }).videoCodec.bitDepth, undefined, String(bitDepth));
+  }
+  assert.equal(mediaFacts({ videoCodec: { fourcc: 'hvc1', bitDepth: '12' } }).videoCodec.bitDepth, 12);
+  assert.equal(mediaFacts({ videoCodec: { fourcc: 'avc1', hdr: false } }).videoCodec.hdr, false);
+  // Beside the frame model, independent of it.
+  const probed = { fps: { num: 24000, den: 1001 }, frames: 1440, tcStart: 0, dropFrame: false };
+  assert.deepEqual(mediaFacts({ ...probed, videoCodec: hevc }), { ...probed, videoCodec: hevc });
+  assert.deepEqual(mediaFacts({ fps: 'x', videoCodec: hevc }), { videoCodec: hevc });
+});
+
+test('the codec comes only from the probe\'s `media`, never a registration\'s own metadata', () => {
+  // A codec taken as sent would let a client have a proxy made of anything,
+  // or none made of a file no browser plays.
+  const hevc = { fourcc: 'hvc1', bitDepth: 10, chroma: '4:2:0', hdr: true };
+  assert.ok(MEDIA_KEYS.includes('videoCodec'));
+  assert.deepEqual(uploadFields({ name: 'a.mov', metadata: { client: 'Acme', videoCodec: hevc } }).metadata, { client: 'Acme' });
+  assert.deepEqual(uploadFields({ name: 'a.mov', media: { videoCodec: hevc } }).metadata, { videoCodec: hevc });
+  // A library field called "Codec" is its own, not this.
+  assert.deepEqual(uploadFields({ name: 'a.mov', metadata: { codec: 'ProRes 422 HQ' } }).metadata, { codec: 'ProRes 422 HQ' });
+});
+
 test('durations read like a player shows them', () => {
   assert.equal(fmtDuration(42.04), '0:42');
   assert.equal(fmtDuration(83.4), '1:23');
