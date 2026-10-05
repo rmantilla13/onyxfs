@@ -22,7 +22,8 @@
 import { fileWriteDecision, folderRoleAllows, strongestFolderRole } from '../../lib/db.js';
 import { driveAccess, canWriteDrive, DRIVE_WRITE_ROLES } from '../../lib/drive-access.js';
 import { MEDIA_KEYS } from '../../lib/media.js';
-import { fileInLink } from '../../lib/folder-links.js';
+import { fileInLink, RESERVED_SEGMENT_RE } from '../../lib/folder-links.js';
+import { THUMB_ARTIFACT_RE, SYSTEM_KEY_RE } from '../../lib/file-query.js';
 
 export const UPLOAD_KEY_TTL_MS = 24 * 60 * 60 * 1000;
 const s = () => globalThis.__mw;
@@ -557,8 +558,93 @@ export async function visibleFileIds(ids, principal = {}) {
   }));
 }
 
-// Collections: none here; the listing route resolves one only when asked
-// (?collection=), which these tests never do.
+// Collections: s().collections, when a test keeps any ({ id, driveId, name,
+// … }); the listing route resolves one only when asked (?collection=), which
+// these tests never do.
 export async function getCollection() { return null; }
-export async function listCollections() { return []; }
+export async function listCollections() { return (s().collections || []).map(copy); }
+export async function moveCollection(id, { driveId, name }) {
+  const c = (s().collections || []).find((x) => x.id === String(id));
+  if (c) Object.assign(c, { driveId: String(driveId || ''), name });
+  return copy(c || null);
+}
 export async function listFilespacesForSpace() { return []; }
+export async function getFilespace(id) { return copy(drive(id)); }
+
+// ── moving the files outside every drive into one (app/api/admin/library/move) ──
+// lib/db.js's rule for which files the move takes (looseFile), from the same
+// patterns; the re-key with its WHERE clause; and the library's folders,
+// folder links and stars following the files as the one statement moves them.
+// The SQL itself is test/library-move-db.test.js's, against a real database.
+const inDrives = (key, prefixes) => (prefixes || []).some((p) => clean(p) && String(key || '').startsWith(`${clean(p)}/`));
+const looseRows = (prefixes) => live().filter((f) => f.storage === 's3' && f.storageKey
+  && !inDrives(f.storageKey, prefixes)
+  && !new RegExp(RESERVED_SEGMENT_RE, 'i').test(f.storageKey)
+  && !new RegExp(THUMB_ARTIFACT_RE).test(f.storageKey)
+  && !new RegExp(SYSTEM_KEY_RE).test(f.storageKey)
+  && ![...s().files.values()].some((t) => t.thumbnailKey === f.storageKey));
+const usage = (rows) => ({ files: rows.length, bytes: rows.reduce((n, f) => n + (Number(f.size) || 0), 0) });
+export async function libraryUsage({ drivePrefixes = null } = {}) {
+  return usage(live().filter((f) => !Array.isArray(drivePrefixes) || !inDrives(f.storageKey, drivePrefixes)));
+}
+export async function countLooseFiles({ drivePrefixes = [] } = {}) { return usage(looseRows(drivePrefixes)); }
+export async function listLooseFiles({ drivePrefixes = [], after = '', limit = 200 } = {}) {
+  return looseRows(drivePrefixes)
+    .filter((f) => f.id > String(after || ''))
+    .sort((a, b) => (a.id < b.id ? -1 : 1))
+    .slice(0, limit)
+    .map((f) => ({ id: f.id, name: f.name, folder: f.folder || '', size: f.size, storageKey: f.storageKey }));
+}
+export async function moveLooseFile(id, { fromKey, toKey, folder = '', name = null, url = null } = {}) {
+  const row = s().files.get(String(id));
+  if (!row || row.deletedAt || row.storageKey !== fromKey) return false;
+  followTranscripts(row.id, toKey);
+  const proxy = s().proxies?.get(row.id);
+  if (proxy && proxy.sourceKey === fromKey) proxy.sourceKey = toKey;
+  Object.assign(row, { storageKey: toKey, folder, name: name ?? row.name, url: url ?? row.url });
+  touch(row);
+  return true;
+}
+export async function folderMoveCopiesInto(prefix) {
+  const p = `${clean(prefix)}/`;
+  return [...moveCopies()].filter(([to]) => to.startsWith(p)).map(([toKey, fromKey]) => ({ toKey, fromKey }));
+}
+// s().stars: [{ owner, driveId, folder }]; s().shares: token → a link's row, snake_case.
+export async function moveFoldersIntoDrive({ tag, driveId, under = '', from = { tag: '', driveId: '' } } = {}) {
+  const to = clean(tag);
+  const fromTag = clean(from.tag);
+  const u = clean(under);
+  const dest = (n) => (u ? `${u}/${n}` : n);
+  let folders = 0;
+  for (const r of rowsOf().filter((x) => x.tag === fromTag)) {
+    const twin = s().folders.get(fkey(to, dest(r.name)));
+    if (twin) {
+      // The drive's row stays, taking on the library's tags and metadata; its own values win.
+      if (r.tags?.length || Object.keys(r.metadata || {}).length) {
+        twin.tags = [...new Set([...(twin.tags || []), ...(r.tags || [])])].sort();
+        twin.metadata = { ...(r.metadata || {}), ...(twin.metadata || {}) };
+      }
+    } else {
+      s().folders.set(fkey(to, dest(r.name)), { ...r, tag: to, name: dest(r.name) });
+    }
+    s().folders.delete(fkey(fromTag, r.name));
+    folders++;
+  }
+  if (u) addFolder(u, to);
+  let links = 0;
+  for (const row of s().shares?.values() || []) {
+    if (row.kind !== 'folder' || (row.storage_prefix ?? null) !== (fromTag || null)) continue;
+    Object.assign(row, { storage_prefix: to, folder: dest(row.folder) });
+    links++;
+  }
+  let stars = 0;
+  const list = s().stars || [];
+  for (const st of [...list]) {
+    if (st.driveId !== String(from.driveId || '')) continue;
+    const kept = list.some((t) => t.owner === st.owner && t.driveId === driveId && t.folder === dest(st.folder));
+    if (kept) list.splice(list.indexOf(st), 1);
+    else Object.assign(st, { driveId, folder: dest(st.folder) });
+    stars++;
+  }
+  return { folders, links, stars };
+}

@@ -13,7 +13,7 @@ import {
 } from '@/lib/storage';
 import {
   cleanFolder, folderPathProblem, isWithin, planRename, planFolderDelete, rebase, mapLimit, settleLimit, folderMoveBudgetMs,
-  folderRenameLimit,
+  folderRenameLimit, isCopyOf,
 } from '@/lib/folder-ops';
 import { listFolderTree, storagePrefixFor } from '@/lib/file-listing';
 import { markFolderLinks } from '@/lib/share-guard';
@@ -26,16 +26,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-
-// Whether a copy noted as `orig`'s (both HEADs, lib/storage.js
-// s3HeadObject) still is one: the same length, and the same ETag or — a
-// multipart original's copy gets a single-part one — written no earlier than
-// the original last was. An original rewritten since fails that.
-function isCopyOf(copy, orig) {
-  if (!copy || !orig || copy.size == null || copy.size !== orig.size) return false;
-  if (copy.etag && copy.etag === orig.etag) return true;
-  return copy.modified != null && orig.modified != null && copy.modified >= orig.modified;
-}
 
 // Files a delete trashes per request. Unlike a rename, a delete can stop and
 // be continued: the client calls again while `more` is true.

@@ -10,12 +10,14 @@ import { driveForKey } from '@/lib/admin-drives';
 import { kindLabel, formatLabel, TRASH_RETENTION_DAYS } from '@/lib/storage-report';
 import { estimateStorageCost, storageParts, storageLocation, pricesByAccount } from '@/lib/storage-pricing';
 import { Thumb } from '@/app/components/ui/FileCard';
+import { libraryOpen } from '@/lib/authz';
 import { requireAdminPage } from '../_lib/guard';
 import AdminPage from '../_ui/AdminPage';
 import AdminState from '../_ui/AdminState';
 import KindBreakdown from '../_ui/KindBreakdown';
 import FrameRates from './FrameRates';
 import StorageCost from './StorageCost';
+import MoveIntoDrive from './MoveIntoDrive';
 
 export const dynamic = 'force-dynamic';
 export const metadata = { title: 'Usage · Admin' };
@@ -157,6 +159,10 @@ export default async function UsagePage() {
               </Link>
             </li>
           </ul>
+          {/* Somewhere to put what is outside every drive, now that there may be no All files to see it in. */}
+          {byDrive.length > 0 && report.outsideDrives.files > 0 && (
+            <div className="admin-card-foot"><MoveIntoDrive libraryOpen={libraryOpen({ flags })} /></div>
+          )}
           {byDrive.length > 1 && <p className="small muted admin-card-foot">A drive inside another counts toward both.</p>}
         </section>
 
