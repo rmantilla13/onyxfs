@@ -8,9 +8,10 @@ import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import {
-  drawServerPreviews, runServerPreviews, previewPlan, uprightSize, SERVER_PREVIEW_MAX_BYTES, drawPlaceholder,
+  drawServerPreviews, drawServerPoster, runServerPreviews, previewPlan, uprightSize, SERVER_PREVIEW_MAX_BYTES, MAX_INPUT_PIXELS,
+  drawPlaceholder,
 } from '../lib/server-previews.js';
-import { gridPosterSize } from '../lib/poster.js';
+import { gridPosterSize, imagePreviewFor } from '../lib/poster.js';
 import { placeholderFacts } from '../lib/placeholder.js';
 
 const picture = (width, height, { format = 'jpeg', orientation } = {}) => {
@@ -119,6 +120,108 @@ describe('a run', () => {
     const out = await runServerPreviews({ io, db: store, concurrency: 1 });
     assert.equal(out.failed, 1);
     assert.ok(store.errors.get('x'));
+  });
+});
+
+describe('the large preview alone, for a picture whose thumbnail stands', () => {
+  const THUMB = '_thumbs/0b5c1d2e-3f40-4a51-8b62-7c83d94ea5f6.webp';
+  // A row as claimServerPosters hands it: a thumbnail, its siblings and
+  // placeholder, and no large preview.
+  const row = (id, over = {}) => ({
+    id, name: `${id}.jpg`, size: 20_000_000, mime: 'image/jpeg', thumbnailKey: THUMB, thumbSizes: ['sm', 'xs'],
+    posterKey: null, metadata: { placeholder: 'data:image/webp;base64,AAAA' }, ...over,
+  });
+
+  // The three queues a run takes from, in the order it is to take them, and
+  // everything it records, as it happens.
+  const db = ({ whole = [], placeholders = [], posters = [], theirs = new Set() } = {}) => {
+    const queues = { whole: [...whole], placeholders: [...placeholders], posters: [...posters] };
+    const log = [];
+    const errors = new Map();
+    const take = (q, n = 1) => queues[q].splice(0, n);
+    return {
+      log, errors, claimed: [],
+      async claimServerPreviews() { return take('whole'); },
+      async claimServerPlaceholders() { return take('placeholders', 4); },
+      async claimServerPosters(args) { this.claimed.push(args); return take('posters'); },
+      async fileThumbnailKey() { return null; },
+      async setFileThumbnail(id) { log.push(['thumbnail', id]); },
+      async setFilePlaceholder(id) { log.push(['placeholder', id]); return {}; },
+      async setServerPoster(id, posterKey, media, { thumbnailKey }) {
+        log.push(['poster', id, posterKey, media, thumbnailKey]);
+        return !theirs.has(id);
+      },
+      async setServerPreviewError(id, e) { errors.set(id, e); },
+    };
+  };
+
+  test('drawn upright, at the size every client draws it, and nothing else', async () => {
+    const io = fakeIO(await picture(4000, 3000, { orientation: 6 }));
+    const made = await drawServerPoster(row('a'), io);
+    assert.match(made.posterKey, /^_thumbs\/[0-9a-f-]{36}\.poster\.webp$/);
+    assert.deepEqual(made.media, { width: 3000, height: 4000 });
+    assert.deepEqual([...io.stored.keys()], [made.posterKey], 'no thumbnail, siblings or placeholder');
+    const poster = await sharp(io.stored.get(made.posterKey).body).metadata();
+    assert.equal(poster.format, 'webp');
+    assert.deepEqual({ width: poster.width, height: poster.height }, imagePreviewFor({ width: 3000, height: 4000 }, { bytes: 20e6, mime: 'image/jpeg' }));
+  });
+
+  test('a picture that turns out to need none: its size, and nothing put', async () => {
+    const io = fakeIO(await picture(900, 600));
+    assert.deepEqual(await drawServerPoster(row('b', { size: 300_000 }), io), { posterKey: null, media: { width: 900, height: 600 } });
+    const gif = fakeIO(await picture(4000, 3000, { format: 'png' }));
+    assert.equal((await drawServerPoster(row('c', { name: 'c.gif', mime: '' }), gif)).posterKey, null, 'a GIF, known by its name');
+    assert.equal(io.stored.size + gif.stored.size, 0);
+  });
+
+  test('a run records it for the thumbnail it was claimed with, and leaves the rest of the row alone', async () => {
+    const io = fakeIO(await picture(6000, 4000));
+    const store = db({ posters: [row('p')] });
+    const out = await runServerPreviews({ io, db: store, concurrency: 1 });
+    assert.equal(out.posters, 1);
+    assert.equal(out.drawn, 0);
+    assert.equal(store.log.length, 1, 'no thumbnail, siblings or placeholder recorded');
+    const [what, id, posterKey, media, thumbnailKey] = store.log[0];
+    assert.deepEqual([what, id, thumbnailKey], ['poster', 'p', THUMB]);
+    assert.deepEqual(media, { width: 6000, height: 4000 });
+    assert.deepEqual([...io.stored.keys()], [posterKey]);
+    assert.equal(store.errors.get('p'), null);
+    assert.deepEqual(store.claimed[0], { limit: 1, maxBytes: SERVER_PREVIEW_MAX_BYTES, maxPixels: MAX_INPUT_PIXELS });
+  });
+
+  test('a large preview someone else recorded meanwhile stays, and ours goes', async () => {
+    const io = fakeIO(await picture(6000, 4000));
+    const store = db({ posters: [row('p')], theirs: new Set(['p']) });
+    const out = await runServerPreviews({ io, db: store, concurrency: 1 });
+    assert.equal(out.kept, 1);
+    assert.equal(out.posters, 0);
+    assert.equal(io.stored.size, 0, 'the one it put is removed');
+    assert.deepEqual(io.removed, [store.log[0][2]]);
+  });
+
+  test('a failure is recorded with its reason, and the run goes on to the next', async () => {
+    const good = await picture(6000, 4000);
+    const io = fakeIO(good);
+    io.read = async (file, path) => { await writeFile(path, file.id === 'x' ? Buffer.from('broken') : good); };
+    const store = db({ posters: [row('x'), row('y')] });
+    const out = await runServerPreviews({ io, db: store, concurrency: 1 });
+    assert.equal(out.failed, 1);
+    assert.ok(store.errors.get('x'));
+    assert.match(out.errors[0], /^x\.jpg: /);
+    assert.equal(out.posters, 1);
+    assert.deepEqual(store.log.map(([what, id]) => [what, id]), [['poster', 'y']]);
+  });
+
+  test('pictures without a thumbnail come first, and placeholders, a few kilobytes each, before large previews', async () => {
+    const io = fakeIO(await picture(3000, 2000));
+    const store = db({
+      whole: [row('w1', { thumbnailKey: null }), row('w2', { thumbnailKey: null })],
+      placeholders: [row('h1', { metadata: {} })],
+      posters: [row('p1'), row('p2')],
+    });
+    const out = await runServerPreviews({ io, db: store, concurrency: 1 });
+    assert.deepEqual(store.log.map(([what, id]) => `${what} ${id}`), ['thumbnail w1', 'thumbnail w2', 'placeholder h1', 'poster p1', 'poster p2']);
+    assert.deepEqual({ drawn: out.drawn, placeholders: out.placeholders, posters: out.posters }, { drawn: 2, placeholders: 1, posters: 2 });
   });
 });
 

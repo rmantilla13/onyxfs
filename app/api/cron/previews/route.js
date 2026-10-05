@@ -9,7 +9,8 @@ export const maxDuration = 300;
 /**
  * Every minute: the server draws the previews no browser or Mac has (lib/
  * server-previews.js) — images still without a thumbnail two minutes after
- * they were added. A run claims a file at a time and stops taking new ones
+ * they were added, and then the large previews of pictures whose thumbnail
+ * came without one. A run claims a file at a time and stops taking new ones
  * after four minutes, so runs that overlap share the work (SKIP LOCKED) and
  * none outlives maxDuration.
  *

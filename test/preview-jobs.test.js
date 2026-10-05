@@ -6,12 +6,13 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  previewClass, drawnClasses, kindsFor, siblingsExpected, posterExpected, previewGaps, cannotDraw, previewJob,
+  previewClass, drawnClasses, kindsFor, siblingsExpected, posterExpected, imagePreviewExpected, previewGaps, cannotDraw, previewJob,
   skipReason, jobOutcome, failureReason, redrawOffered, readPreviewScope, previewScopeQuery,
 } from '../lib/preview-jobs.js';
 import { drawableKind, THUMB_SOURCE_MAX_BYTES } from '../lib/media.js';
 
 const OURS = '_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.webp';
+const POSTER = '_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.poster.webp';
 const OLD = 'files/abc-thumb-photo.jpg';
 const PH = 'data:image/webp;base64,UklGRkQAAABXRUJQVlA4IDgAAAAQAwCdASoYABIAPtFiqk+oJaOiKAgBABoJZQDKABanFAAA/uX6P+HPtj97JX/VR2OO4YxZAAAAAA==';
 
@@ -19,10 +20,10 @@ const PH = 'data:image/webp;base64,UklGRkQAAABXRUJQVlA4IDgAAAAQAwCdASoYABIAPtFiq
 const whole = (over = {}) => ({
   id: 'f1', name: 'photo.jpg', mime: 'image/jpeg', kind: 'image', size: 2_000_000, storage: 's3',
   url: 'https://s3.test/b/photo.jpg', thumbnailKey: OURS, thumbnailUrl: 'https://s3.test/b/t.webp', thumbSizes: ['sm', 'xs'],
-  posterKey: null, metadata: { width: 4000, height: 3000, placeholder: PH }, ...over,
+  posterKey: POSTER, metadata: { width: 4000, height: 3000, placeholder: PH }, ...over,
 });
 const clip = (over = {}) => whole({
-  name: 'clip.mp4', mime: 'video/mp4', kind: 'video', posterKey: '_thumbs/0f8fad5b-d9cb-469f-a165-70867728950e.poster.webp',
+  name: 'clip.mp4', mime: 'video/mp4', kind: 'video', posterKey: POSTER,
   metadata: { width: 1920, height: 1080, placeholder: PH }, ...over,
 });
 
@@ -78,6 +79,17 @@ describe('what a file lacks', () => {
     assert.equal(posterExpected({ width: 640, height: 360 }), false);
   });
 
+  test('an image’s large preview, unless it animates or the original serves; a size not on record expects one', () => {
+    assert.equal(imagePreviewExpected(whole()), true, '4000x3000');
+    assert.equal(imagePreviewExpected(whole({ metadata: {} })), true);
+    assert.equal(imagePreviewExpected(whole({ metadata: { width: 900, height: 600 } })), false, 'within 1.25x its thumbnail');
+    assert.equal(imagePreviewExpected(whole({ size: 1_000_000, metadata: { width: 2400, height: 1600 } })), false, 'light enough to be its own');
+    assert.equal(imagePreviewExpected(whole({ size: 5_000_000, metadata: { width: 2400, height: 1600 } })), true, 'too heavy to be');
+    assert.equal(imagePreviewExpected(whole({ size: 1_000_000, metadata: { width: 3000, height: 2000 } })), true, 'too many pixels to be');
+    assert.equal(imagePreviewExpected(whole({ name: 'a.gif', mime: 'image/gif' })), false);
+    assert.equal(imagePreviewExpected(whole({ name: 'a.GIF', mime: '', metadata: {} })), false, 'a GIF known by its name');
+  });
+
   test('no thumbnail of ours is lacking all of it; one of ours lacks what it lacks', () => {
     assert.deepEqual(previewGaps(whole({ thumbnailKey: null, thumbnailUrl: null })), ['thumbnail']);
     assert.deepEqual(previewGaps(whole({ thumbnailKey: OLD })), ['thumbnail'], 'an old one cannot have siblings or a placeholder');
@@ -88,6 +100,9 @@ describe('what a file lacks', () => {
     assert.deepEqual(previewGaps(clip()), []);
     assert.deepEqual(previewGaps(clip({ posterKey: null })), ['poster']);
     assert.deepEqual(previewGaps(clip({ posterKey: null, metadata: { width: 640, height: 360, placeholder: PH } })), [], 'too small for a poster');
+    assert.deepEqual(previewGaps(whole({ posterKey: null })), ['poster'], 'a picture that opens from its original');
+    assert.deepEqual(previewGaps(whole({ posterKey: null, name: 'a.gif', mime: 'image/gif' })), [], 'a GIF is its own');
+    assert.deepEqual(previewGaps(whole({ posterKey: null, size: 400_000, metadata: { width: 1600, height: 1200, placeholder: PH } })), [], 'and so is a light one');
   });
 });
 
@@ -102,6 +117,14 @@ describe('the cheapest job', () => {
     assert.equal(previewJob(clip({ posterKey: null, thumbSizes: [] })), 'redraw');
     assert.equal(previewJob(whole()), null);
     assert.equal(previewJob(whole({ thumbSizes: [], thumbnailUrl: null })), 'redraw', 'nothing to draw the small ones from');
+    assert.equal(previewJob(whole({ posterKey: null })), 'redraw', 'an image’s large preview, with the rest');
+  });
+
+  test('a picture too big for a tab, lacking only its large preview, is the server’s', () => {
+    const big = whole({ posterKey: null, size: THUMB_SOURCE_MAX_BYTES + 1 });
+    assert.deepEqual(previewGaps(big), ['poster']);
+    assert.equal(previewJob(big), null);
+    assert.match(skipReason(big), /The server draws these on its own/);
   });
 
   test('everything: every file this browser draws, whatever it has', () => {

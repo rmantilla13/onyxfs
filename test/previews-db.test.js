@@ -10,6 +10,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { previewClass, previewGaps, drawnClasses, kindsFor } from '../lib/preview-jobs.js';
 import { effectiveKind } from '../lib/media.js';
+import { PREVIEW_ORIGINAL_MAX_BYTES } from '../lib/poster.js';
 
 const URL_ = process.env.TEST_DATABASE_URL;
 
@@ -36,6 +37,7 @@ const tag = Math.random().toString(36).slice(2, 8);
 const ROOT = `pv-${tag}`;
 const PH = 'data:image/webp;base64,UklGRkQAAABXRUJQVlA4IDgAAAAQAwCdASoYABIAPtFiqk+oJaOiKAgBABoJZQDKABanFAAA/uX6P+HPtj97JX/VR2OO4YxZAAAAAA==';
 const ours = () => `_thumbs/${crypto.randomUUID()}.webp`;
+const poster = () => `_thumbs/${crypto.randomUUID()}.poster.webp`;
 const made = [];
 
 /** A file row under `dir` (a prefix of ROOT's), as createFile records one. */
@@ -138,9 +140,21 @@ describe('what a file lacks', { skip }, () => {
     // What is on record, or not, beyond the size.
     rows.push(await file('gaps', { name: 'no-size.jpg', mime: 'image/jpeg', kind: 'image', thumbnailKey: ours(), metadata: { placeholder: PH } }));
     rows.push(await file('gaps', { name: 'text-size.jpg', mime: 'image/jpeg', kind: 'image', thumbnailKey: ours(), metadata: { width: 'wide', height: 100, placeholder: PH } }));
-    rows.push(await file('gaps', { name: 'complete.jpg', mime: 'image/jpeg', kind: 'image', thumbnailKey: ours(), thumbSizes: ['sm', 'xs'], metadata: { width: 4000, height: 3000, placeholder: PH } }));
-    rows.push(await file('gaps', { name: 'no-placeholder.jpg', mime: 'image/jpeg', kind: 'image', thumbnailKey: ours(), thumbSizes: ['sm', 'xs'], metadata: { width: 4000, height: 3000 } }));
+    rows.push(await file('gaps', { name: 'complete.jpg', mime: 'image/jpeg', kind: 'image', thumbnailKey: ours(), thumbSizes: ['sm', 'xs'], posterKey: poster(), metadata: { width: 4000, height: 3000, placeholder: PH } }));
+    rows.push(await file('gaps', { name: 'no-placeholder.jpg', mime: 'image/jpeg', kind: 'image', thumbnailKey: ours(), thumbSizes: ['sm', 'xs'], posterKey: poster(), metadata: { width: 4000, height: 3000 } }));
     rows.push(await file('gaps', { name: 'bare.jpg', mime: 'image/jpeg', kind: 'image' }));
+    // An image's large preview turns on its bytes as well as its size — at
+    // the edges of 1.25x its grid poster and of the preview's own size, and
+    // either side of what an original may weigh to serve as one — and a GIF,
+    // known by its type or, with none, by its name, never has one.
+    for (const [width, height] of [[960, 720], [961, 721], [2000, 1500], [2400, 1600], [2401, 1600]]) {
+      for (const size of [1000, PREVIEW_ORIGINAL_MAX_BYTES, PREVIEW_ORIGINAL_MAX_BYTES + 1]) {
+        rows.push(await file('gaps', { name: `b-${width}x${height}-${size}.jpg`, size, mime: 'image/jpeg', kind: 'image', thumbnailKey: ours(), thumbSizes: ['sm', 'xs'], metadata: { width, height, placeholder: PH } }));
+      }
+    }
+    rows.push(await file('gaps', { name: 'anim.gif', mime: 'image/gif', kind: 'image', thumbnailKey: ours(), thumbSizes: ['sm', 'xs'], metadata: { width: 4000, height: 3000, placeholder: PH } }));
+    rows.push(await file('gaps', { name: 'anim.GIF', mime: '', kind: 'image', thumbnailKey: ours(), thumbSizes: ['sm', 'xs'], metadata: { width: 4000, height: 3000, placeholder: PH } }));
+    rows.push(await file('gaps', { name: 'anim-unsized.gif', mime: 'image/gif', kind: 'image', thumbnailKey: ours(), thumbSizes: ['sm', 'xs'], metadata: { placeholder: PH } }));
     rows.push(await file('gaps', { name: 'poster.mp4', mime: 'video/mp4', kind: 'video', thumbnailKey: ours(), thumbSizes: ['sm', 'xs'], posterKey: `_thumbs/${crypto.randomUUID()}.poster.webp`, metadata: { width: 1920, height: 1080, placeholder: PH } }));
     // An old thumbnail: a key the server did not name, or only a URL.
     const legacy = await file('gaps', { name: 'legacy-key.jpg', mime: 'image/jpeg', kind: 'image', metadata: { width: 4000, height: 3000 } });
@@ -159,6 +173,8 @@ describe('what a file lacks', { skip }, () => {
     );
     assert.ok(want.some((r) => r.name.startsWith('p-')) && rows.some((r) => r.name.startsWith('p-') && !previewGaps(r).length), 'the sizes fall on both sides of the line');
     assert.ok(want.some((r) => r.name.startsWith('v-')) && rows.some((r) => r.name.startsWith('v-') && !previewGaps(r).length), 'and so do the posters');
+    assert.ok(want.some((r) => r.name.startsWith('b-')) && rows.some((r) => r.name.startsWith('b-') && !previewGaps(r).length), 'and an image’s large preview');
+    assert.ok(!names.some((n) => n.startsWith('anim')), 'a GIF lacks none');
   });
 
   test('the summary counts what lacks what, old thumbnails among them', async () => {
@@ -263,7 +279,7 @@ describe('what a run comes to', { skip }, () => {
   before(async () => {
     if (!live) return;
     await file('count', { name: 'a.jpg', mime: 'image/jpeg', kind: 'image' });
-    await file('count', { name: 'b.jpg', mime: 'image/jpeg', kind: 'image', thumbnailKey: ours(), thumbSizes: ['sm', 'xs'], metadata: { width: 4000, height: 3000, placeholder: PH } });
+    await file('count', { name: 'b.jpg', mime: 'image/jpeg', kind: 'image', thumbnailKey: ours(), thumbSizes: ['sm', 'xs'], posterKey: poster(), metadata: { width: 4000, height: 3000, placeholder: PH } });
     await file('count', { name: 'c.heic', mime: 'image/heic', kind: 'image' });
     await file('count', { name: 'd.heic', mime: 'image/heic', kind: 'image', thumbnailKey: ours(), thumbSizes: ['sm', 'xs'], metadata: { width: 4000, height: 3000 } });
     await file('count', { name: 'e.tif', mime: 'image/tiff', kind: 'image' });

@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { createPreviewRun, carriedOver, unfinished, initialRunState, NAMES_PER_REASON } from '../lib/preview-runner.js';
 
 const OURS = (n) => `_thumbs/${String(n).padStart(8, '0')}-d9cb-469f-a165-70867728950e.webp`;
+const POSTER = (n) => `_thumbs/${String(n).padStart(8, '0')}-d9cb-469f-a165-70867728950e.poster.webp`;
 const PH = 'data:image/webp;base64,UklGRkQAAABXRUJQVlA4IDgAAAAQAwCdASoYABIAPtFiqk+oJaOiKAgBABoJZQDKABanFAAA/uX6P+HPtj97JX/VR2OO4YxZAAAAAA==';
 
 /** A picture of ours lacking what `lacks` names: 'thumbnail', 'sizes', 'placeholder', or nothing. */
@@ -19,7 +20,8 @@ function row(id, lacks = 'placeholder', over = {}) {
     id, name: `${id}.jpg`, mime: 'image/jpeg', kind: 'image', size: 1000, storage: 's3', url: `https://s3.test/${id}.jpg`,
     thumbnailKey: lacks === 'thumbnail' ? null : OURS(id.replace(/\D/g, '') || 1),
     thumbnailUrl: lacks === 'thumbnail' ? null : `https://s3.test/${id}.webp`,
-    thumbSizes: lacks === 'sizes' ? [] : ['sm', 'xs'], posterKey: null, metadata: md, ...over,
+    thumbSizes: lacks === 'sizes' ? [] : ['sm', 'xs'],
+    posterKey: lacks === 'thumbnail' ? null : POSTER(id.replace(/\D/g, '') || 1), metadata: md, ...over,
   };
 }
 

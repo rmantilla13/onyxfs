@@ -45,7 +45,8 @@ function row(id, key, { lacks = 'thumbnail', folder = '', name = `${id}.jpg`, mi
   return {
     id, name, mime, kind, size: 1000, storage: 's3', storageKey: key, folder, url: `http://s3.test/onyx/${key}`,
     thumbnailKey: lacks === 'thumbnail' ? null : OURS(n), thumbnailUrl: null, thumbSizes: lacks === 'thumbnail' ? [] : ['sm', 'xs'],
-    posterKey: null, filmstripKey: null, createdBy: 'someone@pv.test', tags: ['secret-tag'], deletedAt: null,
+    posterKey: lacks === 'thumbnail' ? null : `_thumbs/${String(n).padStart(8, '0')}-d9cb-469f-a165-70867728950e.poster.webp`,
+    filmstripKey: null, createdBy: 'someone@pv.test', tags: ['secret-tag'], deletedAt: null,
     metadata: { width: 4000, height: 3000, client: 'Acme', ...(lacks === 'thumbnail' || lacks === 'placeholder' ? {} : { placeholder: PH }) },
     ...over,
   };

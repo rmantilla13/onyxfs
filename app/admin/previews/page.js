@@ -94,7 +94,8 @@ export default async function PreviewsPage() {
             />
             <StatTile label="Without smaller sizes" value={num(drawn.noSizes)} sub="Cards and list rows load the whole thumbnail" />
             <StatTile label="Without a placeholder" value={num(drawn.noPlaceholder)} sub="Their tiles are blank until it arrives" />
-            <StatTile label="Videos without a player poster" value={num(drawn.noPoster)} sub="The player enlarges the thumbnail" />
+            <StatTile label="Pictures without a large preview" value={num(summary.image.noPoster)} sub="They open from the original" />
+            <StatTile label="Videos without a player poster" value={num(summary.video.noPoster)} sub="The player enlarges the thumbnail" />
           </div>
           {drawn.legacy > 0 && (
             <p className="small muted admin-card-foot">
