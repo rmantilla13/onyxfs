@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 157
+-- Statements: 158
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -285,6 +285,8 @@ CREATE INDEX IF NOT EXISTS files_unmoved_trash_idx ON files (storage_key) WHERE 
 CREATE INDEX IF NOT EXISTS files_trash_key_idx ON files (trash_key) WHERE trash_key IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS files_filmstrip_key_idx ON files (filmstrip_key) WHERE filmstrip_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS files_poster_queue_idx ON files (created_at DESC) WHERE deleted_at IS NULL AND storage = 's3' AND thumbnail_key IS NOT NULL AND poster_key IS NULL AND coalesce(kind, '') IN ('', 'other', 'image') AND (lower(coalesce(mime, '')) IN ('image/jpeg', 'image/png', 'image/webp', 'image/tiff', 'image/avif') OR name ~* '[.](jpe?g|png|webp|tiff?|avif)$') AND (size > 1572864 OR jsonb_typeof(metadata -> 'width') IS DISTINCT FROM 'number' OR jsonb_typeof(metadata -> 'height') IS DISTINCT FROM 'number' OR metadata -> 'width' <= '0' OR metadata -> 'height' <= '0' OR metadata -> 'width' > '2400' OR metadata -> 'height' > '2400');
 
 CREATE TABLE IF NOT EXISTS uploads (
   id           TEXT PRIMARY KEY,

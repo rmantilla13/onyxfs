@@ -85,7 +85,11 @@ describe('what the server claims to draw', { skip }, () => {
     await pic('pc.jpg', { size: 5 * MB, metadata: { width: 2400, height: 1600 } }); // within the preview, but heavy
     await pic('pd.PNG', { mime: '', size: 5 * MB });                           // known by its name
     await pic('pe.jpg', { kind: 'other' });                                    // an image, as effectiveKind reads it
+    await pic('pf.png', { mime: 'image/png', size: 1 * MB, metadata: { width: 3000, height: 2000 } }); // light, but too many pixels to be its own
+    await pic('pg.jpg', { size: 1 * MB, metadata: { width: '3000', height: 2000 } }); // a size written as text
+    await pic('ph.jpg', { size: 1 * MB, metadata: { width: 0, height: 0 } });  // a size that is none
     await pic('qa.jpg', { size: 400_000, metadata: { width: 1600, height: 1200 } }); // light enough to be its own
+    await pic('ql.png', { mime: 'image/png', size: 1 * MB, metadata: { width: 2400, height: 1600 } }); // and within the preview's size
     await pic('qb.jpg', { metadata: { width: 900, height: 600 } });            // barely bigger than its thumbnail
     await pic('qc.gif', { mime: 'image/gif' });                                // animates
     await pic('qd.gif', { mime: '' });                                         // animates, known by its name
@@ -100,7 +104,7 @@ describe('what the server claims to draw', { skip }, () => {
     const these = async (q) => mine(await db.claimServerPosters(q)).filter((n) => /^[pq][a-z]\./.test(n));
     const args = { limit: 100, maxBytes: 450 * MB, maxPixels: 16384 * 16384 };
     const claimed = await these(args);
-    assert.deepEqual(claimed, ['pa.jpg', 'pb.jpg', 'pc.jpg', 'pd.PNG', 'pe.jpg']);
+    assert.deepEqual(claimed, ['pa.jpg', 'pb.jpg', 'pc.jpg', 'pd.PNG', 'pe.jpg', 'pf.png', 'pg.jpg', 'ph.jpg']);
     await db.sql`DELETE FROM files WHERE id = ${young.id}`;
     // Claimed: not again until it is due, and never past the tries.
     assert.deepEqual(await these(args), []);
@@ -156,6 +160,40 @@ describe('what the server claims to draw', { skip }, () => {
     const [row] = await db.sql`SELECT poster_key, metadata FROM files WHERE id = ${f.id}`;
     assert.deepEqual([row.poster_key, row.metadata.width, row.metadata.height], [null, 900, 600]);
     assert.ok(!mine(await db.claimServerPosters({ ...args, now: Date.now() + 60 * 60_000 })).includes('ta.jpg'));
+  });
+
+  test('the size a draw read replaces one on record that judged otherwise, so the claim stops taking it', async () => {
+    // Recorded on its side: 1300x800 wants a preview, 800x1300 upright does
+    // not (lib/poster.js imagePreviewFor's 1.25x, against a grid poster cut
+    // to the other shape).
+    const thumb = `_thumbs/${crypto.randomUUID()}.webp`;
+    const f = await file('ua.jpg', { thumb, size: 5 * 1024 * 1024 });
+    await db.sql`
+      UPDATE files SET metadata = '{"width":1300,"height":800,"placeholder":"data:image/webp;base64,AAAA"}'::jsonb, thumb_sizes = 'sm,xs'
+      WHERE id = ${f.id}`;
+    const args = { limit: 100, maxBytes: 450 * 1024 * 1024 };
+    assert.ok(mine(await db.claimServerPosters(args)).includes('ua.jpg'));
+    assert.equal(await db.setServerPoster(f.id, null, { width: 800, height: 1300 }, { thumbnailKey: thumb }), true);
+    const [row] = await db.sql`SELECT metadata FROM files WHERE id = ${f.id}`;
+    assert.deepEqual([row.metadata.width, row.metadata.height, !!row.metadata.placeholder], [800, 1300, true]);
+    assert.ok(!mine(await db.claimServerPosters({ ...args, now: Date.now() + 60 * 60_000 })).includes('ua.jpg'));
+  });
+
+  test('a draw recorded hands the file back its tries; so do new contents', async () => {
+    const f = await file('va.jpg');
+    await db.claimServerPreviews({ limit: 50, maxBytes: 450 * 1024 * 1024 });
+    await db.setServerPreviewError(f.id, 'Could not draw it.');
+    const tries = async () => (await db.sql`SELECT preview_tries, preview_tried_at, preview_error FROM files WHERE id = ${f.id}`)[0];
+    const claimed = await tries();
+    assert.equal(claimed.preview_tries, 1);
+    assert.ok(claimed.preview_tried_at && claimed.preview_error);
+    await db.setServerPreviewDrawn(f.id);
+    assert.deepEqual({ ...(await tries()) }, { preview_tries: 0, preview_tried_at: null, preview_error: null });
+
+    await db.sql`UPDATE files SET preview_tries = 3, preview_tried_at = ${Date.now()}, preview_error = 'Too many pixels' WHERE id = ${f.id}`;
+    const replaced = await db.replaceFileContent(f.id, { fromKey: f.storageKey, toKey: `${T}/va-2.jpg`, url: `http://s3.test/b/${T}/va-2.jpg`, size: 2000 });
+    assert.ok(replaced);
+    assert.deepEqual({ ...(await tries()) }, { preview_tries: 0, preview_tried_at: null, preview_error: null });
   });
 
   test('thumbnails without a placeholder are claimed for one; those with one are not', async () => {

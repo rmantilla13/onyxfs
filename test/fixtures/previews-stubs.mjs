@@ -2,11 +2,11 @@
 // /api/admin/previews/candidates runs for real — requireAdmin and the
 // session, lib/storage.js's presigning — with the database replaced by rows
 // in globalThis.__pv that the test arranges. Which rows a page holds is
-// lib/preview-jobs.js's rule applied in JS: the rule the SQL is held to in
-// test/previews-db.test.js. The arguments the route passed are recorded, so
-// the test can see the scope it asked for.
+// lib/preview-jobs.js's rule applied in JS (runGaps): the rule the SQL is
+// held to in test/previews-db.test.js. The arguments the route passed are
+// recorded, so the test can see the scope it asked for.
 
-import { previewClass, previewGaps } from '../../lib/preview-jobs.js';
+import { previewClass, runGaps } from '../../lib/preview-jobs.js';
 import { effectiveKind } from '../../lib/media.js';
 import { cleanFolder, nfc } from '../../lib/folder-ops.js';
 
@@ -39,7 +39,7 @@ function inScope(f, { kinds = ['image', 'video'], prefix = null, folder = null }
 }
 function listed(f, { classes, mode }) {
   if (mode === 'everything') return classes.includes(previewClass(f));
-  const gaps = previewGaps(f);
+  const gaps = runGaps(f);
   return (classes.includes(previewClass(f)) && gaps.length > 0) || gaps.includes('sizes') || gaps.includes('placeholder');
 }
 const sorted = () => [...s().files].sort((a, b) => (a.id < b.id ? -1 : 1));
@@ -55,7 +55,7 @@ export async function countPreviewCandidates(args) {
   s().calls.push(['countPreviewCandidates', args]);
   const out = { total: 0, heic: 0, tiff: 0, never: 0 };
   for (const f of sorted().filter((x) => inScope(x, args))) {
-    if (args.mode !== 'everything' && !previewGaps(f).length) continue;
+    if (args.mode !== 'everything' && !runGaps(f).length) continue;
     if (listed(f, args)) out.total += 1;
     else if (previewClass(f) in out) out[previewClass(f)] += 1;
   }

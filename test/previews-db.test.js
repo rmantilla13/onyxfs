@@ -8,7 +8,7 @@
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { previewClass, previewGaps, drawnClasses, kindsFor } from '../lib/preview-jobs.js';
+import { previewClass, previewGaps, runGaps, drawnClasses, kindsFor } from '../lib/preview-jobs.js';
 import { effectiveKind } from '../lib/media.js';
 import { PREVIEW_ORIGINAL_MAX_BYTES } from '../lib/poster.js';
 
@@ -163,18 +163,17 @@ describe('what a file lacks', { skip }, () => {
     rows.push(await db.getFileById(legacy.id), byUrl);
   });
 
-  test('missing only hands a run exactly the files previewGaps finds lacking', async () => {
+  test('missing only hands a run exactly the files runGaps finds lacking', async () => {
     const got = (await listAll({ classes: drawnClasses({}), kinds: ['image', 'video'], prefix: `${ROOT}/gaps`, mode: 'missing' })).map((r) => r.name);
-    const want = rows.filter((r) => previewGaps(r).length > 0);
+    const want = rows.filter((r) => runGaps(r).length > 0);
     const names = want.map((r) => r.name);
     assert.deepEqual(
       { onlyInSql: got.filter((n) => !names.includes(n)), onlyInJs: names.filter((n) => !got.includes(n)) },
       { onlyInSql: [], onlyInJs: [] },
     );
-    assert.ok(want.some((r) => r.name.startsWith('p-')) && rows.some((r) => r.name.startsWith('p-') && !previewGaps(r).length), 'the sizes fall on both sides of the line');
-    assert.ok(want.some((r) => r.name.startsWith('v-')) && rows.some((r) => r.name.startsWith('v-') && !previewGaps(r).length), 'and so do the posters');
-    assert.ok(want.some((r) => r.name.startsWith('b-')) && rows.some((r) => r.name.startsWith('b-') && !previewGaps(r).length), 'and an image’s large preview');
-    assert.ok(!names.some((n) => n.startsWith('anim')), 'a GIF lacks none');
+    assert.ok(want.some((r) => r.name.startsWith('p-')) && rows.some((r) => r.name.startsWith('p-') && !runGaps(r).length), 'the sizes fall on both sides of the line');
+    assert.ok(want.some((r) => r.name.startsWith('v-')) && rows.some((r) => r.name.startsWith('v-') && !runGaps(r).length), 'and so do the posters');
+    assert.ok(rows.some((r) => r.name.startsWith('b-') && previewGaps(r).includes('preview')) && !got.some((n) => n.startsWith('b-')), 'a picture lacking only its large preview is the server’s, not a run’s');
   });
 
   test('the summary counts what lacks what, old thumbnails among them', async () => {
@@ -190,8 +189,11 @@ describe('what a file lacks', { skip }, () => {
       assert.equal(s.thumbs, count(kind, thumbed), `${kind} thumbs`);
       assert.equal(s.noSizes, count(kind, (r) => lacks(r, 'sizes')), `${kind} without sizes`);
       assert.equal(s.noPlaceholder, count(kind, (r) => lacks(r, 'placeholder')), `${kind} without a placeholder`);
-      assert.equal(s.noPoster, count(kind, (r) => lacks(r, 'poster')), `${kind} without a poster`);
+      assert.equal(s.noPoster, count(kind, (r) => lacks(r, kind === 'image' ? 'preview' : 'poster')), `${kind} without a poster`);
     }
+    const preview = (r) => r.name.startsWith('b-') && lacks(r, 'preview');
+    assert.ok(rows.some(preview) && rows.some((r) => r.name.startsWith('b-') && !preview(r)), 'an image’s large preview falls on both sides of the line');
+    assert.ok(!rows.some((r) => r.name.startsWith('anim') && lacks(r, 'preview')), 'a GIF lacks none');
     assert.equal(summary.image.legacy, 2);
     assert.equal(summary.image.files - summary.image.thumbs, 1, 'bare.jpg');
   });
