@@ -14,6 +14,13 @@
 // import a module the bundler builds — and test/preview-cache.test.js runs
 // this file against them and fails when the two disagree.
 //
+// Posters and filmstrips, a few hundred kilobytes each, are kept apart from
+// the grid thumbnails, tens of kilobytes each, with a cap of their own, so
+// neither kind crowds out the other. Each cache is a line: a picture kept
+// goes to the back, and a trim takes from the front. A picture seen again
+// while near the front is put again, which takes it to the back, so what is
+// used is what stays; seen anywhere else, nothing is written.
+//
 // It must never cost a picture. Whatever goes wrong in here — no Cache
 // Storage, a full disk, a bucket with no CORS rule, anything thrown — the
 // page still gets its picture from the network, and nothing is kept.
@@ -32,7 +39,7 @@
 //
 // It has no fetch handler, so from the moment it activates every request
 // goes to the network as though there were no worker; then it drops the
-// cache and unregisters itself. Take app/components/PreviewWorker.js out of
+// caches and unregisters itself. Take app/components/PreviewWorker.js out of
 // the root layout in the same deploy, or each page load installs the kill
 // switch again only for it to remove itself again. Do not delete this file
 // instead: a 404 leaves the installed worker running. middleware.js keeps
@@ -40,13 +47,18 @@
 // replacement too.
 
 const CACHE = 'previews-v1';
+const LARGE_CACHE = 'previews-large-v1';
 const PREFIX = 'previews-';
 const MAX_ENTRIES = 4000;
 const TRIM_TO = 3600;
+const LARGE_MAX_ENTRIES = 400;
+const LARGE_TRIM_TO = 360;
 // A preview key (lib/media.js isThumbKey, isThumbSiblingKey, isPosterKey,
 // isFilmstripKey) as the whole path, or after one segment: the bucket, in a
 // path-style URL.
 const PREVIEW_PATH = /^(?:\/[^/]+)?\/_thumbs\/[0-9a-f-]{36}(?:(?:\.(?:sm|xs|poster))?\.(?:webp|jpg)|\.strip\.webp)$/;
+// Of those, a poster or a filmstrip: kept in LARGE_CACHE.
+const LARGE_PATH = /\.(?:poster|strip)\.(?:webp|jpg)$/;
 
 /** What a request is kept under — the URL's origin and path — or null when it is not a preview's. */
 function previewCacheKey(request) {
@@ -57,15 +69,28 @@ function previewCacheKey(request) {
   return PREVIEW_PATH.test(u.pathname) ? u.origin + u.pathname : null;
 }
 
+/** The cache a preview is kept in, by its key: a poster or a filmstrip in the large one. Null for a key that is not a preview's. */
+function previewCacheName(key) {
+  let path;
+  try { path = new URL(key).pathname; } catch { return null; }
+  if (!PREVIEW_PATH.test(path)) return null;
+  return LARGE_PATH.test(path) ? LARGE_CACHE : CACHE;
+}
+
 /** A picture that came back whole, over CORS. An opaque answer is never kept: Chrome pads each to megabytes of quota. */
 function keepsResponse(res) {
   return !!res && res.ok === true && res.type === 'cors' && !res.redirected
     && /^image\//i.test(res.headers?.get?.('content-type') || '');
 }
 
-/** Once more than `max` are kept, the oldest keys — enough to leave `to`, so a full cache is not trimmed on every put. */
+/** Once more than `max` are kept, the keys at the front of the line — enough to leave `to`, so a full cache is not trimmed on every put. */
 function trimPlan(keys, max, to) {
   return keys.length > max ? keys.slice(0, keys.length - Math.min(to, max)) : [];
+}
+
+/** Whether a picture seen again is put again: once three quarters of a full cache have been put after it, it is near the front. */
+function refreshes(since, max) {
+  return Number.isInteger(since) && Number.isInteger(max) && max > 0 && since * 4 >= max * 3;
 }
 
 self.addEventListener('install', (event) => {
@@ -88,7 +113,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     try {
       const names = await caches.keys();
-      await Promise.all(names.filter((n) => n.startsWith(PREFIX) && n !== CACHE).map((n) => caches.delete(n)));
+      await Promise.all(names.filter((n) => n.startsWith(PREFIX) && n !== CACHE && n !== LARGE_CACHE).map((n) => caches.delete(n)));
     } catch { /* an older version's cache waits for the next activation */ }
     try { await self.clients.claim(); } catch { /* pages already open are taken over when they reload */ }
   })());
@@ -104,11 +129,16 @@ self.addEventListener('fetch', (event) => {
 
 /** The kept copy, or the picture fetched with CORS and kept; null to let the page's own request go. */
 async function answer(event, key) {
+  const queue = queues[previewCacheName(key)];
   let cache = null;
   try {
-    cache = await caches.open(CACHE);
+    cache = await caches.open(queue.name);
     const hit = await cache.match(key, { ignoreVary: true });
-    if (hit) return hit;
+    if (hit) {
+      // Moved to the back if it is near the front, after the page has its answer.
+      try { event.waitUntil(seen(queue, key).catch(() => {})); } catch { /* left where it is this time */ }
+      return hit;
+    }
   } catch { cache = null; }
   // Not kept yet. An <img> asks without CORS, and an opaque answer cannot be
   // kept, so the same URL is asked for again with CORS and no credentials. A
@@ -121,27 +151,80 @@ async function answer(event, key) {
   try { res = await fetch(event.request.url, { mode: 'cors', credentials: 'omit' }); } catch { return null; }
   if (cache && keepsResponse(res)) {
     // Written after the page has its answer; the worker stays up for it.
-    try { event.waitUntil(cache.put(key, res.clone()).then(added, () => {})); } catch { /* not kept this time */ }
+    try { event.waitUntil(cache.put(key, res.clone()).then(() => added(queue, key)).catch(() => {})); } catch { /* not kept this time */ }
   }
   return res;
 }
 
-// How many previews the cache holds, as this worker last counted them: null
-// until it has counted once since it started. Counting reads every key, so
-// it is done when the count says the cache may be over, not on every put.
-let entries = null;
-let trimming = null;
+// Each cache's line as this worker last read it: `places` has a place for
+// every key, front to back in the order Cache Storage lists them, numbered
+// from a count that only goes up, so `next - 1 - place` is how many were put
+// after a key. It is null until the line has been read once since the worker
+// started. Reading lists every key — about a fifth of a second for a full
+// cache in Chrome, though hits are answered alongside it — so it is done
+// then, and again only when the count says the cache may be over its cap,
+// not on every put or hit.
+const queues = {
+  [CACHE]: { name: CACHE, max: MAX_ENTRIES, to: TRIM_TO, places: null, next: 0, trimming: null },
+  [LARGE_CACHE]: { name: LARGE_CACHE, max: LARGE_MAX_ENTRIES, to: LARGE_TRIM_TO, places: null, next: 0, trimming: null },
+};
 
-function added() {
-  if (entries !== null && ++entries <= MAX_ENTRIES) return undefined;
-  if (!trimming) trimming = trim().catch(() => {}).then(() => { trimming = null; });
-  return trimming;
+/** To the back of the line: a key put again leaves its old place. */
+function place(queue, key) {
+  queue.places.delete(key);
+  queue.places.set(key, queue.next++);
 }
 
-async function trim() {
-  const cache = await caches.open(CACHE);
+/** A picture was just put, so it is at the back. Past the cap, or before the line has been read, the cache is read and trimmed. */
+async function added(queue, key) {
+  // A read under way may have listed the cache before this put.
+  if (queue.trimming) await queue.trimming;
+  if (!queue.places) return trim(queue);
+  place(queue, key);
+  if (queue.places.size > queue.max) await trim(queue);
+  return undefined;
+}
+
+/**
+ * A kept picture was answered. Near the front of the line (refreshes) it is
+ * put again, to the back, so the next trims take what has not been used
+ * rather than what was kept first; anywhere else nothing is written. It is
+ * deleted before it is put back: WebKit — Safari, Onyx for Mac's web view —
+ * keeps a replaced entry where it was in the line.
+ */
+async function seen(queue, key) {
+  if (queue.trimming || !queue.places) await trim(queue);
+  const at = queue.places?.get(key);
+  if (at === undefined || !refreshes(queue.next - 1 - at, queue.max)) return;
+  // Placed before anything is awaited, so the same picture seen twice at once is put once.
+  place(queue, key);
+  const cache = await caches.open(queue.name);
+  const copy = await cache.match(key, { ignoreVary: true });
+  if (!copy) return;
+  await cache.delete(key);
+  await cache.put(key, copy);
+}
+
+/** Read the line and trim it to its cap, one read at a time: a call while one is under way waits for that one. Never rejects. */
+function trim(queue) {
+  if (!queue.trimming) queue.trimming = readAndTrim(queue).catch(() => {}).then(() => { queue.trimming = null; });
+  return queue.trimming;
+}
+
+async function readAndTrim(queue) {
+  const cache = await caches.open(queue.name);
   const keys = await cache.keys();
-  const doomed = trimPlan(keys, MAX_ENTRIES, TRIM_TO);
-  await Promise.all(doomed.map((k) => cache.delete(k)));
-  entries = keys.length - doomed.length;
+  // A picture kept in the other cache's place — a poster among the
+  // thumbnails, from before the two were kept apart — is never looked for
+  // here again, so it goes too.
+  const line = [];
+  const stray = [];
+  for (const k of keys) (previewCacheName(k.url) === queue.name ? line : stray).push(k);
+  const doomed = trimPlan(line, queue.max, queue.to);
+  await Promise.all([...stray, ...doomed].map((k) => cache.delete(k)));
+  const places = new Map();
+  let next = 0;
+  for (let i = doomed.length; i < line.length; i++) places.set(line[i].url, next++);
+  queue.places = places;
+  queue.next = next;
 }

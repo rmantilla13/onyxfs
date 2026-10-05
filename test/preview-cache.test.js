@@ -3,7 +3,8 @@
 // signature says. It is a static file that cannot import its rules, so this
 // runs the file itself — in a vm, against Cache Storage and fetch in memory —
 // and checks that it agrees with lib/preview-cache.js, that it never costs a
-// picture, and that the kill switch its comment documents works as written.
+// picture, that a trim takes what was not used rather than what was kept
+// first, and that the kill switch its comment documents works as written.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,7 +12,8 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import {
   PREVIEW_WORKER_URL, PREVIEW_CACHE, PREVIEW_CACHE_PREFIX, PREVIEW_CACHE_MAX, PREVIEW_CACHE_TRIM_TO,
-  isPreviewKey, previewCacheKey, keepsResponse, trimPlan, clearPreviewCaches, registerPreviewWorker,
+  PREVIEW_LARGE_CACHE, PREVIEW_LARGE_CACHE_MAX, PREVIEW_LARGE_CACHE_TRIM_TO,
+  isPreviewKey, previewCacheKey, previewCacheName, keepsResponse, trimPlan, refreshes, clearPreviewCaches, registerPreviewWorker,
 } from '../lib/preview-cache.js';
 import { isThumbKey, isThumbSiblingKey, isPosterKey, isFilmstripKey } from '../lib/media.js';
 
@@ -68,16 +70,26 @@ function opaqueResponse() {
   return r;
 }
 
-/** Cache Storage in memory: named caches of URL → response, in the order they were put. */
-function memoryCaches({ broken = false } = {}) {
+/**
+ * Cache Storage in memory: named caches of URL → response, in the order they
+ * were put. A put replaces an entry by taking it to the back, as the spec
+ * and Chrome do; `inPlace` replaces it where it is, as WebKit does. `putFails`
+ * is a full disk.
+ */
+function memoryCaches({ broken = false, inPlace = false, putFails = false } = {}) {
   const stores = new Map();
-  const calls = { keys: 0 };
+  const calls = { keys: 0, put: 0, delete: 0 };
   const urlOf = (r) => (typeof r === 'string' ? r : r.url);
   const cache = (m) => ({
     async match(r) { const v = m.get(urlOf(r)); return v ? v.clone() : undefined; },
-    async put(r, res) { m.delete(urlOf(r)); m.set(urlOf(r), res); },
+    async put(r, res) {
+      calls.put++;
+      if (putFails) throw new DOMException('Quota exceeded.', 'QuotaExceededError');
+      if (!inPlace) m.delete(urlOf(r));
+      m.set(urlOf(r), res);
+    },
     async keys() { calls.keys++; return [...m.keys()].map((u) => new Request(u)); },
-    async delete(r) { return m.delete(urlOf(r)); },
+    async delete(r) { calls.delete++; return m.delete(urlOf(r)); },
   });
   return {
     stores,
@@ -140,7 +152,17 @@ async function dispatch(w, url, { method = 'GET', mode = 'no-cors' } = {}) {
   return { event, response, answered: !!event.responded };
 }
 
-const kept = (w) => [...(w.caches.stores.get(PREVIEW_CACHE)?.keys() || [])];
+const kept = (w, name = PREVIEW_CACHE) => [...(w.caches.stores.get(name)?.keys() || [])];
+/** The worker's line for a cache as it last read it: each key's place. */
+const line = (w, name = PREVIEW_CACHE) => w.get('queues')[name].places;
+
+/** A cache already holding `n` previews, the first kept first; `key(i)` is the i-th's name under `_thumbs/`. */
+function fill(caches, cacheName, n, key) {
+  const store = new Map();
+  caches.stores.set(cacheName, store);
+  for (let i = 0; i < n; i++) store.set(`${B2}/onyx-files/_thumbs/${key(i)}`, corsResponse());
+  return store;
+}
 
 describe('what is kept, and under what (lib/preview-cache.js)', () => {
   test('a preview key is one the server names — a thumbnail, a sibling, a poster, a filmstrip — and nothing else', () => {
@@ -197,16 +219,87 @@ describe('what is kept, and under what (lib/preview-cache.js)', () => {
     assert.deepEqual(trimPlan(['a', 'b', 'c'], 2, 5), ['a'], 'never leaves more than the cap');
     assert.deepEqual(trimPlan(null), []);
   });
+
+  test('posters and filmstrips are kept apart from the thumbnails, fewer of them', () => {
+    const name = (key) => previewCacheName(`${B2}/onyx-files/${key}`);
+    for (const key of PREVIEWS) {
+      assert.equal(name(key), isPosterKey(key) || isFilmstripKey(key) ? PREVIEW_LARGE_CACHE : PREVIEW_CACHE, key);
+    }
+    assert.equal(previewCacheName(`https://onyx-files.s3.us-east-2.amazonaws.com/_thumbs/${UUID}.poster.jpg`), PREVIEW_LARGE_CACHE, 'virtual-hosted');
+    assert.equal(previewCacheName(`https://onyx-files.s3.us-east-2.amazonaws.com/_thumbs/${UUID}.xs.jpg`), PREVIEW_CACHE);
+    for (const key of NOT_PREVIEWS) assert.equal(name(key), null, key);
+    assert.equal(previewCacheName('not a url'), null);
+    assert.equal(previewCacheName(undefined), null);
+    assert.notEqual(PREVIEW_LARGE_CACHE, PREVIEW_CACHE);
+    assert.ok(PREVIEW_LARGE_CACHE_MAX < PREVIEW_CACHE_MAX, 'a few hundred kilobytes each: fewer of them');
+    assert.ok(PREVIEW_LARGE_CACHE_TRIM_TO < PREVIEW_LARGE_CACHE_MAX);
+  });
+
+  test('a picture seen again is put again only when among the oldest quarter of a full cache', () => {
+    const max = PREVIEW_CACHE_MAX;
+    // A full cache: the one at the front has max - 1 put after it.
+    assert.equal(refreshes(max - 1, max), true, 'the front of the line');
+    assert.equal(refreshes((max * 3) / 4, max), true, 'the last of the oldest quarter');
+    assert.equal(refreshes((max * 3) / 4 - 1, max), false, 'the first of the rest');
+    assert.equal(refreshes(0, max), false, 'the back of the line');
+    assert.equal(refreshes(max * 2, max), true, 'a cache past its cap, before its trim');
+    // Never on every hit: a small cache has nothing near a trim.
+    assert.equal(refreshes(0, 1), false);
+    for (let n = 1; n < (max * 3) / 4; n++) if (refreshes(n - 1, max)) assert.fail(`${n} kept, the oldest put again`);
+    assert.equal(refreshes(PREVIEW_LARGE_CACHE_MAX - 1, PREVIEW_LARGE_CACHE_MAX), true);
+    assert.equal(refreshes((PREVIEW_LARGE_CACHE_MAX * 3) / 4 - 1, PREVIEW_LARGE_CACHE_MAX), false);
+    // Whatever is put again has been through the whole window before the
+    // trim would take it.
+    assert.ok((max * 3) / 4 < PREVIEW_CACHE_TRIM_TO && (PREVIEW_LARGE_CACHE_MAX * 3) / 4 < PREVIEW_LARGE_CACHE_TRIM_TO);
+    for (const [since, m] of [[undefined, max], [null, max], [NaN, max], ['3999', max], [1.5, 4], [3999, 0], [3999, -4], [3999, null]]) {
+      assert.equal(refreshes(since, m), false, `${since} of ${m}`);
+    }
+    assert.equal(refreshes(3999), true, 'the thumbnails’ cap by default');
+  });
 });
 
 describe('the worker agrees with lib/preview-cache.js', () => {
   test('the same names and limits', () => {
     const w = loadWorker();
     assert.equal(w.get('CACHE'), PREVIEW_CACHE);
+    assert.equal(w.get('LARGE_CACHE'), PREVIEW_LARGE_CACHE);
     assert.equal(w.get('PREFIX'), PREVIEW_CACHE_PREFIX);
     assert.equal(w.get('MAX_ENTRIES'), PREVIEW_CACHE_MAX);
     assert.equal(w.get('TRIM_TO'), PREVIEW_CACHE_TRIM_TO);
-    assert.ok(PREVIEW_CACHE.startsWith(PREVIEW_CACHE_PREFIX), 'clearing by prefix reaches the current version');
+    assert.equal(w.get('LARGE_MAX_ENTRIES'), PREVIEW_LARGE_CACHE_MAX);
+    assert.equal(w.get('LARGE_TRIM_TO'), PREVIEW_LARGE_CACHE_TRIM_TO);
+    for (const name of [PREVIEW_CACHE, PREVIEW_LARGE_CACHE]) {
+      assert.ok(name.startsWith(PREVIEW_CACHE_PREFIX), `clearing by prefix reaches ${name}`);
+    }
+  });
+
+  test('the same caches', () => {
+    const w = loadWorker();
+    const workerName = w.get('previewCacheName');
+    let large = 0;
+    for (const url of urlTable()) {
+      const key = previewCacheKey({ url }, APP);
+      assert.equal(workerName(key), previewCacheName(key), url);
+      if (key) assert.ok(previewCacheName(key), url);
+      if (previewCacheName(key) === PREVIEW_LARGE_CACHE) large++;
+      // Anything else handed to it, the same refusal.
+      assert.equal(workerName(url), previewCacheName(url), url);
+    }
+    // The four bases a bucket keeps them at, three of the previews (two
+    // posters and a filmstrip), each tail.
+    assert.equal(large, 4 * 3 * 4);
+    for (const v of [undefined, null, '', 42]) assert.equal(workerName(v), previewCacheName(v), String(v));
+  });
+
+  test('the same pictures put again', () => {
+    const w = loadWorker();
+    const workerRefreshes = w.get('refreshes');
+    // The worker always passes its cap; only the module has a default.
+    for (const max of [PREVIEW_CACHE_MAX, PREVIEW_LARGE_CACHE_MAX, 1, 3, 4, 5, 0, -4, null, 4.5]) {
+      for (const since of [0, 1, 2, 3, 4, 299, 300, 2999, 3000, 3001, 3999, 4000, 9000, -1, 1.5, undefined, null, NaN, '3000']) {
+        assert.equal(workerRefreshes(since, max), refreshes(since, max), `${since} of ${max}`);
+      }
+    }
   });
 
   test('the same requests, under the same keys', () => {
@@ -361,22 +454,127 @@ describe('the worker never costs a picture', () => {
     assert.equal(store.size, PREVIEW_CACHE_TRIM_TO);
     assert.equal(store.has(`${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`), false, 'the oldest went first');
     assert.equal(store.has(`${B2}/onyx-files/_thumbs/${UUID}.webp`), true, 'the newest stayed');
-    assert.equal(w.get('entries'), PREVIEW_CACHE_TRIM_TO);
+    assert.equal(line(w).size, PREVIEW_CACHE_TRIM_TO);
     assert.equal(caches.calls.keys, 1);
 
     await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.sm.webp?X-Amz-Signature=a`);
     assert.equal(caches.calls.keys, 1, 'under the cap, a put is counted, not listed');
-    assert.equal(w.get('entries'), PREVIEW_CACHE_TRIM_TO + 1);
+    assert.equal(line(w).size, PREVIEW_CACHE_TRIM_TO + 1);
   });
 
-  test('a new version drops the old one’s cache, keeps anyone else’s, and takes over open pages', async () => {
+  test('a picture seen again near the front goes to the back, so the trim takes what was not used', async () => {
     const caches = memoryCaches();
-    for (const name of ['previews-v0', PREVIEW_CACHE, 'someone-else']) caches.stores.set(name, new Map());
+    const store = fill(caches, PREVIEW_CACHE, PREVIEW_CACHE_MAX, (i) => `${uuidN(i)}.sm.webp`);
+    const w = loadWorker({ caches, fetch: recordingFetch(() => corsResponse()) });
+    const at = (i) => `${B2}/onyx-files/_thumbs/${uuidN(i)}.sm.webp`;
+
+    // A folder used every day: some of the first pictures ever kept.
+    for (const i of [5, 10, 11]) {
+      const { response } = await dispatch(w, `${at(i)}?X-Amz-Signature=today`);
+      assert.equal(await response.text(), 'pixels', 'answered from the cache');
+    }
+    assert.equal(caches.calls.keys, 1, 'the line is read once, at the first hit');
+    assert.deepEqual([...store.keys()].slice(-3), [at(5), at(10), at(11)], 'each now at the back');
+    assert.equal(caches.calls.put, 3);
+    assert.equal(store.size, PREVIEW_CACHE_MAX, 'moved, not copied');
+
+    // Seen again from the back, or from anywhere short of the oldest
+    // quarter: nothing is written.
+    const quarter = PREVIEW_CACHE_MAX / 4;
+    for (const i of [5, 10, 11, PREVIEW_CACHE_MAX - 1, quarter + 20, quarter + 3]) await dispatch(w, at(i));
+    assert.equal(caches.calls.put, 3, 'a hit away from the front is a read and nothing more');
+    // From just inside it, it is.
+    await dispatch(w, at(quarter - 3));
+    assert.equal(caches.calls.put, 4);
+    assert.equal([...store.keys()].at(-1), at(quarter - 3));
+
+    // A new picture takes the cache past its cap: the trim takes the front,
+    // which is no longer the first pictures kept but the first not used.
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.sm.webp?X-Amz-Signature=a`);
+    assert.equal(store.size, PREVIEW_CACHE_TRIM_TO);
+    for (const i of [5, 10, 11, quarter - 3]) assert.equal(store.has(at(i)), true, `${i}, used, stayed`);
+    for (const i of [0, 4, 6, 12]) assert.equal(store.has(at(i)), false, `${i}, never seen again, went`);
+    assert.equal(caches.calls.keys, 2, 'listed again only for the trim');
+  });
+
+  test('the same picture seen twice at once is put again once', async () => {
+    const caches = memoryCaches();
+    fill(caches, PREVIEW_CACHE, PREVIEW_CACHE_MAX, (i) => `${uuidN(i)}.webp`);
+    const w = loadWorker({ caches, fetch: recordingFetch(() => corsResponse()) });
+    const url = `${B2}/onyx-files/_thumbs/${uuidN(0)}.webp?X-Amz-Signature=a`;
+    const both = await Promise.all([dispatch(w, url), dispatch(w, url)]);
+    for (const { response } of both) assert.equal(await response.text(), 'pixels');
+    assert.equal(caches.calls.put, 1);
+  });
+
+  test('where a replaced entry keeps its place, as in WebKit, a picture put again still goes to the back', async () => {
+    const caches = memoryCaches({ inPlace: true });
+    const store = fill(caches, PREVIEW_CACHE, PREVIEW_CACHE_MAX, (i) => `${uuidN(i)}.webp`);
+    const w = loadWorker({ caches, fetch: recordingFetch(() => corsResponse()) });
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`);
+    assert.equal([...store.keys()].at(-1), `${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`);
+    assert.equal(store.size, PREVIEW_CACHE_MAX);
+  });
+
+  test('a full disk while putting a picture back: the page has its picture all the same', async () => {
+    const caches = memoryCaches({ putFails: true });
+    fill(caches, PREVIEW_CACHE, PREVIEW_CACHE_MAX, (i) => `${uuidN(i)}.webp`);
+    const fetch = recordingFetch(() => corsResponse());
+    const w = loadWorker({ caches, fetch });
+    const { response } = await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`);
+    assert.equal(await response.text(), 'pixels');
+    assert.equal(caches.calls.put, 1);
+    assert.equal(fetch.calls.length, 0);
+    // Gone from the cache, it is fetched and kept again the next time it is seen.
+    const again = await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`);
+    assert.equal(await again.response.text(), 'pixels');
+    assert.equal(fetch.calls.length, 1);
+  });
+
+  test('posters and filmstrips are kept in a cache of their own, trimmed to its own cap', async () => {
+    const caches = memoryCaches();
+    const thumbs = fill(caches, PREVIEW_CACHE, 10, (i) => `${uuidN(i)}.webp`);
+    const large = fill(caches, PREVIEW_LARGE_CACHE, PREVIEW_LARGE_CACHE_MAX, (i) => `${uuidN(i)}.${i % 2 ? 'poster.webp' : 'strip.webp'}`);
+    const fetch = recordingFetch(() => corsResponse('large'));
+    const w = loadWorker({ caches, fetch });
+
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.poster.jpg?X-Amz-Signature=a`);
+    assert.equal(large.size, PREVIEW_LARGE_CACHE_TRIM_TO, 'past its cap of a few hundred, trimmed');
+    assert.equal(large.has(`${B2}/onyx-files/_thumbs/${UUID}.poster.jpg`), true);
+    assert.equal(large.has(`${B2}/onyx-files/_thumbs/${uuidN(0)}.strip.webp`), false, 'the front went');
+    assert.equal(thumbs.size, 10, 'the thumbnails untouched');
+
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.strip.webp?X-Amz-Signature=a`);
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.xs.webp?X-Amz-Signature=a`);
+    assert.equal(large.has(`${B2}/onyx-files/_thumbs/${UUID}.strip.webp`), true);
+    assert.deepEqual(kept(w).slice(-1), [`${B2}/onyx-files/_thumbs/${UUID}.xs.webp`]);
+    assert.equal(large.size, PREVIEW_LARGE_CACHE_TRIM_TO + 1);
+    assert.equal(thumbs.size, 11);
+
+    // Seen again, each from its own cache.
+    const before = fetch.calls.length;
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.poster.jpg?X-Amz-Signature=b`);
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(3)}.webp?X-Amz-Signature=b`);
+    assert.equal(fetch.calls.length, before);
+  });
+
+  test('a poster kept among the thumbnails before the two were apart goes when that cache is read', async () => {
+    const caches = memoryCaches();
+    const thumbs = fill(caches, PREVIEW_CACHE, 6, (i) => `${uuidN(i)}.${i % 3 ? 'webp' : 'poster.webp'}`);
+    const w = loadWorker({ caches, fetch: recordingFetch(() => corsResponse()) });
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(1)}.webp`);
+    assert.deepEqual(kept(w), [1, 2, 4, 5].map((i) => `${B2}/onyx-files/_thumbs/${uuidN(i)}.webp`));
+    assert.equal(line(w).size, 4);
+  });
+
+  test('a new version drops the old one’s caches, keeps both of its own and anyone else’s, and takes over open pages', async () => {
+    const caches = memoryCaches();
+    for (const name of ['previews-v0', PREVIEW_CACHE, PREVIEW_LARGE_CACHE, 'previews-large-v0', 'someone-else']) caches.stores.set(name, new Map());
     const w = loadWorker({ caches });
     const waits = [];
     w.listeners.activate({ waitUntil: (p) => waits.push(p) });
     await Promise.all(waits);
-    assert.deepEqual([...caches.stores.keys()], [PREVIEW_CACHE, 'someone-else']);
+    assert.deepEqual([...caches.stores.keys()], [PREVIEW_CACHE, PREVIEW_LARGE_CACHE, 'someone-else']);
     assert.equal(w.log.claim, 1);
   });
 
@@ -395,24 +593,42 @@ test('the kill switch in the worker’s comment works as written', async () => {
   const lines = WORKER.split('\n').filter((l) => l.startsWith('//   ')).map((l) => l.slice(5));
   assert.ok(lines.length >= 3, 'the kill switch is in the comment');
   const caches = memoryCaches();
-  for (const name of [PREVIEW_CACHE, 'previews-v0', 'someone-else']) caches.stores.set(name, new Map([['k', corsResponse()]]));
+  for (const name of [PREVIEW_CACHE, PREVIEW_LARGE_CACHE, 'previews-v0', 'someone-else']) caches.stores.set(name, new Map([['k', corsResponse()]]));
   const w = loadWorker({ code: lines.join('\n'), caches });
   assert.equal(w.listeners.fetch, undefined, 'no fetch handler: every request goes to the network');
   w.listeners.install({});
   const waits = [];
   w.listeners.activate({ waitUntil: (p) => waits.push(p) });
   await Promise.all(waits);
-  assert.deepEqual([...caches.stores.keys()], ['someone-else'], 'every version of the cache dropped');
+  assert.deepEqual([...caches.stores.keys()], ['someone-else'], 'every version of both caches dropped');
   assert.equal(w.log.unregister, 1);
   assert.equal(w.log.skipWaiting, 1, 'it takes over at once rather than waiting for tabs to close');
 });
 
 describe('the page’s side', () => {
-  test('clearing deletes every version of the preview cache, and nothing else', async () => {
+  test('clearing deletes every version of both preview caches, and nothing else', async () => {
     const deleted = [];
-    const store = { keys: async () => ['previews-v1', 'previews-v0', 'someone-else'], delete: async (n) => { deleted.push(n); return true; } };
+    const names = [PREVIEW_CACHE, PREVIEW_LARGE_CACHE, 'previews-v0', 'previews-large-v0', 'someone-else'];
+    const store = { keys: async () => names, delete: async (n) => { deleted.push(n); return true; } };
     await clearPreviewCaches({ store });
-    assert.deepEqual(deleted.sort(), ['previews-v0', 'previews-v1']);
+    assert.deepEqual(deleted.sort(), ['previews-large-v0', 'previews-large-v1', 'previews-v0', 'previews-v1']);
+    assert.ok(deleted.includes(PREVIEW_CACHE) && deleted.includes(PREVIEW_LARGE_CACHE));
+  });
+
+  test('signing out clears what the worker kept, both caches', async () => {
+    const caches = memoryCaches();
+    const fetch = recordingFetch(() => corsResponse());
+    const w = loadWorker({ caches, fetch });
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.webp?X-Amz-Signature=a`);
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.poster.webp?X-Amz-Signature=a`);
+    caches.stores.set('someone-else', new Map());
+    assert.deepEqual([...caches.stores.keys()], [PREVIEW_CACHE, PREVIEW_LARGE_CACHE, 'someone-else']);
+    await clearPreviewCaches({ store: caches });
+    assert.deepEqual([...caches.stores.keys()], ['someone-else']);
+    // The worker's next answer comes from the network, and is kept again.
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.webp?X-Amz-Signature=b`);
+    assert.equal(fetch.calls.length, 3);
+    assert.deepEqual(kept(w), [`${B2}/onyx-files/_thumbs/${UUID}.webp`]);
   });
 
   test('clearing never holds up signing out, and never throws', async () => {
