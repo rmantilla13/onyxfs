@@ -7,7 +7,10 @@
 //
 // The player wires it as VideoPlayer.js does: every seek goes through
 // seek(), loadedmetadata calls loaded(), seeking and play call shown(), and
-// hold() loads the frame when presented() is false.
+// hold() loads the frame when presented() is false. A drag along the scrub
+// bar goes through scrub() instead, and letting go through seek(); that part
+// is tested against a stand-in that seeks as a loaded element does — busy
+// until it fires `seeked`, a new seek overtaking the one in flight.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -164,5 +167,217 @@ describe('whether the stage shows a frame, or still the poster', () => {
     q.play();
     q.hold();
     assert.deepEqual(q.v.seeks, []);
+  });
+});
+
+/**
+ * A loaded element, as the scrub bar sees one: setting currentTime starts a
+ * seek and `seeking` is true until land() fires `seeked`; a seek made while
+ * one is in flight overtakes it, with one `seeked` for both. With `fast` it
+ * has fastSeek, which lands on the keyframe at or before the time (one every
+ * `gop` seconds), as Safari's and Firefox's approximate seeks do.
+ */
+class SeekingVideo extends EventTarget {
+  constructor({ fast = false, gop = 2, readyState = 1 } = {}) {
+    super();
+    this.readyState = readyState;
+    this.seeking = false;
+    this.t = 0;
+    this.writes = [];      // currentTime set: an exact seek, a decode to the frame
+    this.fastSeeks = [];   // fastSeek called
+    if (fast) {
+      this.fastSeek = (t) => {
+        this.fastSeeks.push(t);
+        if (this.readyState > 0) this.begin(Math.floor(t / gop) * gop);
+      };
+    }
+  }
+  get currentTime() { return this.t; }
+  set currentTime(t) {
+    this.writes.push(t);
+    if (this.readyState > 0) this.begin(t);
+  }
+  begin(t) { this.t = t; this.seeking = true; }
+  /** The seek in flight is done. False when there was none. */
+  land() {
+    if (!this.seeking) return false;
+    this.seeking = false;
+    // Chrome keeps where a seek landed to the microsecond (a TimeDelta),
+    // not the double it was given.
+    this.t = Math.round(this.t * 1e6) / 1e6;
+    this.dispatchEvent(new Event('seeked'));
+    return true;
+  }
+  /** Lands until nothing is left in flight. Returns how many seeks that took. */
+  settle() {
+    let n = 0;
+    while (this.land()) n += 1;
+    return n;
+  }
+}
+
+/** Twenty pointer moves along the bar, a quarter-second apart in the clip. */
+const BURST = Array.from({ length: 20 }, (_, i) => 3 + i * 0.25);
+
+describe('a drag along the scrub bar', () => {
+  test('a burst of twenty moves makes two seeks, and ends on the last', () => {
+    // Chrome has no fastSeek: every seek a drag makes is an exact one, a
+    // range request and a decode into a long-GOP original.
+    const v = new SeekingVideo();
+    const intent = pendingSeek();
+    for (const t of BURST) intent.scrub(v, t);
+    assert.deepEqual(v.writes, [BURST[0]], 'one in flight; the other nineteen wait, and only the last is kept');
+    assert.equal(intent.landed(v), false);
+    v.settle();
+    assert.ok(v.writes.length <= 2, `${v.writes.length} seeks`);
+    assert.equal(v.currentTime, BURST.at(-1));
+    assert.equal(intent.landed(v), true);
+  });
+
+  test('a long drag makes one seek per landing, not one per move', () => {
+    const v = new SeekingVideo();
+    const intent = pendingSeek();
+    const moves = Array.from({ length: 60 }, (_, i) => i * 0.5);
+    moves.forEach((t, i) => {
+      intent.scrub(v, t);
+      // The element is slow: it lands once for every ten moves.
+      if (i % 10 === 9) v.land();
+    });
+    v.settle();
+    assert.ok(v.writes.length <= 7, `${v.writes.length} seeks for ${moves.length} moves`);
+    assert.equal(v.currentTime, moves.at(-1));
+    // Each landing went to the latest move, never one it had already passed.
+    assert.deepEqual(v.writes, [...v.writes].sort((a, b) => a - b));
+  });
+
+  test('where the browser has fastSeek, a drag uses it and sets no exact time', () => {
+    const v = new SeekingVideo({ fast: true });
+    const intent = pendingSeek();
+    for (const t of BURST) intent.scrub(v, t);
+    v.settle();
+    assert.deepEqual(v.writes, []);
+    assert.deepEqual(v.fastSeeks, [BURST[0], BURST.at(-1)]);
+    assert.equal(v.currentTime, 6, 'on the keyframe before 7.75, not the frame');
+  });
+
+  test('letting go lands exactly where the pointer was', () => {
+    const v = new SeekingVideo({ fast: true });
+    const intent = pendingSeek();
+    for (const t of BURST) intent.scrub(v, t);
+    v.settle();
+    intent.release(v, 7.75);
+    v.settle();
+    assert.deepEqual(v.writes, [7.75], 'an exact seek after the approximate ones');
+    assert.equal(v.currentTime, 7.75);
+    assert.equal(intent.landed(v), true);
+  });
+
+  test('letting go mid-flight with fastSeek: exact, though currentTime reads the drag\'s target', () => {
+    // Safari's currentTime is the time asked for while a seek is out, not the
+    // keyframe the approximate one will land on.
+    const v = new SeekingVideo({ fast: true });
+    const intent = pendingSeek();
+    intent.scrub(v, 7.75);
+    v.t = 7.75;
+    intent.release(v, 7.75);
+    v.settle();
+    assert.deepEqual(v.writes, [7.75]);
+    assert.equal(v.currentTime, 7.75);
+  });
+
+  test('without fastSeek, letting go where the last exact seek went makes no second one', () => {
+    const v = new SeekingVideo();
+    const intent = pendingSeek();
+    // A click on the bar: down and up at the same place.
+    intent.scrub(v, 12);
+    intent.release(v, 12);
+    v.settle();
+    assert.deepEqual(v.writes, [12], 'one decode for one click');
+    // A drag that rested before letting go: the last move has already landed.
+    for (const t of BURST) intent.scrub(v, t);
+    v.settle();
+    intent.release(v, BURST.at(-1));
+    assert.deepEqual(v.writes, [12, BURST[0], BURST.at(-1)]);
+    assert.equal(intent.landed(v), true);
+    // Let go a pixel on from the last move: that is a seek of its own.
+    intent.release(v, 8);
+    v.settle();
+    assert.equal(v.currentTime, 8);
+  });
+
+  test('a drag that landed on a time kept to the microsecond is still where it was let go', () => {
+    // A pointer's time is any double: 0.6327 of a 19.986633 s bar.
+    const t = 0.6327 * 19.986633;
+    const v = new SeekingVideo();
+    const intent = pendingSeek();
+    intent.scrub(v, t);
+    v.settle();
+    assert.notEqual(v.currentTime, t, 'the element reads it back rounded');
+    intent.release(v, t);
+    assert.deepEqual(v.writes, [t]);
+  });
+
+  test('letting go mid-flight: the drag\'s waiting target is never made after it', () => {
+    for (const fast of [false, true]) {
+      const v = new SeekingVideo({ fast });
+      const intent = pendingSeek();
+      for (const t of BURST) intent.scrub(v, t);   // one in flight, the last kept
+      intent.release(v, 5.5);                     // let go at 5.5: overtakes it
+      v.settle();
+      assert.equal(v.currentTime, 5.5, fast ? 'with fastSeek' : 'without');
+      assert.equal(v.writes.at(-1), 5.5);
+      assert.ok(!v.writes.includes(BURST.at(-1)) && !v.fastSeeks.includes(BURST.at(-1)));
+    }
+  });
+
+  test('letting go where a waiting target was going: made now, exactly, once', () => {
+    const v = new SeekingVideo();
+    const intent = pendingSeek();
+    for (const t of BURST) intent.scrub(v, t);
+    intent.release(v, BURST.at(-1));
+    v.settle();
+    assert.deepEqual(v.writes, [BURST[0], BURST.at(-1)]);
+    assert.equal(v.currentTime, BURST.at(-1));
+  });
+
+  test('a key, a frame step or a marker is exact and goes at once, even mid-drag', () => {
+    const v = new SeekingVideo({ fast: true });
+    const intent = pendingSeek();
+    intent.scrub(v, 9);
+    const f = 300;
+    intent.seek(v, secondsOfFrame(f, FPS));
+    assert.equal(frameAt(v.currentTime, FPS), f, 'made now, not after the drag\'s seek lands');
+    intent.seek(v, secondsOfFrame(f + 1, FPS));
+    assert.equal(v.writes.length, 2, 'one exact seek per step: none is skipped');
+    v.settle();
+    assert.equal(frameAt(v.currentTime, FPS), f + 1);
+  });
+
+  test('a seek cut short with no `seeked` (a new source) does not hold the drag up', () => {
+    const v = new SeekingVideo();
+    const intent = pendingSeek();
+    intent.scrub(v, 1);
+    intent.scrub(v, 2);
+    v.seeking = false;   // the proxy arrived: the element reloaded, no `seeked`
+    intent.scrub(v, 3);
+    assert.deepEqual(v.writes, [1, 3]);
+    v.settle();
+    assert.equal(v.currentTime, 3);
+    assert.equal(v.writes.length, 2, 'the target the lost seek was holding is dropped, not made late');
+  });
+
+  test('before the source loads, a drag keeps its latest for load, and letting go its own', () => {
+    const v = new SeekingVideo({ fast: true, readyState: 0 });
+    const intent = pendingSeek(deepLink('01:00:05;00'));
+    for (const t of BURST) intent.scrub(v, t);
+    assert.equal(intent.pending(), BURST.at(-1));
+    assert.deepEqual(v.fastSeeks, [], 'fastSeek does nothing before metadata; the time is set instead');
+    intent.release(v, 4.25);
+    v.readyState = 1;
+    assert.equal(intent.loaded(v), 4.25);
+    assert.equal(intent.landed(v), false, 'the load\'s seek is in flight');
+    v.settle();
+    assert.equal(v.currentTime, 4.25);
+    assert.equal(intent.landed(v), true);
   });
 });

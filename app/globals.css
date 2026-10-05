@@ -1990,6 +1990,15 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   object-fit: contain;
   display: block;
 }
+/* A drag's stand-in for the picture while the video catches up: the
+   filmstrip's tile, sized as the hover's and scaled from its top-left corner
+   onto the picture by VideoPlayer. Over the video, under the review overlay,
+   and shown on a phone too, where the finger hides the hover. */
+.player-cover {
+  position: absolute;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
 /* Fullscreen: the stage takes whatever the controls leave. */
 .player:fullscreen { background: #000; padding: var(--s4); justify-content: flex-end; }
 .player:fullscreen .player-stage { flex: 1 1 auto; aspect-ratio: auto; max-height: none; border-radius: 0; }

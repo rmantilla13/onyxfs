@@ -63,6 +63,15 @@ import Icon from '@/app/components/ui/Icon';
  * is kept and made when the metadata arrives — the latest one, not the deep
  * link's (lib/pending-seek.js).
  *
+ * SCRUBBING. A drag along the bar keeps at most one seek in flight and makes
+ * only the latest of the moves that came while it was out, approximately
+ * (fastSeek) where the browser can; letting go seeks exactly to where the
+ * pointer was (lib/pending-seek.js). While the video trails the drag, the
+ * filmstrip's tile for the drag position stands in for the picture, so the
+ * stage follows the finger even before the video catches up. The sheet is
+ * fetched when the pointer comes onto the player, or once the page is idle —
+ * not on the first hover over the bar, which then showed an empty box.
+ *
  * HEAVY FILES. A multi-gigabyte master streamed from object storage seeks
  * badly, and every byte is egress. So while no proxy rendition exists the
  * player shows the poster and does not touch a master over HEAVY_BYTES until
@@ -76,6 +85,11 @@ import Icon from '@/app/components/ui/Icon';
 const HEAVY_BYTES = 500 * 1024 * 1024;
 const VOLUME_KEY = 'onyx.player.volume';
 const SPEEDS = [0.25, 0.5, 1, 1.5, 2];
+// How long a drag's picture may go without landing before the filmstrip
+// stands in for it. A drag the video keeps up with — a proxy, a stretch
+// already buffered — lands every few frames and keeps its own pictures,
+// which are exact where a tile is the nearest of forty.
+const COVER_AFTER_MS = 150;
 
 const VideoPlayer = forwardRef(function VideoPlayer({
   file, startAt = 0, onRangeChange, markers = null, onMarkerClick, onFrameChange, overlay = null, onComment,
@@ -106,6 +120,13 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   const [range, setRange] = useState({ inFrame: null, outFrame: null });
   const [hover, setHover] = useState(null);
   const [scrubbing, setScrubbing] = useState(false);
+  // Where the drag last asked to be, for a drag the system cancels.
+  const scrubbed = useRef(0);
+  // Whether the filmstrip stands in for the picture: from a drag that has
+  // gone COVER_AFTER_MS without the video landing, until it lands where it
+  // was last asked — after letting go, too.
+  const [covered, setCovered] = useState(false);
+  const coverTimer = useRef(0);
   const [error, setError] = useState(null);
   // A proxy or a light clip is small enough to preload; a heavy master is
   // not, so it waits for a deliberate press. `started` is what flips preload
@@ -157,6 +178,28 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   const making = proxyStatus === 'queued' || proxyStatus === 'working';
   const strip = useMemo(() => layoutFromMetadata(file?.metadata), [file?.metadata]);
   const stripUrl = file?.filmstripUrl || null;
+
+  // The filmstrip sheet, fetched before the bar needs it: when the pointer
+  // comes onto the player, or once the page is idle after it mounts (a touch
+  // has no hover to warn of it). Fetched on the first hover over the bar, as
+  // it was, the first preview was an empty box while it downloaded. The image
+  // is held so the browser keeps it, for the hover and the stage to draw from.
+  const sheet = useRef(null);
+  const warmStrip = useCallback(() => {
+    if (!stripUrl || sheet.current?.url === stripUrl) return;
+    const img = new Image();
+    img.src = stripUrl;
+    sheet.current = { url: stripUrl, img };
+  }, [stripUrl]);
+  useEffect(() => {
+    if (!stripUrl) return undefined;
+    if (typeof window.requestIdleCallback === 'function') {
+      const id = window.requestIdleCallback(warmStrip, { timeout: 4000 });
+      return () => window.cancelIdleCallback?.(id);
+    }
+    const id = setTimeout(warmStrip, 2000);
+    return () => clearTimeout(id);
+  }, [stripUrl, warmStrip]);
 
   // The frame model: the exact rate the container recorded, its start
   // timecode and drop-frame flag — or the assumed 30, marked as a guess.
@@ -284,12 +327,16 @@ const VideoPlayer = forwardRef(function VideoPlayer({
     onFrameChange(frame, { playing });
   }, [frame, playing, onFrameChange]);
 
-  const seek = useCallback((to) => {
+  // `how` is which of lib/pending-seek.js's seeks: 'seek', exact, for
+  // everything but the scrub bar; 'scrub', a move along it, which waits for
+  // the seek in flight and may land on a keyframe near `to`; 'release',
+  // letting go of it, exact.
+  const seek = useCallback((to, how = 'seek') => {
     const v = video.current;
     if (!v || !Number.isFinite(to)) return;
     const length = v.duration || duration;
     const clamped = Math.min(Math.max(0, to), length || to);
-    intent.current.seek(v, clamped);
+    intent.current[how](v, clamped);
     setCurrent(clamped);
     onTime?.(clamped);
     // No frame will be presented to say where this landed until the source
@@ -444,11 +491,26 @@ const VideoPlayer = forwardRef(function VideoPlayer({
     }
   }, [togglePlay, doShuttle, seek, position, step, duration, setIn, setOut, clearRange, toggleFullscreen, onComment, comment]);
 
+  // The filmstrip stands in for the picture once a drag has gone
+  // COVER_AFTER_MS without the video landing. Each landing starts the wait
+  // again (onSeeked), so a video that keeps up is never covered.
+  const armCover = () => {
+    if (!strip || !stripUrl || covered || coverTimer.current) return;
+    coverTimer.current = setTimeout(() => {
+      coverTimer.current = 0;
+      const v = video.current;
+      if (v && !intent.current.landed(v)) setCovered(true);
+    }, COVER_AFTER_MS);
+  };
+  useEffect(() => () => clearTimeout(coverTimer.current), []);
+
   // Scrubbing uses pointer capture so a drag continues outside the bar — which
   // is most drags, because the bar is a few pixels tall.
   const scrubTo = (clientX) => {
     if (!bar.current) return;
-    seek(timeFromPointer(clientX, bar.current.getBoundingClientRect(), duration));
+    scrubbed.current = timeFromPointer(clientX, bar.current.getBoundingClientRect(), duration);
+    seek(scrubbed.current, 'scrub');
+    armCover();
   };
 
   const onPointerDown = (e) => {
@@ -463,9 +525,32 @@ const VideoPlayer = forwardRef(function VideoPlayer({
     }
     if (scrubbing) scrubTo(e.clientX);
   };
+  // Letting go lands exactly where the pointer was: the drag's own seeks were
+  // approximate, and the ones it outran were never made. A drag the system
+  // cancels (the touch taken for a gesture) lands where it last asked to be.
   const onPointerUp = (e) => {
-    e.currentTarget.releasePointerCapture?.(e.pointerId);
+    // Released by the browser anyway once a pointer is up or cancelled, and
+    // a cancelled one may already be gone, which throws.
+    try { e.currentTarget.releasePointerCapture?.(e.pointerId); } catch { /* already released */ }
     setScrubbing(false);
+    if (!scrubbing) return;
+    if (e.type === 'pointerup' && bar.current) {
+      scrubbed.current = timeFromPointer(e.clientX, bar.current.getBoundingClientRect(), duration);
+    }
+    seek(scrubbed.current, 'release');
+  };
+
+  // A seek landed. While a drag is on, the bar and the transcript stay with
+  // the pointer rather than the seeks it has outrun. The filmstrip goes once
+  // the video is where it was last asked to be; until then the next seek has
+  // COVER_AFTER_MS of its own to land.
+  const onSeeked = (e) => {
+    const v = e.target;
+    if (!scrubbing) onTime?.(v.currentTime);
+    clearTimeout(coverTimer.current);
+    coverTimer.current = 0;
+    if (intent.current.landed(v)) setCovered(false);
+    else if (scrubbing) armCover();
   };
 
   if (!src) {
@@ -481,6 +566,21 @@ const VideoPlayer = forwardRef(function VideoPlayer({
   const stripStyle = strip && stripUrl && hover != null
     ? { ...framePosition(frameIndexAt(hover, duration, strip.frames), strip), backgroundImage: `url(${stripUrl})` }
     : null;
+  // The drag's tile on the stage: the hover's own geometry, enlarged as a
+  // whole onto the picture's rectangle, so the sprite offsets stay the whole
+  // pixels they were made in. `current` is the drag's position, not the
+  // video's, until it lands.
+  let coverStyle = null;
+  if (covered && strip && stripUrl && rect.width > 0 && rect.height > 0) {
+    const k = Math.min(rect.width / strip.tileWidth, rect.height / strip.tileHeight);
+    coverStyle = {
+      ...framePosition(frameIndexAt(current, duration, strip.frames), strip),
+      backgroundImage: `url(${stripUrl})`,
+      left: rect.x + (rect.width - strip.tileWidth * k) / 2,
+      top: rect.y + (rect.height - strip.tileHeight * k) / 2,
+      transform: `scale(${k})`,
+    };
+  }
 
   return (
     <div
@@ -490,6 +590,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
       role="group"
       aria-label={`Video player for ${file.name}`}
       onKeyDown={onKeyDown}
+      onPointerEnter={warmStrip}
     >
       <div className="player-stage" ref={stage} style={{ '--ratio': ratio || 16 / 9 }}>
         <video
@@ -516,11 +617,17 @@ const VideoPlayer = forwardRef(function VideoPlayer({
             // deep link, or anything since that overtook it — made now that
             // there is.
             intent.current.loaded(e.target);
+            // A drag made before there was anything to seek ends here if the
+            // load had nowhere to go; otherwise when that seek lands.
+            if (intent.current.landed(e.target)) setCovered(false);
           }}
           // Either one ends the poster: from here the stage shows frames.
           onSeeking={() => intent.current.shown()}
-          onSeeked={(e) => onTime?.(e.target.currentTime)}
+          onSeeked={onSeeked}
           onTimeUpdate={(e) => {
+            // A drag owns the playhead: the seeks it outran land behind the
+            // pointer, and a range loop would pull it back to In.
+            if (scrubbing) return;
             const t = e.target.currentTime;
             setCurrent(t);
             onTime?.(t);
@@ -535,7 +642,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
           onPause={() => setPlaying(false)}
           onEnded={() => setPlaying(false)}
           onVolumeChange={(e) => { setVolume(e.target.volume); setMuted(e.target.muted); }}
-          onError={() => setError('This browser cannot decode this video. Download it to view.')}
+          onError={() => { setCovered(false); setError('This browser cannot decode this video. Download it to view.'); }}
           loop={loop && inPoint == null}
         >
           {captions?.src && (
@@ -550,6 +657,8 @@ const VideoPlayer = forwardRef(function VideoPlayer({
             />
           )}
         </video>
+
+        {coverStyle && <div className="player-cover" style={coverStyle} aria-hidden="true" />}
 
         {/* On the picture's own rectangle, not the stage's: the stage
             letterboxes, and a drawing belongs to the frame. Inside the
@@ -605,6 +714,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
           onPointerLeave={() => setHover(null)}
         >
           {spans.map((s, i) => (
