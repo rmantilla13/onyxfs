@@ -3,12 +3,6 @@ const nextConfig = {
   experimental: {
     // sharp is a native module (libvips). Load it at runtime; never bundle it.
     serverComponentsExternalPackages: ['sharp'],
-    // The thumbnail worker shells out to the ffmpeg-static binary through a
-    // runtime path string, which Next's file tracing cannot see. Name it
-    // explicitly or the deployed function is missing the binary.
-    outputFileTracingIncludes: {
-      '/api/files/thumbs': ['./node_modules/ffmpeg-static/ffmpeg'],
-    },
   },
   images: {
     remotePatterns: [

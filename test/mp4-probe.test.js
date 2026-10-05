@@ -1,5 +1,5 @@
 // The container probe behind the frame model. The fixtures are real files,
-// made with the ffmpeg-static binary in node_modules and a few KB each:
+// made with ffmpeg and a few KB each:
 //
 //   h264-23976-tail.mp4  H.264, 24000/1001, 12 frames, moov AFTER mdat (the
 //                        default without +faststart — most camera and NLE

@@ -24,7 +24,6 @@
     "@vercel/blob": "^0.27.0",
     "@vercel/functions": "^2.2.13",
     "drizzle-orm": "^0.36.4",
-    "ffmpeg-static": "^5.3.0",
     "mediabunny": "^1.61.0",
     "next": "^14.2.31",
     "next-auth": "5.0.0-beta.22",
@@ -39,8 +38,5 @@
     "@types/react": "^18.3.12",
     "eslint": "^8.57.1",
     "eslint-config-next": "^14.2.35"
-  },
-  "allowScripts": {
-    "ffmpeg-static@5.3.0": true
   }
 }

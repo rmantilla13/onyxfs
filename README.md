@@ -68,10 +68,6 @@ last Homebrew binary crashes at startup on macOS 27.
 points anywhere but its own cluster, so a Supabase string left in `.env.local`
 never gets a local session run on top of it.
 
-npm 12 skips dependency install scripts that `allowScripts` in `package.json`
-does not approve. ffmpeg-static's is approved there: it downloads the binary
-that server-side video thumbnails need.
-
 ### Against a hosted database
 
 ```bash
