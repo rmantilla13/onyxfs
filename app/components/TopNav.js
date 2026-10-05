@@ -32,7 +32,7 @@ import FinderMenu from '@/app/components/mac/FinderMenu';
  * (clearing the traffic lights, the title bar's height) is CSS, keyed on
  * html[data-mac-app], which the app sets before the page paints.
  */
-export default function TopNav({ brandName, logo, email, isAdmin, build, filespaces = [], avatarUrl = null }) {
+export default function TopNav({ brandName, logo, email, isAdmin, build, filespaces = [], library = null, avatarUrl = null }) {
   const [palette, setPalette] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState('');
   const [shortcuts, setShortcuts] = useState(false);
@@ -91,7 +91,7 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
             </button>
           </div>
         )}
-        <Link href="/files" className="topnav-brand" title="All files">
+        <Link href="/files" className="topnav-brand" title={library === false ? 'Files' : 'All files'}>
           <BrandLogo logo={logo} name={brandName} withName height={22} />
         </Link>
 
@@ -115,6 +115,7 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
         onClose={closePalette}
         initialQuery={paletteQuery}
         drives={filespaces}
+        library={library}
         isAdmin={isAdmin}
         onShortcuts={() => setShortcuts(true)}
       />

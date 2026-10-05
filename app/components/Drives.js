@@ -13,14 +13,14 @@ import OfflineMark from '@/app/components/ui/OfflineMark';
  * one and deciding who may use it are separate from every other drive — and
  * the desktop app mounts each as a volume of its own.
  *
- * "All files" sits above them: the whole library, as far as the viewer may
- * see it. Usage is counted on the server (countFilesUnderPrefix); the library
+ * "All files" sits above them, where there is one (`showLibrary`; the
+ * `library` flag): the whole library, as far as the viewer may see it. Usage is counted on the server (countFilesUnderPrefix); the library
  * total is only shown to admins. Each drive's icon is in its own colour
  * (lib/drive-color.js), the colour of the dot beside its name on its page.
  * In the Mac app, a drive kept offline whole is marked (`keptDrive`, by id;
  * '' for the files in no drive).
  */
-export function DriveList({ drives = [], usage = {}, library = null, activeId = '', pendingId = null, canCreate = false, onOpen, onNew, keptDrive }) {
+export function DriveList({ drives = [], usage = {}, library = null, showLibrary = true, activeId = '', pendingId = null, canCreate = false, onOpen, onNew, keptDrive }) {
   const sorted = [...drives].sort((a, b) => String(a.name).localeCompare(String(b.name)));
   return (
     <nav className="drives" aria-label="Drives">
@@ -31,7 +31,7 @@ export function DriveList({ drives = [], usage = {}, library = null, activeId = 
         )}
       </div>
       <ul className="drives-list edge-scroll">
-        <DriveRow
+        {showLibrary && <DriveRow
           name="All files"
           detail={library ? usageLine(library) : 'Everything you can open'}
           active={!activeId}
@@ -39,7 +39,7 @@ export function DriveList({ drives = [], usage = {}, library = null, activeId = 
           onClick={() => onOpen?.('')}
           kept={!!keptDrive?.('')}
           library
-        />
+        />}
         {sorted.map((d) => (
           <DriveRow
             key={d.id}

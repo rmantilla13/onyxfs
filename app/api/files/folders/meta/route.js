@@ -41,6 +41,10 @@ export async function PUT(req) {
   const folder = cleanFolder(body.folder);
   if (!folder) return bad('Choose a folder.');
 
+  if (!body.filespaceId) {
+    const lib = can(principal, 'library.use');
+    if (!lib.ok) return refusal(lib);
+  }
   let tag = '';
   let driveRole = null;
   if (body.filespaceId) {

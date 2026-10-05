@@ -27,18 +27,18 @@ export function useFolderPicker() {
   return { pick, pickerElement: element };
 }
 
-function FolderPickerDialog({ title = 'Move to…', folders = [], exclude = null, current = null, confirmLabel = 'Move here', onDone }) {
+function FolderPickerDialog({ title = 'Move to…', folders = [], exclude = null, current = null, confirmLabel = 'Move here', rootName = 'All files', onDone }) {
   const [query, setQuery] = useState('');
   const [chosen, setChosen] = useState(null);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const all = [{ folder: '', name: 'All files', depth: 0 }, ...folders.map((f) => ({ ...f, depth: f.depth || f.folder.split('/').length }))];
+    const all = [{ folder: '', name: rootName, depth: 0 }, ...folders.map((f) => ({ ...f, depth: f.depth || f.folder.split('/').length }))];
     return all.filter((f) => {
       if (exclude != null && exclude !== '' && (f.folder === exclude || f.folder.startsWith(`${exclude}/`))) return false;
-      return !q || f.folder.toLowerCase().includes(q) || (f.folder === '' && 'all files'.includes(q));
+      return !q || f.folder.toLowerCase().includes(q) || (f.folder === '' && rootName.toLowerCase().includes(q));
     });
-  }, [folders, exclude, query]);
+  }, [folders, exclude, query, rootName]);
 
   const shown = rows.slice(0, MAX_ROWS);
   const can = chosen !== null && chosen !== current;
@@ -76,7 +76,7 @@ function FolderPickerDialog({ title = 'Move to…', folders = [], exclude = null
               style={{ paddingLeft: `calc(var(--s2) + ${query ? 0 : Math.max(0, f.depth - 1)} * var(--s3))` }}
               onClick={() => setChosen(f.folder)}
               onDoubleClick={() => f.folder !== current && onDone(f.folder)}
-              title={f.folder || 'All files'}
+              title={f.folder || rootName}
             >
               <span className="truncate">{query && f.folder ? f.folder : (f.name || f.folder.slice(f.folder.lastIndexOf('/') + 1))}</span>
               {f.folder === current && <span className="muted"> · current</span>}

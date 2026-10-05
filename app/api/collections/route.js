@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requirePrincipal } from '@/lib/authz';
+import { requirePrincipal, libraryOpen, NO_LIBRARY } from '@/lib/authz';
 import { listCollections, createCollection, listFilespacesForSpace, getFileMetadataSchema } from '@/lib/db';
 import { validateCollectionInput, collectionVisible, sameName, LIMITS } from '@/lib/collections';
 import { canEditCollections } from '@/lib/collection-scope';
@@ -46,7 +46,7 @@ export async function GET(req) {
   ]);
   const canCreate = [null, ...drives].filter((d) => canEditCollections(g.principal, d)).map((d) => (d ? d.id : ''));
   return json({
-    collections: all.filter((c) => collectionVisible(c, drives)).map((c) => toClient(c, g.principal, drives)),
+    collections: all.filter((c) => collectionVisible(c, drives, { library: libraryOpen(g.principal) })).map((c) => toClient(c, g.principal, drives)),
     fields: normalizeSchema(rawSchema).fields.map(({ key, label, type, options }) => ({ key, label, type, ...(options?.length ? { options } : {}) })),
     canCreate,
   });
@@ -71,6 +71,7 @@ export async function POST(req) {
   const drive = v.value.driveId ? drives.find((d) => d.id === v.value.driveId) : null;
   // The same answer for a drive that does not exist and one they are not in.
   if (v.value.driveId && !drive) return json({ error: 'That is not a drive you can open.' }, 400);
+  if (!v.value.driveId && !libraryOpen(g.principal)) return json({ error: NO_LIBRARY, code: 'drive_required' }, 400);
   if (!canEditCollections(g.principal, drive)) {
     return json({ error: drive ? 'You can view this drive but not change it.' : 'Your role cannot make collections.' }, 403);
   }

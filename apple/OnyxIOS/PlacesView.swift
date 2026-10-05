@@ -30,7 +30,7 @@ struct PlacesView: View {
                 .listRowInsets(EdgeInsets(top: 16, leading: 20, bottom: 14, trailing: 20))
                 .selectionDisabled()
             if session.placesLoaded {
-                ForEach(session.drives + [Place.library]) { place in
+                ForEach(session.places) { place in
                     NavigationLink(value: place) {
                         PlaceRow(place: place, usage: session.usage[place.id])
                     }

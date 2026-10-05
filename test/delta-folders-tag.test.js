@@ -125,6 +125,7 @@ describe('the folder list rides along only when it changed', () => {
   });
 
   test('each caller’s own list, as narrowed for them, is what the tag is of', async () => {
+    globalThis.__mw.settings.set('features.flags', { library: true }); // a workspace with an All files
     // The library's folders: an admin sees them all, a member only what a
     // grant gives them (none here). The admin's tag is not the member's.
     const boss = tokenFor(BOSS), ed = tokenFor(ED);
@@ -133,6 +134,14 @@ describe('the folder list rides along only when it changed', () => {
     const narrowed = await delta(ed, { cursor: '0', drive: 'library', folders: '1', foldersTag: all.body.foldersTag });
     assert.deepEqual(narrowed.body.folders, [], 'sent: their list is not the one the tag was of');
     assert.equal(narrowed.body.foldersTag, foldersTag([]));
+  });
+
+  test('with no All files, the library is gone as a drive taken away is: 404, for an admin too', async () => {
+    for (const who of [BOSS, ED]) {
+      const r = await delta(tokenFor(who), { cursor: '0', drive: 'library', folders: '1' });
+      assert.equal(r.status, 404, who);
+    }
+    assert.equal((await delta(tokenFor(ED), { cursor: '0', drive: 'd1' })).status, 200, 'a drive as before');
   });
 
   test('without folders=1 nothing about folders is read or sent, a tag or not', async () => {

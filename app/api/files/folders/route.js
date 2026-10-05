@@ -60,7 +60,16 @@ const bad = (msg, status = 400) => NextResponse.json({ error: msg }, { status })
  * the caller's — or, with `write`, when they may open it but not change it
  * (a drive's viewer).
  */
+/** A refusal when no drive is named and there is no All files; else null. */
+function needsDrive(principal, filespaceId) {
+  if (filespaceId) return null;
+  const lib = can(principal, 'library.use');
+  return lib.ok ? null : refusal(lib);
+}
+
 async function scopeFor(principal, filespaceId, { write = false } = {}) {
+  // No drive named is All files, and with none there is no scope at all.
+  if (!filespaceId && !can(principal, 'library.use').ok) return null;
   const base = await getStorageConfig();
   const s3 = storageMode(base) === 's3';
   if (filespaceId) {
@@ -106,6 +115,8 @@ export async function GET(req) {
 
   const summary = url.searchParams.get('summary');
   if (summary != null) {
+    const noDrive = needsDrive(principal, filespaceId);
+    if (noDrive) return noDrive;
     const scope = await scopeFor(principal, filespaceId);
     if (!scope) return forbidden('No access to that filespace.');
     const name = await canonicalIn(scope, summary);
@@ -122,6 +133,8 @@ export async function GET(req) {
     return NextResponse.json({ files: inScope.size, folders: dirs.size, outside: plan.outside.length });
   }
 
+  const noDrive = needsDrive(principal, filespaceId);
+  if (noDrive) return noDrive;
   const storagePrefix = await storagePrefixFor(email, filespaceId, principal);
   if (storagePrefix === null) return forbidden('No access to that filespace.');
   const folders = await listFolderTree({ principal, storagePrefix });
@@ -150,6 +163,8 @@ export async function POST(req) {
   try { body = await req.json(); } catch { return bad('Bad request'); }
   const problem = folderPathProblem(body.name);
   if (problem) return bad(problem);
+  const noDrive = needsDrive(principal, body.filespaceId);
+  if (noDrive) return noDrive;
   const scope = await scopeFor(principal, body.filespaceId, { write: true });
   if (!scope) return forbidden('You can view this drive but not change it.');
   const name = await canonicalIn(scope, body.name);
@@ -220,6 +235,8 @@ export async function PATCH(req) {
   const problem = folderPathProblem(body.to);
   if (problem) return bad(problem);
 
+  const noDrive = needsDrive(principal, body.filespaceId);
+  if (noDrive) return noDrive;
   const scope = await scopeFor(principal, body.filespaceId, { write: true });
   if (!scope) return forbidden('You can view this drive but not change it.');
   // Both ends as this scope spells them (canonicalIn): the folder a Mac
@@ -433,6 +450,8 @@ export async function DELETE(req) {
   }
   const url = new URL(req.url);
   if (!cleanFolder(url.searchParams.get('name'))) return bad('Folder required.');
+  const noDrive = needsDrive(principal, url.searchParams.get('filespace'));
+  if (noDrive) return noDrive;
   const scope = await scopeFor(principal, url.searchParams.get('filespace'), { write: true });
   if (!scope) return forbidden('You can view this drive but not change it.');
   const name = await canonicalIn(scope, url.searchParams.get('name'));

@@ -24,6 +24,9 @@ final class AppModel: ObservableObject {
     /// What this account may do in the library, as the server says (nil
     /// from an older server): whether its disk is writable.
     @Published private(set) var libraryCan: WriteCaps?
+    /// Whether every file is in a drive: no Library disk, no row for it
+    /// (/api/space/filespaces `drivesOnly`; false from an older server).
+    @Published private(set) var drivesOnly = false
     /// Drives being mounted or unmounted right now.
     @Published private(set) var busy: Set<String> = []
     /// The last thing that went wrong, for the window to say.
@@ -196,6 +199,7 @@ final class AppModel: ObservableObject {
         drivesLoaded = false
         isAdmin = false
         libraryCan = nil
+        drivesOnly = false
         phase = .signedOut
         transcriber.stop()
         proxies.stop()
@@ -283,6 +287,7 @@ final class AppModel: ObservableObject {
             drives = listing.drives.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             isAdmin = listing.isAdmin
             libraryCan = listing.library
+            drivesOnly = listing.drivesOnly
             if adoptAccount(listing.email), finderWaitingForAccount {
                 finderWaitingForAccount = false
                 thumbnailer.start()

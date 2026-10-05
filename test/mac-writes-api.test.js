@@ -829,6 +829,7 @@ describe('new contents for a file', () => {
   });
 
   test('a trashed file has no contents to replace; a file in no drive does', async () => {
+    globalThis.__mw.settings.set('features.flags', { library: true }); // a workspace with an All files
     const who = mac(ED);
     const { f } = await seeded(who);
     await trashFile(who, f.id);
@@ -862,6 +863,7 @@ describe('folder names are per drive', () => {
   const rowsIn = (tag) => [...globalThis.__mw.folders.values()].filter((r) => r.tag === tag).map((r) => r.name).sort();
 
   test('two drives each make "Selects" — and "untitled folder", as Finder does — and the library its own', async () => {
+    globalThis.__mw.settings.set('features.flags', { library: true }); // a workspace with an All files
     const who = mac(ED);
     for (const name of ['Selects', 'untitled folder']) {
       const one = await folders.create(who, { name, filespaceId: 'd1' });
@@ -869,7 +871,7 @@ describe('folder names are per drive', () => {
       assert.deepEqual([one.status, two.status], [201, 201], name);
       assert.deepEqual(two.body, { folder: { name } });
     }
-    assert.equal((await folders.create(web(BOSS), { name: 'Selects' })).status, 201, 'and the library');
+    { const r = await folders.create(web(BOSS), { name: 'Selects' }); assert.equal(r.status, 201, 'and the library ' + JSON.stringify(r.body)); }
     assert.deepEqual(rowsIn('team'), ['Selects', 'untitled folder']);
     assert.deepEqual(rowsIn('studio'), ['Selects', 'untitled folder']);
     assert.deepEqual(rowsIn(''), ['Selects']);
@@ -1197,6 +1199,7 @@ describe('folder names are per drive', () => {
   });
 
   test('a drive editor restructures its own folder, whatever the library has of that name', async () => {
+    globalThis.__mw.settings.set('features.flags', { library: true }); // a workspace with an All files
     const who = mac(ED);
     await folders.create(web(BOSS), { name: 'Board' });
     await folders.create(who, { name: 'Board', filespaceId: 'd1' });
@@ -1733,5 +1736,51 @@ describe('a delete answers at once, and its object follows', () => {
     await afterResponseSettled();
     assert.ok(stored(`_trash/${a.id}/team/Wrap/A.mov`) && stored(`_trash/${b.id}/team/Wrap/B.mov`));
     assert.ok(!stored('team/Wrap/A.mov') && !stored('team/Wrap/B.mov'));
+  });
+});
+
+describe('with no All files (the `library` flag, off by default)', () => {
+  const listing = (who, query = '') => call(filesRoute.GET, `/api/files${query}`, who);
+
+  test('nothing is uploaded, by anyone, to a place outside every drive', async () => {
+    for (const who of [mac(ED), web(ED), web(BOSS)]) {
+      const p = await presign(who, { filename: 'a.jpg', contentType: 'image/jpeg', size: 10, folder: 'Cuts' });
+      assert.equal(p.status, 400, JSON.stringify(p.body));
+      assert.equal(p.body.code, 'drive_required');
+      const m = await multipart(who, { action: 'create', filename: 'a.mov', size: 10 });
+      assert.equal(m.status, 400);
+    }
+    const inDrive = await presign(mac(ED), { filename: 'a.jpg', contentType: 'image/jpeg', size: 10, folder: 'Cuts', filespaceId: 'd1' });
+    assert.equal(inDrive.status, 200, 'a drive takes it as before');
+  });
+
+  test('a listing or a folder tree names a drive', async () => {
+    for (const who of [web(ED), web(BOSS)]) {
+      const all = await listing(who);
+      assert.equal(all.status, 400);
+      assert.equal(all.body.code, 'drive_required');
+      assert.equal((await folders.list(who, '')).status, 400);
+    }
+    assert.equal((await listing(web(ED), '?filespace=d1')).status, 200);
+    assert.equal((await folders.list(web(ED), 'd1')).status, 200);
+  });
+
+  test('no folder is made, moved or removed outside a drive', async () => {
+    const who = web(BOSS);
+    assert.equal((await folders.create(who, { name: 'Loose' })).status, 400);
+    assert.equal((await folders.move(who, { from: 'Archive', to: 'Archive 2' })).status, 400);
+    assert.equal((await folders.remove(who, 'Archive', '')).status, 400);
+    assert.equal((await folders.create(who, { name: 'Loose', filespaceId: 'd1' })).status, 201);
+  });
+
+  test('turned on, All files is back', async () => {
+    globalThis.__mw.settings.set('features.flags', { library: true });
+    assert.equal((await listing(web(ED))).status, 200);
+    assert.equal((await folders.create(web(BOSS), { name: 'Loose' })).status, 201);
+  });
+
+  test('with drives off, the library is the only place there is, so it stays', async () => {
+    globalThis.__mw.settings.set('features.flags', { filespaces: false });
+    assert.equal((await listing(web(ED))).status, 200);
   });
 });

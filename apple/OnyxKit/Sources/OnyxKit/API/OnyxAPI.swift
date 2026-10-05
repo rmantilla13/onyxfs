@@ -136,15 +136,18 @@ public actor OnyxAPI {
     /// what it may do in the library (nil from an older server), and whether
     /// it may share by link at all (the `shares` flag as the web's menus read
     /// it for this account; false from an older server, whose link routes
-    /// take no token).
-    public func drives() async throws -> (drives: [Filespace], isAdmin: Bool, email: String?, library: WriteCaps?, shares: Bool) {
+    /// take no token), and whether every file is in a drive — no All Files,
+    /// no Library disk (`drivesOnly`; false from an older server, which
+    /// always had one).
+    public func drives() async throws -> (drives: [Filespace], isAdmin: Bool, email: String?, library: WriteCaps?, shares: Bool, drivesOnly: Bool) {
         struct Library: Decodable { let can: WriteCaps? }
         struct Wrapper: Decodable {
             let filespaces: [Filespace]; let isAdmin: Bool?; let email: String?; let library: Library?; let shares: Bool?
+            let drivesOnly: Bool?
         }
         let data = try await request(config.url("api/space/filespaces"))
         let w = try decode(Wrapper.self, from: data)
-        return (w.filespaces, w.isAdmin ?? false, w.email, w.library?.can, w.shares ?? false)
+        return (w.filespaces, w.isAdmin ?? false, w.email, w.library?.can, w.shares ?? false, w.drivesOnly ?? false)
     }
 
     public func credentials(filespaceId: String) async throws -> SpaceCredentials {

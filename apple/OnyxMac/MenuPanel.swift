@@ -124,7 +124,9 @@ struct MenuPanel: View {
                 DriveRow(scope: .drive(id: drive.id), name: drive.name, detail: Self.roleWord(drive.role),
                          icon: DriveIcons.image(for: drive))
             }
-            DriveRow(scope: .library, name: "Library", detail: "files in no drive", icon: DriveIcons.library)
+            if !model.drivesOnly {
+                DriveRow(scope: .library, name: "Library", detail: "files in no drive", icon: DriveIcons.library)
+            }
         }
     }
 

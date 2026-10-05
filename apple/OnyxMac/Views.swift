@@ -419,7 +419,9 @@ struct FinderSettings: View {
                 ForEach(model.finderDrives) { drive in
                     row(.drive(id: drive.id), name: drive.name, icon: DriveIcons.image(for: drive))
                 }
-                row(.library, name: "Library", icon: DriveIcons.library)
+                if !model.drivesOnly {
+                    row(.library, name: "Library", icon: DriveIcons.library)
+                }
             }
             HStack {
                 Text(finder.drivesAreDisks

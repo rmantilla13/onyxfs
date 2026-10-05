@@ -162,7 +162,8 @@ struct OnyxCommands: Commands {
             Button("Back") { model.web.back() }.keyboardShortcut("[")
             Button("Forward") { model.web.forward() }.keyboardShortcut("]")
             Divider()
-            Button("All Files") { model.web.go("/files") }.keyboardShortcut("f", modifiers: [.command, .shift])
+            // With no All files, /files opens the drive last used.
+            Button(model.drivesOnly ? "Files" : "All Files") { model.web.go("/files") }.keyboardShortcut("f", modifiers: [.command, .shift])
             Button("Search…") { model.web.openSearch() }.keyboardShortcut("k")
             // Admin pages, for admins, as the web's own account menu has them.
             if model.isAdmin {

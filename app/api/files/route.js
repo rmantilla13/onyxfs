@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createFile, getFilespaceForUser, storageKeyInUse, claimUploadKey, issueUploadKey, previewKeysInUse, requestProxy, canonicalFolder } from '@/lib/db';
 import { nfc } from '@/lib/folder-ops';
-import { requirePrincipal, uploadCheck, refusal } from '@/lib/authz';
+import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 import { listFilesPage, listFolderTree, storagePrefixFor } from '@/lib/file-listing';
 import { collectionFor, collectionListing } from '@/lib/collection-scope';
 import { presignFileUrls, getStorageConfig, storageMode, cfgForFilespace, s3HeadObject, s3DeleteObject } from '@/lib/storage';
@@ -45,6 +45,12 @@ export async function GET(req) {
   // Filespace scope (Space is filespace-aware): restrict to this filespace's prefix.
   const storagePrefix = await storagePrefixFor(email, url.searchParams.get('filespace'), principal);
   if (storagePrefix === null) return NextResponse.json({ error: 'No access to that drive.' }, { status: 403 });
+  // No drive named is All files — when there is one. A collection names its
+  // own drive (below).
+  if (storagePrefix === undefined && !url.searchParams.get('collection')) {
+    const lib = can(principal, 'library.use');
+    if (!lib.ok) return refusal(lib);
+  }
 
   const opts = {
     folder: folderParam === null ? undefined : folderParam,

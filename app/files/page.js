@@ -5,7 +5,7 @@ import { listFilespacesForSpace, getFileMetadataSchema, listSavedViews, listFold
 import { collectionVisible } from '@/lib/collections';
 import { canEditCollections } from '@/lib/collection-scope';
 import { getSessionUser } from '@/lib/session';
-import { getPrincipal, can } from '@/lib/authz';
+import { getPrincipal, can, libraryOpen } from '@/lib/authz';
 import { listFilesPage, listFolderTree } from '@/lib/file-listing';
 import { listingKey } from '@/lib/listing-cache';
 import { cleanFolder } from '@/lib/folder-ops';
@@ -19,6 +19,7 @@ import TopNav from '@/app/components/TopNav';
 import PreviewPreconnect from '@/app/components/PreviewPreconnect';
 import { thumbSources } from '@/lib/renditions';
 import FilesClient from './FilesClient';
+import { LAST_DRIVE_COOKIE } from '@/lib/drive-access';
 import { buildLabel, buildDetail } from '@/lib/version';
 
 export const dynamic = 'force-dynamic';
@@ -77,14 +78,17 @@ export default async function FilesPage({ searchParams }) {
     listCollections().catch(() => []),
   ]);
   const { flags } = principal;
+  // Whether there is an All files (the `library` flag): without one, this
+  // page is always one drive's.
+  const library = libraryOpen(principal);
   const views = visibleViews(savedViews, filespaces).map(toClientView);
   const driveIds = new Set(filespaces.map((f) => f.id));
-  const collections = allCollections.filter((c) => collectionVisible(c, filespaces)).map((c) => ({
+  const collections = allCollections.filter((c) => collectionVisible(c, filespaces, { library })).map((c) => ({
     id: c.id, driveId: c.driveId, name: c.name, match: c.match, rules: c.rules, updatedAt: c.updatedAt,
     canEdit: canEditCollections(principal, c.driveId ? filespaces.find((d) => d.id === c.driveId) : null),
   }));
   const stars = savedStars
-    .filter((s) => !s.driveId || driveIds.has(s.driveId))
+    .filter((s) => (s.driveId ? driveIds.has(s.driveId) : library))
     .map(({ driveId, folder }) => ({ driveId, folder }));
 
   // In a drive, the drive's role decides as well: its viewers see the upload
@@ -92,7 +96,20 @@ export default async function FilesPage({ searchParams }) {
   // (lib/drive-access.js).
   const filespaceId = searchParams?.filespace || '';
   const activeDrive = filespaces.find((f) => f.id === filespaceId) || null;
-  const canWrite = can(principal, 'files.upload').ok && (!activeDrive || canWriteDrive(activeDrive.role, admin));
+  // No All files, and no drive of theirs asked for: the drive they were in
+  // last (LAST_DRIVE_COOKIE, kept by the client), else the first by name —
+  // with the view and the search, which are not the drive's. Someone in no
+  // drive at all is told so (`noDrive`), and nothing is listed.
+  const noDrive = !library && !activeDrive && !filespaces.length;
+  if (!library && !activeDrive && filespaces.length) {
+    const last = jar.get(LAST_DRIVE_COOKIE)?.value;
+    const to = filespaces.find((f) => f.id === last)
+      || [...filespaces].sort((a, b) => String(a.name).localeCompare(String(b.name)))[0];
+    const params = new URLSearchParams({ filespace: to.id });
+    for (const k of ['view', 'q']) if (searchParams?.[k]) params.set(k, String(searchParams[k]));
+    redirect(`/files?${params}`);
+  }
+  const canWrite = !noDrive && can(principal, 'files.upload').ok && (!activeDrive || canWriteDrive(activeDrive.role, admin));
   // Whether their role may make a link that takes comments — a public or
   // password link that is also a review link. The Share dialog offers it for
   // photos and videos; the route checks it, the file and its drive again.
@@ -132,7 +149,7 @@ export default async function FilesPage({ searchParams }) {
   // the page is on screen (/api/filespaces/usage).
   const storagePrefix = activeDrive ? String(activeDrive.prefix || '').replace(/^\/+|\/+$/g, '') : undefined;
   const listing = { folder, query, kinds: st.kinds, sort: st.sort, flat };
-  const [page, tree] = await Promise.all([
+  const [page, tree] = noDrive ? [{ files: [], cursor: null }, []] : await Promise.all([
     listFilesPage({ principal, opts: { ...listingOpts(listing), limit: 100 }, storagePrefix }).catch(() => null),
     listFolderTree({ principal, storagePrefix }).catch(() => null),
   ]);
@@ -160,6 +177,7 @@ export default async function FilesPage({ searchParams }) {
         avatarUrl={avatarUrl}
         isAdmin={admin}
         filespaces={filespaces}
+        library={library}
       />
       <FilesClient
         flags={flags}
@@ -168,6 +186,8 @@ export default async function FilesPage({ searchParams }) {
         folderLinks={folderLinks}
         schema={normalizeSchema(rawSchema)}
         filespaceId={activeDrive ? filespaceId : ''}
+        library={library}
+        noDrive={noDrive}
         isAdmin={admin}
         drives={filespaces}
         initial={initial}

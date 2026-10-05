@@ -17,8 +17,9 @@ import Icon from '@/app/components/ui/Icon';
  * the view on screen ("Filter this view by …"), then:
  *
  *   files     the whole library, searched on the server as you type (the
- *             same /api/files the grid reads — so only what you may see)
- *   folders   the folder tree, filtered here
+ *             same /api/files the grid reads — so only what you may see);
+ *             with no All files (`library` false), each drive, one by one
+ *   folders   the folder tree — every drive's, so — filtered here
  *   drives    the filespaces you can open
  *   views     the files page's views, by name
  *   actions   everything the nav and the menus offer, by name
@@ -45,7 +46,10 @@ export function useCommandPaletteShortcut(setOpen) {
   }, [setOpen]);
 }
 
-export default function CommandPalette({ open, onClose, drives = [], isAdmin = false, onShortcuts, initialQuery = '' }) {
+export default function CommandPalette({ open, onClose, drives = [], library = null, isAdmin = false, onShortcuts, initialQuery = '' }) {
+  // Asked drive by drive unless the page said there is an All files: the
+  // server refuses a listing that names no drive when there is none.
+  const perDrive = library !== true && drives.length > 0;
   const router = useRouter();
   const pathname = usePathname();
   const onFiles = pathname === '/files';
@@ -77,7 +81,13 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
   // The folder tree, once per opening.
   useEffect(() => {
     if (!open || folders) return;
-    fetch('/api/files/folders').then((r) => (r.ok ? r.json() : { folders: [] })).then((d) => setFolders(d.folders || [])).catch(() => setFolders([]));
+    const tree = (drive) => fetch(drive ? `/api/files/folders?filespace=${encodeURIComponent(drive)}` : '/api/files/folders')
+      .then((r) => (r.ok ? r.json() : { folders: [] }))
+      .then((d) => (d.folders || []).map((f) => ({ ...f, drive: drive || '' })))
+      .catch(() => []);
+    Promise.all(perDrive ? drives.map((d) => tree(d.id)) : [tree('')]).then((all) => setFolders(all.flat()));
+  // The drives are the page's, fixed while it is open.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, folders]);
 
   // Files: debounced, and only the newest answer counts.
@@ -90,24 +100,31 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
     setSearching(true);
     const t = setTimeout(async () => {
       try {
-        const r = await fetch(`/api/files?q=${encodeURIComponent(term)}&limit=${MAX_FILES}&folders=0&sort=new`);
-        const d = r.ok ? await r.json() : { files: [] };
-        if (mine === seq.current) setFiles((d.files || []).slice(0, MAX_FILES));
+        const qs = `q=${encodeURIComponent(term)}&limit=${MAX_FILES}&folders=0&sort=new`;
+        const one = (drive) => fetch(drive ? `/api/files?${qs}&filespace=${encodeURIComponent(drive)}` : `/api/files?${qs}`)
+          .then((r) => (r.ok ? r.json() : { files: [] })).then((d) => d.files || []).catch(() => []);
+        const found = (await Promise.all(perDrive ? drives.map((d) => one(d.id)) : [one('')])).flat();
+        // Newest first across the drives, as one drive's answer comes.
+        found.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
+        if (mine === seq.current) setFiles(found.slice(0, MAX_FILES));
       } finally {
         if (mine === seq.current) setSearching(false);
       }
     }, 140);
     return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, open]);
 
   const go = useCallback((href) => { onClose(); router.push(href); }, [onClose, router]);
   // A folder result, when the files page is showing All files, is opened in
   // place (FilesClient handles `onyx:navigate-folder` and says so by
   // cancelling it) — a folder switch, not a server render of the whole page.
-  const goFolder = useCallback((folder) => {
+  const goFolder = useCallback((folder, drive = '') => {
     onClose();
-    const e = new CustomEvent('onyx:navigate-folder', { detail: { folder }, cancelable: true });
-    if (window.dispatchEvent(e)) router.push(`/files?folder=${encodeURIComponent(folder)}`);
+    const e = new CustomEvent('onyx:navigate-folder', { detail: { folder, drive }, cancelable: true });
+    if (!window.dispatchEvent(e)) return;
+    const params = new URLSearchParams(drive ? { filespace: drive, folder } : { folder });
+    router.push(`/files?${params}`);
   }, [onClose, router]);
   const command = useCallback((name, detail = {}) => {
     onClose();
@@ -115,7 +132,7 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
   }, [onClose]);
 
   const actions = useMemo(() => [
-    { id: 'all', label: 'Go to All files', hint: 'Library', run: () => go('/files') },
+    library === true && { id: 'all', label: 'Go to All files', hint: 'Library', run: () => go('/files') },
     onFiles && { id: 'new-folder', label: 'New folder…', run: () => command('new-folder') },
     onFiles && { id: 'upload', label: 'Upload files…', run: () => command('upload') },
     onFiles && { id: 'info', label: 'Get info', hint: 'Open folder', run: () => command('info') },
@@ -129,7 +146,7 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
     { id: 'system', label: 'Theme: System', run: () => { setThemePref('system'); onClose(); } },
     // The pictures kept of the library go first, as from the account menu.
     { id: 'signout', label: 'Sign out', run: () => { clearPreviewCaches().then(() => { window.location.href = '/api/auth/signout'; }); } },
-  ].filter(Boolean), [onFiles, isAdmin, go, command, onClose, onShortcuts]);
+  ].filter(Boolean), [onFiles, isAdmin, library, go, command, onClose, onShortcuts]);
 
   const term = q.trim().toLowerCase();
   const match = (s) => !term || String(s).toLowerCase().includes(term);
@@ -168,13 +185,16 @@ export default function CommandPalette({ open, onClose, drives = [], isAdmin = f
     if (fl.length) {
       out.push({
         title: 'Folders',
-        items: fl.map((f) => ({
-          id: `d:${f.folder}`,
-          label: f.name,
-          hint: f.folder.includes('/') ? f.folder.slice(0, f.folder.lastIndexOf('/')) : 'All files',
-          icon: 'folder',
-          run: () => goFolder(f.folder),
-        })),
+        items: fl.map((f) => {
+          const root = (f.drive && drives.find((d) => d.id === f.drive)?.name) || 'All files';
+          return {
+            id: `d:${f.drive || ''}:${f.folder}`,
+            label: f.name,
+            hint: f.folder.includes('/') ? `${root} / ${f.folder.slice(0, f.folder.lastIndexOf('/'))}` : root,
+            icon: 'folder',
+            run: () => goFolder(f.folder, f.drive || ''),
+          };
+        }),
       });
     }
     const dr = drives.filter((d) => match(d.name));

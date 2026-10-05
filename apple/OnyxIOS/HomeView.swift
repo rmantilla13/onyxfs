@@ -65,7 +65,7 @@ struct HomeView: View {
 
     private func loadRecent() async {
         do {
-            recent = try await session.api.recentFiles(limit: 8).files
+            recent = try await session.findEverywhere(limit: 8).files
             recentProblem = nil
         } catch {
             if !Session.isCancel(error) { recentProblem = session.explain(error) }
@@ -105,7 +105,9 @@ struct HomeView: View {
                     ForEach(session.drives) { place in
                         DriveCard(place: place, usage: session.usage[place.id]) { open(place) }
                     }
-                    DriveCard(place: .library, usage: session.usage[Place.library.id]) { open(.library) }
+                    if !session.drivesOnly {
+                        DriveCard(place: .library, usage: session.usage[Place.library.id]) { open(.library) }
+                    }
                 } else {
                     ForEach(0..<3, id: \.self) { _ in
                         DriveCard(place: .library, usage: nil) {}
@@ -127,7 +129,7 @@ struct HomeView: View {
     // MARK: - Storage
 
     @ViewBuilder private var storage: some View {
-        if let summary = StorageSummary(drives: session.drives, usage: session.usage) {
+        if let summary = StorageSummary(drives: session.drives, usage: session.usage, drivesOnly: session.drivesOnly) {
             StorageCard(summary: summary)
         } else if session.placesLoaded {
             StorageCard(summary: .placeholder)
@@ -306,10 +308,16 @@ struct StorageSummary {
         self.weighed = weighed
     }
 
-    /// Nil until the places are counted.
+    /// Nil until the places are counted. With no All Files (`drivesOnly`),
+    /// the drives are all there is, and the total is theirs.
     @MainActor
-    init?(drives: [Place], usage: [String: PlaceUsage]) {
-        guard let all = usage[Place.library.id], drives.allSatisfy({ usage[$0.id] != nil }) else { return nil }
+    init?(drives: [Place], usage: [String: PlaceUsage], drivesOnly: Bool = false) {
+        guard drives.allSatisfy({ usage[$0.id] != nil }) else { return nil }
+        let summed = PlaceUsage(files: drives.reduce(0) { $0 + (usage[$1.id]?.files ?? 0) },
+                                bytes: drives.allSatisfy({ usage[$0.id]?.bytes != nil })
+                                    ? drives.reduce(Int64(0)) { $0 + (usage[$1.id]?.bytes ?? 0) } : nil)
+        guard let all = drivesOnly ? summed : usage[Place.library.id] else { return nil }
+        if drivesOnly && drives.isEmpty { return nil }
         let weighed = all.bytes != nil && drives.allSatisfy { usage[$0.id]?.bytes != nil }
         func amount(_ u: PlaceUsage) -> Int64 { weighed ? (u.bytes ?? 0) : Int64(u.files) }
         func label(_ u: PlaceUsage) -> String {
@@ -482,7 +490,7 @@ struct RecentFilesView: View {
         loadingMore = loaded
         defer { loadingMore = false }
         do {
-            let page = try await session.api.recentFiles(limit: 40, cursor: cursor)
+            let page = try await session.findEverywhere(limit: 40, cursor: cursor)
             let known = Set(files.map(\.id))
             files += page.files.filter { !known.contains($0.id) }
             cursor = page.cursor

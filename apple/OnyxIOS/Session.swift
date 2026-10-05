@@ -54,6 +54,9 @@ final class Session {
     /// the web's menus read it for them (/api/space/filespaces). The other
     /// half is each file's or folder's own (mayLink).
     private(set) var sharing = false
+    /// Whether every file is in a drive: no All Files to browse, count or
+    /// search (/api/space/filespaces `drivesOnly`; false from an older server).
+    private(set) var drivesOnly = false
     private(set) var loadingPlaces = false
     private(set) var placesLoaded = false
     private(set) var signingIn = false
@@ -226,6 +229,7 @@ final class Session {
         collectionPlaces = []
         isAdmin = false
         sharing = false
+        drivesOnly = false
         trees = [:]
         identity = nil
         usage = [:]
@@ -241,12 +245,13 @@ final class Session {
         loadingPlaces = true
         defer { loadingPlaces = false }
         do {
-            let (list, admin, address, _, shares) = try await api.drives()
+            let (list, admin, address, _, shares, onlyDrives) = try await api.drives()
             drives = list.filter(\.isMember)
                 .map { Place(scope: .drive(id: $0.id), name: $0.name, role: $0.role, color: $0.color) }
                 .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             isAdmin = admin
             sharing = shares
+            drivesOnly = onlyDrives
             if let address {
                 email = address
                 settings.email = address
@@ -274,9 +279,23 @@ final class Session {
         collectionPlaces = index.canCreate
     }
 
+    /// Every place there is, in Browse's order: the drives, then All Files
+    /// where there is one.
+    var places: [Place] { drivesOnly ? drives : drives + [Place.library] }
+
+    /// The newest files everywhere this account can look, a page at a time:
+    /// All Files, or with none every drive (AcrossDrives) — Home's Recent
+    /// and Search.
+    func findEverywhere(query: String? = nil, kinds: [String] = [], limit: Int, cursor: String? = nil) async throws -> FilePage {
+        if drivesOnly {
+            return try await api.findFiles(across: drives.map(\.scope), query: query, kinds: kinds, limit: limit, cursor: cursor)
+        }
+        return try await api.findFiles(query: query, kinds: kinds, sort: .newest, limit: limit, cursor: cursor)
+    }
+
     /// The places this account may make a collection in, in Browse's order.
     var placesForNewCollections: [Place] {
-        (drives + [Place.library]).filter { place in
+        places.filter { place in
             if case let .drive(id) = place.scope { return collectionPlaces.contains(id) }
             return collectionPlaces.contains("")
         }
@@ -327,7 +346,7 @@ final class Session {
 
     /// The place a scope is, while it is one of this account's.
     func place(for scope: SyncDomain) -> Place? {
-        scope == .library ? .library : drives.first { $0.scope == scope }
+        scope == .library ? (drivesOnly ? nil : .library) : drives.first { $0.scope == scope }
     }
 
     func isStarred(_ route: FolderRoute) -> Bool {
@@ -355,7 +374,7 @@ final class Session {
     /// `refresh`. A place that cannot be counted keeps what it last said.
     func loadOverview(refresh: Bool = false) async {
         guard phase == .signedIn, placesLoaded else { return }
-        let places = drives + [Place.library]
+        let places = self.places
         let ids = Set(places.map(\.id))
         if !refresh, let asked = usageAsked, asked.places == ids, Date().timeIntervalSince(asked.at) < 60 { return }
         usageAsked = (Date(), ids)

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireDesktopAuth } from '@/lib/desktop-guard';
 import { listFilespaces, listFilespacesForUser } from '@/lib/db';
-import { can } from '@/lib/authz';
+import { can, libraryOpen } from '@/lib/authz';
 import { loadBrand } from '@/lib/brand-config';
 import { driveColorHex } from '@/lib/drive-color';
 
@@ -91,6 +91,8 @@ export async function GET(req) {
   // it, as on the web; changing or removing a file already there is still
   // the file's own question (its creator, a grant), asked by the server.
   return NextResponse.json({
-    filespaces, library: { can: role }, email: gate.email, isAdmin: principal.isAdmin, shares: !!principal.flags?.shares,
+    // No All files (`drivesOnly`): the apps offer drives alone. Said outright,
+    // since an older server sends no `library` either.
+    filespaces, library: libraryOpen(principal) ? { can: role } : null, drivesOnly: !libraryOpen(principal), email: gate.email, isAdmin: principal.isAdmin, shares: !!principal.flags?.shares,
   });
 }

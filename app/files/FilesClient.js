@@ -14,6 +14,7 @@ import InfoDialog from '@/app/components/ui/InfoDialog';
 import ShareDialog from '@/app/components/ShareDialog';
 import { useDownloadAs } from '@/app/components/download/DownloadAs';
 import { DriveList, DriveMembersDialog } from '@/app/components/Drives';
+import { LAST_DRIVE_COOKIE } from '@/lib/drive-access';
 import NewDriveDialog from '@/app/components/drives/NewDriveDialog';
 import { useDeleteDrive } from '@/app/components/drives/DeleteDriveConfirm';
 import { modKey, isTyping } from '@/lib/keys';
@@ -197,7 +198,9 @@ async function fetchListing({ filespaceId, folder, query, kinds, sort, flat = fa
 
 /**
  * `drives` are the filespaces this person may open (listFilespacesForSpace);
- * `filespaceId` is the drive being shown ('' is All files).
+ * `filespaceId` is the drive being shown ('' is All files). `library` says
+ * whether there is an All files at all (lib/authz.js libraryOpen); without
+ * one the page is always a drive's, or — `noDrive` — says they are in none.
  *
  * `initial` is what the server already rendered (app/files/page.js): the
  * first page of the folder in the URL and the folder tree, so the directory
@@ -216,6 +219,7 @@ async function fetchListing({ filespaceId, folder, query, kinds, sort, flat = fa
  */
 export default function FilesClient({
   flags, canWrite, reviewLinks = false, folderLinks = false, schema: initialSchema, filespaceId, isAdmin = false,
+  library = true, noDrive = false,
   drives = [], initial = null, initialFiltersOpen = false, initialSidebarOpen = true, initialStars = [], initialCollections = [],
   view: initialViewDef = null, views: initialViews = [], initialLocal = {}, initialLegacy = null, initialQuery = '',
 }) {
@@ -1265,7 +1269,7 @@ export default function FilesClient({
   };
 
   const moveFolderUI = async (path) => {
-    const dest = await pick({ title: `Move “${baseName(path)}”`, folders, exclude: path, current: parentOf(path) });
+    const dest = await pick({ title: `Move “${baseName(path)}”`, folders, exclude: path, current: parentOf(path), rootName });
     if (dest != null) await moveFolderTo(path, dest);
   };
 
@@ -1374,7 +1378,7 @@ export default function FilesClient({
     const n = ids.length;
     if (!n) return;
     const one = n === 1 ? files.find((f) => f.id === ids[0]) : null;
-    const dest = await pick({ title: one ? `Move “${one.name}”` : `Move ${n} files`, folders, current: one ? one.folder || '' : folder || '' });
+    const dest = await pick({ title: one ? `Move “${one.name}”` : `Move ${n} files`, folders, current: one ? one.folder || '' : folder || '', rootName });
     if (dest != null) await moveFiles(ids, dest);
   };
 
@@ -1670,6 +1674,11 @@ export default function FilesClient({
     startDriveOpen(() => router.push(`/files${qs ? `?${qs}` : ''}`));
   }, [router]);
   const canManageDrive = (d) => isAdmin || d?.role === 'owner';
+  // Where /files opens next time when there is no All files (app/files/page.js).
+  useEffect(() => {
+    if (!filespaceId) return;
+    document.cookie = `${LAST_DRIVE_COOKIE}=${encodeURIComponent(filespaceId)}; path=/; max-age=31536000; samesite=lax`;
+  }, [filespaceId]);
 
   // ── Starred folders ───────────────────────────────────────────────────────
   // Their shortcuts, in any drive, kept on the server (/api/stars) so the
@@ -1874,11 +1883,11 @@ export default function FilesClient({
     window.addEventListener('onyx:command', on);
     return () => window.removeEventListener('onyx:command', on);
   }, []);
-  // ⌘K's folder results, opened in place while All files is on screen (a
-  // drive's page leaves them to the palette, which loads All files).
+  // ⌘K's folder results, opened in place when they are in what is on
+  // screen — this drive, or All files; another drive's the palette opens.
   const paletteFolder = useRef(null);
   paletteFolder.current = (e) => {
-    if (filespaceId || typeof e.detail?.folder !== 'string') return;
+    if ((e.detail?.drive || '') !== (filespaceId || '') || typeof e.detail?.folder !== 'string') return;
     e.preventDefault();
     navigate(e.detail.folder);
   };
@@ -2370,10 +2379,13 @@ export default function FilesClient({
   const emptyWords = useMemo(() => {
     const what = kinds.length === 1 ? KIND_WORDS[kinds[0]] : kinds.length ? 'files of those kinds' : null;
     const where = folder ? `“${baseName(folder)}”` : rootName;
+    if (noDrive) return isAdmin
+      ? 'Files are kept in drives, and there are none yet. Make one with + beside Drives.'
+      : 'Files are kept in drives, and you are not in one yet. Ask an admin to add you to a drive.';
     if (query) return `Nothing in ${where} matches “${query}”.`;
     if (what) return `No ${what} in ${where}${!flat ? ' itself. Turn on Flatten directories in Display to look in its folders too.' : '.'}`;
     return null;
-  }, [kinds, folder, rootName, query, flat]);
+  }, [kinds, folder, rootName, query, flat, noDrive, isAdmin]);
   const emptyState = useMemo(() => {
     if (loading && noFiles) return <SkeletonItems layout={layout} count={expected} />;
     if (showTiles && subfolders.length > 0 && noFiles) return null;
@@ -2544,6 +2556,7 @@ export default function FilesClient({
             drives={drives}
             usage={driveUsage}
             library={usage.library}
+            showLibrary={library}
             activeId={filespaceId}
             pendingId={drivePending ? pendingDrive : null}
             canCreate={isAdmin}

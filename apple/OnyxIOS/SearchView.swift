@@ -210,8 +210,7 @@ struct SearchView: View {
         }
         phase = .searching
         do {
-            let page = try await session.api.findFiles(query: asked.query, kinds: asked.kind.map { [$0.rawValue] } ?? [],
-                                                       sort: .newest, limit: 40)
+            let page = try await session.findEverywhere(query: asked.query, kinds: asked.kind.map { [$0.rawValue] } ?? [], limit: 40)
             guard !Task.isCancelled, asked == ask else { return }
             results = page.files
             cursor = page.cursor
@@ -228,8 +227,8 @@ struct SearchView: View {
         loadingMore = true
         defer { loadingMore = false }
         do {
-            let page = try await session.api.findFiles(query: asked.query, kinds: asked.kind.map { [$0.rawValue] } ?? [],
-                                                       sort: .newest, limit: 40, cursor: cursor)
+            let page = try await session.findEverywhere(query: asked.query, kinds: asked.kind.map { [$0.rawValue] } ?? [],
+                                                        limit: 40, cursor: cursor)
             guard asked == ask else { return }
             let known = Set(results.map(\.id))
             results += page.files.filter { !known.contains($0.id) }

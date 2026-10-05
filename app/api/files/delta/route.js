@@ -3,6 +3,7 @@ import {
   listFileChanges, currentChangeCursor, changeHorizon, getFilespaceForUser, listFilespaces, listSyncFolders,
 } from '@/lib/db';
 import { resolveActor } from '@/lib/desktop-guard';
+import { libraryOpen } from '@/lib/authz';
 import { presignFileUrls } from '@/lib/storage';
 import { syncFeedRow } from '@/lib/media';
 import { drivePatterns } from '@/lib/drive-access';
@@ -68,6 +69,11 @@ export async function GET(req) {
   }
   if (driveParam && driveParam !== 'library') {
     if (!drive) return NextResponse.json({ error: 'No access to this drive' }, { status: 404 });
+  }
+  // No All files: the library is gone, as a drive taken away is — a device
+  // unmounts it.
+  if (driveParam === 'library' && !libraryOpen(principal)) {
+    return NextResponse.json({ error: 'No access to this drive' }, { status: 404 });
   }
   const scope = syncScope({ drive, library: driveParam === 'library', allDrives });
   if (!scope) return NextResponse.json({ error: 'This drive has no folder in the bucket to sync' }, { status: 400 });

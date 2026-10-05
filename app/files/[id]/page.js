@@ -3,7 +3,7 @@ import { redirect, notFound } from 'next/navigation';
 import { loadBrand } from '@/lib/brand-config';
 import { getFileById, canAccessFile, canModifyFile, listFilespacesForSpace, attachProxies } from '@/lib/db';
 import { getSessionUser } from '@/lib/session';
-import { getPrincipal, can } from '@/lib/authz';
+import { getPrincipal, can, libraryOpen } from '@/lib/authz';
 import { presignFileUrls } from '@/lib/storage';
 import TopNav from '@/app/components/TopNav';
 import PreviewPreconnect from '@/app/components/PreviewPreconnect';
@@ -129,6 +129,7 @@ export default async function FilePage({ params, searchParams }) {
         avatarUrl={avatarUrl}
         isAdmin={principal.isAdmin}
         filespaces={filespaces}
+        library={libraryOpen(principal)}
       />
       <FileDetail
         file={signed}

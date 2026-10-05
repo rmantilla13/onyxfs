@@ -388,7 +388,9 @@ final class DriveService: ObservableObject {
             await mount(scope, name: drive.name)
             guard started == generation else { return }
         }
-        if wantMounted.contains(SyncDomain.library.identifier), mountState(of: .library) == nil {
+        // No Library with no All files: one already on screen goes as a
+        // drive taken away does, once the feed refuses it (driveGone).
+        if !model.drivesOnly, wantMounted.contains(SyncDomain.library.identifier), mountState(of: .library) == nil {
             await mount(.library, name: MountFolder.library)
         }
     }
@@ -414,7 +416,7 @@ final class DriveService: ObservableObject {
             guard let model else { return }
             let started = generation
             var drives: [(SyncDomain, String)] = model.finderDrives.map { (.drive(id: $0.id), $0.name) }
-            drives.append((.library, MountFolder.library))
+            if !model.drivesOnly { drives.append((.library, MountFolder.library)) }
             for (scope, name) in drives where wantMounted.contains(scope.identifier) && mounts.state(of: scope) != nil {
                 await mounts.unmount(scope)
                 guard started == generation else { return }
