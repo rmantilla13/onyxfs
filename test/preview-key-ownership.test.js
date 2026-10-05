@@ -35,6 +35,18 @@ const STUB = `data:text/javascript,${encodeURIComponent('export async function a
 registerHooks({
   resolve(specifier, context, next) {
     if (specifier === '@/auth') return { url: STUB, shortCircuit: true };
+    if (specifier === './db.js' && context.parentURL?.endsWith('/lib/authz.js')) {
+      // A member's own upload lands in the library here: a workspace with an
+      // All files (the `library` flag, off by default).
+      const real = next(specifier, context).url;
+      const src = `export * from ${JSON.stringify(real)};
+        import { getSetting as read } from ${JSON.stringify(real)};
+        export async function getSetting(key, opts) {
+          const value = await read(key, opts);
+          return key === 'features.flags' ? { ...(value || {}), library: true } : value;
+        }`;
+      return { url: `data:text/javascript,${encodeURIComponent(src)}`, shortCircuit: true };
+    }
     return next(specifier, context);
   },
 });

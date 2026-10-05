@@ -94,13 +94,16 @@ const baseSettings = () => ({
       { id: NOLINKS_ROLE, name: 'No links', caps: { 'shares.private': false, 'shares.public': false, 'review.links': false } },
     ],
   },
-  'features.flags': {},
+  // These cases include the library's folders and files: a workspace with
+  // an All files (the `library` flag, off by default since drives became
+  // where files are kept).
+  'features.flags': { library: true },
   'policy.limits': {},
 });
 /** The settings for the length of `fn`: flags and policy laid over the defaults. */
 async function withSettings({ flags = {}, policy = {} }, fn) {
   const s = baseSettings();
-  globalThis.__settings = { ...s, 'features.flags': flags, 'policy.limits': policy };
+  globalThis.__settings = { ...s, 'features.flags': { ...s['features.flags'], ...flags }, 'policy.limits': policy };
   try { return await fn(); } finally { globalThis.__settings = baseSettings(); }
 }
 

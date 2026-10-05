@@ -46,6 +46,20 @@ registerHooks({
   resolve(specifier, context, next) {
     if (specifier === '@/auth') return { url: AUTH, shortCircuit: true };
     if (specifier === 'next/headers') return { url: HEADERS, shortCircuit: true };
+    if (specifier === './db.js' && context.parentURL?.endsWith('/lib/authz.js')) {
+      // The flags every principal is made with, laid over the table's: the
+      // library's folders are part of what is tested here, so there is an
+      // All files (the `library` flag) unless a case says otherwise.
+      const real = next(specifier, context).url;
+      const src = `export * from ${JSON.stringify(real)};
+        import { getSetting as read } from ${JSON.stringify(real)};
+        export async function getSetting(key, opts) {
+          const value = await read(key, opts);
+          if (key !== 'features.flags') return value;
+          return { ...(value || {}), ...(globalThis.__flagsOver || {}) };
+        }`;
+      return { url: `data:text/javascript,${encodeURIComponent(src)}`, shortCircuit: true };
+    }
     if (specifier === '@/lib/authz' && context.parentURL?.endsWith('/lib/share-access.js')) {
       const real = next(specifier, context).url;
       const src = `export * from ${JSON.stringify(real)};
@@ -56,6 +70,8 @@ registerHooks({
     return next(specifier, context);
   },
 });
+
+globalThis.__flagsOver = { library: true };
 
 const db = await import('../lib/db.js');
 const { mergeFlags } = await import('../lib/features.js');
@@ -200,6 +216,22 @@ describe('making, listing and revoking a folder’s links', { skip }, () => {
     as(OUTSIDER);
     assert.equal((await api.make({ folder: LIB, kind: 'public' })).status, 403);
     assert.equal((await api.list(LIB)).status, 403);
+  });
+
+  test('with no All files, a library folder makes no link — for its grant holder or an admin', async () => {
+    globalThis.__flagsOver = {};
+    try {
+      for (const who of [LIBED, BOSS]) {
+        as(who);
+        const r = await api.make({ folder: LIB, kind: 'public' });
+        assert.equal(r.status, 400, who);
+        assert.match(r.body.error, /kept in drives/);
+      }
+      as(OWNER);
+      assert.equal((await api.list('Q1', team.id)).status, 200, 'a drive’s folders as before');
+    } finally {
+      globalThis.__flagsOver = { library: true };
+    }
   });
 
   test('the same capability a file’s public link needs, and the drive’s link kinds', async () => {
