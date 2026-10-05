@@ -41,8 +41,6 @@ enum Lucide {
         "chevron-right": "chevron.right",
         "hard-drive": "externaldrive",
         "refresh-cw": "arrow.triangle.2.circlepath",
-        "cloud-off": "icloud.slash",
-        "cloud-download": "icloud.and.arrow.down",
         "triangle-alert": "exclamationmark.triangle",
         "wifi-off": "wifi.slash",
         "circle-user": "person.crop.circle",

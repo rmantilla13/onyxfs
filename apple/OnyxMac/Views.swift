@@ -242,13 +242,12 @@ struct WebViewHost: NSViewRepresentable {
 enum MenuBarStatus: Equatable {
     case signedOut, idle, mounted(Int), syncing, offline, attention(String)
 
-    var symbol: String {
+    /// Whether the menu bar's mark wears its dot (MenuBarMark): something
+    /// under way or wrong, rather than all quiet.
+    var needsALook: Bool {
         switch self {
-        // icons: hard-drive refresh-cw cloud-off triangle-alert cloud-download
-        case .signedOut, .idle, .mounted: return "hard-drive"
-        case .syncing: return "refresh-cw"
-        case .offline: return "cloud-off"
-        case .attention: return "triangle-alert"
+        case .signedOut, .idle, .mounted: return false
+        case .syncing, .offline, .attention: return true
         }
     }
 
@@ -302,7 +301,9 @@ struct MenuBarIcon: View {
 
     var body: some View {
         let status = MenuBarStatus.of(model, finder)
-        Image(lucide: updater.available != nil && status == .idle ? "cloud-download" : status.symbol, size: 16)
+        // The platform's logo, with a dot while something wants a look:
+        // syncing, offline, a problem, or an update waiting.
+        Image(nsImage: MenuBarMark.image(badged: status.needsALook || updater.available != nil))
             .accessibilityLabel("Onyx: \(status.line)")
             .onReceive(NotificationCenter.default.publisher(for: .onyxOpenWindow)) { _ in
                 Background.shared.comeForward()
