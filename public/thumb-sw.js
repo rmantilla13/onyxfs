@@ -17,9 +17,17 @@
 // Posters and filmstrips, a few hundred kilobytes each, are kept apart from
 // the grid thumbnails, tens of kilobytes each, with a cap of their own, so
 // neither kind crowds out the other. Each cache is a line: a picture kept
-// goes to the back, and a trim takes from the front. A picture seen again
-// while near the front is put again, which takes it to the back, so what is
-// used is what stays; seen anywhere else, nothing is written.
+// goes to the back, and a trim takes from the front. Each picture carries a
+// stamp, the count of new pictures its cache had kept when it was put, and
+// each cache keeps that count in a tally of its own, so a hit tells how many
+// new pictures have come in after it from the copy it is answered with. The
+// cache is never listed for a hit: in WebKit a listing of a full cache holds
+// up every read behind it for a quarter of a second or more, hits included,
+// as the reads a grid sends do. Once half as many new pictures as a trim
+// leaves have come in after it, a picture seen again is put again, which
+// takes it to the back, so what is used is what stays. Any other hit writes
+// nothing, and a picture put again is not put again until as many more new
+// ones have come in: seeing the same pictures over and over writes nothing.
 //
 // It must never cost a picture. Whatever goes wrong in here — no Cache
 // Storage, a full disk, a bucket with no CORS rule, anything thrown — the
@@ -51,8 +59,18 @@ const LARGE_CACHE = 'previews-large-v1';
 const PREFIX = 'previews-';
 const MAX_ENTRIES = 4000;
 const TRIM_TO = 3600;
-const LARGE_MAX_ENTRIES = 400;
-const LARGE_TRIM_TO = 360;
+const LARGE_MAX_ENTRIES = 1000;
+const LARGE_TRIM_TO = 900;
+// The header a kept picture carries its stamp in. Its cache's tally carries
+// the count so far in it too, and how many pictures the cache holds in HELD.
+const STAMP = 'x-onyx-kept';
+const HELD = 'x-onyx-held';
+// What each cache's tally is kept under: on the site's own origin, so never a
+// preview's key (previewCacheKey refuses the site's own).
+const TALLY = `${self.location.origin}/_previews/tally`;
+// A trim deletes this many at a time, so a hit asked for meanwhile waits for
+// a few deletes rather than hundreds.
+const DELETES_AT_ONCE = 50;
 // A preview key (lib/media.js isThumbKey, isThumbSiblingKey, isPosterKey,
 // isFilmstripKey) as the whole path, or after one segment: the bucket, in a
 // path-style URL.
@@ -88,9 +106,9 @@ function trimPlan(keys, max, to) {
   return keys.length > max ? keys.slice(0, keys.length - Math.min(to, max)) : [];
 }
 
-/** Whether a picture seen again is put again: once three quarters of a full cache have been put after it, it is near the front. */
-function refreshes(since, max) {
-  return Number.isInteger(since) && Number.isInteger(max) && max > 0 && since * 4 >= max * 3;
+/** Whether a picture seen again is put again: once `since` new pictures, half as many as a trim leaves (`to`), have been kept after it. */
+function refreshes(since, to) {
+  return Number.isInteger(since) && Number.isInteger(to) && to > 0 && since * 2 >= to;
 }
 
 self.addEventListener('install', (event) => {
@@ -133,10 +151,13 @@ async function answer(event, key) {
   let cache = null;
   try {
     cache = await caches.open(queue.name);
+    // A picture on its way to the back is out of the cache for a moment.
+    const moving = queue.moving.get(key);
+    if (moving) await moving;
     const hit = await cache.match(key, { ignoreVary: true });
     if (hit) {
-      // Moved to the back if it is near the front, after the page has its answer.
-      try { event.waitUntil(seen(queue, key).catch(() => {})); } catch { /* left where it is this time */ }
+      // Put again if it is old enough, after the page has its answer.
+      try { event.waitUntil(seen(queue, key, stampOf(hit)).catch(() => {})); } catch { /* left where it is this time */ }
       return hit;
     }
   } catch { cache = null; }
@@ -151,58 +172,142 @@ async function answer(event, key) {
   try { res = await fetch(event.request.url, { mode: 'cors', credentials: 'omit' }); } catch { return null; }
   if (cache && keepsResponse(res)) {
     // Written after the page has its answer; the worker stays up for it.
-    try { event.waitUntil(cache.put(key, res.clone()).then(() => added(queue, key)).catch(() => {})); } catch { /* not kept this time */ }
+    try { event.waitUntil(keep(queue, cache, key, res.clone()).catch(() => {})); } catch { /* not kept this time */ }
   }
   return res;
 }
 
-// Each cache's line as this worker last read it: `places` has a place for
-// every key, front to back in the order Cache Storage lists them, numbered
-// from a count that only goes up, so `next - 1 - place` is how many were put
-// after a key. It is null until the line has been read once since the worker
-// started. Reading lists every key — about a fifth of a second for a full
-// cache in Chrome, though hits are answered alongside it — so it is done
-// then, and again only when the count says the cache may be over its cap,
-// not on every put or hit.
+// Each cache's tally as this worker has it: `kept`, the count of new
+// pictures put so far, and `held`, how many pictures the cache holds, or null
+// until something has counted them. Both are read from the cache's tally
+// once per worker lifetime, the first time either is needed, and written
+// back after each new picture and each trim. The cache is listed only to
+// trim it, or to count it once when no tally says how many it holds (a cache
+// from before there were tallies), never for a hit.
 const queues = {
-  [CACHE]: { name: CACHE, max: MAX_ENTRIES, to: TRIM_TO, places: null, next: 0, trimming: null },
-  [LARGE_CACHE]: { name: LARGE_CACHE, max: LARGE_MAX_ENTRIES, to: LARGE_TRIM_TO, places: null, next: 0, trimming: null },
+  [CACHE]: newQueue(CACHE, MAX_ENTRIES, TRIM_TO),
+  [LARGE_CACHE]: newQueue(LARGE_CACHE, LARGE_MAX_ENTRIES, LARGE_TRIM_TO),
 };
 
-/** To the back of the line: a key put again leaves its old place. */
-function place(queue, key) {
-  queue.places.delete(key);
-  queue.places.set(key, queue.next++);
+function newQueue(name, max, to) {
+  return {
+    name, max, to, kept: 0, held: null,
+    loading: null, unsaved: false, saving: null, trimming: null,
+    // Pictures on their way to the back, by key, and, while a trim runs,
+    // those that set off after it began to read the line.
+    moving: new Map(), moved: null,
+  };
 }
 
-/** A picture was just put, so it is at the back. Past the cap, or before the line has been read, the cache is read and trimmed. */
-async function added(queue, key) {
-  // A read under way may have listed the cache before this put.
-  if (queue.trimming) await queue.trimming;
-  if (!queue.places) return trim(queue);
-  place(queue, key);
-  if (queue.places.size > queue.max) await trim(queue);
-  return undefined;
+/** A whole number written in a header, or null. */
+function whole(value) {
+  return typeof value === 'string' && /^\d{1,15}$/.test(value) ? Number(value) : null;
 }
 
 /**
- * A kept picture was answered. Near the front of the line (refreshes) it is
- * put again, to the back, so the next trims take what has not been used
- * rather than what was kept first; anywhere else nothing is written. It is
- * deleted before it is put back: WebKit — Safari, Onyx for Mac's web view —
- * keeps a replaced entry where it was in the line.
+ * A kept picture's stamp. One without (kept before pictures carried one) came
+ * in before every picture that has, so it counts as kept before the first.
  */
-async function seen(queue, key) {
-  if (queue.trimming || !queue.places) await trim(queue);
-  const at = queue.places?.get(key);
-  if (at === undefined || !refreshes(queue.next - 1 - at, queue.max)) return;
-  // Placed before anything is awaited, so the same picture seen twice at once is put once.
-  place(queue, key);
+function stampOf(res) {
+  return whole(res.headers.get(STAMP)) ?? 0;
+}
+
+/** The same picture, carrying `stamp`. */
+function stamped(res, stamp) {
+  const headers = new Headers(res.headers);
+  headers.set(STAMP, String(stamp));
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
+/** Read the cache's tally, once per lifetime. Never rejects. */
+function load(queue) {
+  if (!queue.loading) {
+    queue.loading = (async () => {
+      try {
+        const saved = await (await caches.open(queue.name)).match(TALLY);
+        if (!saved) return;
+        queue.kept = Math.max(queue.kept, whole(saved.headers.get(STAMP)) ?? 0);
+        queue.held = whole(saved.headers.get(HELD));
+      } catch { /* counted afresh: the next put lists the cache */ }
+    })();
+  }
+  return queue.loading;
+}
+
+/** Write the tally as it is now. A write while one is under way is folded into the next. Never rejects. */
+function save(queue) {
+  queue.unsaved = true;
+  if (!queue.saving) queue.saving = Promise.resolve().then(() => flush(queue));
+  return queue.saving;
+}
+
+async function flush(queue) {
+  try {
+    const cache = await caches.open(queue.name);
+    while (queue.unsaved) {
+      queue.unsaved = false;
+      const headers = { [STAMP]: String(queue.kept) };
+      if (queue.held !== null) headers[HELD] = String(queue.held);
+      await cache.put(TALLY, new Response(null, { headers }));
+    }
+  } catch { /* written with the next change */ }
+  queue.saving = null;
+}
+
+/** A new picture was fetched: put it at the back with the next stamp, and trim the cache once it is past its cap. */
+async function keep(queue, cache, key, res) {
+  await load(queue);
+  queue.kept += 1;
+  await cache.put(key, stamped(res, queue.kept));
+  // A trim under way may have listed the cache before this put.
+  if (queue.trimming) await queue.trimming;
+  // Nothing has counted this cache yet: listing it counts this one too.
+  if (queue.held === null) return trim(queue);
+  queue.held += 1;
+  return queue.held > queue.max ? trim(queue) : save(queue);
+}
+
+/** Whether a kept picture with this stamp is put again when it is seen. */
+function stale(queue, stamp) {
+  return refreshes(queue.kept - stamp, queue.to);
+}
+
+/**
+ * A kept picture was answered. Once enough new pictures have come in after
+ * it (refreshes), it is put again, to the back, so the next trims take what
+ * has not been used rather than what was kept first; otherwise nothing is
+ * written.
+ */
+async function seen(queue, key, stamp) {
+  await load(queue);
+  // A tally behind its pictures (one not written before the worker stopped) catches up.
+  if (stamp > queue.kept) queue.kept = stamp;
+  if (!stale(queue, stamp) || queue.moving.has(key)) return undefined;
+  // Marked before anything is awaited, so the same picture seen twice at once is put once.
+  const move = toBack(queue, key).catch(() => {}).then(() => { queue.moving.delete(key); });
+  queue.moving.set(key, move);
+  return move;
+}
+
+/**
+ * Put a kept picture again with the latest stamp. It is deleted first:
+ * WebKit — Safari, Onyx for Mac's web view — keeps a replaced entry where it
+ * was in the line. The count of new pictures does not move, so a picture put
+ * again ages only as new ones come in.
+ */
+async function toBack(queue, key) {
+  queue.moved?.add(key);
   const cache = await caches.open(queue.name);
   const copy = await cache.match(key, { ignoreVary: true });
-  if (!copy) return;
+  // Gone, or put again already by a hit answered just before this one.
+  if (!copy || !stale(queue, stampOf(copy))) return;
   await cache.delete(key);
-  await cache.put(key, copy);
+  try {
+    await cache.put(key, stamped(copy, queue.kept));
+  } catch (err) {
+    if (queue.held !== null) queue.held -= 1;
+    throw err;
+  }
 }
 
 /** Read the line and trim it to its cap, one read at a time: a call while one is under way waits for that one. Never rejects. */
@@ -213,18 +318,32 @@ function trim(queue) {
 
 async function readAndTrim(queue) {
   const cache = await caches.open(queue.name);
-  const keys = await cache.keys();
-  // A picture kept in the other cache's place — a poster among the
-  // thumbnails, from before the two were kept apart — is never looked for
-  // here again, so it goes too.
-  const line = [];
-  const stray = [];
-  for (const k of keys) (previewCacheName(k.url) === queue.name ? line : stray).push(k);
-  const doomed = trimPlan(line, queue.max, queue.to);
-  await Promise.all([...stray, ...doomed].map((k) => cache.delete(k)));
-  const places = new Map();
-  let next = 0;
-  for (let i = doomed.length; i < line.length; i++) places.set(line[i].url, next++);
-  queue.places = places;
-  queue.next = next;
+  // A picture set off for the back while this runs may be listed at its old
+  // place, at the front; it is not taken.
+  const moved = new Set();
+  queue.moved = moved;
+  try {
+    const keys = await cache.keys();
+    // A picture kept in the other cache's place — a poster among the
+    // thumbnails, from before the two were kept apart — is never looked for
+    // here again, so it goes too.
+    const line = [];
+    const stray = [];
+    for (const k of keys) {
+      if (k.url === TALLY) continue;
+      (previewCacheName(k.url) === queue.name ? line : stray).push(k);
+    }
+    const doomed = trimPlan(line, queue.max, queue.to);
+    let taken = 0;
+    const gone = [...stray, ...doomed];
+    for (let i = 0; i < gone.length; i += DELETES_AT_ONCE) {
+      const now = gone.slice(i, i + DELETES_AT_ONCE).filter((k) => !moved.has(k.url) && !queue.moving.has(k.url));
+      await Promise.all(now.map((k) => cache.delete(k)));
+      taken += now.filter((k) => previewCacheName(k.url) === queue.name).length;
+    }
+    queue.held = line.length - taken;
+  } finally {
+    queue.moved = null;
+  }
+  await save(queue);
 }

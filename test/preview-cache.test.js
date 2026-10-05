@@ -70,26 +70,56 @@ function opaqueResponse() {
   return r;
 }
 
+// What the worker keeps each cache's tally under, and the headers its
+// pictures and tallies carry (public/thumb-sw.js).
+const TALLY = `${APP}/_previews/tally`;
+const STAMP = 'x-onyx-kept';
+const HELD = 'x-onyx-held';
+
 /**
  * Cache Storage in memory: named caches of URL → response, in the order they
  * were put. A put replaces an entry by taking it to the back, as the spec
  * and Chrome do; `inPlace` replaces it where it is, as WebKit does. `putFails`
- * is a full disk.
+ * is a full disk. `gate.keys()`, `gate.match(url)` and `gate.put(url)` may
+ * return a promise to hold a listing or a match (each taken when it is asked
+ * for) or a put until it settles.
+ * `calls.put` counts pictures, `calls.tally` the tally's writes and
+ * `calls.tallyReads` its reads; `calls.mostDeleting` is the most deletes ever
+ * under way at once.
  */
-function memoryCaches({ broken = false, inPlace = false, putFails = false } = {}) {
+function memoryCaches({ broken = false, inPlace = false, putFails = false, gate = {} } = {}) {
   const stores = new Map();
-  const calls = { keys: 0, put: 0, delete: 0 };
+  const calls = { keys: 0, put: 0, delete: 0, tally: 0, tallyReads: 0, deleting: 0, mostDeleting: 0 };
   const urlOf = (r) => (typeof r === 'string' ? r : r.url);
   const cache = (m) => ({
-    async match(r) { const v = m.get(urlOf(r)); return v ? v.clone() : undefined; },
-    async put(r, res) {
-      calls.put++;
-      if (putFails) throw new DOMException('Quota exceeded.', 'QuotaExceededError');
-      if (!inPlace) m.delete(urlOf(r));
-      m.set(urlOf(r), res);
+    async match(r) {
+      if (urlOf(r) === TALLY) calls.tallyReads++;
+      const v = m.get(urlOf(r));
+      if (gate.match) await gate.match(urlOf(r));
+      return v ? v.clone() : undefined;
     },
-    async keys() { calls.keys++; return [...m.keys()].map((u) => new Request(u)); },
-    async delete(r) { calls.delete++; return m.delete(urlOf(r)); },
+    async put(r, res) {
+      const url = urlOf(r);
+      if (url === TALLY) calls.tally++; else calls.put++;
+      if (gate.put) await gate.put(url);
+      if (putFails) throw new DOMException('Quota exceeded.', 'QuotaExceededError');
+      if (!inPlace) m.delete(url);
+      m.set(url, res);
+    },
+    async keys() {
+      calls.keys++;
+      const listed = [...m.keys()];
+      if (gate.keys) await gate.keys();
+      return listed.map((u) => new Request(u));
+    },
+    async delete(r) {
+      calls.delete++;
+      calls.deleting++;
+      calls.mostDeleting = Math.max(calls.mostDeleting, calls.deleting);
+      await null;
+      calls.deleting--;
+      return m.delete(urlOf(r));
+    },
   });
   return {
     stores,
@@ -152,15 +182,37 @@ async function dispatch(w, url, { method = 'GET', mode = 'no-cors' } = {}) {
   return { event, response, answered: !!event.responded };
 }
 
-const kept = (w, name = PREVIEW_CACHE) => [...(w.caches.stores.get(name)?.keys() || [])];
-/** The worker's line for a cache as it last read it: each key's place. */
-const line = (w, name = PREVIEW_CACHE) => w.get('queues')[name].places;
+/** The pictures a cache holds, front to back: everything but its tally. */
+const pictures = (store) => [...(store?.keys() || [])].filter((u) => u !== TALLY);
+const kept = (w, name = PREVIEW_CACHE) => pictures(w.caches.stores.get(name));
+/** The worker's tally for a cache, as it has it in memory. */
+const queue = (w, name = PREVIEW_CACHE) => w.get('queues')[name];
+/** A cache's tally as written to it. */
+function tallyOf(store) {
+  const t = store.get(TALLY);
+  return t && { kept: Number(t.headers.get(STAMP)), held: t.headers.has(HELD) ? Number(t.headers.get(HELD)) : null };
+}
+/** Until `cond()` holds, letting everything under way run. */
+async function until(cond) {
+  for (let i = 0; i < 1000 && !cond(); i++) await new Promise((r) => setImmediate(r));
+  assert.ok(cond(), 'never came about');
+}
 
-/** A cache already holding `n` previews, the first kept first; `key(i)` is the i-th's name under `_thumbs/`. */
-function fill(caches, cacheName, n, key) {
+/**
+ * A cache already holding `n` previews, the first kept first; `key(i)` is the
+ * i-th's name under `_thumbs/`. Each carries its stamp, the i-th i + 1, and
+ * the tally says n have been kept and are held — unless `stamped` is false: a
+ * cache from before the worker stamped what it kept, with no tally.
+ */
+function fill(caches, cacheName, n, key, { stamped = true } = {}) {
   const store = new Map();
   caches.stores.set(cacheName, store);
-  for (let i = 0; i < n; i++) store.set(`${B2}/onyx-files/_thumbs/${key(i)}`, corsResponse());
+  for (let i = 0; i < n; i++) {
+    const res = corsResponse();
+    if (stamped) res.headers.set(STAMP, String(i + 1));
+    store.set(`${B2}/onyx-files/_thumbs/${key(i)}`, res);
+  }
+  if (stamped) store.set(TALLY, new Response(null, { headers: { [STAMP]: String(n), [HELD]: String(n) } }));
   return store;
 }
 
@@ -235,26 +287,60 @@ describe('what is kept, and under what (lib/preview-cache.js)', () => {
     assert.ok(PREVIEW_LARGE_CACHE_TRIM_TO < PREVIEW_LARGE_CACHE_MAX);
   });
 
-  test('a picture seen again is put again only when among the oldest quarter of a full cache', () => {
-    const max = PREVIEW_CACHE_MAX;
-    // A full cache: the one at the front has max - 1 put after it.
-    assert.equal(refreshes(max - 1, max), true, 'the front of the line');
-    assert.equal(refreshes((max * 3) / 4, max), true, 'the last of the oldest quarter');
-    assert.equal(refreshes((max * 3) / 4 - 1, max), false, 'the first of the rest');
-    assert.equal(refreshes(0, max), false, 'the back of the line');
-    assert.equal(refreshes(max * 2, max), true, 'a cache past its cap, before its trim');
-    // Never on every hit: a small cache has nothing near a trim.
+  test('a picture seen again is put again once half as many new ones as a trim leaves have come in after it', () => {
+    const to = PREVIEW_CACHE_TRIM_TO;
+    assert.equal(refreshes(to / 2, to), true, 'half');
+    assert.equal(refreshes(to / 2 - 1, to), false, 'one short');
+    assert.equal(refreshes(PREVIEW_CACHE_MAX - 1, to), true, 'the front of a full cache');
+    assert.equal(refreshes(0, to), false, 'the back of the line');
+    assert.equal(refreshes(to * 2, to), true, 'a cache past its cap, before its trim');
+    assert.equal(refreshes(PREVIEW_LARGE_CACHE_TRIM_TO / 2, PREVIEW_LARGE_CACHE_TRIM_TO), true);
+    assert.equal(refreshes(PREVIEW_LARGE_CACHE_TRIM_TO / 2 - 1, PREVIEW_LARGE_CACHE_TRIM_TO), false);
+    // Never on every hit: one put again is new, and stays put until that many more come in.
     assert.equal(refreshes(0, 1), false);
-    for (let n = 1; n < (max * 3) / 4; n++) if (refreshes(n - 1, max)) assert.fail(`${n} kept, the oldest put again`);
-    assert.equal(refreshes(PREVIEW_LARGE_CACHE_MAX - 1, PREVIEW_LARGE_CACHE_MAX), true);
-    assert.equal(refreshes((PREVIEW_LARGE_CACHE_MAX * 3) / 4 - 1, PREVIEW_LARGE_CACHE_MAX), false);
-    // Whatever is put again has been through the whole window before the
-    // trim would take it.
-    assert.ok((max * 3) / 4 < PREVIEW_CACHE_TRIM_TO && (PREVIEW_LARGE_CACHE_MAX * 3) / 4 < PREVIEW_LARGE_CACHE_TRIM_TO);
-    for (const [since, m] of [[undefined, max], [null, max], [NaN, max], ['3999', max], [1.5, 4], [3999, 0], [3999, -4], [3999, null]]) {
-      assert.equal(refreshes(since, m), false, `${since} of ${m}`);
+    // Whatever is put again had the whole stretch before the trim to be seen in.
+    assert.ok(to / 2 < to && PREVIEW_LARGE_CACHE_TRIM_TO / 2 < PREVIEW_LARGE_CACHE_TRIM_TO);
+    for (const [since, t] of [[undefined, to], [null, to], [NaN, to], ['3000', to], [1.5, 2], [3999, 0], [3999, -4], [3999, null], [-1, to]]) {
+      assert.equal(refreshes(since, t), false, `${since} of ${t}`);
     }
-    assert.equal(refreshes(3999), true, 'the thumbnails’ cap by default');
+    assert.equal(refreshes(to / 2), true, 'what the thumbnails’ trim leaves, by default');
+  });
+
+  test('a folder opened every so often stays, however many new pictures come in between, short of about what a trim leaves', () => {
+    // The line as the worker keeps it: put order, a stamp counted by new
+    // pictures only, the rule above, and the trim. A folder of 20 is opened
+    // after every `between` new pictures, eight times over.
+    const stays = (between, rule, max = PREVIEW_CACHE_MAX, to = PREVIEW_CACHE_TRIM_TO) => {
+      const line = new Map();
+      let count = 0;
+      let uid = 0;
+      const add = (k) => {
+        count++;
+        line.set(k, count);
+        if (line.size > max) for (const old of [...line.keys()].slice(0, line.size - to)) line.delete(old);
+      };
+      for (let i = 0; i < max; i++) add(`old${uid++}`);
+      for (let f = 0; f < 20; f++) add(`folder${f}`);
+      for (let round = 0; round < 8; round++) {
+        for (let i = 0; i < between; i++) add(`new${uid++}`);
+        for (let f = 0; f < 20; f++) {
+          const k = `folder${f}`;
+          if (!line.has(k)) return false;
+          if (rule(count - line.get(k), to, max)) { line.delete(k); line.set(k, count); }
+        }
+      }
+      return true;
+    };
+    const thumbs = [300, 900, 1000, 1250, 1700, 2000, 2500, 3000, 3400];
+    const large = [75, 225, 250, 310, 400, 500, 625, 750, 850];
+    const lost = (rule, betweens, ...limits) => betweens.filter((n) => !stays(n, rule, ...limits));
+    assert.deepEqual(lost(refreshes, thumbs), []);
+    assert.deepEqual(lost(refreshes, large, PREVIEW_LARGE_CACHE_MAX, PREVIEW_LARGE_CACHE_TRIM_TO), []);
+    // Put again only within the last quarter before a full cache's cap, the
+    // same folder went whenever no opening fell in that quarter.
+    const lastQuarter = (since, to, max) => since * 4 >= max * 3;
+    assert.deepEqual(lost(lastQuarter, thumbs), [900, 1250, 2000, 2500]);
+    assert.deepEqual(lost(lastQuarter, large, PREVIEW_LARGE_CACHE_MAX, PREVIEW_LARGE_CACHE_TRIM_TO), [225, 310, 500, 625]);
   });
 });
 
@@ -271,6 +357,13 @@ describe('the worker agrees with lib/preview-cache.js', () => {
     for (const name of [PREVIEW_CACHE, PREVIEW_LARGE_CACHE]) {
       assert.ok(name.startsWith(PREVIEW_CACHE_PREFIX), `clearing by prefix reaches ${name}`);
     }
+    // Each cache's tally is kept inside it, so it goes when the cache does,
+    // under a key no request is ever answered with.
+    assert.equal(w.get('TALLY'), TALLY);
+    assert.equal(w.get('STAMP'), STAMP);
+    assert.equal(w.get('HELD'), HELD);
+    assert.equal(previewCacheKey({ url: TALLY }, APP), null);
+    assert.equal(w.get('previewCacheKey')({ url: TALLY, method: 'GET', mode: 'no-cors' }), null);
   });
 
   test('the same caches', () => {
@@ -294,10 +387,10 @@ describe('the worker agrees with lib/preview-cache.js', () => {
   test('the same pictures put again', () => {
     const w = loadWorker();
     const workerRefreshes = w.get('refreshes');
-    // The worker always passes its cap; only the module has a default.
-    for (const max of [PREVIEW_CACHE_MAX, PREVIEW_LARGE_CACHE_MAX, 1, 3, 4, 5, 0, -4, null, 4.5]) {
-      for (const since of [0, 1, 2, 3, 4, 299, 300, 2999, 3000, 3001, 3999, 4000, 9000, -1, 1.5, undefined, null, NaN, '3000']) {
-        assert.equal(workerRefreshes(since, max), refreshes(since, max), `${since} of ${max}`);
+    // The worker always passes what its trim leaves; only the module has a default.
+    for (const to of [PREVIEW_CACHE_TRIM_TO, PREVIEW_LARGE_CACHE_TRIM_TO, 1, 2, 3, 4, 0, -4, null, 4.5]) {
+      for (const since of [0, 1, 2, 3, 4, 449, 450, 451, 1799, 1800, 1801, 3999, 4000, 9000, -1, 1.5, undefined, null, NaN, '1800']) {
+        assert.equal(workerRefreshes(since, to), refreshes(since, to), `${since} of ${to}`);
       }
     }
   });
@@ -443,26 +536,115 @@ describe('the worker never costs a picture', () => {
     await assert.rejects(dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.webp?X-Amz-Signature=a`), TypeError);
   });
 
-  test('at the cap the oldest go, and the keys are read again only when the count says so', async () => {
+  test('at the cap the oldest go, and the cache is listed only to trim it', async () => {
     const caches = memoryCaches();
-    const store = new Map();
-    caches.stores.set(PREVIEW_CACHE, store);
-    for (let i = 0; i < PREVIEW_CACHE_MAX; i++) store.set(`${B2}/onyx-files/_thumbs/${uuidN(i)}.webp`, corsResponse());
+    const store = fill(caches, PREVIEW_CACHE, PREVIEW_CACHE_MAX, (i) => `${uuidN(i)}.webp`);
     const w = loadWorker({ caches, fetch: recordingFetch(() => corsResponse()) });
 
     await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.webp?X-Amz-Signature=a`);
-    assert.equal(store.size, PREVIEW_CACHE_TRIM_TO);
+    assert.equal(pictures(store).length, PREVIEW_CACHE_TRIM_TO);
     assert.equal(store.has(`${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`), false, 'the oldest went first');
     assert.equal(store.has(`${B2}/onyx-files/_thumbs/${UUID}.webp`), true, 'the newest stayed');
-    assert.equal(line(w).size, PREVIEW_CACHE_TRIM_TO);
+    assert.equal(store.get(`${B2}/onyx-files/_thumbs/${UUID}.webp`).headers.get(STAMP), String(PREVIEW_CACHE_MAX + 1), 'with the next stamp');
+    assert.deepEqual(tallyOf(store), { kept: PREVIEW_CACHE_MAX + 1, held: PREVIEW_CACHE_TRIM_TO });
     assert.equal(caches.calls.keys, 1);
+    assert.ok(caches.calls.mostDeleting <= w.get('DELETES_AT_ONCE'), 'a few deletes at a time, not all of them');
 
     await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.sm.webp?X-Amz-Signature=a`);
     assert.equal(caches.calls.keys, 1, 'under the cap, a put is counted, not listed');
-    assert.equal(line(w).size, PREVIEW_CACHE_TRIM_TO + 1);
+    assert.deepEqual(tallyOf(store), { kept: PREVIEW_CACHE_MAX + 2, held: PREVIEW_CACHE_TRIM_TO + 1 });
+
+    // The next lifetime reads the tally rather than listing the cache.
+    const next = loadWorker({ caches, fetch: recordingFetch(() => corsResponse()) });
+    await dispatch(next, `${B2}/onyx-files/_thumbs/${UUID}.xs.webp?X-Amz-Signature=a`);
+    assert.equal(caches.calls.keys, 1);
+    assert.deepEqual(tallyOf(store), { kept: PREVIEW_CACHE_MAX + 3, held: PREVIEW_CACHE_TRIM_TO + 2 });
   });
 
-  test('a picture seen again near the front goes to the back, so the trim takes what was not used', async () => {
+  test('a hit never lists the cache, in a worker’s first moments or later', async () => {
+    const caches = memoryCaches();
+    fill(caches, PREVIEW_CACHE, PREVIEW_CACHE_MAX, (i) => `${uuidN(i)}.sm.webp`);
+    fill(caches, PREVIEW_LARGE_CACHE, PREVIEW_LARGE_CACHE_MAX, (i) => `${uuidN(i)}.poster.webp`);
+    const fetch = recordingFetch(() => corsResponse());
+    const w = loadWorker({ caches, fetch });
+    // A grid, the first of it the oldest pictures there are; Quick Look on a few.
+    for (let i = 0; i < 100; i++) await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(i * 7)}.sm.webp?X-Amz-Signature=a`);
+    for (let i = 0; i < 10; i++) await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(i)}.poster.webp?X-Amz-Signature=a`);
+    assert.equal(fetch.calls.length, 0);
+    assert.equal(caches.calls.keys, 0, 'the age of each comes with it');
+    assert.equal(caches.calls.tallyReads, 2, 'each cache’s tally, once');
+  });
+
+  test('a cache from before stamps and tallies: hits write nothing, and the first put counts it once', async () => {
+    const caches = memoryCaches();
+    const store = fill(caches, PREVIEW_CACHE, 3000, (i) => `${uuidN(i)}.webp`, { stamped: false });
+    const w = loadWorker({ caches, fetch: recordingFetch(() => corsResponse()) });
+    // Kept before any picture carried a stamp, each counts as kept before the
+    // first that does: nothing new has come in after them yet.
+    for (const i of [0, 1, 2, 1500, 2999]) await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(i)}.webp`);
+    assert.equal(caches.calls.put, 0);
+    assert.equal(caches.calls.keys, 0);
+
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.webp?X-Amz-Signature=a`);
+    assert.equal(caches.calls.keys, 1, 'counted, to know when to trim');
+    assert.deepEqual(tallyOf(store), { kept: 1, held: 3001 });
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.sm.webp?X-Amz-Signature=a`);
+    assert.equal(caches.calls.keys, 1, 'once');
+
+    // Once half a trim's worth of new pictures has come in, one seen again is put again.
+    queue(w).kept = PREVIEW_CACHE_TRIM_TO / 2;
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`);
+    assert.equal(pictures(store).at(-1), `${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`);
+    assert.equal(store.get(pictures(store).at(-1)).headers.get(STAMP), String(PREVIEW_CACHE_TRIM_TO / 2));
+  });
+
+  test('the same pictures seen over and over are put again once at most, then never, in this lifetime or the next', async () => {
+    for (const [name, max, to, ext] of [
+      [PREVIEW_CACHE, PREVIEW_CACHE_MAX, PREVIEW_CACHE_TRIM_TO, 'sm.webp'],
+      [PREVIEW_LARGE_CACHE, PREVIEW_LARGE_CACHE_MAX, PREVIEW_LARGE_CACHE_TRIM_TO, 'poster.webp'],
+    ]) {
+      for (const n of [0.8 * max, to / 2]) {
+        const caches = memoryCaches();
+        const fetch = recordingFetch(() => corsResponse());
+        let w = loadWorker({ caches, fetch });
+        const pass = async () => {
+          const { put, delete: deleted } = caches.calls;
+          for (let i = 0; i < n; i++) await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(i)}.${ext}?X-Amz-Signature=a`);
+          return { put: caches.calls.put - put, delete: caches.calls.delete - deleted };
+        };
+        assert.deepEqual(await pass(), { put: n, delete: 0 }, `${name}, ${n}: each downloaded and kept`);
+        // By the end of that, half a trim's worth of new pictures had come in
+        // after the first n - to/2 of them: put again once, the next time they
+        // are seen. A set no bigger than that has none.
+        assert.deepEqual(await pass(), { put: n - to / 2, delete: n - to / 2 }, `${name}, ${n}: the second time`);
+        assert.deepEqual(await pass(), { put: 0, delete: 0 }, `${name}, ${n}: the third time`);
+        w = loadWorker({ caches, fetch });
+        assert.deepEqual(await pass(), { put: 0, delete: 0 }, `${name}, ${n}: in the next lifetime`);
+        assert.equal(fetch.calls.length, n, 'never downloaded again');
+        assert.equal(caches.calls.keys, 1, 'listed once, to count a cache with no tally yet');
+        assert.equal(pictures(caches.stores.get(name)).length, n);
+      }
+    }
+  });
+
+  test('a folder opened after every few hundred new posters is still read from disk', async () => {
+    const caches = memoryCaches();
+    const large = fill(caches, PREVIEW_LARGE_CACHE, PREVIEW_LARGE_CACHE_MAX, (i) => `${uuidN(i)}.poster.webp`);
+    const fetch = recordingFetch(() => corsResponse());
+    const w = loadWorker({ caches, fetch });
+    const folder = (f) => `${B2}/onyx-files/_thumbs/${uuidN(9_000_000 + f)}.poster.webp?X-Amz-Signature=a`;
+    for (let f = 0; f < 20; f++) await dispatch(w, folder(f));
+    let n = 0;
+    for (let round = 0; round < 3; round++) {
+      for (let i = 0; i < 500; i++) await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(1_000_000 + n++)}.poster.webp?X-Amz-Signature=a`);
+      const before = fetch.calls.length;
+      for (let f = 0; f < 20; f++) await dispatch(w, folder(f));
+      assert.equal(fetch.calls.length, before, `opened again after ${500 * (round + 1)} new posters, none downloaded`);
+    }
+    assert.ok(pictures(large).length <= PREVIEW_LARGE_CACHE_MAX);
+  });
+
+  test('a picture seen again once enough new ones have come in goes to the back, so the trim takes what was not used', async () => {
     const caches = memoryCaches();
     const store = fill(caches, PREVIEW_CACHE, PREVIEW_CACHE_MAX, (i) => `${uuidN(i)}.sm.webp`);
     const w = loadWorker({ caches, fetch: recordingFetch(() => corsResponse()) });
@@ -473,28 +655,31 @@ describe('the worker never costs a picture', () => {
       const { response } = await dispatch(w, `${at(i)}?X-Amz-Signature=today`);
       assert.equal(await response.text(), 'pixels', 'answered from the cache');
     }
-    assert.equal(caches.calls.keys, 1, 'the line is read once, at the first hit');
-    assert.deepEqual([...store.keys()].slice(-3), [at(5), at(10), at(11)], 'each now at the back');
+    assert.equal(caches.calls.keys, 0, 'never listed for a hit');
+    assert.deepEqual(pictures(store).slice(-3), [at(5), at(10), at(11)], 'each now at the back');
     assert.equal(caches.calls.put, 3);
-    assert.equal(store.size, PREVIEW_CACHE_MAX, 'moved, not copied');
+    assert.equal(pictures(store).length, PREVIEW_CACHE_MAX, 'moved, not copied');
+    assert.equal(store.get(at(5)).headers.get(STAMP), String(PREVIEW_CACHE_MAX), 'stamped as new as the newest');
 
-    // Seen again from the back, or from anywhere short of the oldest
-    // quarter: nothing is written.
-    const quarter = PREVIEW_CACHE_MAX / 4;
-    for (const i of [5, 10, 11, PREVIEW_CACHE_MAX - 1, quarter + 20, quarter + 3]) await dispatch(w, at(i));
-    assert.equal(caches.calls.put, 3, 'a hit away from the front is a read and nothing more');
-    // From just inside it, it is.
-    await dispatch(w, at(quarter - 3));
+    // Seen again from the back, or with fewer than half a trim's worth of
+    // new ones after it: nothing is written.
+    const half = PREVIEW_CACHE_TRIM_TO / 2;
+    // The i-th was stamped i + 1, and the count is at the cap.
+    const young = PREVIEW_CACHE_MAX - half;
+    for (const i of [5, 10, 11, PREVIEW_CACHE_MAX - 1, young, young + 20]) await dispatch(w, at(i));
+    assert.equal(caches.calls.put, 3, 'a hit short of that is a read and nothing more');
+    // With that many, it is.
+    await dispatch(w, at(young - 1));
     assert.equal(caches.calls.put, 4);
-    assert.equal([...store.keys()].at(-1), at(quarter - 3));
+    assert.equal(pictures(store).at(-1), at(young - 1));
 
     // A new picture takes the cache past its cap: the trim takes the front,
     // which is no longer the first pictures kept but the first not used.
     await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.sm.webp?X-Amz-Signature=a`);
-    assert.equal(store.size, PREVIEW_CACHE_TRIM_TO);
-    for (const i of [5, 10, 11, quarter - 3]) assert.equal(store.has(at(i)), true, `${i}, used, stayed`);
+    assert.equal(pictures(store).length, PREVIEW_CACHE_TRIM_TO);
+    for (const i of [5, 10, 11, young - 1]) assert.equal(store.has(at(i)), true, `${i}, used, stayed`);
     for (const i of [0, 4, 6, 12]) assert.equal(store.has(at(i)), false, `${i}, never seen again, went`);
-    assert.equal(caches.calls.keys, 2, 'listed again only for the trim');
+    assert.equal(caches.calls.keys, 1, 'listed for the trim, and only for it');
   });
 
   test('the same picture seen twice at once is put again once', async () => {
@@ -507,13 +692,78 @@ describe('the worker never costs a picture', () => {
     assert.equal(caches.calls.put, 1);
   });
 
+  test('a picture answered just before it was put again is not put again when it is seen after', async () => {
+    const target = `${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`;
+    let release = null;
+    const answered = new Promise((resolve) => { release = resolve; });
+    let matches = 0;
+    const caches = memoryCaches({ gate: { match: (url) => (url === target && ++matches === 1 ? answered : undefined) } });
+    fill(caches, PREVIEW_CACHE, PREVIEW_CACHE_MAX, (i) => `${uuidN(i)}.webp`);
+    const w = loadWorker({ caches, fetch: recordingFetch(() => corsResponse()) });
+    // The first request finds the old copy, and is held before it is answered.
+    const first = dispatch(w, `${target}?X-Amz-Signature=a`);
+    await until(() => matches === 1);
+    // The second is answered, and the picture put again, meanwhile.
+    await dispatch(w, `${target}?X-Amz-Signature=b`);
+    assert.equal(caches.calls.put, 1);
+    release();
+    // The first is answered with the old stamp, and seen once the move is done.
+    assert.equal(await (await first).response.text(), 'pixels');
+    assert.equal(caches.calls.put, 1, 'its copy now carries the new stamp');
+  });
+
+  test('a picture asked for while it is being put again waits for it rather than being downloaded again', async () => {
+    const target = `${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`;
+    let release;
+    const holding = new Promise((resolve) => { release = resolve; });
+    const caches = memoryCaches({ gate: { put: (url) => (url === target ? holding : undefined) } });
+    fill(caches, PREVIEW_CACHE, PREVIEW_CACHE_MAX, (i) => `${uuidN(i)}.webp`);
+    const fetch = recordingFetch(() => corsResponse());
+    const w = loadWorker({ caches, fetch });
+    const first = dispatch(w, `${target}?X-Amz-Signature=a`);
+    // Deleted, and not yet put back.
+    await until(() => caches.calls.put === 1);
+    assert.equal(caches.stores.get(PREVIEW_CACHE).has(target), false);
+    const second = dispatch(w, `${target}?X-Amz-Signature=b`);
+    await new Promise((r) => setImmediate(r));
+    release();
+    for (const { response } of await Promise.all([first, second])) assert.equal(await response.text(), 'pixels');
+    assert.equal(fetch.calls.length, 0, 'read from the cache once it was back');
+    assert.equal(caches.calls.put, 1);
+  });
+
+  test('a picture put again while a trim lists the cache is not taken by that trim', async () => {
+    let release = null;
+    const listing = new Promise((resolve) => { release = resolve; });
+    let holdListing = false;
+    const caches = memoryCaches({ gate: { keys: () => (holdListing ? listing : undefined) } });
+    const store = fill(caches, PREVIEW_CACHE, PREVIEW_CACHE_MAX, (i) => `${uuidN(i)}.webp`);
+    const w = loadWorker({ caches, fetch: recordingFetch(() => corsResponse()) });
+    const at = (i) => `${B2}/onyx-files/_thumbs/${uuidN(i)}.webp`;
+    holdListing = true;
+    // A new picture takes the cache past its cap; the trim's listing, taken
+    // now, is held.
+    const put = dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.webp?X-Amz-Signature=a`);
+    await until(() => caches.calls.keys === 1);
+    // Meanwhile one at the front is seen, and put again.
+    await dispatch(w, at(3));
+    assert.equal(pictures(store).at(-1), at(3));
+    release();
+    await put;
+    assert.equal(store.has(at(3)), true, 'listed at its old place, but put again since');
+    assert.equal(store.has(at(2)), false);
+    assert.equal(store.has(at(4)), false);
+    assert.equal(queue(w).held, pictures(store).length);
+    assert.equal(tallyOf(store).held, pictures(store).length);
+  });
+
   test('where a replaced entry keeps its place, as in WebKit, a picture put again still goes to the back', async () => {
     const caches = memoryCaches({ inPlace: true });
     const store = fill(caches, PREVIEW_CACHE, PREVIEW_CACHE_MAX, (i) => `${uuidN(i)}.webp`);
     const w = loadWorker({ caches, fetch: recordingFetch(() => corsResponse()) });
     await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`);
-    assert.equal([...store.keys()].at(-1), `${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`);
-    assert.equal(store.size, PREVIEW_CACHE_MAX);
+    assert.equal(pictures(store).at(-1), `${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`);
+    assert.equal(pictures(store).length, PREVIEW_CACHE_MAX);
   });
 
   test('a full disk while putting a picture back: the page has its picture all the same', async () => {
@@ -525,6 +775,7 @@ describe('the worker never costs a picture', () => {
     assert.equal(await response.text(), 'pixels');
     assert.equal(caches.calls.put, 1);
     assert.equal(fetch.calls.length, 0);
+    assert.equal(queue(w).held, PREVIEW_CACHE_MAX - 1, 'one fewer held');
     // Gone from the cache, it is fetched and kept again the next time it is seen.
     const again = await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(0)}.webp`);
     assert.equal(await again.response.text(), 'pixels');
@@ -539,17 +790,18 @@ describe('the worker never costs a picture', () => {
     const w = loadWorker({ caches, fetch });
 
     await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.poster.jpg?X-Amz-Signature=a`);
-    assert.equal(large.size, PREVIEW_LARGE_CACHE_TRIM_TO, 'past its cap of a few hundred, trimmed');
+    assert.equal(pictures(large).length, PREVIEW_LARGE_CACHE_TRIM_TO, 'past its cap, trimmed');
     assert.equal(large.has(`${B2}/onyx-files/_thumbs/${UUID}.poster.jpg`), true);
     assert.equal(large.has(`${B2}/onyx-files/_thumbs/${uuidN(0)}.strip.webp`), false, 'the front went');
-    assert.equal(thumbs.size, 10, 'the thumbnails untouched');
+    assert.equal(pictures(thumbs).length, 10, 'the thumbnails untouched');
+    assert.deepEqual(tallyOf(thumbs), { kept: 10, held: 10 });
 
     await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.strip.webp?X-Amz-Signature=a`);
     await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.xs.webp?X-Amz-Signature=a`);
     assert.equal(large.has(`${B2}/onyx-files/_thumbs/${UUID}.strip.webp`), true);
     assert.deepEqual(kept(w).slice(-1), [`${B2}/onyx-files/_thumbs/${UUID}.xs.webp`]);
-    assert.equal(large.size, PREVIEW_LARGE_CACHE_TRIM_TO + 1);
-    assert.equal(thumbs.size, 11);
+    assert.deepEqual(tallyOf(large), { kept: PREVIEW_LARGE_CACHE_MAX + 2, held: PREVIEW_LARGE_CACHE_TRIM_TO + 1 });
+    assert.deepEqual(tallyOf(thumbs), { kept: 11, held: 11 });
 
     // Seen again, each from its own cache.
     const before = fetch.calls.length;
@@ -558,13 +810,13 @@ describe('the worker never costs a picture', () => {
     assert.equal(fetch.calls.length, before);
   });
 
-  test('a poster kept among the thumbnails before the two were apart goes when that cache is read', async () => {
+  test('a poster kept among the thumbnails before the two were apart goes when that cache is first counted', async () => {
     const caches = memoryCaches();
-    const thumbs = fill(caches, PREVIEW_CACHE, 6, (i) => `${uuidN(i)}.${i % 3 ? 'webp' : 'poster.webp'}`);
+    fill(caches, PREVIEW_CACHE, 6, (i) => `${uuidN(i)}.${i % 3 ? 'webp' : 'poster.webp'}`, { stamped: false });
     const w = loadWorker({ caches, fetch: recordingFetch(() => corsResponse()) });
-    await dispatch(w, `${B2}/onyx-files/_thumbs/${uuidN(1)}.webp`);
-    assert.deepEqual(kept(w), [1, 2, 4, 5].map((i) => `${B2}/onyx-files/_thumbs/${uuidN(i)}.webp`));
-    assert.equal(line(w).size, 4);
+    await dispatch(w, `${B2}/onyx-files/_thumbs/${UUID}.webp?X-Amz-Signature=a`);
+    assert.deepEqual(kept(w), [...[1, 2, 4, 5].map((i) => uuidN(i)), UUID].map((u) => `${B2}/onyx-files/_thumbs/${u}.webp`));
+    assert.equal(queue(w).held, 5);
   });
 
   test('a new version drops the old one’s caches, keeps both of its own and anyone else’s, and takes over open pages', async () => {
