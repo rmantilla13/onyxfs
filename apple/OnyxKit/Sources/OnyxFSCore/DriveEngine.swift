@@ -64,6 +64,7 @@ public actor DriveEngine {
     private var byPath: [String: UInt64] = [:]
     private var nextID: UInt64 = 16
     private var writing: [UInt64: Writing] = [:]
+    private var sendingNow: Set<UInt64> = []
     /// Readers by file and version, the most recently used last: a file
     /// open in several places shares one, and its read-ahead.
     private var readers: [(key: String, source: any ByteSource)] = []
@@ -254,6 +255,11 @@ public actor DriveEngine {
     /// The last close: what was written goes to the app. On failure it stays
     /// staged and pending, and is tried again at the next sync.
     public func finishWriting(_ id: UInt64) async throws {
+        // One send at a time: a sync while a promoted file is on its way
+        // does not send it twice.
+        guard !sendingNow.contains(id) else { return }
+        sendingNow.insert(id)
+        defer { sendingNow.remove(id) }
         guard let state = writing[id] else { return }
         guard state.dirty, var node = nodes[id], !node.localOnly else {
             if !(state.dirty) { writing[id] = nil; await staging.remove(id) }
@@ -285,14 +291,23 @@ public actor DriveEngine {
         let over = to.children?[Self.fold(newName)].flatMap { nodes[$0] }
         if let over, over.id != id, replacing == nil { throw VolumeError.posix(EEXIST) }
 
-        let local = node.localOnly || to.localOnly || LocalOnly.isLocalOnly(newName)
-        if local {
+        // What macOS made for itself, renamed into the drive under a name of
+        // its own: Archive Utility's unpacked files, an app's safe save.
+        if node.localOnly, !to.localOnly, !LocalOnly.isLocalOnly(newName) {
+            return try await promote(id, from: from, to: to, newName: newName, over: over)
+        }
+        let oldPath = node.path
+        if node.localOnly || to.localOnly || LocalOnly.isLocalOnly(newName) {
             // macOS's own files move among themselves; a real file cannot
-            // become one (it would vanish from the web) or leave being one.
-            guard node.localOnly, to.localOnly || LocalOnly.isLocalOnly(newName) || !LocalOnly.isLocalOnly(node.name) else {
-                throw VolumeError.posix(EPERM)
-            }
-            await self.local.move(node.path, to: newPath)
+            // become one (it would vanish from the web).
+            guard node.localOnly else { throw VolumeError.posix(EPERM) }
+            // The tree first, then the store: anything that runs while the
+            // store is asked (the engine is an actor) finds the item where it
+            // went — a folder it was in being removed meanwhile takes nothing
+            // with it.
+            if let over, over.id != id { drop(over.id) }
+            move(id, from: from.id, to: to.id, newName: newName)
+            await self.local.move(oldPath, to: newPath)
         } else {
             // Out of a locked folder, into one, or a locked item itself: the
             // app would move the real file the locked one stands for.
@@ -301,13 +316,116 @@ public actor DriveEngine {
                 // Not on the server yet: it goes up under the new name.
                 if let over, over.id != id { try await removeFromServer(over) }
             } else {
-                _ = try await wrap { try await self.bridge.rename(node.path, to: newPath, replace: over != nil && over?.id != id) }
+                _ = try await wrap { try await self.bridge.rename(oldPath, to: newPath, replace: over != nil && over?.id != id) }
             }
-            await self.local.move(node.path, to: newPath)
+            if let over, over.id != id { drop(over.id) }
+            move(id, from: from.id, to: to.id, newName: newName)
+            await self.local.move(oldPath, to: newPath)
         }
-        if let over, over.id != id { drop(over.id) }
+        // Removed meanwhile, by another call while this one waited: said so,
+        // rather than taking the whole file system down.
+        guard let moved = nodes[id] else { throw VolumeError.posix(ESTALE) }
+        return Self.public(moved)
+    }
+
+    /// A file or folder of macOS's own making (in .TemporaryItems, say)
+    /// renamed into the drive under a name of its own becomes the drive's:
+    /// what Archive Utility unpacks, and what an app saving safely writes
+    /// beside the original before swapping it in. Kept here, it would stay
+    /// on this Mac and never reach the web.
+    ///
+    /// Its folders are made on the server, and its files staged, before
+    /// anything here moves: should either fail, the item stays where it was.
+    /// Then it and what it holds take their places in the drive, and its
+    /// files go up after the rename has answered — pending until sent, as a
+    /// copy's are, and sent at the next sync should that fail. macOS's own
+    /// files inside it (.DS_Store, ._*) stay this Mac's.
+    private func promote(_ id: UInt64, from: Node, to: Node, newName: String, over: Node?) async throws -> VolumeNode {
+        guard let node = nodes[id] else { throw VolumeError.posix(ESTALE) }
+        guard !readOnly, !to.readOnly else { throw VolumeError.posix(EACCES) }
+        if let over, over.id != id {
+            // A folder is never put over another (its contents would mix),
+            // nor a file over a folder or the other way round.
+            if over.isDirectory || node.isDirectory { throw VolumeError.posix(over.isDirectory ? (node.isDirectory ? ENOTEMPTY : EISDIR) : ENOTDIR) }
+            guard !over.readOnly else { throw VolumeError.posix(EACCES) }
+        }
+        let oldPath = node.path, newPath = Self.join(to.path, newName)
+        let path = { (relative: String) in relative.isEmpty ? newPath : Self.join(newPath, relative) }
+        let items = await promotable(oldPath)
+        for item in items where item.directory {
+            _ = try await wrap { try await self.bridge.mkdir(path(item.relative)) }
+        }
+        // Waited on the server: still here, still where it was, its folder
+        // still there, and still holding what it held?
+        guard let current = nodes[id], current.path == oldPath, nodes[to.id] != nil,
+              await promotable(oldPath).map(\.relative) == items.map(\.relative) else { throw VolumeError.posix(ESTALE) }
+
+        // Each item's id — the one the kernel knows it by, where it has one —
+        // and its files staged, all before anything moves.
+        var planned: [(relative: String, directory: Bool, modified: Date, created: Date, id: UInt64)] = []
+        for item in items {
+            let known = item.relative.isEmpty ? id : byPath[Self.fold(Self.join(oldPath, item.relative))]
+            let pid = known ?? { defer { nextID += 1 }; return nextID }()
+            planned.append((item.relative, item.directory, item.modified, nodes[pid]?.created ?? item.modified, pid))
+        }
+        var staged: [UInt64] = []
+        do {
+            for item in planned where !item.directory {
+                let source = Self.join(oldPath, item.relative.isEmpty ? "" : item.relative)
+                guard let url = await local.fileURL(item.relative.isEmpty ? oldPath : source) else { throw VolumeError.posix(ESTALE) }
+                try await wrap { try await self.staging.adopt(item.id, from: url) }
+                staged.append(item.id)
+            }
+        } catch {
+            for file in staged { await staging.remove(file) }
+            throw error
+        }
+
+        // Saved over, or a node a listing made for the new path meanwhile:
+        // the new bytes go up to its path, as a new version of the file
+        // there, and the old node goes.
+        if let other = byPath[Self.fold(newPath)], other != id, let replaced = nodes[other] {
+            if replaced.unsent { writing[replaced.id] = nil; await staging.remove(replaced.id) }
+            drop(replaced.id)
+        }
         move(id, from: from.id, to: to.id, newName: newName)
-        return Self.public(nodes[id]!)
+        await local.move(oldPath, to: newPath)
+
+        var sending: [UInt64] = []
+        for item in planned {
+            let at = path(item.relative)
+            let parentPath = item.relative.isEmpty ? to.path : (at as NSString).deletingLastPathComponent
+            guard let parent = item.relative.isEmpty ? to.id : byPath[Self.fold(parentPath)] else { continue }
+            byPath[Self.fold(at)] = item.id
+            let size = item.directory ? 0 : await local.size(at)
+            var made = insert(name: (at as NSString).lastPathComponent, parent: parent, isDirectory: item.directory, size: size,
+                              modified: item.modified, fileId: nil, version: "", localOnly: false, unsent: !item.directory)
+            made.created = item.created
+            if item.directory {
+                // Its listing is what was made in it, until the server's is asked for.
+                made.children = made.children ?? [:]
+                made.listedAt = now()
+            } else {
+                writing[made.id] = Writing(dirty: true, modified: item.modified, created: item.created)
+                sending.append(made.id)
+            }
+            nodes[made.id] = made
+        }
+        await local.release(planned.map { path($0.relative) })
+        // Sent after the rename has answered: a big unpacked folder does not
+        // hold up the app that moved it. Not sent (offline, say): pending,
+        // for the next sync.
+        if !sending.isEmpty {
+            Task { for file in sending { try? await self.finishWriting(file) } }
+        }
+        guard let moved = nodes[id] else { throw VolumeError.posix(ESTALE) }
+        return Self.public(moved)
+    }
+
+    /// What of a local item and its contents can be the drive's: all of it
+    /// but macOS's own files inside it.
+    private func promotable(_ path: String) async -> [(relative: String, directory: Bool, modified: Date)] {
+        await local.subtree(path).filter { !LocalOnly.isLocalOnly(path: $0.relative) }
     }
 
     public func remove(_ id: UInt64, name: String, from directory: UInt64) async throws {

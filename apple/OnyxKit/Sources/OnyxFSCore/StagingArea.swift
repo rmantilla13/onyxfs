@@ -40,6 +40,15 @@ public actor StagingArea {
         return url
     }
 
+    /// A new file whose bytes are already on this Mac, at `source`: staged as
+    /// a copy of them (a clone, on APFS: nothing is read).
+    public func adopt(_ id: UInt64, from source: URL) throws {
+        if let existing = files.removeValue(forKey: id) { try? FileManager.default.removeItem(at: existing) }
+        let url = directory.appendingPathComponent(UUID().uuidString)
+        do { try FileManager.default.copyItem(at: source, to: url) } catch { throw Failure.posix(EIO) }
+        files[id] = url
+    }
+
     /// Copy on write: an existing file about to be changed is brought here
     /// whole first, `size` bytes read through `fetch` in pieces (so a large
     /// file never sits in memory at once).

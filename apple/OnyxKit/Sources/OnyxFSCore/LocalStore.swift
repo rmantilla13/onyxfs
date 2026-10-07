@@ -154,6 +154,36 @@ public actor LocalStore {
         save()
     }
 
+    /// The item at `path` and everything under it, parents first, by path
+    /// relative to it ("" is the item itself).
+    public func subtree(_ path: String) -> [(relative: String, directory: Bool, modified: Date)] {
+        index.files
+            .compactMap { key, entry -> (relative: String, directory: Bool, modified: Date)? in
+                guard key == path || key.hasPrefix(path + "/") else { return nil }
+                let relative = key == path ? "" : String(key.dropFirst(path.count + 1))
+                return (relative, entry.directory, Date(timeIntervalSince1970: entry.modified))
+            }
+            .sorted { $0.relative.split(separator: "/").count < $1.relative.split(separator: "/").count
+                || ($0.relative.split(separator: "/").count == $1.relative.split(separator: "/").count && $0.relative < $1.relative) }
+    }
+
+    /// Where a local file's bytes are, for them to be handed over whole.
+    public func fileURL(_ path: String) -> URL? {
+        guard let entry = index.files[path], !entry.directory, let blob = entry.blob else { return nil }
+        return blobURL(blob)
+    }
+
+    /// These items are this Mac's own no more — they went up as the
+    /// drive's: their entries and bytes go. Their attributes stay, as any
+    /// item's do, and so does anything else under them.
+    public func release(_ paths: [String]) {
+        for path in paths {
+            if let blob = index.files[path]?.blob { try? FileManager.default.removeItem(at: blobURL(blob)) }
+            index.files[path] = nil
+        }
+        save()
+    }
+
     // MARK: - Extended attributes (any item's, local or not)
 
     public func attribute(_ name: String, of path: String) throws -> Data {

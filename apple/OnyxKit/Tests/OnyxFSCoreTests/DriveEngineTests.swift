@@ -25,6 +25,7 @@ private actor FakeBridge: EngineBridge {
     func setReadOnly(_ on: Bool) { readOnly = on }
     func lock(_ path: String) { locked.insert(path) }
     func bytes(_ path: String) -> Data? { files[path]?.bytes }
+    func fileID(_ path: String) -> String? { files[path]?.id }
     func push(_ changes: BridgeChanges) { pendingChanges.append(changes) }
 
     /// The next listing of a path is answered as the folder is when it is
@@ -65,7 +66,14 @@ private actor FakeBridge: EngineBridge {
         return out
     }
 
+    private var holdPut = false
+    private var heldPut: CheckedContinuation<Void, Never>?
+    func holdNextPut() { holdPut = true }
+    func isHoldingPut() -> Bool { heldPut != nil }
+    func releasePut() { heldPut?.resume(); heldPut = nil }
+
     func putFile(_ path: String, from: URL, modified: Date?, created: Date?) async throws -> BridgeEntry {
+        if holdPut { holdPut = false; await withCheckedContinuation { heldPut = $0 } }
         let bytes = try Data(contentsOf: from)
         calls.append("put \(path) \(bytes.count)")
         dates[path] = (modified, created)
@@ -76,7 +84,14 @@ private actor FakeBridge: EngineBridge {
                            size: Int64(bytes.count), version: file.version, pending: true)
     }
 
+    private var holdMkdir = false
+    private var heldMkdir: CheckedContinuation<Void, Never>?
+    func holdNextMkdir() { holdMkdir = true }
+    func isHoldingMkdir() -> Bool { heldMkdir != nil }
+    func releaseMkdir() { heldMkdir?.resume(); heldMkdir = nil }
+
     func mkdir(_ path: String) async throws -> BridgeEntry {
+        if holdMkdir { holdMkdir = false; await withCheckedContinuation { heldMkdir = $0 } }
         calls.append("mkdir \(path)")
         folders.insert(path)
         return BridgeEntry(name: (path as NSString).lastPathComponent, isDirectory: true)
@@ -131,6 +146,16 @@ private actor FakeBridge: EngineBridge {
             return data.subdata(in: start..<min(data.count, start + length))
         }
     }
+}
+
+/// Until `path` holds `bytes` on the server (uploads after a promotion go
+/// once the rename has answered).
+private func sent(_ bridge: FakeBridge, _ path: String, _ bytes: Data) async throws -> Bool {
+    for _ in 0..<500 {
+        if await bridge.bytes(path) == bytes { return true }
+        try await Task.sleep(nanoseconds: 2_000_000)
+    }
+    return false
 }
 
 private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
@@ -386,6 +411,142 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
                              local: try LocalStore(directory: root.appendingPathComponent("local")))
         let again = try await engine.lookup(".DS_Store", in: DriveEngine.rootID)
         #expect(String(decoding: try await engine.read(again.id, at: 0, count: 10), as: UTF8.self) == "view")
+    }
+
+    /// Opening a zip in Finder: Archive Utility unpacks it in .TemporaryItems,
+    /// macOS's own folder, then moves what it unpacked beside the zip. It
+    /// becomes the drive's — on the web, folders and all — where before it
+    /// stayed on this Mac, and the move took the file system down.
+    @Test func whatArchiveUtilityUnpacksBecomesTheDrives() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Shoot")
+        await bridge.addFile("/Shoot/Frames.zip", Data("zip".utf8))
+        let engine = try await makeEngine(bridge)
+        let shoot = try await engine.lookup("Shoot", in: DriveEngine.rootID)
+        let temp = try await engine.create(".TemporaryItems", in: DriveEngine.rootID, isDirectory: true)
+        let user = try await engine.create("folders.501", in: temp.id, isDirectory: true)
+        let frames = try await engine.create("Frames", in: user.id, isDirectory: true)
+        let a = try await engine.create("a.jpg", in: frames.id, isDirectory: false)
+        _ = try await engine.write(a.id, at: 0, data: Data("first".utf8))
+        let day = try await engine.create("Day 2", in: frames.id, isDirectory: true)
+        let b = try await engine.create("b.jpg", in: day.id, isDirectory: false)
+        _ = try await engine.write(b.id, at: 0, data: Data("second!".utf8))
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") }.isEmpty, "unpacking stays on this Mac")
+
+        let moved = try await engine.rename(frames.id, from: user.id, name: "Frames", to: shoot.id, newName: "Frames", replacing: nil)
+        #expect(moved.id == frames.id, "the same item, for the kernel")
+        #expect(!moved.localOnly)
+        let calls = await bridge.calls.filter { !$0.hasPrefix("list") }
+        #expect(calls.contains("mkdir /Shoot/Frames"))
+        #expect(calls.contains("mkdir /Shoot/Frames/Day 2"))
+        #expect(try await sent(bridge, "/Shoot/Frames/a.jpg", Data("first".utf8)))
+        #expect(try await sent(bridge, "/Shoot/Frames/Day 2/b.jpg", Data("second!".utf8)))
+        let all = await bridge.calls
+        #expect(all.firstIndex(of: "mkdir /Shoot/Frames/Day 2")! < all.firstIndex { $0.hasPrefix("put /Shoot/Frames/Day 2/b.jpg") }!,
+                "folders before what is in them")
+
+        // Listed where it went, and gone from where it was unpacked.
+        let names = try await engine.children(of: frames.id).map(\.name).sorted()
+        #expect(names == ["Day 2", "a.jpg"])
+        #expect(try await engine.children(of: user.id).isEmpty)
+        let read = try await engine.lookup("a.jpg", in: frames.id)
+        #expect(String(decoding: try await engine.read(read.id, at: 0, count: 10), as: UTF8.self) == "first")
+    }
+
+    /// An app saving safely writes the new copy in .TemporaryItems and swaps
+    /// it over the original: the file on the web gets the new bytes, as a new
+    /// version of itself.
+    @Test func aSafeSaveFromTemporaryItemsReplacesTheFile() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFile("/notes.txt", Data("old".utf8))
+        let engine = try await makeEngine(bridge)
+        let original = try await engine.lookup("notes.txt", in: DriveEngine.rootID)
+        let temp = try await engine.create(".TemporaryItems", in: DriveEngine.rootID, isDirectory: true)
+        let copy = try await engine.create("notes.txt", in: temp.id, isDirectory: false)
+        _ = try await engine.write(copy.id, at: 0, data: Data("brand new".utf8))
+        try await engine.finishWriting(copy.id)
+        _ = try await engine.rename(copy.id, from: temp.id, name: "notes.txt", to: DriveEngine.rootID, newName: "notes.txt",
+                                    replacing: original.id)
+        #expect(try await sent(bridge, "/notes.txt", Data("brand new".utf8)))
+        #expect(await bridge.fileID("/notes.txt") == "f1", "the same file on the server, a new version of it")
+        let now = try await engine.lookup("notes.txt", in: DriveEngine.rootID)
+        #expect(String(decoding: try await engine.read(now.id, at: 0, count: 20), as: UTF8.self) == "brand new")
+    }
+
+    /// macOS's own files moving among themselves stay its own, and a real file
+    /// still cannot become one.
+    @Test func macOSOwnFilesMovingAmongThemselvesStayOnThisMac() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFile("/real.txt", Data("r".utf8))
+        let engine = try await makeEngine(bridge)
+        let temp = try await engine.create(".TemporaryItems", in: DriveEngine.rootID, isDirectory: true)
+        let x = try await engine.create("x", in: temp.id, isDirectory: false)
+        _ = try await engine.rename(x.id, from: temp.id, name: "x", to: temp.id, newName: "y", replacing: nil)
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") }.isEmpty)
+        let real = try await engine.lookup("real.txt", in: DriveEngine.rootID)
+        await #expect(throws: VolumeError.posix(EPERM)) {
+            _ = try await engine.rename(real.id, from: DriveEngine.rootID, name: "real.txt", to: temp.id, newName: "real.txt", replacing: nil)
+        }
+    }
+
+    /// The rename answers before what it moved has gone up: a big unpacked
+    /// folder does not hold up the app that moved it.
+    @Test func aPromotedFolderIsSentAfterTheRenameAnswers() async throws {
+        let bridge = FakeBridge()
+        let engine = try await makeEngine(bridge)
+        let temp = try await engine.create(".TemporaryItems", in: DriveEngine.rootID, isDirectory: true)
+        let unpacked = try await engine.create("Unpacked", in: temp.id, isDirectory: true)
+        let file = try await engine.create("a.txt", in: unpacked.id, isDirectory: false)
+        _ = try await engine.write(file.id, at: 0, data: Data("a".utf8))
+        await bridge.holdNextPut()
+        let moved = try await engine.rename(unpacked.id, from: temp.id, name: "Unpacked", to: DriveEngine.rootID, newName: "Unpacked", replacing: nil)
+        #expect(moved.name == "Unpacked")
+        while !(await bridge.isHoldingPut()) { try await Task.sleep(nanoseconds: 1_000_000) }
+        // The file reads from here meanwhile, and goes up once let through.
+        let a = try await engine.lookup("a.txt", in: unpacked.id)
+        #expect(String(decoding: try await engine.read(a.id, at: 0, count: 5), as: UTF8.self) == "a")
+        try await engine.remove(temp.id, name: ".TemporaryItems", from: DriveEngine.rootID)
+        await bridge.releasePut()
+        #expect(try await sent(bridge, "/Unpacked/a.txt", Data("a".utf8)))
+    }
+
+    /// The folder something was unpacked in, removed while its folders are
+    /// being made on the server: the move is refused, nothing is left half
+    /// moved, and the file system stays up.
+    @Test func aFolderRemovedWhileItsFoldersAreMadeIsRefusedWhole() async throws {
+        let bridge = FakeBridge()
+        let engine = try await makeEngine(bridge)
+        let temp = try await engine.create(".TemporaryItems", in: DriveEngine.rootID, isDirectory: true)
+        let unpacked = try await engine.create("Unpacked", in: temp.id, isDirectory: true)
+        let file = try await engine.create("a.txt", in: unpacked.id, isDirectory: false)
+        _ = try await engine.write(file.id, at: 0, data: Data("a".utf8))
+        await bridge.holdNextMkdir()
+        let moving = Task { try await engine.rename(unpacked.id, from: temp.id, name: "Unpacked", to: DriveEngine.rootID, newName: "Unpacked", replacing: nil) }
+        while !(await bridge.isHoldingMkdir()) { try await Task.sleep(nanoseconds: 1_000_000) }
+        try await engine.remove(temp.id, name: ".TemporaryItems", from: DriveEngine.rootID)
+        await bridge.releaseMkdir()
+        await #expect(throws: VolumeError.posix(ESTALE)) { _ = try await moving.value }
+        #expect(!(await bridge.calls.contains { $0.hasPrefix("put") }), "nothing sent")
+        #expect(try await engine.children(of: DriveEngine.rootID).allSatisfy { $0.name != "a.txt" })
+    }
+
+    /// macOS's own files inside an unpacked folder stay on this Mac.
+    @Test func finderOwnFilesInsideAPromotedFolderStayHere() async throws {
+        let bridge = FakeBridge()
+        let engine = try await makeEngine(bridge)
+        let temp = try await engine.create(".TemporaryItems", in: DriveEngine.rootID, isDirectory: true)
+        let unpacked = try await engine.create("Unpacked", in: temp.id, isDirectory: true)
+        let store = try await engine.create(".DS_Store", in: unpacked.id, isDirectory: false)
+        _ = try await engine.write(store.id, at: 0, data: Data("view".utf8))
+        let apple = try await engine.create("._a.txt", in: unpacked.id, isDirectory: false)
+        _ = try await engine.write(apple.id, at: 0, data: Data([1]))
+        let file = try await engine.create("a.txt", in: unpacked.id, isDirectory: false)
+        _ = try await engine.write(file.id, at: 0, data: Data("a".utf8))
+        _ = try await engine.rename(unpacked.id, from: temp.id, name: "Unpacked", to: DriveEngine.rootID, newName: "Unpacked", replacing: nil)
+        #expect(try await sent(bridge, "/Unpacked/a.txt", Data("a".utf8)))
+        #expect(!(await bridge.calls.contains { $0.contains(".DS_Store") || $0.contains("._a.txt") }))
+        let kept = try await engine.lookup(".DS_Store", in: unpacked.id)
+        #expect(String(decoding: try await engine.read(kept.id, at: 0, count: 10), as: UTF8.self) == "view")
     }
 
     @Test func attributesStayLocalAndFollowRenames() async throws {
