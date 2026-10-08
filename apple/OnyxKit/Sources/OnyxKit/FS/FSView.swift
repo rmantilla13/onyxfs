@@ -129,7 +129,8 @@ public enum FSNames {
                                         ".TemporaryItems", "Icon\r"]
 
     public static func isLocalOnly(_ name: String) -> Bool {
-        reserved.contains(name) || name.hasPrefix("._")
+        reserved.contains(name) || name.hasPrefix("._") || name.hasPrefix(".ArchiveServiceTemp")
+            || (name.hasPrefix(".AU.") && name.hasSuffix(".nosync"))
     }
 
     /// Whether any segment of a mounted path is one of them.

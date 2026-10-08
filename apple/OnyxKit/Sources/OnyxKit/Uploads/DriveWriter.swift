@@ -251,6 +251,24 @@ public actor DriveWriter {
             let source = await serverFolder(from)
             let destination = await serverFolder(to)
             try await server { try await self.api.moveFolder(from: source, to: destination, filespaceId: self.filespaceId) }
+            // Files still on their way into it go where it went. Else they
+            // land in its old place — which the app that moved it may remove
+            // next, taking them with it (Archive Utility does).
+            for (path, moving) in pending where path.hasPrefix(from + "/") {
+                let newPath = to + path.dropFirst(from.count)
+                let (folder, name) = try Self.split(newPath)
+                if await arrivedFile(moving) != nil {
+                    // On the server already: the folder took it along.
+                    unlist(path)
+                    arrived[path] = nil
+                    continue
+                }
+                await uploads.retarget(moving.job, folder: await serverFolder(folder), name: name, replacing: moving.replaceOf)
+                var moved = moving
+                moved.path = newPath
+                unlist(path)
+                list(moved)
+            }
         case let .file(id)?:
             if target == .folder { throw Failure.posix(EISDIR, nil) }
             try await renameFile(id, from: from, to: to, over: target)

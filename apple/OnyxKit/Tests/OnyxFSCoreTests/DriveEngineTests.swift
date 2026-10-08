@@ -453,6 +453,29 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
         #expect(String(decoding: try await engine.read(read.id, at: 0, count: 10), as: UTF8.self) == "first")
     }
 
+    /// Archive Utility now unpacks into a scratch folder of its own beside
+    /// the zip (.ArchiveServiceTemp.sb-…): nothing of it reaches the server
+    /// until what it unpacked is moved out, and then only that does.
+    @Test func archiveServicesScratchFolderStaysHere() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Footage")
+        let engine = try await makeEngine(bridge)
+        let footage = try await engine.lookup("Footage", in: DriveEngine.rootID)
+        let scratch = try await engine.create(".ArchiveServiceTemp.sb-646fd00c-ZqgRoN", in: footage.id, isDirectory: true)
+        #expect(scratch.localOnly)
+        let sample = try await engine.create("Sample", in: scratch.id, isDirectory: true)
+        let a = try await engine.create("a.txt", in: sample.id, isDirectory: false)
+        _ = try await engine.write(a.id, at: 0, data: Data("hello".utf8))
+        try await engine.finishWriting(a.id)
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") }.isEmpty, "unpacking stays on this Mac")
+        _ = try await engine.rename(sample.id, from: scratch.id, name: "Sample", to: footage.id, newName: "Sample", replacing: nil)
+        try await engine.remove(scratch.id, name: ".ArchiveServiceTemp.sb-646fd00c-ZqgRoN", from: footage.id)
+        #expect(try await sent(bridge, "/Footage/Sample/a.txt", Data("hello".utf8)))
+        #expect(!(await bridge.calls.contains { $0.contains("ArchiveServiceTemp") }))
+        let listed = try await engine.lookup("a.txt", in: sample.id)
+        #expect(listed.size == 5)
+    }
+
     /// An app saving safely writes the new copy in .TemporaryItems and swaps
     /// it over the original: the file on the web gets the new bytes, as a new
     /// version of itself.

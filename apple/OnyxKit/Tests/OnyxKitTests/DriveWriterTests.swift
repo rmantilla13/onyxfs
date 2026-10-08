@@ -165,6 +165,33 @@ private func writer(_ tree: FakeTree, _ routes: FakeRoutes, _ server: FakeServer
         #expect(await routes.calls.isEmpty)
     }
 
+    /// A folder renamed while files in it are still on their way — what
+    /// Archive Utility does with what it unpacks, before removing the folder
+    /// it unpacked into — takes them along: they land where it went, not in
+    /// its old place, where the next step would remove them.
+    @Test func filesStillUploadingGoWhereTheirFolderWent() async throws {
+        let tree = FakeTree(), routes = FakeRoutes(), server = FakeServer()
+        await server.setFailure("presign", URLError(.notConnectedToInternet), times: 2)
+        let gate = Gate()
+        let (drive, queue) = try writer(tree, routes, server, gate: gate)
+        await tree.set("/Scratch/Sample", .folder)
+        try await drive.putFile(path: "/Scratch/Sample/a.txt", from: try source(Data([1])))
+        try await drive.putFile(path: "/Scratch/Sample/Day 2/b.txt", from: try source(Data([2])))
+        try await drive.putFile(path: "/Scratch/Samples.txt", from: try source(Data([3])))
+        try await drive.rename(from: "/Scratch/Sample", to: "/Sample", replace: false)
+        #expect(await routes.calls == ["mvdir Scratch/Sample -> Sample"])
+        #expect(await drive.pending(at: "/Sample/a.txt") != nil)
+        #expect(await drive.pending(at: "/Sample/Day 2/b.txt") != nil)
+        #expect(await drive.pending(at: "/Scratch/Sample/a.txt") == nil)
+        #expect(await drive.pending(at: "/Scratch/Samples.txt") != nil, "a name that only starts the same stays")
+        await gate.open()
+        await settle(queue)
+        let calls = await server.calls
+        #expect(calls.contains("record /Sample/a.txt"))
+        #expect(calls.contains("record /Sample/Day 2/b.txt"))
+        #expect(!calls.contains { $0.hasPrefix("record /Scratch/Sample/") })
+    }
+
     @Test func renamesAndMovesAreTheServersOwn() async throws {
         let tree = FakeTree(), routes = FakeRoutes(), server = FakeServer()
         await tree.set("/a.mov", .file(id: "f1"))
