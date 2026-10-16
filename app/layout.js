@@ -4,6 +4,7 @@ import { THEME_SCRIPT } from '@/lib/theme';
 import { ToastProvider } from '@/app/components/ui/Toast';
 import PreviewWorker from '@/app/components/PreviewWorker';
 import { ActivityDock } from '@/app/components/ui/Activity';
+import ScreensaverWatch from '@/app/components/screensaver/ScreensaverWatch';
 
 export const dynamic = 'force-dynamic';
 
@@ -78,6 +79,9 @@ export default async function RootLayout({ children }) {
         <ToastProvider>{children}</ToastProvider>
         <ActivityDock />
         <PreviewWorker />
+        {/* Puts the screen saver up once the page has been left alone, on
+            every page; nothing until one is chosen (the account menu). */}
+        <ScreensaverWatch logo={brand.visual.logo} brandName={brand.name} />
       </body>
     </html>
   );

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import ProfileMenu from '@/app/components/ProfileMenu';
 import BrandLogo from '@/app/components/BrandLogo';
 import ShortcutsDialog from '@/app/components/ShortcutsDialog';
@@ -11,6 +12,10 @@ import Icon from '@/app/components/ui/Icon';
 import useMacApp from '@/app/components/useMacApp';
 import useMacBar from '@/app/components/mac/useMacBar';
 import FinderMenu from '@/app/components/mac/FinderMenu';
+
+// The screen saver picker and the savers it previews, fetched on first
+// opening: the bar is on every page, and almost none of them opens it.
+const ScreensaverDialog = dynamic(() => import('@/app/components/screensaver/ScreensaverDialog'), { ssr: false });
 
 /**
  * The bar across the top: the mark, one search box, and the account menu.
@@ -36,6 +41,7 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
   const [palette, setPalette] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState('');
   const [shortcuts, setShortcuts] = useState(false);
+  const [saverPicker, setSaverPicker] = useState(false);
   // The modifier is the platform's, which the server cannot know: render ⌘
   // and correct it after mount.
   const [mod, setMod] = useState('⌘');
@@ -108,7 +114,7 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
           </Link>
         )}
         {mac.inApp && mac.hasBar && <FinderMenu mac={mac} />}
-        <ProfileMenu email={email} isAdmin={isAdmin} build={build} avatarUrl={avatarUrl} onShortcuts={() => setShortcuts(true)} inApp={inApp} />
+        <ProfileMenu email={email} isAdmin={isAdmin} build={build} avatarUrl={avatarUrl} onShortcuts={() => setShortcuts(true)} onScreensaver={() => setSaverPicker(true)} inApp={inApp} />
       </div>
       <CommandPalette
         open={palette}
@@ -118,8 +124,12 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
         library={library}
         isAdmin={isAdmin}
         onShortcuts={() => setShortcuts(true)}
+        onScreensaver={() => setSaverPicker(true)}
       />
       <ShortcutsDialog open={shortcuts} onClose={() => setShortcuts(false)} />
+      {saverPicker && (
+        <ScreensaverDialog open onClose={() => setSaverPicker(false)} logo={logo} brandName={brandName} drives={filespaces} library={library} />
+      )}
     </header>
   );
 }

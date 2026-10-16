@@ -51,9 +51,11 @@ test('an unknown icon name fails generation with a pointer to the renames', () =
 
 test('icons come from the kit, not hand-drawn SVG or text glyphs', () => {
   // The one SVG a component may draw itself is artwork: the wordmark, the
-  // review tool's drawing layer, and a sound's waveform.
+  // review tool's drawing layer, a sound's waveform, and the screen saver's
+  // clock face (Dial).
   const allowed = new Set([
     'app/components/OnyxWordmark.js', 'app/components/review/AnnotationLayer.js', 'app/components/media/Waveform.js',
+    'app/components/screensaver/SaverView.js',
   ]);
   // A lone glyph standing in for an icon; a key hint like "← → step" is text.
   const glyphs = /aria-hidden(?:="true")?>\s*[✕✓✗▾▸▴▶❚⋯‹←→↑↓↕]\s*</u;
