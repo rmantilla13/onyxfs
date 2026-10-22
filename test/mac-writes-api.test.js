@@ -1248,6 +1248,58 @@ describe('folder names are per drive', () => {
   });
 });
 
+describe('an upload’s folder is one a folder could be named', () => {
+  // The folder goes into the object key (storage.buildObjectKey), and nothing
+  // on the way strips a ".." from it: "../x" in the drive "team" would have
+  // been signed as "team/../x/a.mov", which a disk that resolves ".." reads
+  // as a place outside the drive.
+  const refused = [
+    ['../x', 'That name is reserved.'],
+    ['Cuts/../../y', 'That name is reserved.'],
+    [' .. /x', 'That name is reserved.'],
+    ['./Cuts', 'That name is reserved.'],
+    ['Cuts/_thumbs', '“_thumbs” is reserved for the app’s own files.'],
+  ];
+
+  test('presign and multipart refuse it with the folder routes’ reason, before anything is signed or issued', async () => {
+    globalThis.__mw.settings.set('features.flags', { library: true }); // and uploads to All files
+    const who = mac(ED);
+    for (const [folder, error] of refused) {
+      for (const filespaceId of ['d1', undefined]) {
+        const at = `${JSON.stringify(folder)} ${filespaceId ? 'in a drive' : 'in All files'}`;
+        const p = await presign(who, { filename: 'a.mov', contentType: 'video/quicktime', size: 10, folder, filespaceId });
+        assert.deepEqual([p.status, p.body], [400, { error }], `presign ${at}`);
+        const m = await multipart(who, { action: 'create', filename: 'a.mov', mime: 'video/quicktime', size: 10, folder, filespaceId });
+        assert.deepEqual([m.status, m.body], [400, { error }], `multipart ${at}`);
+      }
+    }
+    const { s3, uploadKeys, uploads } = globalThis.__mw;
+    assert.deepEqual(s3.calls, [], 'the bucket was not asked anything');
+    assert.deepEqual([uploadKeys.size, uploads.size], [0, 0], 'no key issued, no upload started');
+  });
+
+  test('the top of a drive, and a folder in it, still take uploads', async () => {
+    const who = mac(ED);
+    const top = await presign(who, { filename: 'a.mov', contentType: 'video/quicktime', size: 10, folder: '', filespaceId: 'd1' });
+    assert.deepEqual([top.status, top.body.key], [200, 'team/a.mov']);
+    const deep = await presign(who, { filename: 'a.mov', contentType: 'video/quicktime', size: 10, folder: ' Cuts / 2026 ', filespaceId: 'd1' });
+    assert.deepEqual([deep.status, deep.body.key], [200, 'team/Cuts/2026/a.mov']);
+    const m = await multipart(who, { action: 'create', filename: 'b.mov', mime: 'video/quicktime', size: 10, folder: 'Cuts', filespaceId: 'd1' });
+    assert.deepEqual([m.status, m.body.key], [200, 'team/Cuts/b.mov']);
+  });
+
+  test('new contents go beside their file, whatever folder the body names', async () => {
+    const who = mac(ED);
+    const f = await upload(who, { name: 'Interview.mov', folder: 'Cuts' });
+    const p = await presign(who, { replaceOf: f.id, contentType: 'video/quicktime', size: 10, folder: '../x' });
+    assert.equal(p.status, 200, JSON.stringify(p.body));
+    assert.match(p.body.key, /^team\/Cuts\//);
+    const m = await multipart(who, { action: 'create', replaceOf: f.id, mime: 'video/quicktime', size: 10, folder: '../x' });
+    assert.equal(m.status, 200, JSON.stringify(m.body));
+    assert.match(m.body.key, /^team\/Cuts\//);
+  });
+});
+
 describe('the file’s own dates', () => {
   const SHOT = Date.parse('2026-09-05T12:30:00Z');
   const SAVED = Date.parse('2026-09-05T13:02:10Z');

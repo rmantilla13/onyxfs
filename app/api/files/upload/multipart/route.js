@@ -6,6 +6,7 @@ import {
 import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 import { replacementTarget, replacementKey } from '@/lib/replace-content';
 import { vacateTrashedKey } from '@/lib/trash-move';
+import { uploadFolderProblem } from '@/lib/folder-ops';
 import {
   getStorageConfig, storageMode, cfgForFilespace, partSizeFor, partCount, buildObjectKey,
   s3CreateMultipartUpload, s3PresignUploadParts, s3ListParts,
@@ -126,6 +127,13 @@ export async function POST(req) {
       }
       // Composed, and spelled as the folder already there is (canonicalFolder).
       if (!replacing && !body.filespaceId) body.folder = await canonicalFolder(body.folder);
+      // And, as in the presign route, nothing a folder made or renamed could
+      // not be called — no ".." — since it goes into the key. A replacement's
+      // folder is its file's, whatever the body says.
+      if (!replacing) {
+        const folderProblem = uploadFolderProblem(body.folder);
+        if (folderProblem) return NextResponse.json({ error: folderProblem }, { status: 400 });
+      }
 
       // choosePartSize throws above the provider's single-object ceiling —
       // 5 TiB on S3, 10 TB on B2. Surfacing that here, before a single byte
