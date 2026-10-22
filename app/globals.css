@@ -717,6 +717,76 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 /* A folder's link is public or password: two kinds side by side. */
 @media (min-width: 721px) { .share-kinds.is-two { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .share-folder-note { margin: 0; }
+.share-kind.is-off { opacity: 0.5; cursor: not-allowed; }
+
+/* Templates: chips that fill the form, a person's own with a remove. */
+.share-templates { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: 0 0 var(--s4); }
+.share-template {
+  display: inline-flex; align-items: center;
+  border: 1px solid var(--line); border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+.share-template.is-on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.share-template-use, .share-template-remove {
+  border: 0; background: none; color: var(--ink); font: inherit; cursor: pointer;
+}
+.share-template-use { padding: 5px var(--s3); font-size: var(--t-sm); font-weight: 500; border-radius: var(--radius-pill); }
+.share-template-remove { display: inline-flex; padding: 5px var(--s2) 5px 0; color: var(--muted); }
+.share-template-remove:hover { color: var(--danger); }
+.share-template-use:focus-visible, .share-template-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The form: who and what on the left, the page's look on the right. */
+.share-form { display: flex; flex-direction: column; gap: var(--s4); }
+.share-form-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s5); align-items: start; }
+.share-form-col { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+.share-section { display: flex; flex-direction: column; gap: var(--s2); margin: 0; padding: 0; border: 0; min-width: 0; }
+.share-section-title {
+  display: flex; align-items: baseline; gap: var(--s2); width: 100%;
+  margin-bottom: var(--s2); padding: 0;
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+.share-look-summary { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: var(--t-xs); color: var(--accent-deep); }
+.share-form-cols .share-kinds { grid-template-columns: minmax(0, 1fr); }
+.share-field { gap: var(--s1); }
+.share-check { display: flex; align-items: flex-start; gap: var(--s2); cursor: pointer; }
+.share-check input { margin-top: 3px; flex: none; }
+.share-check.is-off { cursor: default; opacity: 0.7; }
+.share-expiry { flex: 0 1 200px; width: auto; }
+.share-date { flex: 0 1 230px; width: auto; }
+.share-look { padding: var(--s4); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-sunken); }
+.share-look .share-segments { background: var(--surface); }
+.share-look .share-segment.is-on { background: var(--surface-sunken); }
+.share-look-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); align-items: center; gap: var(--s2); }
+.share-message { resize: vertical; min-height: 64px; font: inherit; }
+/* Accents: the workspace's own, a few to pick, any other. */
+.share-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.share-swatch { position: relative; display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; cursor: pointer; }
+.share-swatch input[type='radio'] { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+.share-swatch-dot { width: 20px; height: 20px; border-radius: 50%; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent); }
+.share-swatch.is-workspace .share-swatch-dot { background: conic-gradient(var(--aura-a), var(--aura-b), var(--aura-c), var(--aura-a)); }
+.share-swatch.is-on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); }
+.share-swatch:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; }
+.share-swatch.is-custom input[type='color'] {
+  width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer;
+}
+.share-swatch.is-custom input[type='color']::-webkit-color-swatch-wrapper { padding: 0; }
+.share-swatch.is-custom input[type='color']::-webkit-color-swatch { border: 1px dashed var(--muted); border-radius: 50%; }
+.share-actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.share-actions .btn-ghost .icon, .share-actions .btn-ghost svg { margin-right: 4px; }
+.share-naming { display: inline-flex; align-items: center; gap: var(--s2); }
+.share-naming .input { width: 200px; }
+.share-error { margin: 0; color: var(--danger); }
+.share-editing {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s2) var(--s3);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+.share-editing .small { flex: 1; min-width: 200px; }
+.share-row.is-editing { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+@media (max-width: 880px) {
+  .share-form-cols { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* A folder link's page: a folder as the Files view shows one — its path from
    the shared folder down, its subfolders as tiles, its files as cards — for
