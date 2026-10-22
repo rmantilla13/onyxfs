@@ -51,7 +51,8 @@ export async function GET(req) {
 
 /**
  * POST /api/files/folders/shares { folder, filespaceId?, kind: 'public'|'password',
- * password?, expires: 'never'|'1'|'7'|'30' } → { share }.
+ * password?, expires: 'never'|'1'|'7'|'30'|'90'|'date', expiresAt?,
+ * downloads?: boolean, look? } → { share }.
  *
  * A folder's link is public or password-protected. Not private: that would
  * open only for people who can already open the folder, which a link adds
@@ -72,7 +73,7 @@ export async function POST(req) {
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
   if (!body || typeof body !== 'object' || Array.isArray(body)) return NextResponse.json({ error: 'Bad request' }, { status: 400 });
 
-  const parsed = parseShareRequest(body);
+  const parsed = parseShareRequest(body, { target: 'folder' });
   if (parsed.error) return NextResponse.json({ error: parsed.error }, { status: 400 });
   if (parsed.mode === 'private') {
     return NextResponse.json({ error: 'A folder link is public or password-protected. People who can already open the folder need no link to it.' }, { status: 400 });
@@ -103,11 +104,14 @@ export async function POST(req) {
     createdBy: g.email,
     mode: 'public',
     password: parsed.password,
-    expiresInDays: parsed.expiresInDays,
+    expiresAt: parsed.expiresAt,
+    downloads: parsed.downloads,
+    look: parsed.look,
   });
   if (!reused) {
     await audit(g.email, 'share.create', folderLinkSubject({ storagePrefix: gate.storagePrefix, folder: gate.name, driveName: gate.driveName }), {
       kind, expiresInDays: parsed.expiresInDays, token: token.slice(0, 6),
+      ...(parsed.downloads ? {} : { downloads: false }), ...(parsed.look?.view ? { view: parsed.look.view } : {}),
     });
   }
   const share = (await listSharesForFolder(gate.name, gate.storagePrefix)).find((s) => s.token === token);

@@ -21,6 +21,9 @@ export const dynamic = 'force-dynamic';
  *
  * `?variant=proxy` / `?variant=poster`: a video's streamable copy or its cover,
  * for the guests the page offers them to — decided after the link is.
+ *
+ * None of it when the link's downloads are off (file_shares.downloads):
+ * refused, whatever the variant.
  */
 export async function GET(req, { params }) {
   const { token } = params;
@@ -29,6 +32,9 @@ export async function GET(req, { params }) {
     return NextResponse.redirect(new URL(`/signin?callbackUrl=${encodeURIComponent(`/s/${token}`)}`, req.url));
   }
   if (access.state !== 'ok') return NextResponse.redirect(new URL(`/s/${token}`, req.url));
+  // A link made to be looked at, not downloaded from: the original, the
+  // streamable copy and the cover alike. Its page offers none of them.
+  if (!access.downloads) return NextResponse.json({ error: 'Downloads are turned off for this link.' }, { status: 403 });
 
   const { file } = access;
   // A video's proxy or cover (lib/download-variants.js), past the same gates,

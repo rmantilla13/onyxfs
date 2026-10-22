@@ -65,7 +65,8 @@ export async function GET(req, { params }) {
 
 /**
  * POST /api/files/[id]/shares { kind: 'public'|'password'|'private',
- * password?, expires: 'never'|'1'|'7'|'30', review?: 'view'|'comment'|'approve' }
+ * password?, expires: 'never'|'1'|'7'|'30'|'90'|'date', expiresAt?,
+ * review?: 'view'|'comment'|'approve', downloads?: boolean, look? }
  * → { share }.
  *
  * Each kind is its own capability — a private link stays inside the
@@ -80,7 +81,7 @@ export async function POST(req, { params }) {
   if (g.error) return g.error;
   let body = {};
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }); }
-  const parsed = parseShareRequest(body);
+  const parsed = parseShareRequest(body, { target: 'file' });
   if (parsed.error) return NextResponse.json({ error: parsed.error }, { status: 400 });
 
   const kind = parsed.password ? 'password' : parsed.mode;
@@ -102,12 +103,15 @@ export async function POST(req, { params }) {
     createdBy: g.email,
     mode: parsed.mode,
     password: parsed.password,
-    expiresInDays: parsed.expiresInDays,
+    expiresAt: parsed.expiresAt,
     review: parsed.review,
+    downloads: parsed.downloads,
+    look: parsed.look,
   });
   if (!reused) {
     await audit(g.email, 'share.create', { type: 'file', id: g.file.id, label: g.file.name }, {
       kind, expiresInDays: parsed.expiresInDays, ...(parsed.review ? { review: parsed.review } : {}),
+      ...(parsed.downloads ? {} : { downloads: false }), ...(parsed.look?.view ? { view: parsed.look.view } : {}),
     });
     // A link that takes comments puts the file in review.
     if (parsed.review) await refreshReviewStatus(g.file.id).catch(() => {});
