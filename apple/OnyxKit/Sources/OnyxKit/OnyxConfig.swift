@@ -43,9 +43,18 @@ public struct OnyxConfig: Sendable, Equatable {
         SharedSettings().serverURL.map(OnyxConfig.init(baseURL:)) ?? .production
     }
 
+    /// The server reads a query as URLSearchParams does, where "+" is a
+    /// space; URLComponents leaves a "+" in a value as it is. So it is sent
+    /// as %2B — every "+" here is one the value had, since URLComponents
+    /// writes a space as %20. Unescaped, a folder "Disclaimers+Trademarks"
+    /// was asked for as "Disclaimers Trademarks": deleted, listed or shared,
+    /// it was not there.
     public func url(_ path: String, query: [URLQueryItem] = []) -> URL {
         var c = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-        if !query.isEmpty { c.queryItems = query }
+        if !query.isEmpty {
+            c.queryItems = query
+            c.percentEncodedQuery = c.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        }
         return c.url!
     }
 
