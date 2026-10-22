@@ -10,6 +10,8 @@ import Foundation
 ///   remove   { paths } → Remove Offline Copy
 ///   show     { paths: [one] } → the item in the Onyx window
 ///   open     → the Onyx window
+///   unzip    { paths } → Unzip Here: each zip unzipped beside itself
+///              (OnyxKit's Unzipper)
 ///
 /// Every answer but `index` is a Reply; the work carries on in the app after
 /// it, and what changes comes back as a new index.
@@ -26,6 +28,7 @@ public enum FinderWire {
         case remove = 3
         case show = 4
         case open = 5
+        case unzip = 6
     }
 
     public struct Request: Codable, Sendable, Equatable {

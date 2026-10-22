@@ -5,10 +5,10 @@ import OnyxFinderCore
 
 let finderLog = Logger(subsystem: "io.onyxfs.app.findersync", category: "finder")
 
-/// Onyx in Finder's right-click menu — Keep Offline, Remove Offline Copy,
-/// Show in Onyx — and a mark on what is kept offline, for the drives Onyx
-/// has mounted: each a disk of its own at /Volumes/<drive>, or a folder
-/// mount in ~/Onyx/<drive>.
+/// Onyx in Finder's right-click menu — Unzip Here, Keep Offline, Remove
+/// Offline Copy, Show in Onyx — and a mark on what is kept offline, for the
+/// drives Onyx has mounted: each a disk of its own at /Volumes/<drive>, or a
+/// folder mount in ~/Onyx/<drive>.
 ///
 /// Finder starts it once the person has switched it on in System Settings
 /// (one process for Finder, and one for each app's Open and Save panels).
@@ -163,6 +163,9 @@ final class FinderSync: FIFinderSync {
         let plan = FinderMenuPlan.make(for: paths, in: lookup)
         guard !plan.isEmpty else { return nil }
         self.plan = plan
+        if !plan.unzip.isEmpty {
+            menu.addItem(withTitle: FinderMenuPlan.unzipTitle, action: #selector(unzipHere(_:)), keyEquivalent: "")
+        }
         if !plan.keep.isEmpty {
             menu.addItem(withTitle: FinderMenuPlan.keepTitle, action: #selector(keepOffline(_:)), keyEquivalent: "")
         }
@@ -195,6 +198,12 @@ final class FinderSync: FIFinderSync {
         // Forward through LaunchServices as well: an app that is not in
         // front may not be let to come forward on its own.
         link?.openApp()
+    }
+
+    /// Unzipped by the app, on this Mac's disk, then copied in: Archive
+    /// Utility cannot unzip a downloaded zip on a drive.
+    @objc func unzipHere(_ sender: AnyObject?) {
+        link?.send(.unzip, paths: plan.unzip)
     }
 
     @objc func openOnyx(_ sender: AnyObject?) {
