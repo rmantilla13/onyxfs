@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import OnyxKit
 
@@ -300,5 +301,163 @@ private func writer(_ tree: FakeTree, _ routes: FakeRoutes, _ server: FakeServer
         try await drive.rename(from: "/b.txt", to: "/c.txt", replace: false)
         #expect(await routes.calls == ["delete file-a.txt", "update file-b.txt name=c.txt folder=-"])
         #expect(await drive.pending(at: "/c.txt") == nil)
+    }
+}
+
+/// The writer's folder routes through the real API, to a server that reads a
+/// query as the web's routes do (URLSearchParams): "+" is a space there.
+@Suite struct DriveWriterQueryTests {
+    /// Foundation's safe-save folder, made beside a file and removed at once,
+    /// in a folder whose name has a "+" in it. The delete asked for
+    /// "A B/…", was told there is no such folder, and the folder stayed on
+    /// the server (made by JSON, it had arrived as named) — while Finder,
+    /// never told, took it for gone.
+    @Test func aFolderMadeAndRemovedUnderAPlusLeavesNothingBehind() async throws {
+        let server = try FolderServer()
+        defer { server.tearDown() }
+        let tree = FakeTree()
+        let queue = try UploadQueue(directory: scratch(), transport: FakeServer(), settle: 0)
+        let drive = DriveWriter(scope: "drive.d1", filespaceId: "d1", api: server.api, tree: tree, uploads: queue)
+        let path = "/Disclaimers+Trademarks/Footage/(A Document Being Saved By repl)"
+
+        try await drive.mkdir(path: path)
+        #expect(server.folders == ["Disclaimers+Trademarks/Footage/(A Document Being Saved By repl)"])
+        await tree.set(path, .folder)
+        try await drive.delete(path: path)
+        #expect(server.folders.isEmpty)
+    }
+
+    /// A folder holding files this account was never shown: the server
+    /// deletes nothing (409), and Finder is told the folder is not empty —
+    /// not that it is gone.
+    @Test func aDeleteTheServerRefusesIsNotTakenForDone() async throws {
+        let server = try FolderServer()
+        defer { server.tearDown() }
+        server.add("Shared", refusing: (409, "“Shared” holds 1 file you cannot see, so it was not deleted."))
+        let tree = FakeTree()
+        await tree.set("/Shared", .folder)
+        // Shown by the mirror, gone from the server since.
+        await tree.set("/Elsewhere", .folder)
+        let queue = try UploadQueue(directory: scratch(), transport: FakeServer(), settle: 0)
+        let drive = DriveWriter(scope: "drive.d1", filespaceId: "d1", api: server.api, tree: tree, uploads: queue)
+
+        await #expect(throws: DriveWriter.Failure.posix(ENOTEMPTY, "“Shared” holds 1 file you cannot see, so it was not deleted.")) {
+            try await drive.delete(path: "/Shared")
+        }
+        await #expect(throws: DriveWriter.Failure.posix(ENOENT, "There is no folder here.")) {
+            try await drive.delete(path: "/Elsewhere")
+        }
+        #expect(server.folders == ["Shared"])
+    }
+
+    /// Every query value the app sends reads back as itself on the server.
+    @Test func aQueryValueReadsBackAsItselfOnTheServer() throws {
+        let value = "C++ & Co/a=b #1 50% (été)"
+        let url = OnyxConfig(baseURL: URL(string: "https://onyx.test")!).url("api/files", query: [.init(name: "q", value: value)])
+        #expect(FolderServer.formValue("q", in: url) == value)
+    }
+}
+
+/// /api/files/folders, pretend: the folders made (POST, a JSON body) and
+/// removed (DELETE ?name=, read as URLSearchParams reads it — "+" is a space).
+private final class FolderServer: @unchecked Sendable {
+    let api: OnyxAPI
+    private let host = "\(UUID().uuidString.lowercased()).folders.test"
+    private let tokens = TokenStore(service: "io.onyxfs.tests.folders.\(UUID().uuidString)", accessGroup: nil)
+    private let made = OSAllocatedUnfairLock<Set<String>>(initialState: [])
+    /// Deletes answered with a refusal, by folder, and nothing deleted.
+    private let refusals = OSAllocatedUnfairLock<[String: (Int, String)]>(initialState: [:])
+
+    var folders: Set<String> { made.withLock { $0 } }
+
+    func add(_ name: String, refusing refusal: (Int, String)? = nil) {
+        made.withLock { _ = $0.insert(name) }
+        refusals.withLock { $0[name] = refusal }
+    }
+
+    init() throws {
+        try tokens.set("test-token")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FolderServerProtocol.self]
+        api = OnyxAPI(config: OnyxConfig(baseURL: URL(string: "https://\(host)")!), tokens: tokens,
+                      session: URLSession(configuration: configuration))
+        Self.servers.withLock { $0[host] = self }
+    }
+
+    func tearDown() {
+        tokens.clear()
+        Self.servers.withLock { $0[host] = nil }
+    }
+
+    static let servers = OSAllocatedUnfairLock<[String: FolderServer]>(initialState: [:])
+
+    /// A query value as the server reads it: "+" a space, then %-decoded.
+    static func formValue(_ name: String, in url: URL) -> String? {
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedQuery ?? ""
+        for pair in query.split(separator: "&") {
+            let parts = pair.split(separator: "=", maxSplits: 1).map { $0.replacingOccurrences(of: "+", with: " ").removingPercentEncoding }
+            if parts.first == name { return parts.count > 1 ? parts[1] : "" }
+        }
+        return nil
+    }
+
+    func respond(to request: URLRequest, body: Data) -> (Int, String) {
+        guard let url = request.url, url.path == "/api/files/folders" else { return (404, #"{"error":"Not found."}"#) }
+        switch request.httpMethod {
+        case "POST":
+            let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+            guard let name = json?["name"] as? String else { return (400, #"{"error":"Folder required."}"#) }
+            made.withLock { _ = $0.insert(name) }
+            return (200, "{}")
+        case "DELETE":
+            guard let name = Self.formValue("name", in: url), folders.contains(name) else {
+                return (404, #"{"error":"There is no folder here."}"#)
+            }
+            if let (status, message) = refusals.withLock({ $0[name] }) {
+                let body = try! JSONSerialization.data(withJSONObject: ["error": message])
+                return (status, String(decoding: body, as: UTF8.self))
+            }
+            made.withLock { _ = $0.remove(name) }
+            return (200, #"{"deleted":0,"failed":0,"more":false}"#)
+        default:
+            return (405, #"{"error":"Not allowed."}"#)
+        }
+    }
+}
+
+private final class FolderServerProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host?.hasSuffix(".folders.test") == true
+    }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+
+    override func startLoading() {
+        guard let url = request.url, let host = url.host,
+              let server = FolderServer.servers.withLock({ $0[host] }) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotFindHost))
+            return
+        }
+        let (status, text) = server.respond(to: request, body: request.httpBody ?? Self.read(request.httpBodyStream))
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1",
+                                       headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(text.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    /// A body URLSession hands over as a stream.
+    private static func read(_ stream: InputStream?) -> Data {
+        guard let stream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let n = stream.read(&buffer, maxLength: buffer.count)
+            if n <= 0 { break }
+            data.append(buffer, count: n)
+        }
+        return data
     }
 }
