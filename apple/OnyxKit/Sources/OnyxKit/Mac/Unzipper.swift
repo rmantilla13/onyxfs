@@ -85,10 +85,19 @@ public enum Unzipper {
         name == "__MACOSX" || name == ".DS_Store" || name.hasPrefix("._")
     }
 
-    /// Names as Finder compares them: either Unicode form, any case.
+    /// Names as a drive compares them: either Unicode form, any case, and
+    /// without the whitespace at either end the server trims from every
+    /// name — a drive keeps "Selects " as "Selects" (DriveEngine.stored),
+    /// while the zip lists it as it was.
     static func fold(_ name: String) -> String {
-        name.precomposedStringWithCanonicalMapping.lowercased()
+        name.trimmingCharacters(in: serverTrims).precomposedStringWithCanonicalMapping.lowercased()
     }
+
+    /// What JavaScript's `trim` takes (lib/folder-ops.js), as OnyxFSCore's
+    /// DriveEngine.serverTrims.
+    static let serverTrims = CharacterSet(charactersIn:
+        "\u{9}\u{A}\u{B}\u{C}\u{D}\u{20}\u{A0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}"
+        + "\u{2007}\u{2008}\u{2009}\u{200A}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}")
 
     /// ditto's complaint, as the notice says it.
     static func reason(_ complaint: String, copying: Bool) -> String {

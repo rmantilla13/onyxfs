@@ -45,6 +45,9 @@ struct UnzipperTests {
         // As Finder compares names: either Unicode form, any case.
         #expect(Unzipper.unpackedFrom(both, unpacked: ["B.MOV", "a.mov"], count: 2) == selects)
         #expect(Unzipper.unpackedFrom([(zip: footage, top: ["Cafe\u{301}"])], unpacked: ["Caf\u{E9}"], count: 1) == footage)
+        // A drive keeps a name as the server does, trimmed: a Frame.io
+        // "Selects " is unpacked there as "Selects".
+        #expect(Unzipper.unpackedFrom([(zip: selects, top: ["Selects "])], unpacked: ["Selects"], count: 1) == selects)
         // Only a hundred names come: the count says how many there were.
         #expect(Unzipper.unpackedFrom(both, unpacked: ["a.mov"], count: 2) == selects)
         #expect(Unzipper.unpackedFrom(both, unpacked: ["a.mov"], count: 3) == nil)
