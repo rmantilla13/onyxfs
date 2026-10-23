@@ -14,12 +14,14 @@ public enum LocalOnly {
     ]
 
     /// This name is macOS's, not the person's. Archive Utility's own scratch
-    /// folders too (.ArchiveServiceTemp.sb-…, and .AU.….nosync before it):
-    /// it unpacks into one beside the zip and moves the result out, so the
-    /// unpacking stays on this Mac and only what it unpacked goes up.
+    /// folders too (.ArchiveServiceTemp.sb-…, and .AU.…): it unpacks into one
+    /// beside the zip and moves the result out, so the unpacking stays on
+    /// this Mac and only what it unpacked goes up. Its helper makes .AU.…
+    /// and then renames it to .AU.….nosync: both names are this Mac's, or
+    /// the rename would make a real folder local and be refused (EPERM),
+    /// leaving the scratch folder on the server.
     public static func isLocalOnly(_ name: String) -> Bool {
-        name.hasPrefix("._") || names.contains(name) || name.hasPrefix(".ArchiveServiceTemp")
-            || (name.hasPrefix(".AU.") && name.hasSuffix(".nosync"))
+        name.hasPrefix("._") || names.contains(name) || name.hasPrefix(".ArchiveServiceTemp") || name.hasPrefix(".AU.")
     }
 
     /// Any part of the path is (a file inside .Trashes is local too).

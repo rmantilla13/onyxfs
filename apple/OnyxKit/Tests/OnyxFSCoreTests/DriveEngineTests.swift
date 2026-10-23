@@ -476,6 +476,23 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
         #expect(listed.size == 5)
     }
 
+    /// Archive Utility's helper makes a scratch folder (.AU.…) and renames it
+    /// to .AU.….nosync. Made on the server, the rename was refused (a real
+    /// folder cannot become this Mac's) and the folder stayed on the web.
+    @Test func archiveUtilitysHelperScratchStaysHere() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Shoot")
+        let engine = try await makeEngine(bridge)
+        let shoot = try await engine.lookup("Shoot", in: DriveEngine.rootID)
+        let scratch = try await engine.create(".AU.9g2qX", in: shoot.id, isDirectory: true)
+        #expect(scratch.localOnly)
+        let renamed = try await engine.rename(scratch.id, from: shoot.id, name: ".AU.9g2qX", to: shoot.id,
+                                              newName: ".AU.9g2qX.nosync", replacing: nil)
+        #expect(renamed.localOnly)
+        try await engine.remove(renamed.id, name: ".AU.9g2qX.nosync", from: shoot.id)
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") }.isEmpty, "nothing of it reaches the server")
+    }
+
     /// An app saving safely writes the new copy in .TemporaryItems and swaps
     /// it over the original: the file on the web gets the new bytes, as a new
     /// version of itself.

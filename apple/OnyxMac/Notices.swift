@@ -2,11 +2,12 @@ import AppKit
 import UserNotifications
 
 /// What Onyx says in Notification Center: what the person needs to know while
-/// Onyx is only in the menu bar. One thing so far — their drives are in the
-/// Onyx folder, not disks of their own, because the Onyx file system is off
-/// or waits for a restart. Posted once each time that happens to drives that
-/// were disks (FileSystemSwitch), never for a switch the person turned off
-/// while Onyx watched.
+/// Onyx is only in the menu bar. Two things so far:
+/// - their drives are in the Onyx folder, not disks of their own, because the
+///   Onyx file system is off or waits for a restart. Posted once each time
+///   that happens to drives that were disks (FileSystemSwitch), never for a
+///   switch the person turned off while Onyx watched;
+/// - an Unzip Here asked for in Finder that could not be done, and why.
 ///
 /// The first notice asks macOS for permission (the system's own prompt). Not
 /// allowed, nothing is posted; the menu bar's panel says it all the same.
@@ -45,6 +46,15 @@ final class SystemNotices: NSObject, UNUserNotificationCenterDelegate {
             content.categoryIdentifier = Self.switchedOff
         }
         Task { await post(content, id: "onyxfs.fileSystemOff") }
+    }
+
+    /// Unzip Here could not unzip `name`: nothing else was asked of the
+    /// person, so this is the only place it is said.
+    func unzipFailed(_ name: String, reason: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Couldn't unzip \u{201C}\(name)\u{201D}"
+        content.body = reason
+        Task { await post(content, id: "onyxfs.unzip.\(name)") }
     }
 
     private func post(_ content: UNNotificationContent, id: String) async {

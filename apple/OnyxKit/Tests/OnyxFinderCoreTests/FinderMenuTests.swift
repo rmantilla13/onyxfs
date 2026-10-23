@@ -84,6 +84,19 @@ struct FinderMenuTests {
         #expect(mixed.show == "\(root)/Selects/A.mov")
     }
 
+    /// Archive Utility cannot unzip a downloaded zip on a drive: Unzip Here
+    /// is offered for each zip selected in one, whatever the case of its
+    /// name, beside the rest of the menu.
+    @Test func zipsInADriveAreOfferedUnzipHere() {
+        let one = FinderMenuPlan.make(for: ["\(root)/Selects/Footage.zip"], in: kept)
+        #expect(one.unzip == ["\(root)/Selects/Footage.zip"])
+        #expect(one.keep == ["\(root)/Selects/Footage.zip"])
+        let items = ["\(root)/a.ZIP", "\(root)/Selects/A.mov", "\(root)/b.zip", "/Users/me/Desktop/c.zip"]
+        #expect(FinderMenuPlan.make(for: items, in: kept).unzip == ["\(root)/a.ZIP", "\(root)/b.zip"])
+        #expect(FinderMenuPlan.make(for: ["\(root)/Selects/A.mov", "\(root)/.zip", "\(root)/zip"], in: kept).unzip.isEmpty)
+        #expect(FinderMenuPlan.make(for: ["/Users/me/Desktop/c.zip"], in: kept).isEmpty)
+    }
+
     @Test func twoDrivesAtOnce() {
         let l = lookup(drive(root, scope: "drive.d1", folders: ["Day 1"]),
                        drive("/Users/me/Onyx/Clients", scope: "drive.d2", name: "Clients"))
