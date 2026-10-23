@@ -26,7 +26,11 @@ One Swift codebase. On the Mac it is **Onyx.app**:
   **Unzip Here** has Onyx unzip it on this Mac's own disk with `ditto`,
   quarantine kept, and copy the result in beside the zip, named as Archive
   Utility names it (`Unzipper`). A zip that can't be done says why in a
-  notification.
+  notification. Double-clicked instead, Onyx does the same on its own:
+  the disk sees Archive Utility throw away what it unpacked
+  (`POST /fs/v1/unzip`), and once its error is closed — Archive Utility
+  then quits and removes its placeholder — Onyx unzips it there
+  (`UnzipService`), with a notification to say so.
 - **Each drive in Finder's sidebar** under Locations, with its own icon —
   its initial in its colour from the web, which follows the drive when it
   changes there.

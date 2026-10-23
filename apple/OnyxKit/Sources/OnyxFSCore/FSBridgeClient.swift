@@ -280,6 +280,28 @@ public final class FSBridgeClient: Sendable {
         let cache: Int64?
     }
 
+    /// POST /fs/v1/unzip: Archive Utility could not unzip a zip from the
+    /// internet in `failure.folder`, and the app unzips it instead. An app
+    /// that does not know the route answers 404, and it is dropped.
+    public func unzipFailed(_ failure: UnzipFailure) async throws {
+        var request = self.request("POST", "unzip", query: [])
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(UnzipReport(folder: failure.folder, zips: failure.zips,
+                                                                unpacked: failure.unpacked,
+                                                                unpackedCount: failure.unpackedCount,
+                                                                placeholders: failure.placeholders))
+        let (body, response) = try await Self.send(request, on: bridge)
+        try Self.check(response, body)
+    }
+
+    private struct UnzipReport: Encodable {
+        let folder: String
+        let zips: [String]
+        let unpacked: [String]
+        let unpackedCount: Int
+        let placeholders: [String]
+    }
+
     // MARK: - Plumbing
 
     private func get<T: Decodable>(_ endpoint: String, _ query: [(String, String)], as type: T.Type) async throws -> T {

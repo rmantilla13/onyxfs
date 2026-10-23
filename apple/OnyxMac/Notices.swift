@@ -7,7 +7,10 @@ import UserNotifications
 ///   Onyx file system is off or waits for a restart. Posted once each time
 ///   that happens to drives that were disks (FileSystemSwitch), never for a
 ///   switch the person turned off while Onyx watched;
-/// - an Unzip Here asked for in Finder that could not be done, and why.
+/// - unzipping in a drive: an Unzip Here that could not be done, and why;
+///   and a zip Archive Utility could not unzip there, which Onyx unzips once
+///   its error is closed (UnzipService) — one notice per zip, each step
+///   replacing the last.
 ///
 /// The first notice asks macOS for permission (the system's own prompt). Not
 /// allowed, nothing is posted; the menu bar's panel says it all the same.
@@ -55,6 +58,32 @@ final class SystemNotices: NSObject, UNUserNotificationCenterDelegate {
         content.title = "Couldn't unzip \u{201C}\(name)\u{201D}"
         content.body = reason
         Task { await post(content, id: "onyxfs.unzip.\(name)") }
+    }
+
+    /// Archive Utility's Error 1 is on screen for `name`: why, and what
+    /// happens next.
+    func unzipWaiting(_ name: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Onyx will unzip \u{201C}\(name)\u{201D}"
+        content.body = "Archive Utility can't unzip a zip from the internet in a drive. Close its message, and Onyx unzips it there instead."
+        Task { await post(content, id: "onyxfs.unzip.\(name)") }
+    }
+
+    /// Onyx unzipped `name`, which Archive Utility could not, into `landed`.
+    func unzipped(_ name: String, into landed: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Unzipped \u{201C}\(name)\u{201D}"
+        content.body = "Archive Utility couldn't, so Onyx did. It's in \u{201C}\(landed)\u{201D}, beside the zip."
+        Task { await post(content, id: "onyxfs.unzip.\(name)") }
+    }
+
+    /// Archive Utility could not unzip a zip in `folder`, and Onyx cannot
+    /// tell which of the zips there it was.
+    func unzipUnclear(folder: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Archive Utility couldn't unzip a zip in \u{201C}\(folder)\u{201D}"
+        content.body = "It can't unzip a zip from the internet in a drive. Select the zip in Finder, then choose Unzip Here from its right-click menu."
+        Task { await post(content, id: "onyxfs.unzip.folder.\(folder)") }
     }
 
     private func post(_ content: UNNotificationContent, id: String) async {

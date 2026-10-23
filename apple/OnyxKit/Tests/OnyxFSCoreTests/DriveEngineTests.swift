@@ -115,6 +115,10 @@ private actor FakeBridge: EngineBridge {
         folders.remove(path)
     }
 
+    /// What the app was told Archive Utility could not unzip.
+    var unzips: [UnzipFailure] = []
+    func unzipFailed(_ failure: UnzipFailure) async { unzips.append(failure) }
+
     func changes(since generation: UInt64) async throws -> BridgeChanges {
         while pendingChanges.isEmpty {
             try await Task.sleep(nanoseconds: 5_000_000)
@@ -156,6 +160,23 @@ private func sent(_ bridge: FakeBridge, _ path: String, _ bytes: Data) async thr
         try await Task.sleep(nanoseconds: 2_000_000)
     }
     return false
+}
+
+/// `name` in `folder`, marked as a browser marks a download.
+private func downloaded(_ engine: DriveEngine, _ name: String, in folder: UInt64) async throws {
+    let zip = try await engine.lookup(name, in: folder)
+    try await engine.setXattr(named: "com.apple.quarantine", of: zip.id, to: Data("0081;6ada8c8c;Chrome;".utf8),
+                              createOnly: false, replaceOnly: false)
+}
+
+/// What the app was told, once it has been (the engine tells it after the
+/// remove that showed the unzip failed has answered).
+private func reported(_ bridge: FakeBridge) async throws -> UnzipFailure? {
+    for _ in 0..<500 {
+        if let first = await bridge.unzips.first { return first }
+        try await Task.sleep(nanoseconds: 2_000_000)
+    }
+    return nil
 }
 
 private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
@@ -476,6 +497,127 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
         #expect(listed.size == 5)
     }
 
+    /// Archive Utility cannot unzip a zip from the internet on a drive. It
+    /// claims the result's name beside the zip, unpacks into its scratch
+    /// folder there, and throws it all away (Error 1), deepest first: the
+    /// app is told which folder, which zips, what was unpacked, and the
+    /// placeholder — named, not removed, since Archive Utility removes its own.
+    @Test func anUnzipArchiveUtilityThrewAwayIsReported() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Footage")
+        await bridge.addFile("/Footage/c4.zip", Data("zip".utf8))
+        await bridge.addFile("/Footage/plain.zip", Data("zip".utf8))
+        let engine = try await makeEngine(bridge)
+        let footage = try await engine.lookup("Footage", in: DriveEngine.rootID)
+        try await downloaded(engine, "c4.zip", in: footage.id)
+
+        let scratch = try await engine.create(".ArchiveServiceTemp.sb-4f3493ac-pKpKhG", in: footage.id, isDirectory: true)
+        _ = try await engine.create("Walmart Ad Videos", in: footage.id, isDirectory: true)
+        // The person's own, made meanwhile: not Archive Utility's.
+        _ = try await engine.create("untitled folder", in: footage.id, isDirectory: true)
+        let unpacked = try await engine.create("Walmart Ad Videos", in: scratch.id, isDirectory: true)
+        let video = try await engine.create("a.mp4", in: unpacked.id, isDirectory: false)
+        _ = try await engine.write(video.id, at: 0, data: Data("frames".utf8))
+        try await engine.finishWriting(video.id)
+        try await engine.remove(video.id, name: "a.mp4", from: unpacked.id)
+        try await engine.remove(unpacked.id, name: "Walmart Ad Videos", from: scratch.id)
+        try await engine.remove(scratch.id, name: ".ArchiveServiceTemp.sb-4f3493ac-pKpKhG", from: footage.id)
+
+        #expect(try await reported(bridge) == UnzipFailure(folder: "/Footage", zips: ["c4.zip"], unpacked: ["Walmart Ad Videos"],
+                                                            unpackedCount: 1, placeholders: ["Walmart Ad Videos"]))
+        #expect(!(await bridge.calls.contains { $0.hasPrefix("delete") }), "Archive Utility removes its placeholder itself")
+    }
+
+    /// A zip of one file: its placeholder is an empty file, numbered past
+    /// one already there ("solo 2.txt").
+    @Test func aOneFileZipsPlaceholderIsAnEmptyFile() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFile("/solo.txt", Data("solo".utf8))
+        await bridge.addFile("/solo.zip", Data("zip".utf8))
+        let engine = try await makeEngine(bridge)
+        try await downloaded(engine, "solo.zip", in: DriveEngine.rootID)
+        let scratch = try await engine.create(".ArchiveServiceTemp.sb-4f3493ac-iEug2D", in: DriveEngine.rootID, isDirectory: true)
+        let placeholder = try await engine.create("solo 2.txt", in: DriveEngine.rootID, isDirectory: false)
+        try await engine.finishWriting(placeholder.id)
+        let unpacked = try await engine.create("solo.txt", in: scratch.id, isDirectory: false)
+        try await engine.remove(unpacked.id, name: "solo.txt", from: scratch.id)
+        try await engine.remove(scratch.id, name: ".ArchiveServiceTemp.sb-4f3493ac-iEug2D", from: DriveEngine.rootID)
+        #expect(try await reported(bridge) == UnzipFailure(folder: "/", zips: ["solo.zip"], unpacked: ["solo.txt"],
+                                                            unpackedCount: 1, placeholders: ["solo 2.txt"]))
+    }
+
+    /// The same unzip where it works: what was unpacked moves out into the
+    /// placeholder before the scratch folder goes. Nothing to tell.
+    @Test func anUnzipThatWorkedIsNotReported() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Footage")
+        await bridge.addFile("/Footage/c4.zip", Data("zip".utf8))
+        let engine = try await makeEngine(bridge)
+        let footage = try await engine.lookup("Footage", in: DriveEngine.rootID)
+        try await downloaded(engine, "c4.zip", in: footage.id)
+        let scratch = try await engine.create(".ArchiveServiceTemp.sb-4f3493ac-Gr7u5e", in: footage.id, isDirectory: true)
+        let placeholder = try await engine.create("Walmart Ad Videos", in: footage.id, isDirectory: true)
+        let unpacked = try await engine.create("Walmart Ad Videos", in: scratch.id, isDirectory: true)
+        let video = try await engine.create("a.mp4", in: unpacked.id, isDirectory: false)
+        _ = try await engine.write(video.id, at: 0, data: Data("frames".utf8))
+        try await engine.finishWriting(video.id)
+        _ = try await engine.rename(video.id, from: unpacked.id, name: "a.mp4", to: placeholder.id, newName: "a.mp4", replacing: nil)
+        try await engine.remove(unpacked.id, name: "Walmart Ad Videos", from: scratch.id)
+        try await engine.remove(scratch.id, name: ".ArchiveServiceTemp.sb-4f3493ac-Gr7u5e", from: footage.id)
+        #expect(try await sent(bridge, "/Footage/Walmart Ad Videos/a.mp4", Data("frames".utf8)))
+        try await Task.sleep(nanoseconds: 20_000_000)
+        #expect(await bridge.unzips.isEmpty)
+    }
+
+    /// Archive Utility can unzip a zip from no browser here: one it threw
+    /// away (cancelled, say) is its own business.
+    @Test func anUnzipOfAZipFromNoBrowserIsNotReported() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFile("/c4.zip", Data("zip".utf8))
+        let engine = try await makeEngine(bridge)
+        let scratch = try await engine.create(".ArchiveServiceTemp.sb-4f3493ac-8AIyqc", in: DriveEngine.rootID, isDirectory: true)
+        let unpacked = try await engine.create("a.txt", in: scratch.id, isDirectory: false)
+        try await engine.remove(unpacked.id, name: "a.txt", from: scratch.id)
+        try await engine.remove(scratch.id, name: ".ArchiveServiceTemp.sb-4f3493ac-8AIyqc", from: DriveEngine.rootID)
+        try await Task.sleep(nanoseconds: 20_000_000)
+        #expect(await bridge.unzips.isEmpty)
+    }
+
+    @Test func archiveUtilitysNumbersComeOff() {
+        #expect(DriveEngine.unnumbered("Footage 2", isDirectory: true) == "Footage")
+        #expect(DriveEngine.unnumbered("notes 12.txt", isDirectory: false) == "notes.txt")
+        #expect(DriveEngine.unnumbered("v1.2 3", isDirectory: true) == "v1.2")
+        #expect(DriveEngine.unnumbered("Take 2a", isDirectory: true) == "Take 2a")
+        #expect(DriveEngine.unnumbered("2", isDirectory: true) == "2")
+        #expect(DriveEngine.unnumbered("Footage", isDirectory: true) == "Footage")
+    }
+
+    /// rmdir takes an empty folder only. The kernel leaves it to the file
+    /// system, and the server's delete takes a folder whole, so `rmdir` on a
+    /// folder with files in it took them all.
+    @Test func aFolderWithSomethingInItIsNotRemoved() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Shoot")
+        await bridge.addFile("/Shoot/a.mov", Data("frames".utf8))
+        let engine = try await makeEngine(bridge)
+        let shoot = try await engine.lookup("Shoot", in: DriveEngine.rootID)
+        await #expect(throws: VolumeError.posix(ENOTEMPTY)) {
+            try await engine.remove(shoot.id, name: "Shoot", from: DriveEngine.rootID)
+        }
+        #expect(!(await bridge.calls.contains { $0.hasPrefix("delete") }))
+        #expect(try await engine.lookup("a.mov", in: shoot.id).size == 6)
+        // macOS's own files count as on any disk; emptied, as Finder empties
+        // one, it goes.
+        let ds = try await engine.create(".DS_Store", in: shoot.id, isDirectory: false)
+        try await engine.remove(try await engine.lookup("a.mov", in: shoot.id).id, name: "a.mov", from: shoot.id)
+        await #expect(throws: VolumeError.posix(ENOTEMPTY)) {
+            try await engine.remove(shoot.id, name: "Shoot", from: DriveEngine.rootID)
+        }
+        try await engine.remove(ds.id, name: ".DS_Store", from: shoot.id)
+        try await engine.remove(shoot.id, name: "Shoot", from: DriveEngine.rootID)
+        #expect(await bridge.calls.contains("delete /Shoot"))
+    }
+
     /// Archive Utility's helper makes a scratch folder (.AU.…) and renames it
     /// to .AU.….nosync. Made on the server, the rename was refused (a real
     /// folder cannot become this Mac's) and the folder stayed on the web.
@@ -563,6 +705,9 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
         await bridge.holdNextMkdir()
         let moving = Task { try await engine.rename(unpacked.id, from: temp.id, name: "Unpacked", to: DriveEngine.rootID, newName: "Unpacked", replacing: nil) }
         while !(await bridge.isHoldingMkdir()) { try await Task.sleep(nanoseconds: 1_000_000) }
+        // Emptied first, as any removal of a folder is (rmdir takes no other).
+        try await engine.remove(file.id, name: "a.txt", from: unpacked.id)
+        try await engine.remove(unpacked.id, name: "Unpacked", from: temp.id)
         try await engine.remove(temp.id, name: ".TemporaryItems", from: DriveEngine.rootID)
         await bridge.releaseMkdir()
         await #expect(throws: VolumeError.posix(ESTALE)) { _ = try await moving.value }

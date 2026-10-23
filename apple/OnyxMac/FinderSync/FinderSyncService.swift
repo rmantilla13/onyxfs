@@ -48,8 +48,6 @@ final class FinderSyncService: ObservableObject {
     /// Published even if unchanged: the first, which an extension started
     /// before the app is waiting for.
     private var mustPublish = false
-    /// The last Unzip Here asked for, which the next waits on.
-    private var unzipping: Task<Void, Never>?
 
     private struct Mount: Equatable, Sendable {
         let root: String
@@ -247,31 +245,13 @@ final class FinderSyncService: ObservableObject {
             openWindow()
             model.web.go(page)
         case .unzip:
-            unzip(paths.filter { mounted.locate($0) != nil && Unzipper.isZip($0) })
+            // One at a time, with any Archive Utility could not do
+            // (UnzipService). What lands shows in Finder as it is copied in,
+            // and goes up as a Finder copy does; a zip that fails says why.
+            model.unzips.unzip(paths.filter { mounted.locate($0) != nil && Unzipper.isZip($0) }
+                .map { URL(fileURLWithPath: $0) })
         case .index, .open:
             break
-        }
-    }
-
-    /// Unzip Here, one zip at a time, so two big ones never need twice the
-    /// room on this Mac. What lands shows in Finder as it is copied in, and
-    /// goes up as a Finder copy does; a zip that fails says why in a notice.
-    private func unzip(_ zips: [String]) {
-        guard !zips.isEmpty else { return }
-        let before = unzipping
-        unzipping = Task {
-            await before?.value
-            for path in zips {
-                let zip = URL(fileURLWithPath: path)
-                do {
-                    let landed = try await Unzipper.unzip(zip)
-                    appLog.info("finder: unzipped into \(landed.lastPathComponent, privacy: .private)")
-                } catch {
-                    let reason = (error as? Unzipper.Failure)?.reason ?? error.localizedDescription
-                    appLog.error("finder: unzip failed: \(reason, privacy: .public)")
-                    SystemNotices.shared.unzipFailed(zip.lastPathComponent, reason: reason)
-                }
-            }
         }
     }
 
