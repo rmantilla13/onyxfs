@@ -113,6 +113,7 @@ export default function ShareDialog({ file = null, folder = null, open, onClose,
   const views = SHARE_VIEWS[target];
   const expiry = expiryChoices(can);
   const showForm = creatable || !!editShare;
+  const customAccent = !!form.accent && !SHARE_ACCENTS.includes(form.accent.toUpperCase());
 
   useEffect(() => {
     if (!open || !listUrl) return undefined;
@@ -451,8 +452,11 @@ export default function ShareDialog({ file = null, folder = null, open, onClose,
                       <span className="sr-only">{c}</span>
                     </label>
                   ))}
-                  <label className={`share-swatch is-custom${form.accent && !SHARE_ACCENTS.includes(form.accent.toUpperCase()) ? ' is-on' : ''}`} title="Another colour">
-                    <input type="color" value={/^#[0-9a-f]{6}$/i.test(form.accent) ? form.accent : '#1D4ED8'}
+                  <label className={`share-swatch is-custom${customAccent ? ' is-on' : ''}`} title={customAccent ? form.accent : 'Another colour'}>
+                    <span className="share-swatch-dot" style={customAccent ? { background: form.accent } : undefined}>
+                      {!customAccent && <Icon name="plus" size={12} />}
+                    </span>
+                    <input type="color" value={/^#[0-9a-f]{6}$/i.test(form.accent) ? form.accent : SHARE_ACCENTS[0]}
                       onChange={(e) => set({ accent: e.target.value.toUpperCase() })} aria-label="Another accent colour" />
                   </label>
                 </div>
