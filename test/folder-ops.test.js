@@ -4,7 +4,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  cleanFolder, folderNameProblem, folderPathProblem, isWithin, rebase, escapeLike,
+  cleanFolder, folderNameProblem, folderPathProblem, uploadFolderProblem, isWithin, rebase, escapeLike,
   keyFor, planRename, mapLimit, settleLimit, parentOf, baseName, crumbsFor, folderSummaries, describeFolder,
 } from '../lib/folder-ops.js';
 
@@ -20,6 +20,15 @@ test('folder names: one segment, not reserved, not blank', () => {
   assert.match(folderNameProblem('a\u0000b'), /control/);
   assert.equal(folderPathProblem('Clients/Acme/2026'), null);
   assert.match(folderPathProblem('Clients/_thumbs'), /reserved/);
+});
+
+test('an upload’s folder: the top level, or a path a folder could have', () => {
+  for (const top of [undefined, null, '', '/', ' / ']) assert.equal(uploadFolderProblem(top), null, JSON.stringify(top));
+  assert.equal(uploadFolderProblem(' Clients / Acme '), null);
+  for (const bad of ['..', '../x', 'a/../../b', 'a/..', ' .. ', './a', 'a/_trash']) {
+    assert.match(uploadFolderProblem(bad), /reserved/, bad);
+  }
+  assert.match(uploadFolderProblem(`a/${'x'.repeat(201)}`), /200/);
 });
 
 test('paths are normalized and compared by segment, not by string prefix', () => {

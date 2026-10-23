@@ -18,7 +18,7 @@ import {
 delete process.env.DATABASE_URL;
 delete process.env.POSTGRES_URL;
 const { fileWriteDecision } = await import('../lib/db.js');
-const { etagOf } = await import('../lib/storage.js');
+const { etagOf, buildFilespaceSessionPolicy } = await import('../lib/storage.js');
 
 const drives = [
   { id: 'brand', prefix: 'brand-assets' },
@@ -248,5 +248,54 @@ describe('duplicates', () => {
     assert.deepEqual(copiesToRemove(g, { 'aaa:100': 'a3' }).map((x) => x.id).sort(), ['a1', 'a2', 'b2'], 'a chosen keeper');
     assert.deepEqual(copiesToRemove(g, { 'aaa:100': 'zzz' }).map((x) => x.id).sort(), ['a1', 'a3', 'b2'], 'a keeper not in the set falls back to the default');
     assert.equal(bytesOf(copiesToRemove(g)), 5200);
+  });
+});
+
+describe('a drive’s scoped credentials list only that drive', () => {
+  // IAM's StringLike over s3:prefix, as AWS evaluates it: "*" is any run of
+  // characters, everything else is itself. A ListObjectsV2 is allowed when its
+  // Prefix matches a pattern — and S3 then answers with every key that starts
+  // with that Prefix as a string. So no Prefix the policy allows may be the
+  // start of another drive's keys.
+  const listPatterns = (policy) => policy.Statement.find((s) => s.Sid === 'ListWithinPrefix').Condition.StringLike['s3:prefix'];
+  const mayList = (policy, prefix) => listPatterns(policy).some((pat) => {
+    const re = new RegExp(`^${pat.split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+    return re.test(prefix);
+  });
+
+  test('the listing stops at the drive’s "/": "<prefix>/*" and nothing else', () => {
+    const policy = buildFilespaceSessionPolicy({ bucket: 'b', prefix: '/drives/team/' });
+    assert.deepEqual(listPatterns(policy), ['drives/team/*'], 'no bare "drives/team"');
+  });
+
+  test('a drive whose prefix starts another’s cannot list the other', () => {
+    // Both pairs are ones the app makes itself: prefixOverlap only refuses at
+    // a "/", and a second drive of the same name gets "-2".
+    const pairs = [
+      [`drives/${drivePrefixFor('Team')}`, `drives/${drivePrefixFor('Team Secret')}`],
+      [`drives/${drivePrefixFor('Campaigns')}`, `drives/${drivePrefixFor('Campaigns')}-2`],
+    ];
+    for (const [mine, theirs] of pairs) {
+      assert.ok(theirs.startsWith(mine), `${theirs} starts with ${mine}`);
+      assert.equal(prefixOverlap(theirs, [{ id: 'mine', prefix: mine }]), null, 'and the two are allowed side by side');
+      const policy = buildFilespaceSessionPolicy({ bucket: 'b', prefix: mine });
+      assert.ok(mayList(policy, `${mine}/`), 'its own top level');
+      assert.ok(mayList(policy, `${mine}/Cuts/`), 'a folder in it');
+      assert.equal(mayList(policy, mine), false, 'the bare prefix, which S3 would answer with the other’s keys');
+      assert.equal(mayList(policy, theirs), false, 'the other drive');
+      assert.equal(mayList(policy, `${theirs}/`), false, 'the other drive’s top level');
+      assert.equal(mayList(policy, 'drives/'), false, 'every drive');
+      assert.equal(mayList(policy, ''), false, 'the whole bucket');
+    }
+  });
+
+  test('objects only under "<prefix>/", and a viewer only reads them', () => {
+    const viewer = buildFilespaceSessionPolicy({ bucket: 'b', prefix: 'drives/team', role: 'viewer' });
+    const objects = (policy) => policy.Statement.find((s) => s.Sid === 'ObjectsWithinPrefix');
+    assert.equal(objects(viewer).Resource, 'arn:aws:s3:::b/drives/team/*');
+    assert.deepEqual(objects(viewer).Action, ['s3:GetObject']);
+    const editor = buildFilespaceSessionPolicy({ bucket: 'b', prefix: 'drives/team', role: 'editor' });
+    assert.equal(objects(editor).Resource, 'arn:aws:s3:::b/drives/team/*');
+    assert.ok(objects(editor).Action.includes('s3:PutObject'));
   });
 });

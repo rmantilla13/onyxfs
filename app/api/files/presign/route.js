@@ -6,6 +6,7 @@ import { getFilespaceForWrite, issueUploadKey, uploadKeyHeld, canonicalFolder } 
 import { requirePrincipal, uploadCheck, can, refusal } from '@/lib/authz';
 import { replacementTarget, replacementKey } from '@/lib/replace-content';
 import { vacateTrashedKey } from '@/lib/trash-move';
+import { uploadFolderProblem } from '@/lib/folder-ops';
 
 export const runtime = 'nodejs';
 // Room for moving a just-trashed file out of the key a new one wants
@@ -112,6 +113,11 @@ export async function POST(req) {
   } else {
     folder = await canonicalFolder(folder);
   }
+  // The folder goes into the key, so it keeps to what a folder made or
+  // renamed may be called — no ".." (lib/folder-ops.js uploadFolderProblem).
+  // A replacement or a preview has no folder of the client's.
+  const folderProblem = uploadFolderProblem(folder);
+  if (folderProblem) return NextResponse.json({ error: folderProblem }, { status: 400 });
 
   if (body.thumb || body.poster || body.strip) {
     // A preview for a new upload, or for an existing file someone may edit.
