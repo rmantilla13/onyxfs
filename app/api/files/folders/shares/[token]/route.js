@@ -5,6 +5,7 @@ import { isShareToken, parseShareChanges } from '@/lib/share-kinds';
 import {
   folderLinkWritable, folderLinkSubject, folderShareKinds, linkSettingsDecision, settingsAudit, presentShare,
 } from '@/lib/share-guard';
+import { kitRefusal } from '@/lib/share-brands-store';
 import { audit } from '@/lib/audit';
 
 export const runtime = 'nodejs';
@@ -42,6 +43,8 @@ export async function PATCH(req, { params }) {
     const driveShareKinds = await folderShareKinds(g.principal, { storagePrefix: target.storagePrefix, name: target.folder });
     const allowed = linkSettingsDecision(g.principal, target, changes, { canModify, driveShareKinds });
     if (!allowed.ok) return refusal(allowed);
+    const noKit = await kitRefusal(changes.look, { kept: target.look?.brand });
+    if (noKit) return noKit;
     const updated = await updateShareSettings(token, changes);
     if (!updated) return NextResponse.json({ error: 'Link not found' }, { status: 404 });
     await audit(g.email, 'share.update', folderLinkSubject({ storagePrefix: target.storagePrefix, folder: target.folder }), {

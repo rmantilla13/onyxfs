@@ -8,6 +8,7 @@ import { parseShareReview, parseShareChanges, shareKind } from '@/lib/share-kind
 import { presentFileShare, linkLevelDecision, linkSettingsDecision, settingsAudit } from '@/lib/share-guard';
 import { effectiveKind } from '@/lib/media';
 import { isReviewableKind } from '@/lib/review';
+import { kitRefusal } from '@/lib/share-brands-store';
 import { audit } from '@/lib/audit';
 
 export const runtime = 'nodejs';
@@ -80,6 +81,8 @@ export async function PATCH(req, { params }) {
   if (Object.keys(changes).length) {
     const allowed = linkSettingsDecision(g.principal, target, changes, ctx);
     if (!allowed.ok) return refusal(allowed);
+    const noKit = await kitRefusal(changes.look, { kept: target.look?.brand });
+    if (noKit) return noKit;
   }
 
   if (Object.keys(changes).length) {

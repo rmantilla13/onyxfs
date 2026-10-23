@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { loadBrand } from '@/lib/brand-config';
+import { loadBrand, loadShareKit } from '@/lib/brand-config';
 import { presignFileUrls } from '@/lib/storage';
 import { resolveFolderShareAccess, folderLinkFile } from '@/lib/share-access';
 import { linkCrumbs, linkFolderHref, linkFileHref, relativeTo } from '@/lib/folder-links';
@@ -34,13 +34,14 @@ export default async function SharedFolderFilePage({ params }) {
   // The folder's look, without its words (they are the folder's, over the
   // folder) and in the standard layout a single file takes here.
   const look = { ...access.look, title: '', message: '', sender: false };
+  const kit = await loadShareKit(look.brand);
 
   let file = null;
   try {
     file = await folderLinkFile(access, id);
   } catch {
     return (
-      <Shell brand={brand} narrow look={look}>
+      <Shell brand={brand} kit={kit} narrow look={look}>
         <h1 className="share-title">This link can’t be opened right now</h1>
         <p className="small muted" style={{ margin: 0 }}>Try again in a moment.</p>
       </Shell>
@@ -48,7 +49,7 @@ export default async function SharedFolderFilePage({ params }) {
   }
   if (!file) {
     return (
-      <Shell brand={brand} narrow look={look}>
+      <Shell brand={brand} kit={kit} narrow look={look}>
         <h1 className="share-title">This file is not in the link</h1>
         <p className="small muted" style={{ margin: 0 }}>It may have been moved or removed since the link was made.</p>
         <p className="small" style={{ margin: 'var(--s4) 0 0' }}>
@@ -69,7 +70,7 @@ export default async function SharedFolderFilePage({ params }) {
   const folder = crumbs[crumbs.length - 1];
 
   return (
-    <Shell brand={brand} look={look}>
+    <Shell brand={brand} kit={kit} look={look}>
       <div className="share-file">
         <nav className="crumbs share-file-crumbs" aria-label="Folder path">
           <ol>

@@ -15,6 +15,9 @@ import {
   parseShareExpiry, parseShareLook, resolveShareLook, parseShareChanges, parseTemplateSettings, parseTemplateName,
   SHARE_TEMPLATES, LOOK_TITLE_MAX, LOOK_MESSAGE_MAX, MAX_EXPIRY_DAYS,
 } from '../lib/share-kinds.js';
+import {
+  parseBrandKit, parseKitUrl, readKits, findKit, isKitId, kitNameTaken, presentKit, MAX_KITS, KIT_NAME_MAX,
+} from '../lib/share-brands.js';
 import { withoutOriginal } from '../lib/media.js';
 import { themeLockScript, THEME_SCRIPT } from '../lib/theme.js';
 import { safeReturnPath } from '../lib/return-path.js';
@@ -221,10 +224,10 @@ test('a look\'s words are text: one line for the title, the note\'s own breaks, 
 });
 
 test('a stored look reads back whole, and anything it does not know is the default', () => {
-  assert.deepEqual(resolveShareLook(null, 'folder'), { view: 'grid', theme: 'auto', accent: null, logo: 'workspace', title: '', message: '', sender: false });
+  assert.deepEqual(resolveShareLook(null, 'folder'), { view: 'grid', theme: 'auto', brand: null, accent: null, logo: 'workspace', title: '', message: '', sender: false });
   assert.deepEqual(resolveShareLook(null, 'file').view, 'standard');
   const r = resolveShareLook({ view: 'carousel', theme: 'dark', accent: 'tomato', title: 'Selects', future: 1 }, 'folder');
-  assert.deepEqual(r, { view: 'grid', theme: 'dark', accent: null, logo: 'workspace', title: 'Selects', message: '', sender: false });
+  assert.deepEqual(r, { view: 'grid', theme: 'dark', brand: null, accent: null, logo: 'workspace', title: 'Selects', message: '', sender: false });
   assert.deepEqual(resolveShareLook('{"theme":"dark"}').theme, 'auto', 'a string is not a look');
 });
 
@@ -285,4 +288,108 @@ test('a link can hold its page to one scheme without touching the visitor\'s own
   assert.doesNotMatch(themeLockScript('dark'), /localStorage/);
   // The head script honours the lock, so an OS switch does not undo it.
   assert.match(THEME_SCRIPT, /themeLock/);
+});
+
+// ── Brand kits ──────────────────────────────────────────────────────────────
+
+const KIT = { name: 'Acme Studio', logoUrl: 'https://cdn.acme.test/logo.svg', accent: '#be185d' };
+
+test('a look names a brand kit by id, and only by id', () => {
+  assert.deepEqual(parseShareLook({ brand: 'kAbc123_-x' }), { look: { brand: 'kAbc123_-x' } });
+  // The workspace's own look is no kit at all.
+  assert.deepEqual(parseShareLook({ brand: '' }), { look: null });
+  assert.deepEqual(parseShareLook({ brand: 'workspace' }), { look: null });
+  assert.deepEqual(parseShareLook({ brand: null, theme: 'dark' }), { look: { theme: 'dark' } });
+  // Never an image, never anything but an id's shape: a sharer cannot type a logo in.
+  for (const bad of ['https://evil.test/logo.png', '/onyx-mark.svg', 'abc', 'x'.repeat(41), 42, { url: 'x' }, '</style>']) {
+    assert.match(parseShareLook({ brand: bad }).error, /brand kits/, String(bad));
+  }
+  // Whether one by that id exists is not this parser's to say: the routes look it up.
+  assert.deepEqual(parseShareRequest({ kind: 'public', look: { brand: 'kGone12345' } }).look, { brand: 'kGone12345' });
+  assert.deepEqual(parseShareChanges({ look: { brand: 'kAbc123_-x', accent: '#1d4ed8' } }).changes.look, { brand: 'kAbc123_-x', accent: '#1D4ED8' });
+});
+
+test('a stored look reads its kit back, and a bad one as the workspace’s', () => {
+  assert.equal(resolveShareLook({ brand: 'kAbc123_-x' }).brand, 'kAbc123_-x');
+  assert.equal(resolveShareLook({ brand: 'https://evil.test/x.png', theme: 'dark' }).brand, null);
+  assert.equal(resolveShareLook({ brand: 'https://evil.test/x.png', theme: 'dark' }).theme, 'dark', 'one bad field is dropped on its own');
+});
+
+test('a template can carry a kit, as a link does', () => {
+  const { settings } = parseTemplateSettings({ kind: 'public', look: { brand: 'kAbc123_-x', theme: 'light' } });
+  assert.deepEqual(settings.look, { brand: 'kAbc123_-x', theme: 'light' });
+  assert.match(parseTemplateSettings({ look: { brand: 'https://x.test/a.png' } }).error, /brand kits/);
+});
+
+test('a kit is a name, a logo and an accent, and maybe a dark logo and a font', () => {
+  assert.deepEqual(parseBrandKit(KIT), { kit: { name: 'Acme Studio', logoUrl: 'https://cdn.acme.test/logo.svg', accent: '#BE185D' } });
+  const full = parseBrandKit({
+    ...KIT, name: '  Acme\n  Studio ', logoDarkUrl: '/brand/acme-dark.svg',
+    displayFontFamily: "'Fraunces', Georgia, serif", displayFontUrl: 'https://fonts.googleapis.com/css2?family=Fraunces:wght@600&display=swap',
+  });
+  assert.deepEqual(full, { kit: {
+    name: 'Acme Studio', logoUrl: 'https://cdn.acme.test/logo.svg', accent: '#BE185D', logoDarkUrl: '/brand/acme-dark.svg',
+    displayFontFamily: "'Fraunces', Georgia, serif", displayFontUrl: 'https://fonts.googleapis.com/css2?family=Fraunces:wght@600&display=swap',
+  } });
+  // Blank optional fields are left out, not kept as ''.
+  assert.deepEqual(Object.keys(parseBrandKit({ ...KIT, logoDarkUrl: ' ', displayFontFamily: '' }).kit).sort(), ['accent', 'logoUrl', 'name']);
+});
+
+test('a kit is refused, never trimmed, when anything in it is wrong', () => {
+  assert.match(parseBrandKit(null).error, /Fill in/);
+  assert.match(parseBrandKit({ ...KIT, name: '  ' }).error, /Name the kit/);
+  assert.match(parseBrandKit({ ...KIT, name: 'x'.repeat(KIT_NAME_MAX + 1) }).error, new RegExp(String(KIT_NAME_MAX)));
+  assert.match(parseBrandKit({ ...KIT, logoUrl: '' }).error, /logo/);
+  assert.match(parseBrandKit({ ...KIT, accent: 'pink' }).error, /#RRGGBB/);
+  assert.match(parseBrandKit({ ...KIT, accent: '#abc' }).error, /#RRGGBB/);
+  // A font that could close the <style> it is written into.
+  assert.match(parseBrandKit({ ...KIT, displayFontFamily: 'X;}</style><script>' }).error, /CSS names it/);
+  assert.match(parseBrandKit({ ...KIT, displayFontUrl: 'https://fonts.test/a.css' }).error, /Name the font/);
+});
+
+test('a kit’s images are https or a path on this site, nothing else', () => {
+  assert.deepEqual(parseKitUrl('https://cdn.acme.test/a.svg'), { url: 'https://cdn.acme.test/a.svg' });
+  assert.deepEqual(parseKitUrl('/brand/a.svg'), { url: '/brand/a.svg' });
+  assert.deepEqual(parseKitUrl('  '), { url: '' });
+  for (const bad of [
+    'http://cdn.acme.test/a.svg', // blocked on an https page
+    'javascript:alert(1)',
+    'data:image/svg+xml,<svg onload=alert(1)>',
+    '//evil.test/a.svg', // protocol-relative: someone else's host
+    'https://evil.test/a b.svg',
+    'https://evil.test/a.svg"onerror="x',
+    'cdn.acme.test/a.svg',
+    `https://a.test/${'x'.repeat(400)}`,
+    42,
+  ]) {
+    assert.ok(parseKitUrl(bad).error, `accepted ${bad}`);
+    assert.ok(parseBrandKit({ ...KIT, logoUrl: bad }).error, `a kit took ${bad}`);
+  }
+});
+
+test('stored kits are read through the same checks; a bad one is left out, an unknown id is no kit', () => {
+  const stored = { kits: [
+    { id: 'kAcme12345', ...KIT, updatedAt: 5 },
+    { id: 'kEvil12345', name: 'Evil', logoUrl: 'javascript:alert(1)', accent: '#000000' },
+    { id: 'no', ...KIT, name: 'Short id' },
+    { ...KIT, name: 'No id' },
+    null,
+  ] };
+  const kits = readKits(stored);
+  assert.deepEqual(kits.map((k) => k.id), ['kAcme12345']);
+  assert.equal(kits[0].accent, '#BE185D');
+  assert.equal(kits[0].updatedAt, 5);
+  assert.equal(findKit(stored, 'kAcme12345').name, 'Acme Studio');
+  assert.equal(findKit(stored, 'kEvil12345'), null, 'a kit this version cannot read is no kit');
+  assert.equal(findKit(stored, 'kGone12345'), null, 'removed');
+  assert.equal(findKit(stored, null), null);
+  assert.equal(findKit(null, 'kAcme12345'), null);
+  assert.deepEqual(readKits({}), []);
+  assert.deepEqual(readKits({ kits: 'nope' }), []);
+  assert.ok(isKitId('kAcme12345'));
+  assert.ok(!isKitId('k/../x'));
+  assert.ok(kitNameTaken(kits, 'acme STUDIO'));
+  assert.ok(!kitNameTaken(kits, 'acme studio', 'kAcme12345'), 'a kit keeping its own name');
+  assert.deepEqual(presentKit(kits[0]), { id: 'kAcme12345', name: 'Acme Studio', accent: '#BE185D', logoUrl: KIT.logoUrl, logoDarkUrl: null });
+  assert.ok(MAX_KITS > 0);
 });
