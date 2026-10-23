@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import Dialog from '@/app/components/ui/Dialog';
 import Icon from '@/app/components/ui/Icon';
+import BrandLogo from '@/app/components/BrandLogo';
 import { useToast } from '@/app/components/ui/Toast';
 import {
   SHARE_KINDS, SHARE_REVIEW, SHARE_VIEWS, SHARE_THEMES, SHARE_LOGOS, SHARE_ACCENTS, SHARE_TEMPLATES,
@@ -10,7 +11,7 @@ import {
 } from '@/lib/share-kinds';
 import {
   blankForm, applyTemplate, formFromShare, createRequest, changeRequest, templateSettings,
-  expiryChoices, defaultDate, toLocalInput, lookSummary,
+  expiryChoices, defaultDate, toLocalInput, lookSummary, withKnownKit,
 } from '@/lib/share-form';
 import { effectiveKind } from '@/lib/media';
 
@@ -60,9 +61,14 @@ function Segments({ name, value, options, onChange, disabled = false, label }) {
  * A link is who it is for (public, password, private — a folder's, public or
  * password), what its people may do (comment and approve, on a photo or a
  * video; download, anywhere), when it expires (a number of days, or a date),
- * and how its page looks (lib/share-kinds.js: a view, a scheme, an accent,
- * the logo, and a title, a note and the sharer's name). The form is
- * lib/share-form.js, which turns it into the requests and back.
+ * and how its page looks (lib/share-kinds.js: a view, a scheme, a brand
+ * kit, an accent, the logo, and a title, a note and the sharer's name). The
+ * form is lib/share-form.js, which turns it into the requests and back.
+ *
+ * Brand kits are an admin's (Admin → Brand; /api/share-brands lists them):
+ * a sharer picks one by name and never types an image. Offered only when
+ * there are some; until the list has loaded — or if it could not — a
+ * link's kit is left as it is rather than dropped.
  *
  * A file (`file`): GET/POST /api/files/[id]/shares; PATCH …/[token] changes
  * an existing link in place. `canReview` says the server would let this
@@ -92,6 +98,7 @@ export default function ShareDialog({ file = null, folder = null, open, onClose,
   const [mine, setMine] = useState([]);
   const [applied, setApplied] = useState(null);
   const [naming, setNaming] = useState(null);
+  const [kits, setKits] = useState(null);
   const toast = useToast();
   const id = useId();
 
@@ -114,6 +121,11 @@ export default function ShareDialog({ file = null, folder = null, open, onClose,
   const expiry = expiryChoices(can);
   const showForm = creatable || !!editShare;
   const customAccent = !!form.accent && !SHARE_ACCENTS.includes(form.accent.toUpperCase());
+  const kit = form.brand ? (kits || []).find((k) => k.id === form.brand) || null : null;
+  const logoOptions = kit ? SHARE_LOGOS.map((o) => (o.id === 'workspace' ? { ...o, label: 'Kit logo' } : o)) : SHARE_LOGOS;
+  // Only kits the list knows: a stale id falls back to the workspace's look,
+  // as the link's page already shows it.
+  const known = useCallback((f) => (kits ? withKnownKit(f, kits) : f), [kits]);
 
   useEffect(() => {
     if (!open || !listUrl) return undefined;
@@ -144,8 +156,17 @@ export default function ShareDialog({ file = null, folder = null, open, onClose,
       .then((r) => (r.ok ? r.json() : { templates: [] }))
       .then((body) => { if (live) setMine(body.templates || []); })
       .catch(() => {});
+    setKits(null);
+    fetch('/api/share-brands')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body) => { if (live && Array.isArray(body?.kits)) setKits(body.kits); })
+      .catch(() => {});
     return () => { live = false; };
   }, [open, listUrl, target]);
+
+  // Once the kits are known, a form already filled from a link whose kit
+  // has gone stops naming it.
+  useEffect(() => { setForm((f) => known(f)); }, [known]);
 
   const set = (patch) => {
     setForm((f) => ({ ...f, ...patch }));
@@ -167,14 +188,14 @@ export default function ShareDialog({ file = null, folder = null, open, onClose,
   }, [toast]);
 
   const pickTemplate = (t) => {
-    setForm((f) => applyTemplate(f, t.settings, { target, can, reviewable }));
+    setForm((f) => known(applyTemplate(f, t.settings, { target, can, reviewable })));
     setApplied(t.id);
     setError(null);
   };
 
   const startEdit = (s) => {
     setEditing(s.token);
-    setForm(formFromShare(s, target));
+    setForm(known(formFromShare(s, target)));
     setApplied(null);
     setNaming(null);
     setError(null);
@@ -425,8 +446,25 @@ export default function ShareDialog({ file = null, folder = null, open, onClose,
             <fieldset className="share-section share-form-col share-look">
               <legend className="share-section-title">
                 How the page looks
-                <span className="share-look-summary">{lookSummary(form, views)}</span>
+                <span className="share-look-summary">{lookSummary(form, views, kits || [])}</span>
               </legend>
+              {kits?.length > 0 && (
+                <div className="share-look-row">
+                  <span className="small">Brand</span>
+                  <div className="share-kit-pick">
+                    <select className="input share-kit-select" value={form.brand} aria-label="Brand"
+                      onChange={(e) => set({ brand: e.target.value })}>
+                      <option value="">The workspace’s own</option>
+                      {kits.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
+                    </select>
+                    {kit && (
+                      <span className="share-kit-logo" aria-hidden="true">
+                        <BrandLogo logo={{ lockupPath: kit.logoUrl, lockupDarkPath: kit.logoDarkUrl || kit.logoUrl }} name={kit.name} height={18} />
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="share-look-row">
                 <span className="small">Layout</span>
                 <Segments name="view" label="Layout" value={form.view} options={views} onChange={(v) => set({ view: v })} />
@@ -439,10 +477,11 @@ export default function ShareDialog({ file = null, folder = null, open, onClose,
               <div className="share-look-row">
                 <span className="small">Accent</span>
                 <div className="share-swatches" role="radiogroup" aria-label="Accent colour">
-                  <label className={`share-swatch is-workspace${!form.accent ? ' is-on' : ''}`} title="The workspace’s accent">
+                  <label className={`share-swatch is-workspace${!form.accent ? ' is-on' : ''}`} title={kit ? `${kit.name}’s accent` : 'The workspace’s accent'}>
                     <input type="radio" name="accent" checked={!form.accent} onChange={() => set({ accent: '' })} />
-                    <span className="share-swatch-dot" />
-                    <span className="sr-only">The workspace’s accent</span>
+                    {/* The kit's accent is an admin's colour, drawn as its own value. */}
+                    <span className="share-swatch-dot" style={kit ? { background: kit.accent } : undefined} />
+                    <span className="sr-only">{kit ? `${kit.name}’s accent` : 'The workspace’s accent'}</span>
                   </label>
                   {SHARE_ACCENTS.map((c) => (
                     <label key={c} className={`share-swatch${form.accent.toUpperCase() === c ? ' is-on' : ''}`} title={c}>
@@ -463,7 +502,7 @@ export default function ShareDialog({ file = null, folder = null, open, onClose,
               </div>
               <div className="share-look-row">
                 <span className="small">Logo</span>
-                <Segments name="logo" label="Logo" value={form.logo} options={SHARE_LOGOS} onChange={(v) => set({ logo: v })} />
+                <Segments name="logo" label="Logo" value={form.logo} options={logoOptions} onChange={(v) => set({ logo: v })} />
               </div>
               <label className="stack share-field">
                 <span className="small">Title <span className="muted">— over what you share</span></span>
@@ -540,6 +579,7 @@ export default function ShareDialog({ file = null, folder = null, open, onClose,
             const expired = exp === 'Expired';
             const levelEditable = !isFolder && !expired && s.kind !== 'private' && (reviewable || !!s.review);
             const view = s.look?.view ? views.find((v) => v.id === s.look.view)?.label : null;
+            const kitName = s.look?.brand ? (kits || []).find((k) => k.id === s.look.brand)?.name : null;
             return (
               <li key={s.token} className={`share-row${s.token === fresh ? ' is-fresh' : ''}${expired ? ' is-expired' : ''}${s.token === editing ? ' is-editing' : ''}`}>
                 <span className={`tag share-tag share-tag-${s.kind}`}>{KIND_LABEL[s.kind] || s.kind}</span>
@@ -557,6 +597,7 @@ export default function ShareDialog({ file = null, folder = null, open, onClose,
                       exp || 'Never expires',
                       s.downloads === false ? 'No downloads' : null,
                       view,
+                      kitName,
                       s.look?.title ? `“${s.look.title}”` : null,
                       `${s.viewCount} view${s.viewCount === 1 ? '' : 's'}`,
                       s.createdAt && dateFmt ? `made ${dateFmt.format(new Date(s.createdAt))}` : null,
