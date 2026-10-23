@@ -328,7 +328,7 @@ describe('what the list says may be made', { skip }, () => {
 
   test('a Member’s photo or video: every kind, comments and approvals, any expiry', async () => {
     assert.deepEqual(await can(OWNER), {
-      kinds: ['public', 'password', 'private'], review: ['comment', 'approve'], expires: ['never', '1', '7', '30'],
+      kinds: ['public', 'password', 'private'], review: ['comment', 'approve'], expires: ['never', '1', '7', '30', '90'],
       maxExpiryDays: null, passwordMin: 6,
     });
     assert.deepEqual((await can(OWNER, f.pdf)).review, [], 'only photos and videos take comments through a link');
@@ -512,7 +512,7 @@ describe('a folder’s links from the phone', { skip }, () => {
     const listed = await folderLinks.list(app(OWNER), 'Cuts', drive.id);
     assert.equal(listed.status, 200);
     assert.deepEqual(listed.body.can, {
-      kinds: ['public', 'password'], review: [], expires: ['never', '1', '7', '30'], maxExpiryDays: null, passwordMin: 6,
+      kinds: ['public', 'password'], review: [], expires: ['never', '1', '7', '30', '90'], maxExpiryDays: null, passwordMin: 6,
     });
     const made1 = await folderLinks.make(app(OWNER), { folder: 'Cuts', filespaceId: drive.id, kind: 'password', password: 'hunter22', expires: '30' });
     assert.equal(made1.status, 200, JSON.stringify(made1.body));

@@ -20,7 +20,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { brandCssVars, resolveBrand, sanitizeBrandSubmission } = await import('../lib/brand-config.js');
+const { brandCssVars, brandDarkCssVars, resolveBrand, sanitizeBrandSubmission, withAccent, contrast } = await import('../lib/brand-config.js');
 
 describe('brandCssVars', () => {
   test('emits font families unescaped', () => {
@@ -91,5 +91,30 @@ describe('the logo', () => {
 
   test('the dark wordmark can be set from the admin form', () => {
     assert.deepEqual(sanitizeBrandSubmission({ lockupDarkUrl: '/x.svg' }), { lockupDarkUrl: '/x.svg' });
+  });
+});
+
+describe('withAccent (a share link\'s own accent)', () => {
+  test('swaps the accent and draws the aura from it, nothing else', () => {
+    const brand = resolveBrand(null);
+    const b = withAccent(brand, '#1D4ED8');
+    assert.equal(b.visual.palette.accent.toUpperCase(), '#1D4ED8', 'already legible: kept as chosen');
+    assert.notEqual(b.visual.palette.accentAlt, brand.visual.palette.accentAlt);
+    assert.equal(b.visual.palette.paper, brand.visual.palette.paper);
+    assert.equal(b.name, brand.name);
+    assert.deepEqual(b.visual.fonts, brand.visual.fonts);
+    assert.match(brandCssVars(b), /--accent:#1d4ed8/i);
+    assert.match(brandDarkCssVars(b), /--accent:#/);
+  });
+
+  test('a pale accent is deepened until it reads as text on the paper', () => {
+    const brand = resolveBrand(null);
+    const b = withAccent(brand, '#FDE68A');
+    assert.ok(contrast(b.visual.palette.accent, brand.visual.palette.paper) >= 4.5);
+  });
+
+  test('anything but #rrggbb is the brand unchanged', () => {
+    const brand = resolveBrand(null);
+    for (const bad of [null, '', 'red', '#abc', '#abcdef;}</style>']) assert.equal(withAccent(brand, bad), brand, String(bad));
   });
 });
