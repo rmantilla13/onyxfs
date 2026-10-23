@@ -32,7 +32,66 @@ struct UnzipperTests {
         #expect(Unzipper.isZip("/D/a.ZIP") && !Unzipper.isZip("/D/.zip") && !Unzipper.isZip("/D/a.mov"))
     }
 
+    /// Which zip Archive Utility unpacked before it gave up: the one whose
+    /// top holds what it unpacked.
+    @Test func theZipArchiveUtilityUnpackedIsTheOneHoldingWhatItUnpacked() {
+        let listing = "Walmart Ad Videos/\nWalmart Ad Videos/a.mp4\n__MACOSX/\n__MACOSX/Walmart Ad Videos/._a.mp4\n"
+        #expect(Unzipper.topLevel(listing: listing) == ["Walmart Ad Videos"])
+        #expect(Unzipper.topLevel(listing: "b.txt\n._b.txt\na.txt\n._a.txt\n.DS_Store\n") == ["b.txt", "a.txt"])
+
+        let footage = URL(fileURLWithPath: "/D/footage.zip"), selects = URL(fileURLWithPath: "/D/selects.zip")
+        let both = [(zip: footage, top: ["Walmart Ad Videos"]), (zip: selects, top: ["a.mov", "b.mov"])]
+        #expect(Unzipper.unpackedFrom(both, unpacked: ["Walmart Ad Videos"], count: 1) == footage)
+        // As Finder compares names: either Unicode form, any case.
+        #expect(Unzipper.unpackedFrom(both, unpacked: ["B.MOV", "a.mov"], count: 2) == selects)
+        #expect(Unzipper.unpackedFrom([(zip: footage, top: ["Cafe\u{301}"])], unpacked: ["Caf\u{E9}"], count: 1) == footage)
+        // A drive keeps a name as the server does, trimmed: a Frame.io
+        // "Selects " is unpacked there as "Selects".
+        #expect(Unzipper.unpackedFrom([(zip: selects, top: ["Selects "])], unpacked: ["Selects"], count: 1) == selects)
+        // Only a hundred names come: the count says how many there were.
+        #expect(Unzipper.unpackedFrom(both, unpacked: ["a.mov"], count: 2) == selects)
+        #expect(Unzipper.unpackedFrom(both, unpacked: ["a.mov"], count: 3) == nil)
+        // None of them, or two alike: unclear, and nothing is unzipped.
+        #expect(Unzipper.unpackedFrom(both, unpacked: ["Archive.zip"], count: 1) == nil)
+        let again = (zip: URL(fileURLWithPath: "/D/selects 2.zip"), top: ["a.mov", "b.mov"])
+        #expect(Unzipper.unpackedFrom(both + [again], unpacked: ["a.mov", "b.mov"], count: 2) == nil)
+    }
+
     #if os(macOS)
+    @Test func theTopOfARealZipComesFromBsdtar() async throws {
+        let place = try Place()
+        defer { place.remove() }
+        let zip = try place.zip("Shoot", files: ["Caf\u{E9} \u{D1}/e.txt": "e", "notes.txt": "n"], quarantined: true)
+        let top = try await Unzipper.topLevel(of: zip, scratch: place.scratch)
+        #expect(Set(top.map(Unzipper.fold)) == Set(["Caf\u{E9} \u{D1}", "notes.txt"].map(Unzipper.fold)))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: place.scratch.path).isEmpty, "nothing left behind")
+        await #expect(throws: Unzipper.Failure.self) {
+            try await Unzipper.topLevel(of: place.drive.appendingPathComponent("nope.zip"), scratch: place.scratch)
+        }
+    }
+
+    /// Archive Utility's placeholder goes only while it is still empty: a
+    /// folder with nothing in it, or a file of no bytes.
+    @Test func onlyAnEmptyPlaceholderIsRemoved() async throws {
+        let place = try Place()
+        defer { place.remove() }
+        let fm = FileManager.default
+        let empty = place.drive.appendingPathComponent("Footage 2"), full = place.drive.appendingPathComponent("Footage")
+        try fm.createDirectory(at: empty, withIntermediateDirectories: false)
+        try fm.createDirectory(at: full, withIntermediateDirectories: false)
+        try Data("keep".utf8).write(to: full.appendingPathComponent("a.txt"))
+        let nothing = place.drive.appendingPathComponent("solo 2.txt"), something = place.drive.appendingPathComponent("solo.txt")
+        try Data().write(to: nothing)
+        try Data("solo".utf8).write(to: something)
+        #expect(await Unzipper.removePlaceholder(empty))
+        #expect(await Unzipper.removePlaceholder(nothing))
+        #expect(!(await Unzipper.removePlaceholder(full)))
+        #expect(!(await Unzipper.removePlaceholder(something)))
+        #expect(!(await Unzipper.removePlaceholder(place.drive.appendingPathComponent("gone"))))
+        #expect(try fm.contentsOfDirectory(atPath: place.drive.path).sorted() == ["Footage", "solo.txt"])
+        #expect(try fm.contentsOfDirectory(atPath: full.path) == ["a.txt"])
+    }
+
     /// A downloaded zip: what it holds lands beside it, every item still
     /// marked as downloaded, and the unpacking left nothing behind.
     @Test func aDownloadedZipLandsBesideItselfStillQuarantined() async throws {

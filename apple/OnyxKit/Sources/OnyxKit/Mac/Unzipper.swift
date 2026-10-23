@@ -1,6 +1,7 @@
 import Foundation
 
-/// Unzip Here, from Finder's menu on a drive (OnyxFinder): a zip unzipped
+/// Unzip Here, from Finder's menu on a drive (OnyxFinder), and on its own
+/// once Archive Utility could not (the app's UnzipService): a zip unzipped
 /// beside itself, as Archive Utility would, but unpacked on this Mac's own
 /// disk first and then copied in.
 ///
@@ -55,6 +56,49 @@ public enum Unzipper {
         }
     }
 
+    /// The names at the top of a zip, from `tar -tf`'s listing: each
+    /// entry's first name, once, without macOS's own (__MACOSX, ._*,
+    /// .DS_Store), which no unzip lands.
+    public static func topLevel(listing: String) -> [String] {
+        var seen = Set<String>()
+        var top: [String] = []
+        for line in listing.split(whereSeparator: \.isNewline) {
+            guard let first = line.split(separator: "/").first.map(String.init),
+                  !isMacOSOwn(first), seen.insert(fold(first)).inserted else { continue }
+            top.append(first)
+        }
+        return top
+    }
+
+    /// Of the zips beside it, the one Archive Utility unpacked: the only one
+    /// whose top is what it unpacked — `unpacked` (at most a hundred of the
+    /// names) and `count` of them in all. Nil for none, or more than one.
+    public static func unpackedFrom(_ candidates: [(zip: URL, top: [String])], unpacked: [String], count: Int) -> URL? {
+        let matching = candidates.filter { candidate in
+            let names = Set(candidate.top.map(fold))
+            return names.count == count && unpacked.allSatisfy { names.contains(fold($0)) }
+        }
+        return matching.count == 1 ? matching[0].zip : nil
+    }
+
+    static func isMacOSOwn(_ name: String) -> Bool {
+        name == "__MACOSX" || name == ".DS_Store" || name.hasPrefix("._")
+    }
+
+    /// Names as a drive compares them: either Unicode form, any case, and
+    /// without the whitespace at either end the server trims from every
+    /// name — a drive keeps "Selects " as "Selects" (DriveEngine.stored),
+    /// while the zip lists it as it was.
+    static func fold(_ name: String) -> String {
+        name.trimmingCharacters(in: serverTrims).precomposedStringWithCanonicalMapping.lowercased()
+    }
+
+    /// What JavaScript's `trim` takes (lib/folder-ops.js), as OnyxFSCore's
+    /// DriveEngine.serverTrims.
+    static let serverTrims = CharacterSet(charactersIn:
+        "\u{9}\u{A}\u{B}\u{C}\u{D}\u{20}\u{A0}\u{1680}\u{2000}\u{2001}\u{2002}\u{2003}\u{2004}\u{2005}\u{2006}"
+        + "\u{2007}\u{2008}\u{2009}\u{200A}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}")
+
     /// ditto's complaint, as the notice says it.
     static func reason(_ complaint: String, copying: Bool) -> String {
         let said = complaint.lowercased()
@@ -105,30 +149,92 @@ extension Unzipper {
         return landed
     }
 
+    /// The names at the top of `zip` (`topLevel(listing:)`), as bsdtar lists
+    /// them — in UTF-8, as they are. zipinfo would print "?" for any byte
+    /// it takes for no letter: "Café Ñ" came out "Caf?? ??".
+    public static func topLevel(of zip: URL, scratch: URL = FileManager.default.temporaryDirectory) async throws -> [String] {
+        let fm = FileManager.default
+        let work = scratch.appendingPathComponent("Onyx Unzip \(UUID().uuidString)", isDirectory: true)
+        do { try fm.createDirectory(at: work, withIntermediateDirectories: true) } catch {
+            throw Failure("This Mac's temporary folder can't be written.")
+        }
+        defer { try? fm.removeItem(at: work) }
+        let listed = work.appendingPathComponent("list.txt")
+        let said = work.appendingPathComponent("tar.log")
+        guard try await run("/usr/bin/tar", ["-tf", zip.path], output: listed, errors: said,
+                            environment: ["LC_ALL": "en_US.UTF-8"]) == 0,
+              let listing = try? String(contentsOf: listed, encoding: .utf8) else {
+            throw Failure("The zip could not be read.")
+        }
+        return topLevel(listing: listing)
+    }
+
+    /// Archive Utility's placeholder for what it meant to land, if it is
+    /// still there and still empty: a folder with nothing in it (rmdir takes
+    /// no other), or a file of no bytes. Answers whether it went.
+    @discardableResult
+    public static func removePlaceholder(_ item: URL) async -> Bool {
+        var status = stat()
+        guard lstat(item.path, &status) == 0 else { return false }
+        let log = FileManager.default.temporaryDirectory.appendingPathComponent("Onyx placeholder \(UUID().uuidString).log")
+        defer { try? FileManager.default.removeItem(at: log) }
+        switch status.st_mode & S_IFMT {
+        case S_IFDIR:
+            return (try? await run("/bin/rmdir", [item.path], output: nil, errors: log)) == 0
+        case S_IFREG where status.st_size == 0:
+            return (try? await run("/bin/rm", ["-f", item.path], output: nil, errors: log)) == 0
+        default:
+            return false
+        }
+    }
+
     /// /usr/bin/ditto with `arguments`, waited for without holding a thread.
     /// Nothing to read from (a zip that wants a password fails at once); what
     /// it says goes to a file in `work`, read if it fails.
     private static func ditto(_ arguments: [String], in work: URL, copying: Bool) async throws {
         let said = work.appendingPathComponent(copying ? "copy.log" : "unzip.log")
-        guard FileManager.default.createFile(atPath: said.path, contents: nil),
-              let log = try? FileHandle(forWritingTo: said) else { throw Failure("This Mac's temporary folder can't be written.") }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        process.arguments = arguments
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = log
-        let code: Int32 = try await withCheckedThrowingContinuation { done in
-            process.terminationHandler = { done.resume(returning: $0.terminationStatus) }
-            do { try process.run() } catch {
-                process.terminationHandler = nil
-                done.resume(throwing: Failure("ditto could not be started."))
-            }
-        }
-        try? log.close()
+        let code = try await run("/usr/bin/ditto", arguments, output: nil, errors: said)
         guard code == 0 else {
             let complaint = (try? String(contentsOf: said, encoding: .utf8)) ?? ""
             throw Failure(reason(complaint, copying: copying))
+        }
+    }
+
+    /// `tool` in a process of its own — what it does on a drive comes back
+    /// through this app's own bridge — waited for without holding a thread.
+    /// What it prints goes to `output` (or nowhere), what it complains of to
+    /// `errors`; its exit status is the answer. `environment` is added to
+    /// this app's.
+    private static func run(_ tool: String, _ arguments: [String], output: URL?, errors: URL,
+                            environment: [String: String] = [:]) async throws -> Int32 {
+        let fm = FileManager.default
+        guard fm.createFile(atPath: errors.path, contents: nil), let log = try? FileHandle(forWritingTo: errors) else {
+            throw Failure("This Mac's temporary folder can't be written.")
+        }
+        defer { try? log.close() }
+        var printed: FileHandle?
+        if let output {
+            guard fm.createFile(atPath: output.path, contents: nil), let handle = try? FileHandle(forWritingTo: output) else {
+                throw Failure("This Mac's temporary folder can't be written.")
+            }
+            printed = handle
+        }
+        defer { try? printed?.close() }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: tool)
+        process.arguments = arguments
+        if !environment.isEmpty {
+            process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, given in given }
+        }
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = printed ?? FileHandle.nullDevice
+        process.standardError = log
+        return try await withCheckedThrowingContinuation { done in
+            process.terminationHandler = { done.resume(returning: $0.terminationStatus) }
+            do { try process.run() } catch {
+                process.terminationHandler = nil
+                done.resume(throwing: Failure("\((tool as NSString).lastPathComponent) could not be started."))
+            }
         }
     }
 }

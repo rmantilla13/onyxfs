@@ -357,6 +357,23 @@ final class DriveService: ObservableObject {
         diskState(of: scope) ?? mounts.state(of: scope)
     }
 
+    /// Archive Utility could not unzip a zip from the internet on one of the
+    /// disks (its extension says so: POST /fs/v1/unzip). `handler` is given
+    /// the folder on this Mac, inside that disk as it is mounted now.
+    func onUnzipFailed(_ handler: @escaping @MainActor (_ folder: URL, _ failure: FSUnzipFailure) -> Void) {
+        server.fs.onUnzipFailed { [weak self] scope, failure in
+            Task { @MainActor in
+                guard let self, let domain = SyncDomain(identifier: scope),
+                      case let .mounted(root)? = self.mountState(of: domain) else { return }
+                // Plausible already (FSBridge): names only, no "." or "..".
+                let folder = failure.folder.split(separator: "/").reduce(root) {
+                    $0.appendingPathComponent(String($1), isDirectory: true)
+                }
+                handler(folder, failure)
+            }
+        }
+    }
+
     /// Every drive's, disks and mounts together (the menu bar's count).
     var allMountStates: [MountManager.State] {
         Array(mounts.states.values) + diskStates

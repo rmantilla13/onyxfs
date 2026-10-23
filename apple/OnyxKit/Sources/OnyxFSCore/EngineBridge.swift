@@ -22,10 +22,40 @@ public protocol EngineBridge: Sendable {
     /// Bytes apps read from the disk or wrote to it, for the app's Activity
     /// window (TransferMeter): counted, never waited on.
     func count(_ kind: TransferMeter.Kind, bytes: Int)
+    /// Archive Utility could not unzip a zip from the internet here: the app
+    /// unzips it instead. Told, never answered.
+    func unzipFailed(_ failure: UnzipFailure) async
 }
 
 extension EngineBridge {
     public func count(_ kind: TransferMeter.Kind, bytes: Int) {}
+    public func unzipFailed(_ failure: UnzipFailure) async {}
+}
+
+/// Archive Utility unpacked a zip into its scratch folder beside it and then
+/// threw all of it away, moving nothing out: on a drive it may not mark that
+/// folder with the zip's quarantine (a drive is no local disk to macOS), so
+/// a zip that came from the internet always stops there, with Error 1.
+public struct UnzipFailure: Sendable, Equatable {
+    /// Where the zip is, as the drive has it ("/Footage").
+    public var folder: String
+    /// The zips there that came from the internet: the one is among them.
+    public var zips: [String]
+    /// The names at the top of what was unpacked — the zip's own — at most
+    /// `maxNames` of them, and how many there were in all.
+    public var unpacked: [String]
+    public var unpackedCount: Int
+    /// What Archive Utility made beside the zip for the result, named as the
+    /// result would be and still empty. It removes it itself once its error
+    /// is closed, or not if it is stopped.
+    public var placeholders: [String]
+
+    public static let maxNames = 100
+
+    public init(folder: String, zips: [String], unpacked: [String], unpackedCount: Int, placeholders: [String]) {
+        self.folder = folder; self.zips = zips; self.unpacked = unpacked
+        self.unpackedCount = unpackedCount; self.placeholders = placeholders
+    }
 }
 
 public protocol ByteSource: Sendable {

@@ -49,6 +49,9 @@ final class AppModel: ObservableObject {
     /// Keep Offline in Finder's own right-click menu, and the marks on what
     /// is kept (the OnyxFinder extension asks here).
     let finderSync = FinderSyncService()
+    /// Zips unzipped in a drive: Finder's Unzip Here, and any Archive
+    /// Utility could not unzip there.
+    let unzips = UnzipService()
     /// What redraws the activity graphs, wherever they show (ActivityClock).
     lazy var activity = ActivityClock(transfers: finder.transfers)
     private let settings = SharedSettings()
@@ -69,6 +72,8 @@ final class AppModel: ObservableObject {
         proxies.attach(to: self)
         // Before the drives open: it hears what each keeps from the first.
         finderSync.attach(to: self)
+        // A zip from the internet Archive Utility could not unzip in a drive.
+        finder.onUnzipFailed { [unzips] folder, failure in unzips.archiveUtilityFailed(in: folder, failure) }
         if phase == .signedIn { startup = Task { await afterSignIn() } }
         // A notice's Open System Settings: the Onyx file system's switch,
         // watched for coming on.
