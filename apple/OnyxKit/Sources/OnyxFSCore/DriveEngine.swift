@@ -296,6 +296,18 @@ public actor DriveEngine {
         if node.localOnly, !to.localOnly, !LocalOnly.isLocalOnly(newName) {
             return try await promote(id, from: from, to: to, newName: newName, over: over)
         }
+        if let over, over.id != id {
+            // As rename(2): a folder replaces only a folder, and only an empty
+            // one. The kernel leaves that to the file system, and the server's
+            // replace takes what is there whole: a folder moved over another
+            // took everything the other held.
+            if node.isDirectory != over.isDirectory { throw VolumeError.posix(node.isDirectory ? ENOTDIR : EISDIR) }
+            if over.isDirectory {
+                try await ensureListed(over.id)
+                guard nodes[id] != nil, let target = nodes[over.id] else { throw VolumeError.posix(ESTALE) }
+                guard (target.children ?? [:]).isEmpty else { throw VolumeError.posix(ENOTEMPTY) }
+            }
+        }
         let oldPath = node.path
         if node.localOnly || to.localOnly || LocalOnly.isLocalOnly(newName) {
             // macOS's own files move among themselves; a real file cannot
