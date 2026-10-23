@@ -335,6 +335,61 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
         }
     }
 
+    /// As rename(2): a folder takes an empty folder's place, never a full
+    /// one's — the server's replace would take what it held with it — and a
+    /// file and a folder never take each other's. Nothing refused reaches
+    /// the server.
+    @Test func aFolderReplacesOnlyAnEmptyFolder() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Cut")
+        await bridge.addFile("/Cut/a.mov", Data([1]))
+        await bridge.addFolder("/Empty")
+        await bridge.addFolder("/Full")
+        await bridge.addFile("/Full/b.mov", Data([2]))
+        await bridge.addFolder("/Junk")
+        await bridge.addFile("/notes.txt", Data("n".utf8))
+        let engine = try await makeEngine(bridge)
+        let root = DriveEngine.rootID
+        let cut = try await engine.lookup("Cut", in: root)
+        let empty = try await engine.lookup("Empty", in: root)
+        let full = try await engine.lookup("Full", in: root)
+        let junk = try await engine.lookup("Junk", in: root)
+        let notes = try await engine.lookup("notes.txt", in: root)
+        _ = try await engine.create(".DS_Store", in: junk.id, isDirectory: false)
+        let draft = try await engine.create("draft.txt", in: root, isDirectory: false)
+        _ = try await engine.write(draft.id, at: 0, data: Data("d".utf8))
+
+        await #expect(throws: VolumeError.posix(ENOTEMPTY)) {
+            _ = try await engine.rename(cut.id, from: root, name: "Cut", to: root, newName: "Full", replacing: full.id)
+        }
+        // macOS's own files are what a folder holds, as on any disk.
+        await #expect(throws: VolumeError.posix(ENOTEMPTY)) {
+            _ = try await engine.rename(cut.id, from: root, name: "Cut", to: root, newName: "Junk", replacing: junk.id)
+        }
+        await #expect(throws: VolumeError.posix(ENOTDIR)) {
+            _ = try await engine.rename(cut.id, from: root, name: "Cut", to: root, newName: "notes.txt", replacing: notes.id)
+        }
+        await #expect(throws: VolumeError.posix(EISDIR)) {
+            _ = try await engine.rename(notes.id, from: root, name: "notes.txt", to: root, newName: "Empty", replacing: empty.id)
+        }
+        // One not on the server yet would have had the folder deleted to make way.
+        await #expect(throws: VolumeError.posix(EISDIR)) {
+            _ = try await engine.rename(draft.id, from: root, name: "draft.txt", to: root, newName: "Full", replacing: full.id)
+        }
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") }.isEmpty)
+        #expect(await bridge.bytes("/Full/b.mov") == Data([2]))
+        #expect(try await engine.children(of: full.id).map(\.name) == ["b.mov"])
+
+        let moved = try await engine.rename(cut.id, from: root, name: "Cut", to: root, newName: "Empty", replacing: empty.id)
+        #expect(moved.id == cut.id)
+        #expect(try await engine.lookup("Empty", in: root).id == cut.id)
+        // Its own name in another case is no folder in the way, full as it is.
+        _ = try await engine.rename(cut.id, from: root, name: "Empty", to: root, newName: "EMPTY", replacing: cut.id)
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") } == [
+            "rename /Cut -> /Empty (replace)", "rename /Empty -> /EMPTY",
+        ])
+    }
+
     /// Finder asks for "Selects " — a folder from Frame.io Drive, say, with
     /// a space at the end of its name. The server keeps names without one,
     /// so it is made as "Selects", and Finder's next step, which still says

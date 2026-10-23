@@ -489,6 +489,11 @@ called "Collections (Onyx)".
 - Opening an existing remote file for writing (not truncating) first fetches
   it whole into staging (copy-on-write), then the same.
 - `mkdir`, `rename` (incl. `overItem`), `remove` → the bridge calls above.
+  A rename over an item follows rename(2), which the kernel leaves to the
+  file system: a folder replaces only a folder, and only an empty one —
+  macOS's own files in it count (ENOTEMPTY) — and a file and a folder never
+  replace each other (EISDIR, ENOTDIR). The server's replace takes what is
+  there whole; before, a folder moved over another took what it held.
 - **Local-only names** (`.DS_Store`, `._*`, `.Trashes`, `.Spotlight-V100`,
   `.fseventsd`, `.TemporaryItems`, `Icon\r`) live only in the extension's
   container; they are never uploaded and never listed by the bridge. They
