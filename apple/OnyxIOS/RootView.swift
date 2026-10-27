@@ -96,6 +96,9 @@ struct MainTabs: View {
             }
             .padding(.bottom, 2)
             .animation(.spring(duration: 0.3, bounce: 0.15), value: chrome.selecting)
+            // Bent, an iPhone Duo's fold would run through the middle of
+            // the pill: it moves into one half.
+            .clearOfFold()
             // Typing, the keyboard covers the bar rather than lifting it.
             .ignoresSafeArea(.keyboard, edges: .bottom)
         }
@@ -142,7 +145,7 @@ struct FloatingTabBar: View {
 }
 
 /// Browse: the drives, and the folder open beside them — side by side on
-/// an iPad, one after the other on an iPhone.
+/// an iPad and an open iPhone Duo, one after the other on an iPhone.
 private struct Browser: View {
     @Binding var place: Place?
     @Environment(Session.self) private var session
@@ -152,20 +155,30 @@ private struct Browser: View {
     @State private var pending: [FolderRoute]?
     /// Which column an iPhone shows: a star opened goes to the folder.
     @State private var column = NavigationSplitViewColumn.sidebar
+    /// All of Browse, which side by side its columns' auras are parts of.
+    @State private var canvas: CGRect?
+
+    /// The place open: the one chosen — or, side by side with none chosen,
+    /// the first drive rather than an empty half of the screen. That one
+    /// isn't selected, so one after the other (an iPhone, a closed iPhone
+    /// Duo) the list comes first, unless someone had gone into it.
+    private var shown: Place? {
+        place ?? (width == .regular ? session.drives.first : path.first?.place)
+    }
 
     var body: some View {
         NavigationSplitView(preferredCompactColumn: $column) {
-            PlacesView(selection: $place, open: open)
+            PlacesView(selection: $place, beside: width == .regular ? shown : nil, open: open)
         } detail: {
-            if let place {
+            if let shown {
                 NavigationStack(path: $path) {
-                    FolderView(route: FolderRoute(place: place, folder: ""))
+                    FolderView(route: FolderRoute(place: shown, folder: ""))
                         .navigationDestination(for: FolderRoute.self) { FolderView(route: $0) }
                 }
                 // Another place starts from its top — or, opened from a
                 // star, at its folder. Set once the stack is there: a path
                 // set before it appears is lost.
-                .id(place.id)
+                .id(shown.id)
                 .onAppear {
                     if let trail = pending {
                         pending = nil
@@ -180,11 +193,24 @@ private struct Browser: View {
                     .background { AuraBackground() }
             }
         }
-        .onChange(of: place) { path = [] }
-        // Side by side, the first drive is open rather than an empty half of
-        // the screen; one after the other (an iPhone), the list comes first.
-        .onChange(of: session.drives, initial: true) {
-            if width == .regular, place == nil { place = session.drives.first }
+        // Side by side — an iPad, an open iPhone Duo — the list and the
+        // folder are lit by one aura, not one each with a seam between them.
+        .environment(\.auraCanvas, width == .regular ? canvas : nil)
+        .background {
+            Color.clear
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { canvas = $0 }
+                .ignoresSafeArea()
+        }
+        // Another place starts from its top; the one already open keeps the
+        // folder it is in.
+        .onChange(of: place) { if path.first?.place != place { path = [] } }
+        // An iPhone Duo closing goes from side by side to one after the
+        // other: the folder that was open stays on screen — in the first
+        // drive too, once someone has gone into it.
+        .onChange(of: width) {
+            guard width == .compact else { return }
+            if place == nil, let opened = path.first?.place { place = opened }
+            if place != nil { column = .detail }
         }
     }
 
@@ -196,7 +222,8 @@ private struct Browser: View {
         let trail = route.collection != nil ? [route] : parts.indices.map { i in
             FolderRoute(place: route.place, folder: parts[...i].joined(separator: "/"))
         }
-        if place == route.place {
+        if shown == route.place {
+            place = route.place
             path = trail
         } else {
             pending = trail
