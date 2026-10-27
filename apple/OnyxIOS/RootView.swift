@@ -60,12 +60,16 @@ final class AppChrome {
 
 /// The tabs, each keeping its own place, under a tab bar of our own — a
 /// dark glass pill of three line icons that floats over the content — and
-/// the download tray above it.
+/// the download tray above it. On an iPhone Duo the pill stands down the
+/// right edge instead, with the status bar and the system's own bars.
 struct MainTabs: View {
     @State private var tab: AppTab = .home
     @State private var chrome = AppChrome()
     /// The place open in Browse, which Home's cards can open.
     @State private var place: Place?
+    /// The status bar stands in a column down the right edge — an iPhone
+    /// Duo's, open or closed (iOS 27.1) — and the tab bar stands there too.
+    @State private var sideRail = false
 
     var body: some View {
         TabView(selection: $tab) {
@@ -86,10 +90,16 @@ struct MainTabs: View {
             }
         }
         .environment(chrome)
+        // The column shows as a right inset wider than the top's (and than
+        // the left's, which an iPhone on its side has as wide).
+        .onGeometryChange(for: Bool.self) { proxy in
+            let inset = proxy.safeAreaInsets
+            return inset.trailing > max(inset.top, inset.leading) + 20
+        } action: { sideRail = $0 }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 10) {
                 DownloadTray()
-                if !chrome.selecting {
+                if !sideRail, !chrome.selecting {
                     FloatingTabBar(selection: $tab)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -102,6 +112,24 @@ struct MainTabs: View {
             // Typing, the keyboard covers the bar rather than lifting it.
             .ignoresSafeArea(.keyboard, edges: .bottom)
         }
+        // On an iPhone Duo the pill stands at the foot of the status bar's
+        // column, in line below the system's own buttons there (48 points
+        // wide, 24 in from the screen's edge): clear of the content and of
+        // the fold, and the screen's whole height left to it.
+        .overlay {
+            ZStack {
+                if sideRail, !chrome.selecting {
+                    FloatingTabBar(selection: $tab, axis: .vertical)
+                        .padding(.trailing, 24)
+                        .padding(.bottom, 10)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            .ignoresSafeArea(.container, edges: .trailing)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+            .animation(.spring(duration: 0.3, bounce: 0.15), value: chrome.selecting)
+        }
     }
 }
 
@@ -109,11 +137,14 @@ struct MainTabs: View {
 /// chosen one lit.
 struct FloatingTabBar: View {
     @Binding var selection: AppTab
+    /// Across, or standing down the side as on an iPhone Duo.
+    var axis: Axis = .horizontal
     @Namespace private var lit
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 2) {
+        let stack = axis == .horizontal ? AnyLayout(HStackLayout(spacing: 2)) : AnyLayout(VStackLayout(spacing: 2))
+        stack {
             ForEach(AppTab.allCases) { tab in
                 let chosen = selection == tab
                 Button {
@@ -122,7 +153,7 @@ struct FloatingTabBar: View {
                     Image(systemName: tab.symbol(selected: chosen))
                         .font(.system(size: 19, weight: chosen ? .semibold : .regular))
                         .foregroundStyle(chosen ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                        .frame(width: 62, height: 46)
+                        .frame(width: axis == .horizontal ? 62 : 38, height: axis == .horizontal ? 46 : 52)
                         .background {
                             if chosen {
                                 Capsule()
