@@ -6,8 +6,11 @@ import SwiftUI
 /// them — the sidebar on an iPad, the first screen of Browse on an iPhone.
 struct PlacesView: View {
     @Environment(Session.self) private var session
-    @Environment(\.horizontalSizeClass) private var width
     @Binding var selection: Place?
+    /// The place open beside the list, side by side (an iPad, an open
+    /// iPhone Duo) — chosen, or the first drive filling the half. Told by
+    /// Browse: in the sidebar the size class is always compact.
+    var beside: Place?
     /// A starred folder chosen: open it, in its place.
     var open: (FolderRoute) -> Void = { _ in }
     @State private var makingCollection = false
@@ -152,10 +155,11 @@ struct PlacesView: View {
         return count == 0 ? "All Files" : "\(drives), and All Files"
     }
 
-    /// Side by side (an iPad), the place open beside the list is marked in
-    /// it; one after the other, nothing stays chosen once it is left.
+    /// Side by side (an iPad, an open iPhone Duo), the place open beside the
+    /// list is marked in it; one after the other, nothing stays chosen once
+    /// it is left.
     private func chosen(_ place: Place) -> Bool {
-        width == .regular && selection == place
+        beside == place
     }
 }
 
