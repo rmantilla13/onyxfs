@@ -25,7 +25,10 @@ export function DriveList({ drives = [], usage = {}, library = null, showLibrary
   return (
     <nav className="drives" aria-label="Drives">
       <div className="drives-head">
-        <h3 className="drives-title">Drives</h3>
+        {/* The heading opens every drive as a grid of cards (/drives). */}
+        <h3 className="drives-title">
+          <a href="/drives" className="drives-title-link" title="See all drives">Drives</a>
+        </h3>
         {canCreate && (
           <button type="button" className="btn btn-ghost btn-sm drives-new" onClick={onNew} aria-label="New drive" title="New drive"><Icon name="plus" /></button>
         )}
@@ -55,6 +58,16 @@ export function DriveList({ drives = [], usage = {}, library = null, showLibrary
             kept={!!keptDrive?.(d.id)}
           />
         ))}
+        {/* On a phone the heading is gone and the drives are a row of chips:
+            the drives page is the last of them. */}
+        {sorted.length > 0 && (
+          <li className="drives-all">
+            <a href="/drives" className="drive-row">
+              <span className="drive-icon" aria-hidden><Icon name="layout-grid" /></span>
+              <span className="drive-text"><span className="drive-name truncate">All drives</span></span>
+            </a>
+          </li>
+        )}
       </ul>
       {!sorted.length && canCreate && (
         <p className="small muted drives-empty">No drives yet. A drive is a space of its own, with its own members.</p>
@@ -63,8 +76,9 @@ export function DriveList({ drives = [], usage = {}, library = null, showLibrary
   );
 }
 
-const ROLE_WORDS = { owner: 'Owner', editor: 'Can edit', viewer: 'Can view' };
-const usageLine = (u) => `${fmtSize(u.bytes) || '0 B'} · ${Number(u.files).toLocaleString()} file${u.files === 1 ? '' : 's'}`;
+// Also the drives page's cards (app/drives/DrivesGrid.js), which say the same.
+export const ROLE_WORDS = { owner: 'Owner', editor: 'Can edit', viewer: 'Can view' };
+export const usageLine = (u) => `${fmtSize(u.bytes) || '0 B'} · ${Number(u.files).toLocaleString()} file${u.files === 1 ? '' : 's'}`;
 
 // A drive opens with a server render, which takes a moment: the row it is
 // going to says so (`pending`) until the page has changed.

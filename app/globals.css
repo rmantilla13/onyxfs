@@ -1141,9 +1141,9 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 /* The card size, from the view (data-card-size on the pane): a card's
    column width — its picture keeps 4:3, so its height follows — a folder
    card's size, a tile row's height and a column's width. */
-.files-pane[data-card-size='s'] { --card-min: 150px; --folder-min: 210px; --folder-h: 80px; --folder-name: 15px; }
-.files-pane[data-card-size='m'] { --card-min: 200px; --folder-min: 240px; --folder-h: 108px; --folder-name: 18px; }
-.files-pane[data-card-size='l'] { --card-min: 280px; --folder-min: 300px; --folder-h: 132px; --folder-name: 20px; }
+.files-pane[data-card-size='s'] { --card-min: 150px; --folder-min: 210px; --folder-h: 80px; --folder-name: 15px; --mosaic: 56px; }
+.files-pane[data-card-size='m'] { --card-min: 200px; --folder-min: 240px; --folder-h: 108px; --folder-name: 18px; --mosaic: 80px; }
+.files-pane[data-card-size='l'] { --card-min: 280px; --folder-min: 300px; --folder-h: 132px; --folder-name: 20px; --mosaic: 100px; }
 /* A folder a move has sprung open (DragPreview): let go anywhere on the page
    and the move goes into it, as the dashed edge — the upload overlay's —
    around its listing says. */
@@ -1352,6 +1352,44 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   border-radius: calc(var(--glyph) * 2.2 / 24);
   background: var(--folder-front);
   box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 30%, transparent);
+}
+
+/* A folder's picture (FolderMosaic): its newest few pictures in a rounded
+   square — one, two side by side, one large and two small, or four — with a
+   small folder on its corner so it still reads as a folder; the folder alone
+   when there is nothing to show. Pure decoration: clicks, drags and the
+   marquee all belong to the tile around it. */
+.folder-mosaic {
+  position: relative; flex: none;
+  display: inline-grid; place-items: center;
+  width: var(--mosaic, 80px); height: var(--mosaic, 80px);
+  pointer-events: none;
+}
+.folder-mosaic-cells {
+  display: grid; gap: 2px; width: 100%; height: 100%;
+  border-radius: calc(var(--radius) + 2px); overflow: hidden;
+  background: var(--surface-sunken);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.folder-mosaic.is-2 .folder-mosaic-cells { grid-template-columns: 1fr 1fr; }
+.folder-mosaic.is-3 .folder-mosaic-cells { grid-template: 1fr 1fr / 1.4fr 1fr; }
+.folder-mosaic.is-4 .folder-mosaic-cells { grid-template: 1fr 1fr / 1fr 1fr; }
+.folder-mosaic-cell.is-lead { grid-row: span 2; }
+.folder-mosaic-cell {
+  position: relative; min-width: 0; min-height: 0; overflow: hidden;
+  background: var(--surface-sunken) center / cover no-repeat;
+}
+.folder-mosaic-cell img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.folder-mosaic-badge {
+  position: absolute; left: -4px; bottom: -4px;
+  display: grid; place-items: center; padding: 2px;
+  border-radius: 6px; background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+/* About a fifth of the square, whatever its size: a mark, not a second icon. */
+.folder-mosaic-badge > .folder-glyph {
+  width: clamp(12px, calc(var(--mosaic, 80px) * 0.2), 22px);
+  height: clamp(12px, calc(var(--mosaic, 80px) * 0.2), 22px);
 }
 
 /* The open folder's subfolders, above its files: larger than a file's card,
@@ -1972,12 +2010,12 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   .tb-right { min-width: 0; }
   .tb-chips { order: 3; flex: 1 1 100%; min-width: 0; }
   .files-section { margin-bottom: var(--s5); }
-  .files-pane[data-card-size] { --folder-min: 150px; --folder-h: 64px; --folder-name: 15px; }
-  .files-pane[data-card-size='l'] { --folder-min: 100%; --folder-h: 84px; --folder-name: 17px; }
+  .files-pane[data-card-size] { --folder-min: 150px; --folder-h: 64px; --folder-name: 15px; --mosaic: 48px; }
+  .files-pane[data-card-size='l'] { --folder-min: 100%; --folder-h: 84px; --folder-name: 17px; --mosaic: 64px; }
   .folder-tiles { gap: var(--s2); }
   .folder-tile { gap: var(--s3); padding: var(--s2) var(--s3); }
-  .folder-tile .folder-glyph { width: 36px; height: 36px; }
-  .files-pane[data-card-size='l'] .folder-tile .folder-glyph { width: 48px; height: 48px; }
+  .folder-tile .folder-mosaic.is-empty > .folder-glyph { width: 36px; height: 36px; }
+  .files-pane[data-card-size='l'] .folder-tile .folder-mosaic.is-empty > .folder-glyph { width: 48px; height: 48px; }
 
   /* The sidebar becomes a strip of folders as chips. A 220px column beside a
      150px grid was the whole page. */
@@ -2111,6 +2149,59 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   background: color-mix(in srgb, var(--drive, var(--accent)) 16%, var(--surface));
 }
 .drive-icon.is-library { color: var(--ink); background: var(--surface-sunken); }
+/* The sidebar's "Drives" heading is a way to all of them (/drives). */
+.drives-title-link { color: inherit; text-decoration: none; }
+.drives-title-link:hover { color: var(--ink); }
+.drives-title-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+/* /drives: every drive as a card — a mosaic of its newest pictures, its
+   colour, its name and what it holds. */
+.drives-page { max-width: 1400px; margin: 0 auto; padding: var(--s5) var(--s5) var(--s6); }
+.drives-page-head { margin-bottom: var(--s5); }
+.drives-page-title { margin: 0; font-size: var(--t-2xl); letter-spacing: -0.02em; }
+.drives-page-count { margin: 2px 0 0; }
+.drives-page-empty { margin: var(--s6) 0; }
+.drive-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: var(--s4); }
+.drive-card {
+  display: flex; flex-direction: column; min-width: 0;
+  border: 1px solid var(--line); border-radius: calc(var(--radius) + 6px);
+  background: var(--surface); color: var(--ink); text-decoration: none;
+  overflow: hidden;
+  transition: border-color var(--dur-1) var(--ease), transform var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease);
+}
+.drive-card:hover { border-color: color-mix(in srgb, var(--drive, var(--accent)) 45%, var(--line)); box-shadow: var(--shadow-2); }
+@media (prefers-reduced-motion: no-preference) { .drive-card:hover { transform: translateY(-2px); } }
+.drive-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.drive-card-cover {
+  position: relative; display: grid; aspect-ratio: 16 / 10;
+  background: color-mix(in srgb, var(--drive, var(--accent)) 14%, var(--surface-sunken));
+  border-bottom: 1px solid var(--line); overflow: hidden;
+}
+/* Laid over the cover rather than in its grid, so the pictures' own size can
+   never stretch the cover past its 16:10. */
+.drive-card-cover .folder-mosaic.drive-card-mosaic { position: absolute; inset: 0; width: auto; height: auto; }
+.drive-card-cover .folder-mosaic-cells { border-radius: 0; box-shadow: none; }
+.drive-card-cover .folder-mosaic-badge { display: none; }
+.drive-card-icon {
+  place-self: center; display: grid; place-items: center;
+  width: 64px; height: 64px; border-radius: 18px;
+  color: color-mix(in srgb, var(--drive, var(--accent)) 78%, var(--ink));
+  background: color-mix(in srgb, var(--drive, var(--accent)) 20%, var(--surface));
+}
+.drive-card-text { display: flex; flex-direction: column; gap: 2px; padding: var(--s3) var(--s4) var(--s4); min-width: 0; }
+.drive-card-name { display: flex; align-items: center; gap: 8px; font-size: var(--t-lg); font-weight: 600; letter-spacing: -0.01em; }
+.drive-card-dot {
+  flex: none; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--drive, var(--accent));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--drive, var(--accent)) 20%, transparent);
+}
+.drive-card-detail { font-size: var(--t-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) {
+  .drives-page { padding: var(--s4); }
+  .drive-cards { grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr)); gap: var(--s3); }
+  .drive-card-text { padding: var(--s2) var(--s3) var(--s3); }
+  .drive-card-name { font-size: var(--t-md); }
+}
 .drive-row.is-active .drive-icon { color: var(--on-aura); background: linear-gradient(135deg, var(--aura-a-deep), var(--aura-b-deep)); }
 /* An open drive keeps its own colour, only stronger: the dot beside its name
    on the page is that colour, and the aura (the library's, the accent) would
@@ -2125,6 +2216,8 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 .drive-row.is-active .drive-name { font-weight: 600; }
 .drive-detail { font-size: var(--t-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 .drives-empty { margin: var(--s1) 6px 0; }
+.drives-all { display: none; }
+.drives-all > .drive-row { color: inherit; text-decoration: none; }
 .fs-members-table { width: 100%; font-size: var(--t-sm); border-collapse: collapse; margin-bottom: var(--s3); }
 .fs-members-table td { padding: var(--s1) var(--s2) var(--s1) 0; border-top: 1px solid var(--line); vertical-align: middle; }
 .fs-members-table select.input { width: auto; }
@@ -2136,6 +2229,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   /* A row of chips above the folders, like the folders themselves. */
   .drives { margin-bottom: var(--s2); }
   .drives-head, .drives-empty { display: none; }
+  .drives-all { display: list-item; }
   .drives-list { flex-direction: row; gap: 6px; overflow-x: auto; padding-bottom: var(--s1); }
   .drives-list > li { flex: 0 0 auto; }
   .drive-row { width: auto; padding: 3px 10px 3px 3px; border: 1px solid var(--line); border-radius: var(--radius-pill); }

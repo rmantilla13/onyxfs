@@ -5,8 +5,10 @@ import FolderDrop, { startFolderDrag } from './FolderDrop';
 import { folderKey } from '@/lib/selection';
 import { overlaps } from '@/lib/marquee';
 import FolderGlyph from '@/app/components/ui/FolderGlyph';
+import FolderMosaic from '@/app/components/ui/FolderMosaic';
 import OfflineMark from '@/app/components/ui/OfflineMark';
 import { describeFolder } from '@/lib/folder-ops';
+import { useFolderPreview } from './useFolderPreview';
 
 // Past this many subfolders the tree is the better way in; the items are not
 // virtualized.
@@ -97,11 +99,14 @@ function useFolderNav({ folders, navRef, columns }) {
   return { list, active, onFocus };
 }
 
-const FolderTile = memo(function FolderTile({ folder: f, detail, glyph, selected, tabbable, handlers, canWrite, onDrop, kept = false }) {
+const FolderTile = memo(function FolderTile({ folder: f, filespace = '', previews = true, detail, glyph, selected, tabbable, handlers, canWrite, onDrop, kept = false }) {
   const key = folderKey(f.folder);
+  // What is in it, once the tile is on screen (useFolderPreview).
+  const { ref, tiles } = useFolderPreview(filespace, f.folder, { enabled: previews });
   return (
     <FolderDrop target={f.folder} enabled={canWrite} onDrop={onDrop} className="folder-tile-wrap">
       <div
+        ref={ref}
         role="option"
         aria-selected={selected}
         tabIndex={tabbable ? 0 : -1}
@@ -114,7 +119,7 @@ const FolderTile = memo(function FolderTile({ folder: f, detail, glyph, selected
         draggable={canWrite}
         onDragStart={canWrite ? (e) => startFolderDrag(e, f.folder) : undefined}
       >
-        <FolderGlyph size={glyph} className="folder-tile-icon" />
+        <FolderMosaic tiles={previews ? tiles : null} glyph={glyph} className="folder-tile-icon" />
         <span className="folder-tile-text">
           <span className="folder-tile-title">
             <span className="folder-tile-name truncate">{f.name}</span>
@@ -135,8 +140,12 @@ const FolderTile = memo(function FolderTile({ folder: f, detail, glyph, selected
  * cross between them and the files. Each is a drop target for moves and
  * uploads, draggable onto another folder on its own, and carries data-folder
  * so the page's context menu finds it. `summaries` is folderSummaries().
+ *
+ * Each shows what is in it — its newest few pictures, as a mosaic
+ * (FolderMosaic) — once it is on screen; `filespace` is the drive the
+ * folders are in ('' for All files), `previews` false keeps the plain icon.
  */
-export const FolderTiles = memo(function FolderTiles({ folders, summaries, cardSize = 'm', selected, handlers, canWrite, onDrop, navRef, keptFolder }) {
+export const FolderTiles = memo(function FolderTiles({ folders, summaries, cardSize = 'm', selected, handlers, canWrite, onDrop, navRef, keptFolder, filespace = '', previews = true }) {
   const shown = folders.slice(0, MAX_TILES);
   const { list, active, onFocus } = useFolderNav({ folders: shown, navRef });
   return (
@@ -145,6 +154,8 @@ export const FolderTiles = memo(function FolderTiles({ folders, summaries, cardS
         <FolderTile
           key={f.folder}
           folder={f}
+          filespace={filespace}
+          previews={previews}
           detail={describeFolder(summaries?.get(f.folder))}
           glyph={GLYPH[cardSize] || GLYPH.m}
           selected={selected.has(f.folder)}

@@ -56,6 +56,7 @@ import FolderMetaDialog from './FolderMetaDialog';
 import CollectionBar from './CollectionBar';
 import DragLayer, { beginDrag, paneDrop } from './DragPreview';
 import { FolderTiles, FolderRows, MAX_TILES } from './FolderItems';
+import { forgetFolderPreviews } from './useFolderPreview';
 import FilesHeader from './FilesHeader';
 import FilesToolbar, { MoreMenu } from './FilesToolbar';
 import DisplayPopover from './DisplayPopover';
@@ -481,6 +482,8 @@ export default function FilesClient({
 
   const loadFolders = useCallback(async () => {
     loadUsage();
+    // What changed the tree changed what the folders' previews show.
+    forgetFolderPreviews(filespaceId || '');
     try {
       const r = await fetch(`/api/files/folders${filespaceId ? `?filespace=${encodeURIComponent(filespaceId)}` : ''}`);
       if (!r.ok) return;
@@ -2898,6 +2901,7 @@ export default function FilesClient({
                     <FolderTiles
                       folders={itemFolders}
                       summaries={summaries}
+                      filespace={filespaceId || ''}
                       cardSize={display.size}
                       selected={sel.selectedFolders}
                       handlers={sel.handlers}
