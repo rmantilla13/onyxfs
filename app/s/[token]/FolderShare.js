@@ -5,6 +5,7 @@ import { describeFolder } from '@/lib/folder-ops';
 import FolderGlyph from '@/app/components/ui/FolderGlyph';
 import Icon from '@/app/components/ui/Icon';
 import FolderFiles from './FolderFiles';
+import LinkPath from './LinkPath';
 import Shell from './Shell';
 
 function Message({ brand, title, body, token }) {
@@ -64,24 +65,11 @@ export default async function FolderShare({ token, access, brand, path }) {
       <div className="files-pane share-folder" data-card-size="m">
         <header className="files-header share-folder-head">
           {up && (
-            <a className="btn btn-ghost btn-icon hdr-btn files-up" href={folderHref(token, up.sub)} aria-label={`Up to ${up.name}`} title={`Up to ${up.name}`}>
-              <Icon name="chevron-left" size={18} />
+            <a className="btn btn-ghost btn-icon hdr-btn files-up" href={folderHref(token, up.sub)} aria-label={`Back to ${up.name}`} title={`Back to ${up.name}`}>
+              <Icon name="arrow-left" size={18} />
             </a>
           )}
-          <nav className="crumbs" aria-label="Folder path">
-            <FolderGlyph size={22} className="share-folder-glyph" />
-            <ol>
-              {crumbs.slice(0, -1).map((c) => (
-                <li key={c.sub || '/'} className="crumb-item">
-                  <a className="crumb" href={folderHref(token, c.sub)} title={c.name}>{c.name}</a>
-                  <Icon name="chevron-right" size={14} className="crumb-sep" />
-                </li>
-              ))}
-              <li className="crumb-item crumb-here">
-                <h1 className="files-title truncate" aria-current="page" title={here.name}>{here.name}</h1>
-              </li>
-            </ol>
-          </nav>
+          <LinkPath token={token} crumbs={crumbs} title={here.name} />
         </header>
         <p className="small muted share-folder-summary">{summary === 'Empty' ? 'This folder is empty.' : summary}</p>
 

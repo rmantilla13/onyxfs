@@ -446,6 +446,9 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 .menu-item:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .menu-item:disabled { opacity: 0.5; cursor: not-allowed; }
 .menu-item.danger { color: var(--danger); }
+/* An item that is a link (a link page's folders): drawn as the buttons are. */
+a.menu-item { color: var(--ink); text-decoration: none; box-sizing: border-box; }
+a.menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .menu-sep { height: 1px; margin: var(--s1) 0; background: var(--line); }
 
 /* The right-click menu. Fixed, and placed by script after measuring so it
@@ -930,7 +933,8 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 }
 .files-header-actions { display: flex; align-items: center; gap: 2px; flex: none; margin-right: -8px; }
 .hdr-btn { width: 36px; height: 36px; padding: 0; justify-content: center; color: var(--muted); }
-.files-up { display: none; }
+/* Back to the folder above: wherever there is one, on every screen. */
+.files-up { margin-left: -10px; margin-right: -8px; }
 .hdr-btn:hover, .hdr-btn[aria-expanded='true'] { color: var(--ink); }
 
 /* The toolbar: what the view shows on the left, the view itself on the
@@ -1477,6 +1481,25 @@ select.input.cell-input { padding-right: 2px; }
 .crumb:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .crumb-drop.is-over .crumb, .crumb-drop[data-drop='ok'] .crumb { color: var(--ink); }
 .crumb-sep { flex: none; color: var(--muted); opacity: 0.6; }
+/* The top folder, below it: a chip in the drive's colour (--dot, set on the
+   path), never folded away. On a phone, the house alone. */
+.crumb-top { flex: 0 2 auto; }
+.crumbs .crumb.crumb-home {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 0; padding: 3px 10px 3px 8px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--dot, var(--accent)) 13%, transparent);
+  color: var(--ink); font-size: var(--t-md); font-weight: 500; letter-spacing: 0;
+}
+.crumbs .crumb.crumb-home:hover { background: color-mix(in srgb, var(--dot, var(--accent)) 22%, transparent); }
+.crumb-drop.is-over .crumb-home, .crumb-drop[data-drop='ok'] .crumb-home { box-shadow: inset 0 0 0 1.5px var(--dot, var(--accent)); }
+.crumb-home-icon { flex: none; color: var(--dot, var(--accent)); }
+.crumb-home-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The folders between, folded: "…" opens a menu of them. A phone folds
+   every one of them (is-narrow), a wider window only past two (is-wide). */
+.crumb-more { flex: none; }
+.crumb-more.is-narrow { display: none; }
+.crumbs .crumb.crumb-more-btn { display: inline-flex; align-items: center; padding: 4px 6px; }
 /* ── Selection action bar (phone) ──────────────────────────────────────────
    The header's Trash button scrolls out of reach on a phone, so a selection
    ends up with nothing to act on. This bar is fixed to the bottom edge and
@@ -1835,10 +1858,17 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   .filters-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3) var(--s4); }
   .filters-panel { padding: var(--s3); }
 
-  /* The open folder's name alone, with the way up before it. */
-  .files-up { display: inline-flex; margin-left: -10px; margin-right: -6px; }
-  .crumb-item:not(.crumb-here) { display: none; }
-  .crumb-item.crumb-here .files-title { padding-left: 0; }
+  /* The way back, the top folder's house, every folder between in one
+     "…", and the open folder's name. */
+  .files-up { margin-right: -6px; }
+  .crumb-between, .crumb-more.is-wide { display: none; }
+  .crumb-more.is-narrow { display: flex; }
+  .crumb-home-name { display: none; }
+  .crumbs .crumb.crumb-home { padding: 5px 7px; }
+  /* Every pixel to the open folder's name: the house and "…" sit together. */
+  .crumb-top .crumb-sep { display: none; }
+  .crumb-top { margin-right: 2px; }
+  .crumbs .crumb.crumb-more-btn { padding: 4px 3px; }
 
   /* Columns on a phone: the open folder's column, the width of the page,
      and what is selected in it below — there is no room beside it. */

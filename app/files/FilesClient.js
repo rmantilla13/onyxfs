@@ -2735,6 +2735,7 @@ export default function FilesClient({
             color={driveColor(filespaceId)}
             canWrite={canWrite && !collectionId}
             onOpen={navigate}
+            onUp={goUp}
             onDrop={onTreeDrop}
             onUploadFiles={() => inputRef.current?.click()}
             onUploadFolder={() => folderInputRef.current?.click()}
