@@ -1,4 +1,4 @@
-import { recordShareView, folderLinkRootExists } from '@/lib/db';
+import { recordShareView, folderLinkRootExists, linkSenderName } from '@/lib/db';
 import { folderLinkListing } from '@/lib/share-access';
 import { linkSubpath, linkCrumbs, linkFolderHref as folderHref } from '@/lib/folder-links';
 import { describeFolder } from '@/lib/folder-ops';
@@ -6,11 +6,11 @@ import FolderGlyph from '@/app/components/ui/FolderGlyph';
 import Icon from '@/app/components/ui/Icon';
 import FolderFiles from './FolderFiles';
 import LinkPath from './LinkPath';
-import Shell from './Shell';
+import Shell, { introFrom } from './Shell';
 
-function Message({ brand, title, body, token }) {
+function Message({ brand, kit = null, title, body, token, look = null }) {
   return (
-    <Shell brand={brand} narrow>
+    <Shell brand={brand} kit={kit} narrow look={look}>
       <h1 className="share-title">{title}</h1>
       <p className="small muted" style={{ margin: 0 }}>{body}</p>
       {token && (
@@ -34,25 +34,33 @@ function Message({ brand, title, body, token }) {
  * trashed, or restricted to certain people is not here on the next request,
  * and one added is. A view is counted when the link's own folder is opened,
  * not each subfolder.
+ *
+ * In the link's view (access.look.view: grid, list or gallery) and look —
+ * its brand kit's too (`kit`, looked up by the page) — with the sharer's
+ * words over the link's own folder, not repeated in each folder inside it.
+ * Its files download only when the link allows it.
  */
-export default async function FolderShare({ token, access, brand, path }) {
+export default async function FolderShare({ token, access, brand, kit = null, path }) {
+  const { look, downloads } = access;
   const sub = linkSubpath(path);
   if (sub == null) {
-    return <Message brand={brand} token={token} title="This folder is not in the link" body="The link opens one folder and what is inside it." />;
+    return <Message brand={brand} kit={kit} look={look} token={token} title="This folder is not in the link" body="The link opens one folder and what is inside it." />;
   }
   const listing = await folderLinkListing(access, { sub });
   if (listing.state) {
-    return <Message brand={brand} title="This link can’t be opened right now" body="Try again in a moment." />;
+    return <Message brand={brand} kit={kit} look={look} title="This link can’t be opened right now" body="Try again in a moment." />;
   }
   const { files, cursor, folders, count } = listing;
   const empty = !files.length && !folders.length;
   if (empty && sub) {
-    return <Message brand={brand} token={token} title="This folder is not in the link" body="It may have been moved, removed or emptied since the link was made." />;
+    return <Message brand={brand} kit={kit} look={look} token={token} title="This folder is not in the link" body="It may have been moved, removed or emptied since the link was made." />;
   }
   if (empty && !(await folderLinkRootExists(access.scope).catch(() => true))) {
-    return <Message brand={brand} title="This folder is no longer available" body="It was removed after the link was made." />;
+    return <Message brand={brand} kit={kit} look={look} title="This folder is no longer available" body="It was removed after the link was made." />;
   }
   if (!sub) await recordShareView(token);
+  const sender = !sub && look.sender ? await linkSenderName(access.row.created_by) : null;
+  const intro = sub ? null : introFrom(look, sender);
 
   const crumbs = linkCrumbs(access.scope.root, sub);
   const here = crumbs[crumbs.length - 1];
@@ -61,7 +69,7 @@ export default async function FolderShare({ token, access, brand, path }) {
   const summary = describeFolder({ total, subfolders: folders.length });
 
   return (
-    <Shell brand={brand} wide>
+    <Shell brand={brand} kit={kit} wide look={look} view={look.view} intro={intro}>
       <div className="files-pane share-folder" data-card-size="m">
         <header className="files-header share-folder-head">
           {up && (
@@ -69,7 +77,8 @@ export default async function FolderShare({ token, access, brand, path }) {
               <Icon name="arrow-left" size={18} />
             </a>
           )}
-          <LinkPath token={token} crumbs={crumbs} title={here.name} />
+          {/* Under the sharer's own heading, the folder's name is the second one. */}
+          <LinkPath token={token} crumbs={crumbs} title={here.name} as={intro?.title ? 'h2' : 'h1'} />
         </header>
         <p className="small muted share-folder-summary">{summary === 'Empty' ? 'This folder is empty.' : summary}</p>
 
@@ -98,12 +107,13 @@ export default async function FolderShare({ token, access, brand, path }) {
         {files.length > 0 && (
           <section className="files-section" aria-label="Files">
             <h2 className="files-section-label">Files <span className="files-section-count">· {count.toLocaleString()}</span></h2>
-            <FolderFiles token={token} sub={sub} initial={files} cursor={cursor} />
+            <FolderFiles token={token} sub={sub} initial={files} cursor={cursor} view={look.view} downloads={downloads} />
           </section>
         )}
 
         <p className="small muted share-foot">
           Shared from {brand.name}. {access.kind === 'password' ? 'Anyone with this link and its password' : 'Anyone with this link'} sees this folder as it is when they open it.
+          {downloads ? '' : ' Downloads are turned off for this link.'}
         </p>
       </div>
     </Shell>

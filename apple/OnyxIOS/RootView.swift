@@ -28,6 +28,13 @@ struct CollectionRef: Hashable {
     let name: String
 }
 
+extension EnvironmentValues {
+    /// Open a folder above the one on screen, in the same place — "" its
+    /// top — as Back would after enough taps: Browse sets it on its stack.
+    /// Nil anywhere else, where a folder screen offers no way up but Back.
+    @Entry var openFolderAbove: ((String) -> Void)? = nil
+}
+
 /// The app's three places to be.
 enum AppTab: String, CaseIterable, Identifiable {
     case home, search, browse
@@ -202,9 +209,16 @@ private struct Browser: View {
             PlacesView(selection: $place, beside: width == .regular ? shown : nil, open: open)
         } detail: {
             if let shown {
+                // Up to a folder above, for each folder screen: given to each
+                // one, the pushed ones included — set on the stack, it never
+                // reached them.
+                let above: (String) -> Void = { climb(to: $0, in: shown) }
                 NavigationStack(path: $path) {
                     FolderView(route: FolderRoute(place: shown, folder: ""))
-                        .navigationDestination(for: FolderRoute.self) { FolderView(route: $0) }
+                        .environment(\.openFolderAbove, above)
+                        .navigationDestination(for: FolderRoute.self) {
+                            FolderView(route: $0).environment(\.openFolderAbove, above)
+                        }
                 }
                 // Another place starts from its top — or, opened from a
                 // star, at its folder. Set once the stack is there: a path
@@ -248,10 +262,9 @@ private struct Browser: View {
     /// Open a starred folder: its place, then each folder on the way down to
     /// it, so Back climbs out one level at a time.
     private func open(_ route: FolderRoute) {
-        let parts = route.folder.split(separator: "/").map(String.init)
         // A collection is one screen; a folder brings the ones above it.
-        let trail = route.collection != nil ? [route] : parts.indices.map { i in
-            FolderRoute(place: route.place, folder: parts[...i].joined(separator: "/"))
+        let trail = route.collection != nil ? [route] : FolderTrail.steps(to: route.folder).map {
+            FolderRoute(place: route.place, folder: $0)
         }
         if shown == route.place {
             place = route.place
@@ -261,5 +274,19 @@ private struct Browser: View {
             place = route.place
         }
         column = .detail
+    }
+
+    /// Go up to a folder above the one on screen — "" the place's top — by
+    /// cutting the stack back to it, so Back from there still climbs a level
+    /// at a time. The stack holds every folder on the way down (opening a
+    /// folder pushes one level; `open` pushes them all); one that does not is
+    /// given its way down again.
+    private func climb(to folder: String, in place: Place) {
+        guard !folder.isEmpty else { path = []; return }
+        if let i = path.lastIndex(where: { $0.collection == nil && $0.folder == folder }) {
+            path = Array(path[...i])
+        } else {
+            path = FolderTrail.steps(to: folder).map { FolderRoute(place: place, folder: $0) }
+        }
     }
 }

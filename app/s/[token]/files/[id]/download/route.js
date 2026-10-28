@@ -20,6 +20,9 @@ export const dynamic = 'force-dynamic';
  *      it; nothing about it is signed
  *   3. then, and only then, a URL for that one object
  *
+ * Refused outright, before the file is looked at, when the link's downloads
+ * are off (file_shares.downloads).
+ *
  * Signed for six hours (ORIGINAL_URL_TTL), as a file link's download is, so
  * a large download cut off part way can resume; a URL already handed out
  * keeps working that long after a revoke, as there.
@@ -28,6 +31,8 @@ export async function GET(req, { params }) {
   const { token, id } = params || {};
   const access = await resolveFolderShareAccess(token);
   if (access.state !== 'ok') return NextResponse.redirect(new URL(linkFolderHref(token), req.url));
+  // A folder shared to be looked at: no file of it downloads.
+  if (!access.downloads) return NextResponse.json({ error: 'Downloads are turned off for this link.' }, { status: 403 });
 
   let file;
   try {
