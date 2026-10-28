@@ -5,6 +5,7 @@ import { parseShareRequest } from '@/lib/share-kinds';
 import {
   presentShare, folderLinkGate, folderLinkSubject, folderShareKinds, linkChoices,
 } from '@/lib/share-guard';
+import { kitRefusal } from '@/lib/share-brands-store';
 import { audit } from '@/lib/audit';
 
 export const runtime = 'nodejs';
@@ -97,6 +98,8 @@ export async function POST(req) {
   if (!(await folderPathInUse(gate.name, { tag: gate.tag, prefix: gate.storagePrefix }))) {
     return NextResponse.json({ error: `There is no folder “${gate.name}” here.` }, { status: 404 });
   }
+  const noKit = await kitRefusal(parsed.look);
+  if (noKit) return noKit;
 
   const { token, reused } = await createFolderShare({
     folder: gate.name,
@@ -112,6 +115,7 @@ export async function POST(req) {
     await audit(g.email, 'share.create', folderLinkSubject({ storagePrefix: gate.storagePrefix, folder: gate.name, driveName: gate.driveName }), {
       kind, expiresInDays: parsed.expiresInDays, token: token.slice(0, 6),
       ...(parsed.downloads ? {} : { downloads: false }), ...(parsed.look?.view ? { view: parsed.look.view } : {}),
+      ...(parsed.look?.brand ? { brand: parsed.look.brand } : {}),
     });
   }
   const share = (await listSharesForFolder(gate.name, gate.storagePrefix)).find((s) => s.token === token);

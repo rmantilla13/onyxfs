@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   blankForm, applyTemplate, formFromShare, createRequest, changeRequest, templateSettings,
-  expiryChoices, startingExpiry, toLocalInput, fromLocalInput, defaultDate, lookSummary,
+  expiryChoices, startingExpiry, toLocalInput, fromLocalInput, defaultDate, lookSummary, withKnownKit,
 } from '../lib/share-form.js';
 import {
   SHARE_TEMPLATES, SHARE_VIEWS, parseShareRequest, parseShareChanges, parseTemplateSettings,
@@ -112,4 +112,23 @@ test('a look is summed up in a few words', () => {
   assert.equal(lookSummary(blankForm('folder'), SHARE_VIEWS.folder), 'Grid');
   assert.equal(lookSummary({ ...blankForm('folder'), view: 'gallery', theme: 'dark', logo: 'none', accent: '#123456', title: 'x', sender: true }, SHARE_VIEWS.folder),
     'Gallery · Dark · Own accent · No logo · With a note · Your name');
+});
+
+test('a kit goes through the form by id, and one no longer offered falls back to the workspace’s', () => {
+  const kits = [{ id: 'kAcme12345', name: 'Acme', accent: '#BE185D', logoUrl: '/a.svg', logoDarkUrl: null }];
+  const f = { ...blankForm('file'), brand: 'kAcme12345' };
+  assert.equal(blankForm('file').brand, '');
+  assert.deepEqual(parseShareRequest(createRequest(f)).look, { brand: 'kAcme12345' });
+  assert.deepEqual(parseShareRequest(createRequest(blankForm('file'))).look, null, 'the workspace’s look is no look');
+  const share = { kind: 'public', look: { brand: 'kAcme12345', theme: 'dark' } };
+  assert.equal(formFromShare(share).brand, 'kAcme12345');
+  assert.deepEqual(parseShareChanges(changeRequest(formFromShare(share), share)).changes.look, { brand: 'kAcme12345', theme: 'dark' });
+  assert.equal(applyTemplate(blankForm('folder'), { look: { brand: 'kAcme12345' } }, { target: 'folder' }).brand, 'kAcme12345');
+  assert.deepEqual(parseTemplateSettings(templateSettings(f)).settings.look, { brand: 'kAcme12345' });
+  // Removed since: the form stops naming it, so saving never sends an id the route refuses.
+  assert.equal(withKnownKit(f, kits), f);
+  assert.equal(withKnownKit(f, []).brand, '');
+  assert.equal(withKnownKit({ ...f, brand: 'kGone12345' }, kits).brand, '');
+  assert.equal(lookSummary(f, SHARE_VIEWS.file, kits), 'Standard · Acme');
+  assert.equal(lookSummary({ ...f, brand: 'kGone12345' }, SHARE_VIEWS.file, kits), 'Standard');
 });

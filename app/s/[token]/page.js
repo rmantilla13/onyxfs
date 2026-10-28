@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { loadBrand } from '@/lib/brand-config';
+import { loadBrand, loadShareKit } from '@/lib/brand-config';
 import { presignFileUrls } from '@/lib/storage';
 import { recordShareView, getShareTarget, linkSenderName } from '@/lib/db';
 import { resolveLinkAccess } from '@/lib/share-access';
@@ -22,10 +22,13 @@ export const dynamic = 'force-dynamic';
  * A look's colours alone — scheme and accent — for a page the link has not
  * let anyone into yet (its password form): they say nothing about what is
  * shared, and the page would otherwise change colour once it is unlocked.
+ * A brand kit's accent is a colour too, and is the one taken when the link
+ * chose none of its own; the kit's logo and font wait for the password.
  */
-const coloursOnly = (row) => {
+const coloursOnly = async (row) => {
   const look = resolveShareLook(row?.look);
-  return { theme: look.theme, accent: look.accent };
+  const kit = await loadShareKit(look.brand);
+  return { theme: look.theme, accent: look.accent || kit?.accent || null };
 };
 
 /**
@@ -60,7 +63,8 @@ export async function generateMetadata({ params }) {
  *
  * How the page looks is the link's (access.look, lib/share-kinds.js): a
  * view — 'standard', or 'presentation' with the file filling the page —
- * a scheme, an accent, the logo or none, and the sharer's words above it.
+ * a scheme, a brand kit, an accent, the logo or none, and the sharer's
+ * words above it.
  * With its downloads off (access.downloads) the page offers no download and
  * is not handed the original where a preview shows the file
  * (withoutOriginal); the download route refuses either way.
@@ -76,7 +80,8 @@ export default async function SharePage({ params, searchParams }) {
 
   if (access.state === 'ok' && folder) {
     const path = typeof searchParams?.path === 'string' ? searchParams.path : '';
-    return <FolderShare token={token} access={access} brand={brand} path={path} />;
+    const kit = await loadShareKit(access.look.brand);
+    return <FolderShare token={token} access={access} brand={brand} kit={kit} path={path} />;
   }
 
   if (access.state === 'ok') {
@@ -95,9 +100,10 @@ export default async function SharePage({ params, searchParams }) {
     const { look } = access;
     const presenting = look.view === 'presentation' && !review;
     const sender = look.sender ? await linkSenderName(access.row.created_by) : null;
+    const kit = await loadShareKit(look.brand);
     const Name = look.title ? 'h2' : 'h1';
     return (
-      <Shell brand={brand} wide={!!review || presenting} look={look} view={review ? 'review' : look.view} intro={introFrom(look, sender)}>
+      <Shell brand={brand} kit={kit} wide={!!review || presenting} look={look} view={review ? 'review' : look.view} intro={introFrom(look, sender)}>
         {/* Only once the link has let them in: a locked link connects to nothing. */}
         <PreviewPreconnect urls={[file.thumbnailUrl, file.posterUrl, file.proxyUrl, file.url]} />
         <div className="share-file">
@@ -136,7 +142,7 @@ export default async function SharePage({ params, searchParams }) {
 
   if (access.state === 'password' || access.state === 'locked') {
     return (
-      <Shell brand={brand} narrow look={coloursOnly(access.row)}>
+      <Shell brand={brand} narrow look={await coloursOnly(access.row)}>
         <h1 className="share-title">{folder ? 'This folder is password protected' : 'This file is password protected'}</h1>
         <p className="small muted" style={{ margin: '0 0 var(--s4)' }}>Enter the password you were given with the link.</p>
         <UnlockForm token={token} locked={access.state === 'locked'} />

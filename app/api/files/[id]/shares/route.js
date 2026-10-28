@@ -5,6 +5,7 @@ import { parseShareRequest } from '@/lib/share-kinds';
 import { presentFileShare, reviewLinkRefusal, linkChoices } from '@/lib/share-guard';
 import { effectiveKind } from '@/lib/media';
 import { isReviewableKind } from '@/lib/review';
+import { kitRefusal } from '@/lib/share-brands-store';
 import { audit } from '@/lib/audit';
 
 export const runtime = 'nodejs';
@@ -97,6 +98,8 @@ export async function POST(req, { params }) {
     const no = await reviewLinkRefusal(g, g.file, { kind, expiresInDays: parsed.expiresInDays });
     if (no) return no;
   }
+  const noKit = await kitRefusal(parsed.look);
+  if (noKit) return noKit;
 
   const { token, reused } = await createShare({
     fileId: g.file.id,
@@ -112,6 +115,7 @@ export async function POST(req, { params }) {
     await audit(g.email, 'share.create', { type: 'file', id: g.file.id, label: g.file.name }, {
       kind, expiresInDays: parsed.expiresInDays, ...(parsed.review ? { review: parsed.review } : {}),
       ...(parsed.downloads ? {} : { downloads: false }), ...(parsed.look?.view ? { view: parsed.look.view } : {}),
+      ...(parsed.look?.brand ? { brand: parsed.look.brand } : {}),
     });
     // A link that takes comments puts the file in review.
     if (parsed.review) await refreshReviewStatus(g.file.id).catch(() => {});

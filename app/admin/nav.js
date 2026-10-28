@@ -58,6 +58,8 @@ export const ADMIN_NAV = [
     items: [
       // Becomes "Health & maintenance" when the maintenance card lands (Phase 1).
       { href: '/admin/health', label: 'Health' },
+      // How the workspace looks, and the brand kits share links may wear.
+      { href: '/admin/brand', label: 'Brand' },
       // { href: '/admin/activity', label: 'Activity' },                   // Phase 1: audit_events
       // { href: '/admin/features', label: 'Features' },                   // Phase 1: flag cleanup
     ],
