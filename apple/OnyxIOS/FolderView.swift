@@ -10,6 +10,7 @@ struct FolderView: View {
     @Environment(Session.self) private var session
     @Environment(AppChrome.self) private var chrome: AppChrome?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openFolderAbove) private var openFolderAbove
     @Environment(\.horizontalSizeClass) private var width
     @State private var listing: FolderListing
     @AppStorage("browser.layout") private var layout: BrowserLayout = .grid
@@ -115,6 +116,20 @@ struct FolderView: View {
         guard route.collection == nil, !route.folder.isEmpty else { return nil }
         let parent = (route.folder as NSString).deletingLastPathComponent
         return parent.isEmpty ? route.place.name : (parent as NSString).lastPathComponent
+    }
+
+    /// Whether the folder above is the drive's top: the chip says so with a
+    /// house, as ⌂ does further down.
+    private var parentIsTop: Bool { FolderTrail.depth(of: route.folder) == 1 }
+
+    /// ⌂, the drive's top in one tap, from two folders down — one down, the
+    /// chip is the top already. Back's long press lists every folder between.
+    /// It sits in the chip rather than beside it: as an item of its own it
+    /// cost the bar ~60 points, and iOS put Select and the view options away
+    /// behind an overflow ⋯ to make room.
+    private var topAction: (() -> Void)? {
+        guard route.collection == nil, FolderTrail.depth(of: route.folder) > 1, let openFolderAbove else { return nil }
+        return { openFolderAbove("") }
     }
 
     /// The page's headline: the folder's name, huge, and what it holds.
@@ -308,7 +323,7 @@ struct FolderView: View {
         }
         if !selecting, let parentName {
             ToolbarItem(placement: .topBarLeading) {
-                ParentChip(name: parentName) { dismiss() }
+                ParentChip(name: parentName, top: parentIsTop, place: route.place.name, home: topAction) { dismiss() }
             }
         }
         if selecting {
@@ -394,9 +409,15 @@ struct FolderView: View {
 }
 
 /// The folder this one is in, as a pill beside the back chevron: a tap goes
-/// up to it. Liquid Glass draws the pill on iOS 26; before it, a frosted one.
+/// up to it — with a house when that is the drive's top. Further down, the
+/// pill leads with ⌂ (`home`), its own button, which goes to the drive's top
+/// (`place`) in one tap. Liquid Glass draws the pill on iOS 26; before it, a
+/// frosted one.
 private struct ParentChip: View {
     let name: String
+    var top = false
+    var place = ""
+    var home: (() -> Void)? = nil
     let action: () -> Void
 
     /// Its own width, whatever the toolbar offers: on iOS 26 the toolbar
@@ -404,20 +425,55 @@ private struct ParentChip: View {
     /// shortened here instead, so the pill never crowds the title.
     private var shown: String { name.count > 22 ? String(name.prefix(20)) + "…" : name }
 
+    /// Beside ⌂ the name gets at most this many points, and is cut to fit
+    /// them: any wider and an iPhone's bar moved Select into its overflow ⋯.
+    /// The whole name is still in Back's long press.
+    private static let besideHome: CGFloat = 56
+
     var body: some View {
+        HStack(spacing: 0) {
+            if let home {
+                Button(action: home) {
+                    Image(systemName: "house")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.leading, Theme.liquidGlass ? 0 : 10)
+                        .padding(.trailing, 6)
+                        .padding(.vertical, Theme.liquidGlass ? 0 : 7)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(place), the top folder")
+                Rectangle()
+                    .fill(.secondary.opacity(0.5))
+                    .frame(width: 1, height: 14)
+            }
+            upButton
+        }
+        .background {
+            if !Theme.liquidGlass, home != nil { Capsule().fill(Color.white.opacity(0.12)) }
+        }
+    }
+
+    private var upButton: some View {
         Button(action: action) {
-            Text(shown)
+            HStack(spacing: 5) {
+                if top { Image(systemName: "house").imageScale(.small) }
+                Text(shown)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: home == nil ? nil : Self.besideHome, alignment: .leading)
+            }
                 .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
                 .fixedSize()
-                .padding(.horizontal, Theme.liquidGlass ? 6 : 14)
+                .padding(.leading, home == nil ? (Theme.liquidGlass ? 6 : 14) : 6)
+                .padding(.trailing, Theme.liquidGlass ? 6 : 14)
                 .padding(.vertical, Theme.liquidGlass ? 0 : 7)
                 .background {
-                    if !Theme.liquidGlass { Capsule().fill(Color.white.opacity(0.12)) }
+                    if !Theme.liquidGlass, home == nil { Capsule().fill(Color.white.opacity(0.12)) }
                 }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Up to \(name)")
+        .accessibilityLabel(top ? "Up to \(name), the top folder" : "Up to \(name)")
     }
 }
 
