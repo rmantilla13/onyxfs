@@ -8,6 +8,7 @@ import { kindLabel } from '@/lib/file-info';
 import { fmtSize, sharedFile, withoutOriginal } from '@/lib/media';
 import FilePreview from '@/app/components/file/FilePreview';
 import Icon from '@/app/components/ui/Icon';
+import LinkPath from '../../LinkPath';
 import Shell from '../../Shell';
 
 export const dynamic = 'force-dynamic';
@@ -72,16 +73,7 @@ export default async function SharedFolderFilePage({ params }) {
   return (
     <Shell brand={brand} kit={kit} look={look}>
       <div className="share-file">
-        <nav className="crumbs share-file-crumbs" aria-label="Folder path">
-          <ol>
-            {crumbs.map((c) => (
-              <li key={c.sub || '/'} className="crumb-item">
-                <a className="crumb" href={linkFolderHref(token, c.sub)} title={c.name}>{c.name}</a>
-                <Icon name="chevron-right" size={14} className="crumb-sep" />
-              </li>
-            ))}
-          </ol>
-        </nav>
+        <LinkPath token={token} crumbs={crumbs} className="share-file-crumbs" />
         <div className="share-head">
           <a className="btn btn-ghost btn-icon" href={linkFolderHref(token, folder.sub)} aria-label={`Back to ${folder.name}`} title={`Back to ${folder.name}`}>
             <Icon name="arrow-left" size={18} />

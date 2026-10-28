@@ -5,7 +5,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cleanFolder, folderNameProblem, folderPathProblem, isWithin, rebase, escapeLike,
-  keyFor, planRename, mapLimit, settleLimit, parentOf, baseName, crumbsFor, folderSummaries, describeFolder,
+  keyFor, planRename, mapLimit, settleLimit, parentOf, baseName, crumbsFor, foldCrumbs, folderSummaries, describeFolder,
 } from '../lib/folder-ops.js';
 
 test('folder names: one segment, not reserved, not blank', () => {
@@ -139,4 +139,25 @@ describe('folderSummaries', () => {
     assert.equal(describeFolder(s.get('Footage'), { short: true }), '7 files', 'a list column says the files');
     assert.equal(describeFolder({ files: 0, total: 0, subfolders: 3 }, { short: true }), '3 folders', 'or the folders, when there are no files');
   });
+});
+
+test('a path folds its middle once there are more than two folders between', () => {
+  const names = (list) => list.map((c) => c.name);
+  // The top folder: top and here are the same crumb, nothing between.
+  const top = foldCrumbs(crumbsFor('', 'Showcase'));
+  assert.equal(top.top, top.here);
+  assert.deepEqual([top.folded, top.between], [[], []]);
+  // Two between: all shown.
+  const two = foldCrumbs(crumbsFor('Spring/Day 1/Selects', 'Showcase'));
+  assert.deepEqual([two.top.name, names(two.folded), names(two.between), two.here.name], ['Showcase', [], ['Spring', 'Day 1'], 'Selects']);
+  // Four between: the folder just above stays, the rest fold, in order.
+  const deep = foldCrumbs(crumbsFor('a/b/c/d/here', 'Showcase'));
+  assert.deepEqual([names(deep.folded), names(deep.between), deep.here.path], [['a', 'b', 'c'], ['d'], 'a/b/c/d/here']);
+  assert.equal(deep.folded[2].path, 'a/b/c', 'each folded crumb still opens its own folder');
+  // Tunable, and safe on nothing.
+  assert.deepEqual(names(foldCrumbs(crumbsFor('a/b/c/d/here'), { most: 4 }).folded), []);
+  assert.deepEqual(names(foldCrumbs(crumbsFor('a/b/c/d/here'), { keep: 2 }).between), ['c', 'd']);
+  assert.deepEqual(foldCrumbs([]).folded, []);
+  const none = foldCrumbs(null);
+  assert.equal(none.top, none.here);
 });
