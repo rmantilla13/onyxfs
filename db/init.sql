@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 158
+-- Statements: 162
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -401,6 +401,20 @@ ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS pw_locked_until BIGINT;
 CREATE INDEX IF NOT EXISTS file_shares_created_by_idx ON file_shares (created_by);
 
 ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS review TEXT;
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS downloads BOOLEAN NOT NULL DEFAULT true;
+
+ALTER TABLE file_shares ADD COLUMN IF NOT EXISTS look JSONB;
+
+CREATE TABLE IF NOT EXISTS share_templates (
+  id         TEXT PRIMARY KEY,
+  owner      TEXT NOT NULL,
+  name       TEXT NOT NULL,
+  settings   JSONB NOT NULL,
+  created_at BIGINT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS share_templates_owner_idx ON share_templates (owner, created_at);
 
 CREATE SEQUENCE IF NOT EXISTS review_change_seq;
 
