@@ -79,7 +79,7 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 30) {
                 content()
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, Theme.Space.gutter)
             .padding(.top, 14)
             .padding(.bottom, 28)
         }

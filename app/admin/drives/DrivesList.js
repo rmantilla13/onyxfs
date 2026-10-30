@@ -85,7 +85,9 @@ export default function DrivesList({ rows, storage }) {
     <AdminPage
       title="Drives"
       description="Each drive is a folder in a bucket with its own members — a disk of its own on the desktop."
-      actions={<button type="button" className="btn btn-primary" onClick={() => setMaking(true)}>New drive…</button>}
+      // One lit button in the view: while a drive needs an owner the remedy
+      // on the attention card is it, and New drive… waits as a plain button.
+      actions={<button type="button" className={ownerless.length ? 'btn' : 'btn btn-primary'} onClick={() => setMaking(true)}>New drive…</button>}
     >
       {ownerless.length > 0 && (
         <AdminCard>

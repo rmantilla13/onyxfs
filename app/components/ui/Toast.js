@@ -21,8 +21,11 @@ const ToastContext = createContext(null);
  *
  * A dismissed toast leaves the way it came: dismiss() marks it leaving and
  * the element takes itself out of the list when its exit animation ends
- * (.toast[data-leaving], globals.css). No timer for that — animationend
- * fires under the reduced-motion clamp too, so none can stick.
+ * (.toast[data-leaving], globals.css); animationend fires under the
+ * reduced-motion clamp too. The end does not hang on the event, though: a
+ * backstop (GONE_MS, past the longest exit) removes the toast should the
+ * animation never run or never end — a stylesheet that sets animation:
+ * none, a stack hidden at the moment of dismissal — so none can stick.
  *
  * A toast can carry one action — `{ label, onClick }`, the Undo after a
  * delete. It stays longer (ACTION_MS), and its clock stops while the pointer
@@ -30,6 +33,7 @@ const ToastContext = createContext(null);
  * timer; it starts again, from the top, on leaving.
  */
 const ACTION_MS = 10000;
+const GONE_MS = 600;
 
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
@@ -37,13 +41,16 @@ export function ToastProvider({ children }) {
 
   const remove = useCallback((id) => {
     setToasts((list) => list.filter((t) => t.id !== id));
+    const gone = timers.current.get(`${id}:gone`);
+    if (gone) { clearTimeout(gone); timers.current.delete(`${id}:gone`); }
   }, []);
 
   const dismiss = useCallback((id) => {
     setToasts((list) => list.map((t) => (t.id === id ? { ...t, leaving: true } : t)));
     const timer = timers.current.get(id);
     if (timer) { clearTimeout(timer); timers.current.delete(id); }
-  }, []);
+    if (!timers.current.has(`${id}:gone`)) timers.current.set(`${id}:gone`, setTimeout(() => remove(id), GONE_MS));
+  }, [remove]);
 
   const schedule = useCallback((id, ms) => {
     const timer = timers.current.get(id);
@@ -88,7 +95,8 @@ export function ToastProvider({ children }) {
             role={t.type === 'error' ? 'alert' : 'status'}
             aria-live={t.type === 'error' ? 'assertive' : 'polite'}
             data-leaving={t.leaving ? '' : undefined}
-            onAnimationEnd={t.leaving ? () => remove(t.id) : undefined}
+            // Its own exit, not a child's animation ending inside it.
+            onAnimationEnd={t.leaving ? (e) => { if (e.target === e.currentTarget) remove(t.id); } : undefined}
             onMouseEnter={t.action ? () => hold(t) : undefined}
             onMouseLeave={t.action ? () => release(t) : undefined}
             onFocus={t.action ? () => hold(t) : undefined}
@@ -107,7 +115,7 @@ export function ToastProvider({ children }) {
                 {t.action.label}
               </button>
             )}
-            <button onClick={() => dismiss(t.id)} aria-label="Dismiss"><Icon name="x" size={14} /></button>
+            <button className="toast-close" onClick={() => dismiss(t.id)} aria-label="Dismiss"><Icon name="x" size={14} /></button>
           </div>
         ))}
       </div>

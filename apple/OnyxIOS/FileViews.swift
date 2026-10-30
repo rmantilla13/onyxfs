@@ -165,13 +165,13 @@ struct SelectionCheck: View {
 
     var body: some View {
         ZStack {
-            Circle().fill(chosen ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(.black.opacity(0.28)))
+            Circle().fill(chosen ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Theme.dim))
             Image(systemName: "checkmark")
                 .font(.system(size: 11, weight: .heavy))
                 .foregroundStyle(Theme.onAura)
                 .opacity(chosen ? 1 : 0)
                 .bounce(on: chosen)
-            Circle().strokeBorder(.white.opacity(0.9), lineWidth: 1.5)
+            Circle().strokeBorder(Theme.rim, lineWidth: 1.5)
         }
         .frame(width: 24, height: 24)
         .elevation(.low)
@@ -244,7 +244,7 @@ struct ReviewBadge: View {
                 Circle()
                     .fill(color)
                     .frame(width: 10, height: 10)
-                    .overlay(Circle().strokeBorder(.white.opacity(0.9), lineWidth: 1.5))
+                    .overlay(Circle().strokeBorder(Theme.rim, lineWidth: 1.5))
                     .accessibilityLabel(FileFormat.reviewName(status))
             }
         }

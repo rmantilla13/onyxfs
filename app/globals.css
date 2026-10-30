@@ -85,7 +85,7 @@
   --edge-hi: inset 0 1px 0 var(--glass-hi);
   /* A control's edge: --line is a divider, this is what makes an input or a
      segmented control read as a control (3:1 against the card it sits on).
-     The dark scheme's line already does. */
+     The dark scheme mixes its own below; its line is a divider there too. */
   --line-strong: color-mix(in srgb, var(--ink) 45%, var(--paper));
 
   /* The second text colour: a card's meta line, a drive's detail, a cell.
@@ -106,11 +106,27 @@
   --z-toast: 200;
   --z-drag: 300;
 
+  /* Three durations: a state changing (a hover, a press), something small
+     arriving (a menu, a toast), something large arriving (a dialog, Quick
+     Look). The reduced-motion block below sets all three to zero. */
   --dur-1: 120ms;
   --dur-2: 200ms;
+  --dur-3: 320ms;
   --ease: cubic-bezier(0.2, 0, 0.13, 1);
+  /* For what arrives: it covers most of the way at once and settles, so it
+     is where the eye looks by the time the eye gets there. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   /* For what leaves (a toast): it accelerates away rather than easing in. */
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  /* A glaze: light laid over the brand's gradient — the primary button's
+     sheen, the band that crosses a progress bar. Pure white rather than a
+     brand colour, so it is the same light in either scheme. */
+  --glaze: color-mix(in srgb, #fff 28%, transparent);
+  /* The stage a picture plays on: letterboxing is black at every theme, and
+     what sits on it — the big play button — is lit white. Not brand colours,
+     so the one pair serves both schemes and every palette. */
+  --stage: #000;
+  --on-stage: #fff;
 
   /* One state language. Hover is a tint of ink, a shade stronger in a menu;
      what is chosen or on — a toggle, the open drive, a picked row — is the
@@ -190,8 +206,11 @@
 
 /* In the dark scheme ink is the light colour, so anything that used it as
    "the dark one" — a shadow, a scrim over the page or over a thumbnail —
-   takes paper, which is now the dark one, instead. */
-:root[data-theme='dark'] {
+   takes paper, which is now the dark one, instead. A brand whose own paper
+   is dark (data-brand, which the root layout sets from isDarkPalette) is
+   in the same position in either scheme: the light recipes above mix the
+   paper with white, and would put its light ink on light cards. */
+:root[data-theme='dark'], :root[data-brand='dark'] {
   color-scheme: dark;
   /* On near-black a card is seen by its lift alone, so the page is the
      paper itself, the card the 8% lift darkPalette() tests its text against,
@@ -207,7 +226,10 @@
      is a faint ink rather than the card's line. */
   --surface-raised: color-mix(in srgb, var(--paper) 86%, #fff);
   --line-raised: color-mix(in srgb, var(--ink) 22%, transparent);
-  --line-strong: var(--line);
+  /* The line is 1.2:1 on a card here, a divider and no more; a control's
+     edge is mixed to clear 3:1 on the card and the page (test/theme.test.js
+     checks it for the Onyx dark scheme and a dark white-label brand). */
+  --line-strong: color-mix(in srgb, var(--ink) 46%, var(--paper));
   --hover-bg: color-mix(in srgb, var(--ink) 10%, transparent);
   --hover-bg-strong: color-mix(in srgb, var(--ink) 14%, transparent);
   --ring: color-mix(in srgb, var(--accent) 85%, #fff);
@@ -267,12 +289,15 @@
 /* Motion is decoration here — nothing depends on an animation finishing, so
    it can all go to zero without changing behaviour. */
 @media (prefers-reduced-motion: reduce) {
-  :root { --dur-1: 0ms; --dur-2: 0ms; }
+  :root { --dur-1: 0ms; --dur-2: 0ms; --dur-3: 0ms; }
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+  /* The view transition's pseudo-elements belong to no element, so the
+     clamp above misses them (the files page also asks before starting one). */
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -340,18 +365,43 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 .seg-btn[aria-checked='true']:focus-visible,
 .switch:focus-visible { outline-color: var(--ink); }
 
+/* ── Motion ─────────────────────────────────────────────────────────────── */
+/* Everything that appears, arrives, and it arrives the same way: a shade
+   smaller or a step away, then in place, over --dur-2 on --ease-out (a
+   dialog or Quick Look takes --dur-3). One pair of keyframes for all of it
+   — a menu, a toast, a panel, an empty state — each saying where it comes
+   from through --arrive-y and --arrive-scale, and `leave` for the few that
+   go the way they came (a toast). Transform and opacity only, so an
+   arrival is a composite and nothing after it; one shot, so nothing runs
+   at rest. Under reduced motion the durations are zero and the end state
+   is simply there. */
+@keyframes arrive {
+  from { opacity: 0; transform: translateY(var(--arrive-y, var(--s2))) scale(var(--arrive-scale, 1)); }
+}
+@keyframes leave { to { opacity: 0; transform: translateY(6px); } }
+/* The grid-list-tile switch (FilesClient changeDisplay) crossfades the page
+   through a same-document view transition at the same pace. */
+::view-transition-old(root),
+::view-transition-new(root) { animation-duration: var(--dur-2); animation-timing-function: var(--ease); }
+
 /* ── Primitives ─────────────────────────────────────────────────────────── */
 
 .shell { max-width: 1400px; margin: 0 auto; padding: 0 var(--s5); }
 
 .btn {
+  position: relative;
+  /* Its own stacking context, so the sheen (::before, z-index -1) sits
+     between the fill and the label rather than behind the page. */
+  isolation: isolate;
   display: inline-flex;
   align-items: center;
   gap: var(--s2);
   padding: var(--s2) 14px;
   border: 1px solid var(--glass-edge);
   border-radius: var(--radius);
-  background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill);
+  /* A colour, not a gradient: a hover eases from one fill to the next,
+     where one gradient swapped for another can only snap. */
+  background: var(--glass-fill);
   box-shadow: inset 0 1px 0 var(--glass-hi), 0 1px 2px var(--glass-drop), 0 6px 16px -12px var(--glass-drop);
   cursor: pointer;
   font-size: var(--t-md);
@@ -359,8 +409,21 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   line-height: var(--lh-tight);
   white-space: nowrap;
   transition:
-    border-color var(--dur-1), background-color var(--dur-1), color var(--dur-1),
-    box-shadow var(--dur-2) var(--ease), transform var(--dur-1) var(--ease), filter var(--dur-1);
+    border-color var(--dur-2) var(--ease), background-color var(--dur-2) var(--ease), color var(--dur-1),
+    box-shadow var(--dur-2) var(--ease), transform var(--dur-1) var(--ease), opacity var(--dur-2) var(--ease);
+}
+/* The sheen: light across the top that stops above the label, on a layer
+   of its own, so a state brightens or fades it — opacity eases, where a
+   background image cannot. */
+.btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(180deg, var(--glass-sheen), transparent 55%);
+  pointer-events: none;
+  transition: opacity var(--dur-2) var(--ease);
 }
 /* A glyph leading a label sits a little into the padding, so the pair reads
    centred: an outline has air inside its box that a letter does not. */
@@ -369,15 +432,18 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 @media (hover: hover) {
   .btn:hover:not(:disabled) {
     border-color: color-mix(in srgb, var(--accent) 38%, var(--glass-edge));
-    background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill-hover);
+    background-color: var(--glass-fill-hover);
     box-shadow:
       inset 0 1px 0 var(--glass-hi),
       0 1px 2px var(--glass-drop),
       0 10px 26px -16px color-mix(in srgb, var(--aura-a) 75%, transparent);
   }
+  /* The primary's glaze comes up to full and its glow spreads, both eased
+     by the transitions above — where a brightness filter re-rasterised the
+     label on every frame of the hover. */
+  .btn-primary:hover:not(:disabled)::before { opacity: 1; }
   .btn-primary:hover:not(:disabled) {
     border-color: color-mix(in srgb, #fff 22%, transparent);
-    filter: brightness(1.07) saturate(1.05);
     box-shadow:
       inset 0 1px 0 color-mix(in srgb, #fff 45%, transparent),
       inset 0 -1px 0 color-mix(in srgb, #000 18%, transparent),
@@ -394,9 +460,10 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   /* A ghost button is bare until it is pointed at, then it fills. */
   .btn-ghost:hover:not(:disabled) {
     border-color: var(--glass-edge);
-    background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill-hover);
+    background-color: var(--glass-fill-hover);
     box-shadow: inset 0 1px 0 var(--glass-hi);
   }
+  .btn-ghost:hover:not(:disabled)::before { opacity: 1; }
 }
 /* Pressed: the glass gives a little, and the light edge moves inside. A
    scale only — a half-pixel translate re-rasterised the label on press. */
@@ -416,9 +483,7 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
    avatar, the count badge and progress keep it as identity and light
    moving, not as actions. */
 .btn-primary {
-  background:
-    linear-gradient(180deg, color-mix(in srgb, #fff 20%, transparent) 0%, transparent 34%),
-    linear-gradient(120deg, var(--aura-a-deep) 0%, var(--aura-b-deep) 100%);
+  background: linear-gradient(120deg, var(--aura-a-deep) 0%, var(--aura-b-deep) 100%);
   color: var(--on-aura);
   border-color: color-mix(in srgb, #fff 16%, transparent);
   box-shadow:
@@ -426,12 +491,16 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
     inset 0 -1px 0 color-mix(in srgb, #000 18%, transparent),
     0 8px 22px -12px color-mix(in srgb, var(--aura-b) 65%, transparent);
 }
+/* Its sheen is the glaze at 72% — a fifth of white, as it was — gone by a
+   third of the height, where the letters start; a hover brings it to full. */
+.btn-primary::before {
+  background: linear-gradient(180deg, var(--glaze) 0%, transparent 34%);
+  opacity: 0.72;
+}
 .btn-danger {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 32%, transparent);
-  background:
-    linear-gradient(180deg, var(--glass-sheen), transparent 55%),
-    color-mix(in srgb, var(--danger) 7%, var(--glass-fill));
+  background: color-mix(in srgb, var(--danger) 7%, var(--glass-fill));
 }
 
 /* The text button that was hand-rolled inline in six places. */
@@ -440,6 +509,7 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   border-color: transparent;
   box-shadow: none;
 }
+.btn-ghost::before { opacity: 0; }
 .btn-sm { padding: var(--s1) var(--s2); font-size: var(--t-sm); gap: var(--s1); }
 .btn-icon { padding: var(--s2); }
 /* Glass, opted into: a control that floats over changing content — the
@@ -450,7 +520,7 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 .btn-glass {
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
-  background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-float);
+  background: var(--glass-float);
 }
 /* Over footage that is playing nothing blurs — a blur over moving pixels
    is a blur pass per frame. The HUD fills until the clip pauses
@@ -458,7 +528,7 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 .player.is-playing .btn-glass {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
-  background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill);
+  background: var(--glass-fill);
 }
 /* <Icon>: a Lucide outline in currentColor (app/components/ui/Icon.js). */
 .icon { flex: none; vertical-align: middle; }
@@ -485,6 +555,9 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   border-color: transparent;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
+/* The wash is the whole of the fill: no sheen over it. */
+.btn.is-active::before,
+.btn[aria-pressed='true']::before { opacity: 0; }
 .is-active .icon,
 [aria-pressed='true'] .icon { color: var(--selected-icon); }
 
@@ -566,6 +639,23 @@ textarea.input { min-height: 80px; resize: vertical; line-height: var(--lh-base)
   text-align: center;
   color: var(--muted);
 }
+/* An empty listing composed, not a sentence alone: a glyph for what is
+   missing, what is (or is not) here, and the one thing to do about it. Its
+   parts arrive a beat apart, top down. */
+.empty-state { display: flex; flex-direction: column; align-items: center; gap: var(--s2); }
+.empty-glyph { margin-bottom: var(--s1); color: var(--muted); }
+.empty-title { margin: 0; color: var(--ink); font-size: var(--t-lg); font-weight: 600; letter-spacing: -0.01em; }
+.empty-body { margin: 0; max-width: 44ch; text-wrap: balance; }
+.empty-action { margin-top: var(--s2); }
+.empty-state > * {
+  --arrive-y: 6px;
+  --arrive-i: 0;
+  animation: arrive var(--dur-2) var(--ease-out) backwards;
+  animation-delay: calc(var(--arrive-i) * var(--dur-1) / 3);
+}
+.empty-state > :nth-child(2) { --arrive-i: 1; }
+.empty-state > :nth-child(3) { --arrive-i: 2; }
+.empty-state > :nth-child(4) { --arrive-i: 3; }
 
 /* The three admin tables each inlined this. */
 .table { width: 100%; font-size: var(--t-sm); border-collapse: collapse; }
@@ -576,6 +666,34 @@ textarea.input { min-height: 80px; resize: vertical; line-height: var(--lh-base)
 /* The centred-card layout repeated by hand on six pages. */
 .auth-page { min-height: 100vh; display: grid; place-items: center; padding: var(--s5); }
 .auth-card { width: 100%; max-width: 400px; padding: var(--s6); }
+/* .lit: the aura as a halo behind one thing — the mark on the sign-in
+   card, as Onyx for iPhone draws its own. Two soft ellipses of the first
+   two accents (30% and 35%, the iPhone's numbers) on a layer behind, drawn
+   once and never filtered: a blur() halo is an offscreen pass on every
+   frame it is on screen. The halo has a size of its own, centred on what
+   it lights (--lit-size, the 64px mark): grown from the child's box, it was
+   a streak under a wide lockup rather than a glow. */
+.lit { position: relative; isolation: isolate; --lit-size: 64px; }
+.lit::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  left: 50%; top: 50%;
+  width: calc(var(--lit-size) * 2.1);
+  height: calc(var(--lit-size) * 1.9);
+  translate: -50% -50%;
+  pointer-events: none;
+  background:
+    radial-gradient(48% 46% at 40% 44%, color-mix(in srgb, var(--aura-a) 30%, transparent), transparent 100%),
+    radial-gradient(48% 46% at 62% 58%, color-mix(in srgb, var(--aura-b) 35%, transparent), transparent 100%);
+}
+/* The sign-in card, composed as the iPhone's: the mark under its halo,
+   then the name of the place, its line, and the form. */
+.auth-hero { display: flex; flex-direction: column; align-items: center; gap: var(--s2); margin-bottom: var(--s5); text-align: center; }
+.auth-mark { display: inline-block; margin-bottom: var(--s3); }
+.auth-mark img { display: block; }
+.auth-title { font-size: var(--t-2xl); }
+.auth-tagline { margin: 0; }
 
 /* ── Dialog ─────────────────────────────────────────────────────────────── */
 /* Native <dialog>, so focus trapping, escape-to-close and inertness of the
@@ -604,8 +722,29 @@ dialog.dialog {
    unset rather than falling back to an earlier declaration — so without that
    the scrim is simply invisible and the modal floats on the live page. */
 dialog.dialog::backdrop { background: color-mix(in srgb, var(--ink) 45%, transparent); }
-[data-theme='dark'] dialog.dialog::backdrop { background: color-mix(in srgb, var(--paper) 70%, transparent); }
+[data-theme='dark'] dialog.dialog::backdrop, [data-brand='dark'] dialog.dialog::backdrop { background: color-mix(in srgb, var(--paper) 70%, transparent); }
 dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
+/* A dialog arrives — up a step and a shade smaller, then in place — under a
+   scrim that fades up with it, and leaves the same way, kept on screen for
+   the length of the fade (overlay and display, allow-discrete). One set of
+   transitions: @starting-style is the way in, :not([open]) the way out. A
+   browser without either simply shows it and hides it. */
+dialog.dialog {
+  transition:
+    opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out),
+    overlay var(--dur-3) allow-discrete, display var(--dur-3) allow-discrete;
+}
+dialog.dialog::backdrop {
+  transition:
+    background-color var(--dur-3) var(--ease-out),
+    overlay var(--dur-3) allow-discrete, display var(--dur-3) allow-discrete;
+}
+@starting-style {
+  dialog.dialog[open] { opacity: 0; transform: translateY(var(--s2)) scale(0.98); }
+  dialog.dialog[open]::backdrop { background-color: transparent; }
+}
+dialog.dialog:not([open]) { opacity: 0; transform: translateY(var(--s2)) scale(0.98); pointer-events: none; }
+dialog.dialog:not([open])::backdrop { background-color: transparent; }
 
 .dialog-head {
   display: flex; align-items: center; gap: var(--s3);
@@ -709,6 +848,19 @@ a.menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
 .ctx-heading { padding: var(--s1) var(--s3) var(--s2); max-width: 100%; }
 .ctx-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu { max-width: calc(100vw - 16px); }
+/* A popup grows out of its anchor: a shade smaller and a step towards the
+   trigger, then in place. --from is the corner it hangs from — Menu and
+   Popover set it as they place themselves (top or bottom, left or right),
+   the context menu from which way placeMenu flipped it. */
+.menu, .ctx-menu, .cell-pop {
+  --arrive-y: -4px;
+  --arrive-scale: 0.96;
+  --from: top left;
+  transform-origin: var(--from);
+  animation: arrive var(--dur-2) var(--ease-out);
+}
+.menu { --from: top right; }
+.cell-pop.is-up { --from: bottom left; }
 
 /* ── Top nav ────────────────────────────────────────────────────────────── */
 /* The mark, one search box (the ⌘K palette), and the account menu (TopNav).
@@ -732,8 +884,8 @@ a.menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
 .brand-logo { display: inline-flex; align-items: center; gap: var(--s2); flex: none; }
 .brand-logo img { display: block; width: auto; }
 .brand-logo .brand-logo-dark { display: none; }
-[data-theme='dark'] .brand-logo .brand-logo-light { display: none; }
-[data-theme='dark'] .brand-logo .brand-logo-dark { display: block; }
+[data-theme='dark'] .brand-logo .brand-logo-light, [data-brand='dark'] .brand-logo .brand-logo-light { display: none; }
+[data-theme='dark'] .brand-logo .brand-logo-dark, [data-brand='dark'] .brand-logo .brand-logo-dark { display: block; }
 .brand-logo-name { font-family: var(--font-display); letter-spacing: -0.02em; }
 /* Our wordmark: ink letters, and "FS" in the aura colours sliding behind
    them — slowly, so it reads as light moving rather than a banner. The
@@ -858,14 +1010,32 @@ dialog.palette {
 }
 dialog.palette[open] { display: flex; }
 dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transparent); }
-[data-theme='dark'] dialog.palette::backdrop { background: color-mix(in srgb, var(--paper) 62%, transparent); }
+[data-theme='dark'] dialog.palette::backdrop, [data-brand='dark'] dialog.palette::backdrop { background: color-mix(in srgb, var(--paper) 62%, transparent); }
+/* It drops in from a step above — it hangs high, so it comes from where it
+   hangs — under its scrim, as a dialog does (see dialog.dialog). */
+dialog.palette {
+  transition:
+    opacity var(--dur-3) var(--ease-out), transform var(--dur-3) var(--ease-out),
+    overlay var(--dur-3) allow-discrete, display var(--dur-3) allow-discrete;
+}
+dialog.palette::backdrop {
+  transition:
+    background-color var(--dur-3) var(--ease-out),
+    overlay var(--dur-3) allow-discrete, display var(--dur-3) allow-discrete;
+}
+@starting-style {
+  dialog.palette[open] { opacity: 0; transform: translateY(calc(var(--s2) * -1)) scale(0.985); }
+  dialog.palette[open]::backdrop { background-color: transparent; }
+}
+dialog.palette:not([open]) { opacity: 0; transform: translateY(calc(var(--s2) * -1)) scale(0.985); pointer-events: none; }
+dialog.palette:not([open])::backdrop { background-color: transparent; }
 .palette-box { display: flex; flex-direction: column; width: 100%; min-height: 0; }
 .palette-input-row { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line); }
 .palette-glass { flex: none; color: var(--muted); }
 .palette-input { flex: 1; min-width: 0; padding: var(--s1) 0; border: 0; outline: 0; background: transparent; font-size: var(--t-lg); }
 .palette-list { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--s1) var(--s2) var(--s2); }
 .palette-section { padding: var(--s3) var(--s2) var(--s1); }
-.palette-item { display: flex; align-items: center; gap: var(--s3); min-width: 0; padding: 6px var(--s2); border-radius: var(--radius-sm); cursor: pointer; }
+.palette-item { display: flex; align-items: center; gap: var(--s3); min-width: 0; padding: 6px var(--s2); border-radius: var(--radius-sm); cursor: pointer; transition: background-color var(--dur-1) var(--ease); }
 /* The row the arrow keys are on: the wash, without the toggle's edge. */
 .palette-item.is-active {
   background: var(--selected-bg);
@@ -1088,7 +1258,7 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 /* Where every download shows at once (no hover), none of them blurs: a
    grid of twenty frosted buttons is twenty layers on a phone. */
 @media (hover: none) {
-  .share-tile-download { opacity: 1; -webkit-backdrop-filter: none; backdrop-filter: none; background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill); }
+  .share-tile-download { opacity: 1; -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--glass-fill); }
 }
 .share-more { display: flex; justify-content: center; padding-top: var(--s5); }
 .share-more-error { margin: var(--s3) 0 0; text-align: center; color: var(--danger); }
@@ -1200,7 +1370,7 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
   border-radius: var(--radius-lg);
   box-shadow: var(--edge-hi), var(--shadow-3);
   overflow: hidden;
-  animation: upload-in var(--dur-2) var(--ease);
+  animation: arrive var(--dur-2) var(--ease-out);
 }
 .work-panel { order: 0; }
 .upload-panel { order: 1; }
@@ -1226,6 +1396,8 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 @keyframes activity-slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
 @media (prefers-reduced-motion: reduce) {
   .upbar-indeterminate .upbar-fill { animation: none; width: 100%; opacity: 0.45; transform: none; }
+  /* The clamp would leave the band standing still on the fill. */
+  .upbar-uploading .upbar-fill::after { display: none; }
 }
 .upload-head { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s4) var(--s2); }
 .upload-list { list-style: none; margin: 0; padding: var(--s1) 0; max-height: 320px; overflow-y: auto; border-top: 1px solid var(--line); }
@@ -1244,21 +1416,26 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
   position: absolute; inset: 0;
   transform-origin: left center;
   background: linear-gradient(90deg, var(--aura-a), var(--aura-b));   /* Progress, in the brand's gradient. */
-  transition: transform 240ms linear, background-color var(--dur-2) var(--ease);
+  /* Each report glides to the next and settles, so a bar never ticks. */
+  transition: transform var(--dur-3) var(--ease-out), background-color var(--dur-2) var(--ease);
 }
-/* A slow sheen while bytes are moving, so a large file that creeps a percent
-   at a time still visibly works. */
-.upbar-uploading .upbar-fill {
-  background: linear-gradient(90deg, var(--aura-a) 0%, var(--aura-b) 45%, var(--aura-c) 55%, var(--aura-a) 100%);
-  background-size: 200% 100%;
-  animation: upload-sheen 1.6s linear infinite;
+/* A band of light crosses the fill while bytes are moving, so a large file
+   that creeps a percent at a time still visibly works. On transform, which
+   the compositor moves, not background-position, which repainted the bar
+   every frame; and only while the row is uploading — the class goes with
+   the last byte, and the band with it. */
+.upbar-uploading .upbar-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 20%, var(--glaze) 50%, transparent 80%);
+  animation: upbar-band 1.6s linear infinite;
 }
+@keyframes upbar-band { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 .upbar-error .upbar-fill { background: var(--danger); }
 .upbar-done .upbar-fill { background: linear-gradient(90deg, var(--aura-a), var(--aura-b)); }
 
-@keyframes upload-in { from { opacity: 0; transform: translateY(var(--s2)); } to { opacity: 1; transform: none; } }
 @keyframes upload-pop { 0% { transform: scale(0.4); opacity: 0; } 70% { transform: scale(1.2); } 100% { transform: none; opacity: 1; } }
-@keyframes upload-sheen { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 
 /* Shown while files are dragged over the library. */
 .drop-overlay {
@@ -1271,7 +1448,7 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
     radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--aura-a) 14%, transparent), transparent 70%),
     color-mix(in srgb, var(--paper) 82%, transparent);
   pointer-events: none;
-  animation: upload-in var(--dur-1) var(--ease);
+  animation: arrive var(--dur-1) var(--ease-out);
 }
 
 /* ── Toasts ─────────────────────────────────────────────────────────────── */
@@ -1297,29 +1474,32 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
   border-radius: var(--radius-lg);
   box-shadow: var(--edge-hi), var(--shadow-3);
   font-size: var(--t-md);
-  animation: toast-in var(--dur-2) var(--ease);
+  animation: arrive var(--dur-2) var(--ease-out);
 }
 .toast-error { box-shadow: inset 3px 0 0 var(--danger), var(--edge-hi), var(--shadow-3); }
 .toast-glyph { flex: none; margin-top: 2px; color: var(--accent-deep); }
 .toast-error .toast-glyph { color: var(--danger); }
 .toast button { background: none; border: 0; color: inherit; cursor: pointer; opacity: 0.7; padding: 0; }
 .toast button:hover { opacity: 1; }
+/* Dismiss is a 14px glyph; its target is 24px (WCAG 2.5.8): padded out and
+   pulled back by the same step, so the glyph sits where it did. */
+.toast .toast-close {
+  display: inline-grid; place-items: center;
+  min-width: 24px; min-height: 24px;
+  padding: var(--s1); margin: calc(var(--s1) * -1);
+  border-radius: var(--radius-sm);
+}
 /* Dismissed: it leaves the way it came (Toast.js takes it out of the list
-   at animationend — which still fires under the reduced-motion clamp, so
-   one can never stick). */
-.toast[data-leaving] { animation: leave-down var(--dur-2) var(--ease-in) forwards; pointer-events: none; }
+   at animationend — which still fires under the reduced-motion clamp — and,
+   should the event never come, on a backstop timer, so one can never
+   stick). */
+.toast[data-leaving] { animation: leave var(--dur-2) var(--ease-in) forwards; pointer-events: none; }
 /* The one action a toast can carry (Undo): read as a button, not a glyph. */
 .toast .toast-action {
   opacity: 1; font-weight: 600; white-space: nowrap;
   text-decoration: underline; text-underline-offset: 3px;
 }
 .toast .toast-action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 2px; }
-
-@keyframes toast-in {
-  from { opacity: 0; transform: translateY(var(--s2)); }
-  to   { opacity: 1; transform: none; }
-}
-@keyframes leave-down { to { opacity: 0; transform: translateY(6px); } }
 
 /* ── Files page ─────────────────────────────────────────────────────────── */
 
@@ -1393,18 +1573,22 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
    open, Filters while its panel is, Display while the view has unsaved
    changes — takes the bordered button back, so a border means "on". */
 .tb-btn, .hdr-btn { border-color: transparent; background: transparent; box-shadow: none; }
+.tb-btn::before, .hdr-btn::before { opacity: 0; }
 .tb-btn { height: var(--tb-h); min-height: var(--tb-h); padding: 0 var(--s2-5); gap: var(--s1-5); font-size: var(--t-sm); }
 @media (hover: hover) {
   .tb-btn:hover:not(:disabled), .hdr-btn:hover:not(:disabled) { border-color: transparent; background: var(--hover-bg); box-shadow: none; }
+  .tb-btn:hover:not(:disabled)::before, .hdr-btn:hover:not(:disabled)::before { opacity: 0; }
 }
 .tb-btn .icon { color: var(--muted); }
 .tb-btn:hover .icon, .tb-btn[aria-expanded='true'] .icon { color: var(--ink); }
 .tb-btn.is-dirty, .tb-btn[aria-expanded='true'], .tb-btn.is-open,
 .tb-btn.is-dirty:hover:not(:disabled), .tb-btn[aria-expanded='true']:hover:not(:disabled), .tb-btn.is-open:hover:not(:disabled) {
   border-color: var(--glass-edge);
-  background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill);
+  background: var(--glass-fill);
   box-shadow: inset 0 1px 0 var(--glass-hi), 0 1px 2px var(--glass-drop), 0 6px 16px -12px var(--glass-drop);
 }
+.tb-btn.is-dirty::before, .tb-btn[aria-expanded='true']::before, .tb-btn.is-open::before,
+.tb-btn.is-dirty:hover:not(:disabled)::before, .tb-btn[aria-expanded='true']:hover:not(:disabled)::before, .tb-btn.is-open:hover:not(:disabled)::before { opacity: 1; }
 .tb-icon { width: var(--tb-h); padding: 0; justify-content: center; }
 /* The dividers FilesToolbar still renders: the spacing does the grouping. */
 .tb-div { display: none; }
@@ -1459,8 +1643,8 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   background: color-mix(in srgb, var(--accent) 12%, var(--surface));
   box-shadow: 0 0 0 1px var(--accent), 0 10px 30px -14px color-mix(in srgb, var(--aura-b) 70%, transparent);
 }
-[data-theme='dark'] .filecard[aria-selected='true'],
-[data-theme='dark'] .folder-tile[aria-selected='true'] { background: color-mix(in srgb, var(--accent) 22%, var(--surface)); }
+[data-theme='dark'] .filecard[aria-selected='true'], [data-brand='dark'] .filecard[aria-selected='true'],
+[data-theme='dark'] .folder-tile[aria-selected='true'], [data-brand='dark'] .folder-tile[aria-selected='true'] { background: color-mix(in srgb, var(--accent) 22%, var(--surface)); }
 .filecard-thumb {
   position: relative;
   display: grid;
@@ -1567,6 +1751,13 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 .skeleton-line.is-short { width: 40%; }
 .filelist-row.is-skeleton { cursor: default; }
 .filelist-row.is-skeleton .skeleton-line { width: 50%; margin: 0; }
+/* What replaces a skeleton fades up in its place rather than popping. The
+   listing's root is a new element only when the first page lands — or when
+   the layout changes, when the view transition does this instead:
+   data-morphing, set by FilesClient for its length, holds the fade at
+   zero. The pages that follow append to the root and move nothing. */
+.files-pane .files-grid:not(.is-skeleton), .files-pane .tiles, .files-pane .filelist { --arrive-y: 0px; animation: arrive var(--dur-2) var(--ease-out); }
+.files-pane[data-morphing] .files-grid, .files-pane[data-morphing] .tiles, .files-pane[data-morphing] .filelist { animation-duration: 0s; }
 /* Selection and hover fade in and out — for a keyboard and a finger too, so
    the transition is not behind the hover query. */
 .filecard, .folder-tile, .filelist-row { transition: box-shadow var(--dur-2) var(--ease), border-color var(--dur-1), background-color var(--dur-1); }
@@ -1592,7 +1783,7 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   display: inline-flex; align-items: center; gap: 3px;
 }
 /* Sits on a thumbnail, so it stays a dark chip in either scheme. */
-[data-theme='dark'] .filecard-badge { background: color-mix(in srgb, var(--paper) 72%, transparent); color: var(--ink); }
+[data-theme='dark'] .filecard-badge, [data-brand='dark'] .filecard-badge { background: color-mix(in srgb, var(--paper) 72%, transparent); color: var(--ink); }
 .folder-link {
   display: flex;
   width: 100%;
@@ -1972,11 +2163,7 @@ select.input.cell-input { padding-right: 2px; }
   background: linear-gradient(120deg, var(--aura-a-deep), var(--aura-b-deep)); color: var(--on-aura);
   font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
 }
-.filters-panel { padding: var(--s3) var(--s4) var(--s4); margin: calc(var(--s2) - var(--s5)) 0 var(--s5); border-radius: var(--radius-lg); animation: filters-in var(--dur-2) var(--ease); }
-@keyframes filters-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to   { opacity: 1; transform: none; }
-}
+.filters-panel { padding: var(--s3) var(--s4) var(--s4); margin: calc(var(--s2) - var(--s5)) 0 var(--s5); border-radius: var(--radius-lg); --arrive-y: -4px; animation: arrive var(--dur-2) var(--ease-out); }
 .filters-head { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s3); }
 .filters-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--s4) var(--s5); }
 .facet { margin: 0; padding: 0; border: 0; min-width: 0; }
@@ -1987,6 +2174,8 @@ select.input.cell-input { padding-right: 2px; }
 .facet-more { margin-top: 2px; padding: 2px 0; border: 0; background: none; color: var(--accent-deep); font: inherit; font-size: var(--t-sm); cursor: pointer; }
 .facet-more:hover { text-decoration: underline; }
 .filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: calc(var(--s1) * -1) 0 var(--s4); }
+/* A chip pops in as its filter is applied. */
+.filter-chip { --arrive-y: 0px; --arrive-scale: 0.9; animation: arrive var(--dur-2) var(--ease-out); }
 .filter-chip {
   display: inline-flex; align-items: center; gap: 6px;
   max-width: 280px; min-width: 0;
@@ -2259,6 +2448,14 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 .activity-row:hover, .activity-row:focus-visible { background: var(--hover-bg); }
 .activity-row.is-skeleton { cursor: default; }
 .activity-row.is-skeleton .skeleton-line { flex: 1; margin: 0; }
+/* The rows arrive in order once the listing is in, the first eight a beat
+   apart and the rest with the eighth: a staircase, not a wait. */
+.activity-list:not([aria-busy]) > li {
+  --arrive-y: 4px;
+  --arrive-i: 0;
+  animation: arrive var(--dur-2) var(--ease-out) backwards;
+  animation-delay: calc(min(var(--arrive-i), 8) * var(--dur-1) / 5);
+}
 .activity-thumb {
   flex: none; display: grid; place-items: center;
   width: 34px; height: 34px; overflow: hidden;
@@ -2289,6 +2486,20 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 
 .file-detail-body { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: var(--s5); align-items: start; }
 .detail-list { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--s2) var(--s3); margin: 0; }
+
+/* Share and Download are one control: joined along their edges, as Download
+   and its arrow already are (download.css .dl-split), so the header reads as
+   one place to send the file out of rather than a row of loose buttons. The
+   one under the pointer or the keyboard lifts over its neighbours, so its
+   own edge — the accent on hover, the ring on focus — shows whole. */
+.file-actions { display: inline-flex; align-items: stretch; flex: none; }
+.file-actions > :not(:first-child) { margin-left: -1px; }
+.file-actions > .btn:not(:last-child),
+.file-actions > .dl-split:not(:last-child) > .btn:last-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.file-actions > .btn:not(:first-child),
+.file-actions > .dl-split:not(:first-child) > .btn:first-child { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.file-actions > .btn:hover, .file-actions > .btn:focus-visible,
+.file-actions > .dl-split > .btn:hover { z-index: 1; }
 
 /* The opening shell (FileOpening): the file page's own geometry, drawn by
    the files page over itself while the file page is on its way, so the
@@ -2460,6 +2671,9 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
     max-height: 90vh;
     padding-bottom: env(safe-area-inset-bottom);
   }
+  /* A sheet rises from the edge it sits on rather than growing in place. */
+  @starting-style { dialog.dialog[open] { transform: translateY(var(--s5)); } }
+  dialog.dialog:not([open]) { transform: translateY(var(--s5)); }
   .dialog-head, .dialog-body { padding-left: var(--s4); padding-right: var(--s4); }
   .dialog-foot { padding: var(--s3) var(--s4) var(--s4); }
 
@@ -2670,9 +2884,21 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   aspect-ratio: var(--ratio, 16 / 9);
   max-height: 70vh;
   min-height: 200px;
-  background: #000;               /* Letterboxing is black at every theme. */
+  background: var(--stage);
   border-radius: var(--radius);
   overflow: hidden;
+}
+/* Its bound: a hairline drawn over the edge, so on the dark scheme — black
+   on near-black — the stage still reads as a box. A pseudo-element over the
+   picture, transparent to the pointer. */
+.player-stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 10%, transparent);
+  pointer-events: none;
 }
 .player-stage video {
   position: absolute;
@@ -2692,8 +2918,9 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   pointer-events: none;
 }
 /* Fullscreen: the stage takes whatever the controls leave. */
-.player:fullscreen { background: #000; padding: var(--s4); justify-content: flex-end; }
+.player:fullscreen { background: var(--stage); padding: var(--s4); justify-content: flex-end; }
 .player:fullscreen .player-stage { flex: 1 1 auto; aspect-ratio: auto; max-height: none; border-radius: 0; }
+.player:fullscreen .player-stage::after { display: none; }
 
 .player-bigplay {
   position: absolute;
@@ -2703,13 +2930,19 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   width: 100%;
   border: 0;
   background: transparent;
-  color: #fff;
+  color: var(--on-stage);
   font-size: 40px;
   cursor: pointer;
+  transition: background-color var(--dur-2) var(--ease);
   /* No preload until this is pressed, so the whole stage is the target. */
 }
-.player-bigplay .icon { filter: drop-shadow(0 2px 12px rgba(0, 0, 0, 0.6)); }
-.player-bigplay:hover { background: rgba(0, 0, 0, 0.15); }
+.player-bigplay .icon {
+  filter: drop-shadow(0 2px 12px color-mix(in srgb, var(--stage) 60%, transparent));
+  transition: transform var(--dur-2) var(--ease);
+}
+.player-bigplay:hover { background: color-mix(in srgb, var(--stage) 15%, transparent); }
+/* The glyph leans in a little under the pointer: a transform, nothing repainted. */
+@media (hover: hover) { .player-bigplay:hover .icon { transform: scale(1.06); } }
 
 .player-error { color: var(--danger); margin: 0; }
 .player-note, .player-empty { margin: 0; }
@@ -2754,7 +2987,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   z-index: var(--z-menu);
 }
 .player-hover-frame {
-  background-color: #000;
+  background-color: var(--stage);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-2);
@@ -3031,6 +3264,25 @@ body::before {
     radial-gradient(52vw 44vh at 98% -6%, color-mix(in srgb, var(--aura-b) var(--aura-strength), transparent), transparent 70%),
     radial-gradient(70vw 42vh at 55% 112%, color-mix(in srgb, var(--aura-c) var(--aura-soft), transparent), transparent 72%);
 }
+/* On the two pages someone only passes through — sign-in and a link's
+   landing page — the light drifts: a slow sway of the whole layer, out and
+   back once (two passes, alternate), then held where it started, so a tab
+   left open on either page costs nothing once the sway is over. On
+   transform alone, so the compositor moves it and nothing is repainted. Not
+   in Onyx for Mac's window, whose pages are the ones left open, and not for
+   anyone who asked for less motion. The files page gets one settle instead:
+   the light comes to rest as the page first paints, then holds still. The
+   layer is scaled up a little throughout, so its edges stay off screen as
+   it moves. */
+@media (prefers-reduced-motion: no-preference) {
+  html:not([data-mac-app]) body:has(.signin-page, .share-page)::before { animation: aura-drift 28s ease-in-out 2 alternate forwards; }
+  body:has(.files-pane)::before { animation: aura-settle calc(var(--dur-3) * 3) var(--ease-out); }
+}
+@keyframes aura-drift {
+  from { transform: translate3d(0, 0, 0) scale(1.08); }
+  to   { transform: translate3d(-2.5%, 1.5%, 0) scale(1.12); }
+}
+@keyframes aura-settle { from { opacity: 0.55; transform: scale(1.05); } }
 
 /* The gradient hairline under the nav. */
 .topnav::after {

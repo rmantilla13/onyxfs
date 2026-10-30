@@ -28,12 +28,27 @@ export default function SignInClient({ brandName, tagline, logo, oktaEnabled, li
   // next starts without them.
   useEffect(() => { clearPreviewCaches(); }, []);
 
+  // The square mark under its halo, as Onyx for iPhone composes its sign-in:
+  // ours (onyxWordmark — the lockup is ours too, and spells the name the
+  // title already does), or a deployment's own, which is what it has left
+  // when it set no lockup. A white-label kit with a lockup of its own shows
+  // that instead (BrandLogo). markPath is never empty, so it is not the test.
+  const mark = logo?.markPath && (logo.onyxWordmark || !logo.lockupPath) ? logo.markPath : null;
   return (
-    <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
-      <div className="card" style={{ width: '100%', maxWidth: 400, padding: 32 }}>
-        <BrandLogo logo={logo} name={brandName} height={30} markSize={40} className="auth-logo" />
-        <h1 style={{ fontSize: 22, marginBottom: 6 }}><BlurText text={`Sign in to ${brandName}`} /></h1>
-        <p className="muted small" style={{ margin: '0 0 24px' }}>{tagline}</p>
+    // signin-page: the aura drifts on this page alone (globals.css, Aura).
+    <main className="auth-page signin-page">
+      <div className="card auth-card">
+        <div className="auth-hero">
+          <span className="auth-mark lit">
+            {mark ? (
+              // The brand's own file, wherever it is kept: not next/image's to optimise.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={mark} alt="" width={64} height={64} style={{ borderRadius: Math.round((64 * 112) / 512) }} />
+            ) : <BrandLogo logo={logo} name={brandName} height={30} markSize={64} />}
+          </span>
+          <h1 className="auth-title"><BlurText text={`Sign in to ${brandName}`} /></h1>
+          <p className="muted small auth-tagline">{tagline}</p>
+        </div>
 
         {error && (
           <p className="small" style={{ color: 'var(--danger)', marginBottom: 16 }}>{error}</p>

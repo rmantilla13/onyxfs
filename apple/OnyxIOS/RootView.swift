@@ -135,7 +135,7 @@ struct MainTabs: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             .ignoresSafeArea(.container, edges: .trailing)
             .ignoresSafeArea(.keyboard, edges: .bottom)
-            .animation(.spring(duration: 0.3, bounce: 0.15), value: chrome.selecting)
+            .animation(Theme.motion(.arrive), value: chrome.selecting)
         }
     }
 }
@@ -163,10 +163,13 @@ struct FloatingTabBar: View {
                         .frame(width: axis == .horizontal ? 62 : 38, height: axis == .horizontal ? 46 : 52)
                         .background {
                             if chosen {
-                                // The lit one: glass of its own, sliding
-                                // between the three.
-                                Color.clear
-                                    .glassSurface(Capsule())
+                                // The lit one, sliding between the three:
+                                // a frost with a lit rim, not glass of its
+                                // own — Liquid Glass asks not to be nested
+                                // in Liquid Glass, and the bar is glass.
+                                Capsule()
+                                    .fill(Theme.frost)
+                                    .overlay(Capsule().strokeBorder(Theme.highlight, lineWidth: Theme.hairline))
                                     .matchedGeometryEffect(id: "lit", in: lit)
                             }
                         }

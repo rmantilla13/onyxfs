@@ -71,11 +71,6 @@ enum Theme {
                        startPoint: .leading, endPoint: .trailing)
     }
 
-    /// The mark's glow, and a spinner's ring: all three hues around.
-    static var halo: AngularGradient {
-        AngularGradient(colors: [auraBlue, auraMagenta, auraCyan, auraBlue], center: .center)
-    }
-
     // MARK: - The page
 
     /// The page is the paper (--paper), as the launch screen and the web's
@@ -90,6 +85,12 @@ enum Theme {
     /// The shade a badge sits on over a picture (.filecard-badge): dark
     /// enough for a white label on any picture, in either scheme.
     static let scrim = Color.black.opacity(0.55)
+    /// A check not yet chosen, over a picture (SelectionCheck): a lighter
+    /// shade than the scrim, so the picture still reads through it.
+    static let dim = Color.black.opacity(0.28)
+    /// The lit rim of a badge over a picture — a check, a review dot — so it
+    /// stands on a light picture and on a dark one (the web's --on-stage).
+    static let rim = Color.white.opacity(0.9)
 
     // MARK: - Shape
 

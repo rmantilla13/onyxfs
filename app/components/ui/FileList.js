@@ -13,6 +13,7 @@ import { fileKey } from '@/lib/selection';
 import { rowsPerViewport } from '@/lib/nav-geometry';
 import { createEditIntent } from '@/lib/edit-intent';
 import Icon from '@/app/components/ui/Icon';
+import { measureStill } from '@/app/components/ui/ContextMenu';
 
 /**
  * The library as a list: one row per file, a Name column, and whichever
@@ -671,7 +672,7 @@ function MultiEditor({ col, value, suggestions, onDone }) {
   // window would otherwise put the checklist off screen — and slide left
   // when the column is the last one, near the window's right edge.
   useLayoutEffect(() => {
-    const r = box.current?.getBoundingClientRect();
+    const r = box.current ? measureStill(box.current) : null;
     if (!r) return;
     const up = r.bottom > window.innerHeight - 8 && r.top - r.height > 8;
     const dx = r.right > window.innerWidth - 8 ? Math.round(window.innerWidth - 8 - r.right) : 0;

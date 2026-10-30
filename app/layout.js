@@ -1,5 +1,5 @@
 import './globals.css';
-import { loadBrand, brandCssVars, brandDarkCssVars, darkPalette } from '@/lib/brand-config';
+import { loadBrand, brandCssVars, brandDarkCssVars, darkPalette, isDarkPalette } from '@/lib/brand-config';
 import { THEME_SCRIPT } from '@/lib/theme';
 import { ToastProvider } from '@/app/components/ui/Toast';
 import PreviewWorker from '@/app/components/PreviewWorker';
@@ -46,7 +46,9 @@ export default async function RootLayout({ children }) {
     // suppressHydrationWarning: THEME_SCRIPT sets data-theme on this element
     // before React hydrates, so the server's <html> never matches exactly.
     // It only silences this element's own attributes, not its children.
-    <html lang="en" suppressHydrationWarning>
+    // data-brand: a brand whose paper is darker than its ink wears the dark
+    // scheme's surfaces in either scheme (globals.css, the dark block).
+    <html lang="en" suppressHydrationWarning data-brand={isDarkPalette(brand.visual.palette) ? 'dark' : undefined}>
       <head>
         {/* First in <head>, so data-theme is set before anything paints. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />

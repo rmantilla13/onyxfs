@@ -232,7 +232,8 @@ export default function ProgressiveImage({
       )}
       {progress != null && (
         <div className="image-progress" role="progressbar" aria-label="Loading the full picture" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((progress || 0) * 100)}>
-          <span style={{ width: `${Math.max(4, Math.round((progress || 0) * 100))}%` }} />
+          {/* A transform the compositor scales (review.css .image-progress), never under 4%: a sliver says it has started. */}
+          <span style={{ transform: `scaleX(${Math.max(0.04, progress || 0)})` }} />
         </div>
       )}
       {children}

@@ -292,6 +292,11 @@ dialog.dialog.dialog-sheet {
   overflow: hidden;
 }
 dialog.dialog.dialog-sheet:not([open]) { display: none; }
+/* The way in is the edge it hangs from — in from the right over the same
+   --dur-3 as a dialog — not the centred dialog's shrink in place, which
+   globals.css's @starting-style gives everything with .dialog. The way out
+   stays the line above: a drawer closes with its route. */
+@starting-style { dialog.dialog.dialog-sheet[open] { opacity: 0; transform: translateX(var(--s4)); } }
 /* Child selectors: a confirm opened from inside the drawer is a dialog in
    its body, and must keep its own head, body and foot. */
 dialog.dialog-sheet > .dialog-head { flex: none; }
@@ -344,6 +349,8 @@ dialog.dialog-sheet > .dialog-foot { flex: none; border-top: 1px solid var(--lin
     border-width: 1px 0 0;
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   }
+  /* A bottom sheet here: up from the edge it sits on. */
+  @starting-style { dialog.dialog.dialog-sheet[open] { transform: translateY(var(--s5)); } }
   .drawer-nav { margin: 0 calc(var(--s4) * -1) var(--s4); padding: var(--s2) var(--s4); }
 }
 

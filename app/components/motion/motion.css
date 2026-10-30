@@ -5,7 +5,10 @@
    end state is simply there; the one loop (.shiny-text) is switched off by
    the same preference. */
 
-/* BlurText: a word at a time, down out of a blur. Backwards only, never
+/* BlurText: a word at a time, down into place. React Bits blurs each word
+   in as well; here it is opacity and transform alone, as every arrival is
+   (globals.css, Motion) — a filter re-rasterises the word on each frame it
+   runs, and at heading size the drop reads the same. Backwards only, never
    forwards: an animation that keeps filling after it ends stays in effect,
    and a word's own style is already where the animation ends. */
 .blur-text-word {
@@ -14,7 +17,7 @@
   animation-delay: calc(var(--blur-i) * var(--dur-1) / 2);
 }
 @keyframes blur-text-in {
-  from { opacity: 0; filter: blur(0.25em); transform: translateY(-0.35em); }
+  from { opacity: 0; transform: translateY(-0.35em); }
 }
 
 /* The copy a screen reader hears is not copied a second time with the

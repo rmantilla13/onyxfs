@@ -56,7 +56,6 @@ extension View {
 
 private struct ClearOfFold: ViewModifier {
     @State private var lane: ClosedRange<CGFloat>?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content
@@ -64,6 +63,6 @@ private struct ClearOfFold: ViewModifier {
             .padding(.leading, lane?.lowerBound ?? 0)
             .frame(maxWidth: .infinity, alignment: lane == nil ? .center : .leading)
             .onGeometryChange(for: ClosedRange<CGFloat>?.self) { Fold.lane(in: $0) } action: { lane = $0 }
-            .animation(reduceMotion ? nil : .spring(duration: 0.35, bounce: 0.15), value: lane)
+            .animation(Theme.motion(.sheet), value: lane)
     }
 }

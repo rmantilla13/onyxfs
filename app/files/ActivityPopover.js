@@ -60,11 +60,12 @@ function ActivityList({ filespaceId, folder, rootName, onOpen, onShowAll, close 
         <p className="small muted activity-empty">Nothing here yet.</p>
       ) : (
         <ul className="activity-list">
-          {state.files.map((f) => {
+          {state.files.map((f, i) => {
             const changed = Number(f.updatedAt) - Number(f.createdAt) > 60_000;
             const src = thumbSources(f, 'palette').src;
             return (
-              <li key={f.id}>
+              // Its place in the list, for the staircase the rows arrive in (globals.css).
+              <li key={f.id} style={{ '--arrive-i': i }}>
                 <button type="button" className="activity-row" onClick={() => { close(); onOpen(f); }} title={f.folder ? `${f.folder}/${f.name}` : f.name}>
                   <span className="activity-thumb" aria-hidden>
                     {/* A presigned URL, which next/image cannot fetch through its optimizer. */}

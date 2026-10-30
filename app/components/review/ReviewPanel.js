@@ -139,8 +139,12 @@ export default function ReviewPanel({
       <div className="review-list" ref={list}>
         {!feed.loaded && <p className="small muted">Loading comments…</p>}
         {feed.loaded && shown.length === 0 && <p className="small muted review-empty">{empty}</p>}
-        {shown.map((c) => (
-          <div key={c.id} data-comment={c.id}>
+        {shown.map((c, i) => (
+          // Keyed by the optimistic row's id where there was one (useReviewFeed
+          // clientKey): the server's row then takes its place in the same
+          // element, and the arrival (review.css .review-item, staggered by
+          // --arrive-i) plays once.
+          <div key={c.clientKey || c.id} className="review-item" data-comment={c.id} style={{ '--arrive-i': i }}>
             <CommentThread
               comment={c}
               replies={replies.get(c.id) || []}

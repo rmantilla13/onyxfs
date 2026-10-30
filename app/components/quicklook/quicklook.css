@@ -12,8 +12,17 @@
   position: absolute;
   inset: 0;
   background: color-mix(in srgb, var(--surface) 92%, transparent);
+  --arrive-y: 0px;
+  animation: arrive var(--dur-3) var(--ease-out);
 }
+/* It arrives from where it was asked for: the panel grows out of the tile
+   that stands for the item when that tile is on screen (QuickLook sets
+   --ql-dx, --ql-dy and --ql-s from the tile's box against the panel's), and
+   rises from the centre when none is; the backdrop fades up under it. One
+   shot, transform and opacity. Stepping to a neighbour moves nothing: the
+   panel stays and only what it shows changes. */
 .ql-panel {
+  animation: ql-grow var(--dur-3) var(--ease-out);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -70,6 +79,10 @@
 .ql-card-name { font-size: var(--t-lg); font-weight: 600; overflow-wrap: anywhere; }
 .ql-card-kind { color: var(--muted); }
 .ql-keys { margin: 0; padding: var(--s1) var(--s4); border-top: 1px solid var(--line); text-align: center; }
+
+@keyframes ql-grow {
+  from { opacity: 0; transform: translate(var(--ql-dx, 0px), var(--ql-dy, 0px)) scale(var(--ql-s, 0.96)); }
+}
 
 @media (max-width: 720px) {
   .ql-panel { width: 100vw; height: 100dvh; border: 0; border-radius: 0; }

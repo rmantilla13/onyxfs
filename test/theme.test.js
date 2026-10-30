@@ -10,7 +10,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 
-const { darkPalette, brandDarkCssVars, auraCssVars, contrast, mixHex, resolveBrand } = await import('../lib/brand-config.js');
+import { readFileSync } from 'node:fs';
+const { darkPalette, isDarkPalette, brandDarkCssVars, auraCssVars, contrast, mixHex, resolveBrand } = await import('../lib/brand-config.js');
 const { THEME_SCRIPT, THEME_KEY, resolveTheme } = await import('../lib/theme.js');
 
 const TEXT = ['ink', 'muted', 'accent', 'accentDeep', 'warning', 'danger'];
@@ -125,9 +126,12 @@ describe('derived tokens', () => {
   const PALETTES = { 'the Onyx defaults': ONYX, 'the dark scheme': darkPalette(ONYX), 'a dark white-label brand': WARM };
 
   const aura = (p) => Object.fromEntries(auraCssVars(p).split(';').map((d) => d.split(':')));
-  // The dark scheme and a dark brand share the dark block's recipes; a
-  // brand is dark when its paper is darker than its ink (darkPalette's test).
-  const isDark = (p) => contrast('#ffffff', p.paper) > contrast('#000000', p.paper);
+  // The dark scheme and a dark brand share the dark block's recipes:
+  // globals.css keys it on data-theme='dark' or data-brand='dark', and the
+  // root layout sets the latter from isDarkPalette — the same test here, so
+  // the table and the stylesheet cannot drift apart (the light recipes mix
+  // the paper with white, and would hand a dark brand light cards).
+  const isDark = isDarkPalette;
   function derive(p) {
     const a = aura(p);
     const dark = isDark(p);
@@ -153,7 +157,7 @@ describe('derived tokens', () => {
       changesText: mixHex(p.warning, p.ink, 0.15),               // .review-changes pressed
       changesFill: mixHex(surface, p.warning, 0.14),
       ink2: mixHex(p.ink, p.paper, 0.28),                        // --ink-2: the second text colour
-      lineStrong: dark ? p.line : mixHex(p.ink, p.paper, 0.55),  // --line-strong: a control's edge
+      lineStrong: mixHex(p.ink, p.paper, dark ? 0.54 : 0.55),    // --line-strong: a control's edge
       tag: mixHex(surface, p.ink, 0.06),                         // .tag: ink 6% over the card it sits on
       tagText: mixHex(p.muted, p.ink, 0.30),                     // .tag's text: muted leaning to ink
       onAura: a['--on-aura'],                                    // the label on a filled gradient
@@ -203,11 +207,11 @@ describe('derived tokens', () => {
       for (const [where, bg] of [['paper', p.paper], ['surface', d.surface]]) {
         assert.ok(contrast(d.ink2, bg) >= 4.5, `ink-2 on ${where}: ${ratio(d.ink2, bg)}`);
       }
-      // The focus ring is non-text (3:1); so is a control's edge, which the
-      // light scheme derives for it. The dark scheme's is its line (rank 8).
+      // The focus ring is non-text (3:1); so is a control's edge, which
+      // each scheme mixes for it — the dark line alone is 1.2:1 on a card.
       for (const [where, bg] of [['paper', p.paper], ['surface', d.surface]]) {
         assert.ok(contrast(d.ring, bg) >= 3, `ring on ${where}: ${ratio(d.ring, bg)}`);
-        if (!isDark(p)) assert.ok(contrast(d.lineStrong, bg) >= 3, `line-strong on ${where}: ${ratio(d.lineStrong, bg)}`);
+        assert.ok(contrast(d.lineStrong, bg) >= 3, `line-strong on ${where}: ${ratio(d.lineStrong, bg)}`);
       }
     });
 
@@ -219,6 +223,18 @@ describe('derived tokens', () => {
       assert.ok(contrast(d.hoverStrong, d.surface) > contrast(d.hover, d.surface), 'a menu item is the stronger step');
     });
   }
+
+  // The dark recipes reach a dark brand through <html data-brand="dark">,
+  // which only the root layout sets — a server component with no DOM to
+  // render into here, so its text is checked for the attribute and the test
+  // it reads, and the test for the three palettes above.
+  test('the root layout marks a dark brand for the stylesheet', () => {
+    const layout = readFileSync(new URL('../app/layout.js', import.meta.url), 'utf8');
+    assert.match(layout, /<html[^>]*data-brand=\{isDarkPalette\(brand\.visual\.palette\) \? 'dark' : undefined\}/);
+    assert.equal(isDarkPalette(ONYX), false);
+    assert.equal(isDarkPalette(darkPalette(ONYX)), true);
+    assert.equal(isDarkPalette(WARM), true);
+  });
 
   test('.tag text clears AA on its chip', () => {
     for (const [name, p] of Object.entries(PALETTES)) {

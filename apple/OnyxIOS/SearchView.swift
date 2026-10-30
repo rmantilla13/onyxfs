@@ -65,7 +65,7 @@ struct SearchView: View {
                     chips
                     content
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, Theme.Space.gutter)
                 .padding(.top, 14)
                 .padding(.bottom, 28)
             }
@@ -140,11 +140,11 @@ struct SearchView: View {
                     .accessibilityAddTraits(on ? .isSelected : [])
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, Theme.Space.gutter)
         }
         .scrollIndicators(.hidden)
         .sensoryFeedback(.selection, trigger: kind)
-        .padding(.horizontal, -20)
+        .padding(.horizontal, -Theme.Space.gutter)
     }
 
     // MARK: - Answers

@@ -69,14 +69,13 @@ test('every var() in a stylesheet names a property something declares', () => {
 // Pure white and pure black are not brand colours: a sheen is light and a
 // rim or letterboxing is dark, in either scheme and under any palette.
 // Anything else is a colour, and a colour comes from the brand. White and
-// black may be mixed into a token in :root, and these rules are light or
-// dark by nature — a glaze over the brand's gradient, a folder's lit edge,
-// the stage a picture plays on.
+// black may be mixed into a token in :root (the stage a picture plays on is
+// --stage, with --on-stage lit over it), and these rules are light or dark
+// by nature — a glaze over the brand's gradient, a folder's lit edge.
 const LIGHT_OR_DARK = /^(?:#(?:fff|ffffff|000|000000)|rgba?\(\s*(?:0\s*,\s*0\s*,\s*0|255\s*,\s*255\s*,\s*255)\b)/i;
 const LITERAL_OK = new Set([
   '.btn-primary', '.btn-primary:hover:not(:disabled)',
   '.folder-glyph-front',
-  '.player-stage', '.player:fullscreen', '.player-bigplay', '.player-bigplay .icon', '.player-bigplay:hover', '.player-hover-frame',
   // A caption over a picture is lit by the picture, not the scheme.
   '.share-gallery-name',
 ]);
@@ -95,7 +94,9 @@ test('a rule names no colour of its own', () => {
 test('globals.css keeps its tokens in one place: the :root at the top and its dark twin', () => {
   const top = rules(CSS['app/globals.css']).filter((r) => r.depth === 0);
   assert.equal(top[0].selector, ':root');
-  assert.equal(top[1].selector, ":root[data-theme='dark']");
+  // The dark twin serves the dark scheme and a dark brand in either scheme
+  // (data-brand, set by the root layout from isDarkPalette).
+  assert.equal(top[1].selector, ":root[data-theme='dark'], :root[data-brand='dark']");
   // A :root inside a media or supports query is that preference's override;
   // a bare one further down is a token declared where its reader would not
   // think to look.
