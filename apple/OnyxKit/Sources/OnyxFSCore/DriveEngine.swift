@@ -56,6 +56,18 @@ public actor DriveEngine {
         var created: Date?
     }
 
+    /// One of Archive Utility's scratch folders beside a zip, while it
+    /// lasts: what was unpacked into it, what was made beside it meanwhile
+    /// (the result's placeholder among them), and whether anything unpacked
+    /// was moved out into the drive — which an unzip that failed never does.
+    struct ArchiveScratch {
+        let parent: UInt64
+        let path: String
+        var unpacked: Set<String> = []
+        var made: Set<UInt64> = []
+        var delivered = false
+    }
+
     let bridge: any EngineBridge
     let staging: StagingArea
     let local: LocalStore
@@ -65,6 +77,8 @@ public actor DriveEngine {
     private var nextID: UInt64 = 16
     private var writing: [UInt64: Writing] = [:]
     private var sendingNow: Set<UInt64> = []
+    /// Archive Utility's scratch folders, by id; nearly always none.
+    private var scratches: [UInt64: ArchiveScratch] = [:]
     /// Readers by file and version, the most recently used last: a file
     /// open in several places shares one, and its read-ahead.
     private var readers: [(key: String, source: any ByteSource)] = []
@@ -162,19 +176,24 @@ public actor DriveEngine {
             try await wrap {
                 if isDirectory { try await self.local.createDirectory(path) } else { try await self.local.createFile(path) }
             }
-            return Self.public(insert(name: name, parent: dir.id, isDirectory: isDirectory, size: 0,
-                                      modified: now(), fileId: nil, version: "", localOnly: true, unsent: false))
+            let node = insert(name: name, parent: dir.id, isDirectory: isDirectory, size: 0,
+                              modified: now(), fileId: nil, version: "", localOnly: true, unsent: false)
+            noteMade(node, in: dir)
+            return Self.public(node)
         }
         guard !readOnly, !dir.readOnly else { throw VolumeError.posix(EACCES) }
         if isDirectory {
             let entry = try await wrap { try await self.bridge.mkdir(path) }
-            return Self.public(insert(entry, parent: dir.id))
+            let node = insert(entry, parent: dir.id)
+            noteMade(node, in: dir)
+            return Self.public(node)
         }
         let node = insert(name: name, parent: dir.id, isDirectory: false, size: 0, modified: now(),
                           fileId: nil, version: "", localOnly: false, unsent: true)
         try await wrap { _ = try await self.staging.create(node.id) }
         // A new file goes up even if nothing is ever written to it.
         writing[node.id] = Writing(dirty: true)
+        noteMade(node, in: dir)
         return Self.public(node)
     }
 
@@ -290,11 +309,24 @@ public actor DriveEngine {
         if to.path.hasPrefix("/.Trashes") || newName == ".Trashes" { throw VolumeError.posix(EPERM) }
         let over = to.children?[Self.fold(newName)].flatMap { nodes[$0] }
         if let over, over.id != id, replacing == nil { throw VolumeError.posix(EEXIST) }
+        if !scratches.isEmpty { noteMoved(node, to: to, newName: newName) }
 
         // What macOS made for itself, renamed into the drive under a name of
         // its own: Archive Utility's unpacked files, an app's safe save.
         if node.localOnly, !to.localOnly, !LocalOnly.isLocalOnly(newName) {
             return try await promote(id, from: from, to: to, newName: newName, over: over)
+        }
+        if let over, over.id != id {
+            // As rename(2): a folder replaces only a folder, and only an empty
+            // one. The kernel leaves that to the file system, and the server's
+            // replace takes what is there whole: a folder moved over another
+            // took everything the other held.
+            if node.isDirectory != over.isDirectory { throw VolumeError.posix(node.isDirectory ? ENOTDIR : EISDIR) }
+            if over.isDirectory {
+                try await ensureListed(over.id)
+                guard nodes[id] != nil, let target = nodes[over.id] else { throw VolumeError.posix(ESTALE) }
+                guard (target.children ?? [:]).isEmpty else { throw VolumeError.posix(ENOTEMPTY) }
+            }
         }
         let oldPath = node.path
         if node.localOnly || to.localOnly || LocalOnly.isLocalOnly(newName) {
@@ -430,6 +462,13 @@ public actor DriveEngine {
 
     public func remove(_ id: UInt64, name: String, from directory: UInt64) async throws {
         guard let node = nodes[id] else { throw VolumeError.posix(ESTALE) }
+        if node.isDirectory {
+            // rmdir takes an empty folder only. The kernel leaves that to the
+            // file system, and the server's delete takes a folder whole: a
+            // tool removing a folder only if it is empty took it all.
+            try await ensureListed(id)
+            guard (nodes[id]?.children ?? [:]).isEmpty else { throw VolumeError.posix(ENOTEMPTY) }
+        }
         if node.localOnly {
             await local.remove(node.path)
         } else {
@@ -438,6 +477,88 @@ public actor DriveEngine {
             await local.removeAttributes(under: node.path)
         }
         drop(id)
+        if !scratches.isEmpty, let scratch = scratches.removeValue(forKey: id), !scratch.delivered {
+            // Answered first: Archive Utility does not wait on the app.
+            Task { await self.failedUnzip(scratch) }
+        }
+    }
+
+    // MARK: - Archive Utility on a drive
+
+    /// Where Archive Utility unpacks a zip on a drive: a folder of this name
+    /// beside it (LocalOnly keeps it on this Mac).
+    static let scratchPrefix = ".ArchiveServiceTemp"
+    static let quarantine = "com.apple.quarantine"
+
+    /// Archive Utility at work beside a zip: its scratch folder made, what it
+    /// unpacks into it, and what it makes beside it for the result.
+    private func noteMade(_ node: Node, in dir: Node) {
+        if node.isDirectory, node.name.hasPrefix(Self.scratchPrefix), !dir.localOnly {
+            scratches[node.id] = ArchiveScratch(parent: dir.id, path: node.path)
+            return
+        }
+        guard !scratches.isEmpty else { return }
+        if scratches[dir.id] != nil {
+            scratches[dir.id]?.unpacked.insert(node.name)
+        } else if !node.localOnly {
+            for (id, scratch) in scratches where scratch.parent == dir.id { scratches[id]?.made.insert(node.id) }
+        }
+    }
+
+    /// Something unpacked moved out into the drive: that unzip worked. A
+    /// name moved into a scratch folder was unpacked.
+    private func noteMoved(_ node: Node, to: Node, newName: String) {
+        let from = Self.fold(node.path)
+        for (id, scratch) in scratches {
+            if to.id == id { scratches[id]?.unpacked.insert(newName) }
+            if from.hasPrefix(Self.fold(scratch.path) + "/"), !to.localOnly, !LocalOnly.isLocalOnly(newName) {
+                scratches[id]?.delivered = true
+            }
+        }
+    }
+
+    /// Archive Utility threw away what it unpacked beside a zip and moved
+    /// none of it out: an unzip that failed. When a zip there came from the
+    /// internet — which Archive Utility cannot unzip on a drive — the app is
+    /// told, and unzips it itself. Archive Utility's placeholder for the
+    /// result is named, not removed: Archive Utility removes it itself once
+    /// its error is closed, and the app does after that if it is still there.
+    private func failedUnzip(_ scratch: ArchiveScratch) async {
+        guard let folder = nodes[scratch.parent] else { return }
+        let unpacked = scratch.unpacked.filter { !LocalOnly.isLocalOnly($0) && $0 != "__MACOSX" }.sorted()
+        guard !unpacked.isEmpty else { return }
+        var zips: [String] = []
+        for id in folder.children?.values.map({ $0 }) ?? [] {
+            guard let node = nodes[id], !node.isDirectory, node.name.lowercased().hasSuffix(".zip"),
+                  (try? await local.attribute(Self.quarantine, of: node.path)) != nil else { continue }
+            zips.append(node.name)
+        }
+        guard !zips.isEmpty else { return }
+        // Named as the result would land: the zip's one item, or a folder
+        // named after the zip — with " 2" or the like for a name taken.
+        let results = Set((unpacked + zips.map { ($0 as NSString).deletingPathExtension }).map(Self.fold))
+        let placeholders = scratch.made.compactMap { id -> String? in
+            guard let node = nodes[id], node.parent == scratch.parent, !node.localOnly,
+                  node.isDirectory ? (node.children ?? [:]).isEmpty : node.size == 0,
+                  results.contains(Self.fold(node.name))
+                    || results.contains(Self.fold(Self.unnumbered(node.name, isDirectory: node.isDirectory))) else { return nil }
+            return node.name
+        }
+        await bridge.unzipFailed(UnzipFailure(folder: folder.path, zips: Array(zips.sorted().prefix(UnzipFailure.maxNames)),
+                                              unpacked: Array(unpacked.prefix(UnzipFailure.maxNames)),
+                                              unpackedCount: unpacked.count, placeholders: placeholders.sorted()))
+    }
+
+    /// A name as Archive Utility numbers one it finds taken, without its
+    /// number: "Footage" for "Footage 2", "notes.txt" for "notes 2.txt".
+    static func unnumbered(_ name: String, isDirectory: Bool) -> String {
+        let ext = isDirectory ? "" : (name as NSString).pathExtension
+        let stem = ext.isEmpty ? name : (name as NSString).deletingPathExtension
+        guard let space = stem.lastIndex(of: " "), space > stem.startIndex else { return name }
+        let number = stem[stem.index(after: space)...]
+        guard !number.isEmpty, number.allSatisfy({ $0.isASCII && $0.isNumber }) else { return name }
+        let base = String(stem[..<space])
+        return ext.isEmpty ? base : "\(base).\(ext)"
     }
 
     /// Everything written goes to the app now (an eject, a sync).

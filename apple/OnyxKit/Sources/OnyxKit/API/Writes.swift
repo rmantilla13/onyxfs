@@ -241,13 +241,16 @@ extension OnyxAPI {
 
     /// The folder and what is in it, the way the web's folder delete does:
     /// a few hundred files a call, so asked again while it says there is more.
+    /// A refusal is thrown as it came — no such folder (404), files in it the
+    /// account was never shown (409) — never taken for done.
     public func deleteFolder(path: String, filespaceId: String?) async throws {
         struct Answer: Decodable { let failed: Int?; let error: String?; let more: Bool? }
         var query = [URLQueryItem(name: "name", value: path)]
         if let filespaceId { query.append(URLQueryItem(name: "filespace", value: filespaceId)) }
         let url = config.url("api/files/folders", query: query)
         for _ in 0..<2_500 {
-            let answer = try? JSONDecoder().decode(Answer.self, from: try await request(url, method: "DELETE"))
+            let data = try await request(url, method: "DELETE")
+            let answer = try? JSONDecoder().decode(Answer.self, from: data)
             if let failed = answer?.failed, failed > 0 {
                 throw OnyxError.http(status: 500, message: answer?.error ?? "\(failed) of its files could not be deleted.")
             }

@@ -164,8 +164,9 @@ Endpoints:
    listing changed. `all: true` = drop everything (e.g. the mirror was rebuilt).
 7. `GET /fs/v1/volume` → the `volume` object from (1), fresh.
 
-(And 12, `GET /fs/v1/icon`, under "The drive's icon" at the end; and 13,
-`POST /fs/v1/activity`, under "Activity" after it.)
+(And 12, `GET /fs/v1/icon`, under "The drive's icon" at the end; 13,
+`POST /fs/v1/activity`, under "Activity" after it; and 14, `POST
+/fs/v1/unzip`, under "Archive Utility" after that.)
 
 `generation` is a per-scope counter that moves every time that drive's mirror
 changes.
@@ -488,6 +489,11 @@ called "Collections (Onyx)".
 - Opening an existing remote file for writing (not truncating) first fetches
   it whole into staging (copy-on-write), then the same.
 - `mkdir`, `rename` (incl. `overItem`), `remove` → the bridge calls above.
+  A rename over an item follows rename(2), which the kernel leaves to the
+  file system: a folder replaces only a folder, and only an empty one —
+  macOS's own files in it count (ENOTEMPTY) — and a file and a folder never
+  replace each other (EISDIR, ENOTDIR). The server's replace takes what is
+  there whole; before, a folder moved over another took what it held.
 - **Local-only names** (`.DS_Store`, `._*`, `.Trashes`, `.Spotlight-V100`,
   `.fseventsd`, `.TemporaryItems`, `Icon\r`) live only in the extension's
   container; they are never uploaded and never listed by the bridge. They
@@ -688,6 +694,57 @@ drawn by the same `DriveIcon` the extension puts on the disk.
 - **Not seen:** the rclone NFS mounts in `~/Onyx` (macOS 26 and older, or a
   disk not yet allowed) read storage themselves; the bar shows nothing of
   them.
+
+## Archive Utility
+
+The owner double-clicked a 376 MB zip downloaded from the internet in a
+drive and got "Unable to expand … (Error 1 - Operation not permitted.)" —
+after Unzip Here (Finder's menu, `Unzipper`) had shipped for exactly that.
+
+- **Why it fails.** Archive Utility's ArchiveService may hand on access
+  (`file-issue-extension`) only under its TMPDIR and a volume's own
+  `/.TemporaryItems` (`com.apple.desktopservices.ArchiveService.sb`). It
+  finds its scratch folder with `NSItemReplacementDirectory`, which never
+  answers `.TemporaryItems` on a volume without `MNT_LOCAL`, and FSKit gives
+  a URL-mounted volume none: it unpacks into `.ArchiveServiceTemp.sb-…`
+  beside the zip instead, and cannot then mark that folder with the zip's
+  quarantine. A zip with no quarantine unzips; one from the internet never
+  does, whatever its size. The same holds on SMB.
+- **What it does, step by step** (watched in the folder): makes the
+  scratch folder (local-only, `LocalOnly`); claims the result's name beside
+  the zip — the zip's one item, or a folder named after the zip, " 2" past
+  a name taken — as an empty folder, or an empty file for a one-file zip;
+  unpacks into the scratch folder; then either moves what it unpacked out
+  into the placeholder (it worked) or throws the scratch folder away and
+  shows Error 1. Once its error is closed it quits, and removes its
+  placeholder by name (the owner's run left none).
+- **The disk tells the app** (`DriveEngine`): while a scratch folder lasts
+  it keeps the names unpacked at its top, what is made beside it, and
+  whether anything unpacked was moved out into the drive. When the scratch
+  folder goes with nothing moved out, and a zip beside it carries
+  `com.apple.quarantine`, it says so — after the remove has answered:
+  14. `POST /fs/v1/unzip` — `{ "folder": "/Footage", "zips": ["c4.zip"],
+      "unpacked": ["Walmart Ad Videos"], "unpackedCount": 1, "placeholders":
+      ["Walmart Ad Videos"] }`: the zips there from the internet; the names
+      unpacked (at most 100) and how many; and what was made beside it that
+      is still empty and named as the result would be. 200 `{ "ok": true }`;
+      400 for a folder that is not an absolute path in the drive, a name with
+      "/", "." or "..", or counts out of reason; 403 for a drive this account
+      may only view. An older app answers 404, and it is dropped.
+  Nothing is tracked while no scratch folder exists.
+- **The app unzips it** (`UnzipService`, OnyxMac): the zip is the one whose
+  top, as `tar -tf` lists it (zipinfo turns "Ñ" into "?"), is what was
+  unpacked — none or two alike, and a notification says to use Unzip Here.
+  It says it will unzip it, then waits for Archive Utility to quit
+  (NSWorkspace; at most ten minutes): until then Archive Utility could
+  still remove its placeholder by name, which is the name the result lands
+  under. A placeholder still there then, and still empty, goes (rmdir, or a
+  file of no bytes), and the zip is unzipped as Unzip Here does it, in the
+  same queue. A notification says where it landed.
+- **rmdir.** Finding this showed `rmdir` on a disk took a folder with
+  files in it: the kernel leaves the emptiness check to the file system,
+  and the server's delete takes a folder whole. A folder is now removed
+  only when it is empty, macOS's own files in it included (ENOTEMPTY).
 
 ## Thumbnails
 

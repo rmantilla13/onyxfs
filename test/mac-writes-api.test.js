@@ -124,6 +124,8 @@ const filmstripRoute = await import('../app/api/files/[id]/filmstrip/route.js');
 const foldersRoute = await import('../app/api/files/folders/route.js');
 const { _setFolderMoveBudgetMs, _setFolderRenameLimits } = await import('../lib/folder-ops.js');
 const restoreRoute = await import('../app/api/admin/trash/restore/route.js');
+const trashListRoute = await import('../app/api/files/trash/route.js');
+const trashRestoreRoute = await import('../app/api/files/trash/restore/route.js');
 const collectionsRoute = await import('../app/api/collections/route.js');
 const collectionRoute = await import('../app/api/collections/[id]/route.js');
 // What a route finishes after it answers: a trashed file's object moving to the trash.
@@ -189,6 +191,8 @@ const patchFile = (who, id, body, headers) => call(fileRoute.PATCH, `/api/files/
 const trashFile = (who, id) => call(fileRoute.DELETE, `/api/files/${id}`, { method: 'DELETE', params: { id }, ...who });
 const swap = (who, id, body, headers) => call(contentRoute.POST, `/api/files/${id}/content`, { method: 'POST', body, params: { id }, headers, ...who });
 const restore = (who, ids) => call(restoreRoute.POST, '/api/admin/trash/restore', { method: 'POST', body: { ids }, ...who });
+const myTrash = (who, cursor) => call(trashListRoute.GET, `/api/files/trash${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, who);
+const putBack = (who, ids) => call(trashRestoreRoute.POST, '/api/files/trash/restore', { method: 'POST', body: { ids }, ...who });
 /** PATCH with `progress`: the HTTP status, and the NDJSON lines read to the end — progress, then the answer. */
 async function moveStreamed({ token, cookie } = {}, body) {
   globalThis.__mw.session = cookie ? { user: { email: cookie } } : null;
@@ -586,7 +590,7 @@ describe('the Mac’s writes', () => {
 
     const gone = await folders.remove(who, 'Day One');
     assert.equal(gone.status, 200);
-    assert.deepEqual(gone.body, { deleted: 1, failed: 0, error: null, outside: 0, more: false, trashed: true });
+    assert.deepEqual(gone.body, { deleted: 1, failed: 0, error: null, outside: 0, more: false, trashed: true, trashedIds: [f.id] });
     assert.ok(row(f.id).deletedAt);
     assert.equal([...globalThis.__mw.folders.keys()].length, 0);
     assert.ok(!stored('team/Day One/Cam A/'), 'markers go too');
@@ -1194,7 +1198,7 @@ describe('folder names are per drive', () => {
     const mine = await upload(who, { name: 'A.mov', folder: 'Selects', filespaceId: 'd1' });
     const theirs = await upload(who, { name: 'B.mov', folder: 'Selects', filespaceId: 'd2' });
     const gone = await folders.remove(who, 'Selects', 'd1');
-    assert.deepEqual(gone.body, { deleted: 1, failed: 0, error: null, outside: 1, more: false, trashed: true });
+    assert.deepEqual(gone.body, { deleted: 1, failed: 0, error: null, outside: 1, more: false, trashed: true, trashedIds: [mine.id] });
     assert.ok(row(mine.id).deletedAt);
     assert.equal(row(theirs.id).deletedAt, null);
     assert.deepEqual(rowsIn('team'), []);
@@ -1940,5 +1944,141 @@ describe('collections: none goes missing', () => {
     const r = await list(web(ED), '?stranded=1');
     assert.equal(r.status, 503);
     assert.equal(r.body.collections, undefined);
+  });
+});
+
+describe('a person’s own Trash (/api/files/trash), and the Undo after a delete', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const holdCopies = () => {
+    let release;
+    globalThis.__mw.s3.copyGate = new Promise((r) => { release = r; });
+    return () => { globalThis.__mw.s3.copyGate = null; release(); };
+  };
+
+  test('an editor finds what they deleted, and puts it back where it was', async () => {
+    const f = await upload(mac(ED));
+    await trashFile(mac(ED), f.id);
+    await afterResponseSettled();
+    assert.ok(stored(`_trash/${f.id}/team/Cuts/Take 1.mov`), 'its object moved to the trash');
+
+    const list = await myTrash(web(ED));
+    assert.equal(list.status, 200);
+    assert.equal(list.body.retentionDays, 30);
+    const [item] = list.body.files;
+    assert.equal(item.id, f.id);
+    assert.deepEqual(item.drive, { id: 'd1', name: 'Team' });
+    assert.equal(item.deletedBy, ED);
+    assert.equal(item.purgesAt, item.deletedAt + 30 * DAY);
+    assert.equal(item.url, undefined, 'no link to a trashed file');
+
+    const seq = row(f.id).seq;
+    const back = await putBack(web(ED), [f.id]);
+    assert.equal(back.status, 200);
+    assert.deepEqual(back.body, { restored: [{ id: f.id, name: 'Take 1.mov', movedTo: null, restored: true }], failed: [], notInTrash: [] });
+    assert.equal(row(f.id).deletedAt, null);
+    assert.equal(row(f.id).storageKey, 'team/Cuts/Take 1.mov');
+    assert.ok(row(f.id).seq > seq, 'its sequence moves on, so devices see it come back');
+    assert.ok(stored('team/Cuts/Take 1.mov') && !stored(`_trash/${f.id}/team/Cuts/Take 1.mov`));
+    assert.ok(globalThis.__mw.audit.some((e) => e.action === 'trash.restore' && e.actor === ED));
+    assert.deepEqual((await myTrash(web(ED))).body.files, []);
+  });
+
+  test('Undo at once, while the object is still on its way to the trash', async () => {
+    const f = await upload(mac(ED));
+    const release = holdCopies();
+    assert.deepEqual((await trashFile(web(ED), f.id)).body, { ok: true, trashed: true });
+    const back = await putBack(web(ED), [f.id]);
+    assert.equal(back.body.restored[0].restored, true);
+    release();
+    await afterResponseSettled();
+    assert.equal(row(f.id).deletedAt, null);
+    assert.equal(row(f.id).trashKey, null);
+    assert.equal(row(f.id).storageKey, 'team/Cuts/Take 1.mov');
+    assert.ok(stored('team/Cuts/Take 1.mov'), 'the object is where the row says');
+    assert.ok(!stored(`_trash/${f.id}/team/Cuts/Take 1.mov`), 'and the copy made meanwhile is gone');
+  });
+
+  test('a name taken since: back beside the new file, under the name its key has', async () => {
+    const f = await upload(mac(ED));
+    await trashFile(mac(ED), f.id);
+    await afterResponseSettled();
+    const again = await upload(mac(ED), { bytes: Buffer.alloc(1000, 2) });
+    const back = await putBack(web(ED), [f.id]);
+    assert.deepEqual(back.body.restored, [{ id: f.id, name: 'Take 1 (2).mov', movedTo: 'team/Cuts/Take 1 (2).mov', restored: true }]);
+    assert.equal(row(f.id).name, 'Take 1 (2).mov');
+    assert.equal(row(again.id).storageKey, 'team/Cuts/Take 1.mov', 'the new file keeps its own');
+  });
+
+  test('another editor of the drive may put it back too', async () => {
+    const f = await upload(mac(ED));
+    await trashFile(mac(ED), f.id);
+    assert.deepEqual((await myTrash(web(ED2))).body.files.map((x) => x.id), [f.id]);
+    assert.equal((await putBack(web(ED2), [f.id])).body.restored[0].restored, true);
+  });
+
+  test('a drive’s viewer, and anyone outside the drive, have no say in its trash', async () => {
+    const inD1 = await upload(mac(ED));
+    const inD2 = await upload(mac(ED), { filespaceId: 'd2' });
+    await trashFile(mac(ED), inD1.id);
+    await trashFile(mac(ED), inD2.id);
+    // DV views d1 and is not in d2: neither is theirs to restore.
+    const theirs = await myTrash(web(DV));
+    assert.equal(theirs.status, 200);
+    assert.deepEqual(theirs.body.files, []);
+    const tried = await putBack(web(DV), [inD1.id, inD2.id]);
+    assert.equal(tried.status, 200);
+    assert.deepEqual(tried.body.restored, []);
+    assert.deepEqual(tried.body.notInTrash.sort(), [inD1.id, inD2.id].sort(), 'answered as not in the trash: nothing said about them');
+    assert.ok(row(inD1.id).deletedAt && row(inD2.id).deletedAt);
+    // The Viewer role may not delete at all: no Trash.
+    assert.equal((await myTrash(web(VR))).status, 403);
+    assert.equal((await putBack(web(VR), [inD1.id])).status, 403);
+    assert.ok(row(inD1.id).deletedAt);
+  });
+
+  test('a live file’s id is not in the trash, and restoring it changes nothing', async () => {
+    const f = await upload(mac(ED));
+    const seq = row(f.id).seq;
+    const tried = await putBack(web(ED), [f.id]);
+    assert.deepEqual(tried.body, { restored: [], failed: [], notInTrash: [f.id] });
+    assert.equal(row(f.id).seq, seq);
+  });
+
+  test('a page at a time, newest first, and the cursor carries on', async () => {
+    const ids = [];
+    for (let i = 0; i < 52; i++) {
+      const f = await upload(mac(ED), { name: `Clip ${i}.mov` });
+      globalThis.__mw.now += 1000; // a deletion time each
+      await trashFile(mac(ED), f.id);
+      ids.push(f.id);
+    }
+    const first = await myTrash(web(ED));
+    assert.equal(first.body.files.length, 50);
+    assert.equal(first.body.files[0].id, ids.at(-1), 'the newest deletion first');
+    assert.ok(first.body.cursor);
+    const second = await myTrash(web(ED), first.body.cursor);
+    assert.deepEqual(second.body.files.map((x) => x.id), [ids[1], ids[0]]);
+    assert.equal(second.body.cursor, null);
+  });
+
+  test('with the trash off there is no Trash to list or restore from', async () => {
+    const f = await upload(mac(ED));
+    await trashFile(mac(ED), f.id);
+    globalThis.__mw.settings.set('features.flags', { trash: false });
+    assert.equal((await myTrash(web(ED))).status, 404);
+    assert.equal((await putBack(web(ED), [f.id])).status, 404);
+    assert.ok(row(f.id).deletedAt);
+  });
+
+  test('a folder’s delete says which files it put in the trash, and they come back from it', async () => {
+    const a = await upload(mac(ED), { name: 'A.mov', folder: 'Wrap' });
+    const b = await upload(mac(ED), { name: 'B.mov', folder: 'Wrap' });
+    const gone = await folders.remove(web(ED), 'Wrap');
+    assert.deepEqual(gone.body.trashedIds.sort(), [a.id, b.id].sort());
+    await afterResponseSettled();
+    const back = await putBack(web(ED), gone.body.trashedIds);
+    assert.equal(back.body.restored.filter((r) => r.restored).length, 2);
+    assert.equal(row(a.id).folder, 'Wrap');
+    assert.ok(stored('team/Wrap/A.mov') && stored('team/Wrap/B.mov'));
   });
 });

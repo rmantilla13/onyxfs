@@ -121,6 +121,9 @@ export default async function FilesPage({ searchParams }) {
   // Whether a collection may be made here: the same rule POST /api/collections
   // keeps — editing files in this drive, or in All files while there is one.
   const canMakeCollections = (!noDrive && (activeDrive || library)) ? canEditCollections(principal, activeDrive) : false;
+  // Whether there is a Trash for them: the `trash` flag on, and a role that
+  // may delete — what GET /api/files/trash itself checks.
+  const canTrash = flags.trash !== false && can(principal, 'files.delete').ok;
   // Whether their role may make a link that takes comments — a public or
   // password link that is also a review link. The Share dialog offers it for
   // photos and videos; the route checks it, the file and its drive again.
@@ -200,6 +203,7 @@ export default async function FilesPage({ searchParams }) {
         library={library}
         noDrive={noDrive}
         canMakeCollections={canMakeCollections}
+        canTrash={canTrash}
         viewer={email}
         isAdmin={admin}
         drives={filespaces}

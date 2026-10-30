@@ -475,3 +475,37 @@ dialog.dialog-sheet > .dialog-foot { flex: none; border-top: 1px solid var(--lin
   .request-actions { order: 3; justify-content: flex-start; }
   .admin-empty { padding: var(--s5) var(--s4); }
 }
+
+/* ── Brand ──────────────────────────────────────────────────────────────── */
+
+.kit-section { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+.kit-empty { margin: 0; }
+.kit-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.kit-row { display: flex; flex-direction: column; gap: var(--s3); padding: var(--s3) 0; border-top: 1px solid var(--line); min-width: 0; }
+.kit-row:first-child { border-top: 0; padding-top: 0; }
+.kit-row-main { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; min-width: 0; }
+.kit-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 200px; min-width: 0; }
+.kit-name { overflow-wrap: anywhere; }
+.kit-facts { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s1) var(--s2); }
+.kit-swatch { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent); }
+.kit-actions { display: flex; align-items: center; gap: var(--s2); }
+/* A kit's logos on the page colour of each scheme, as a share page shows them. */
+.kit-tiles { display: inline-flex; gap: var(--s1); flex: none; }
+.kit-tile {
+  display: inline-grid; place-items: center; overflow: hidden;
+  width: 112px; height: 44px; padding: 0 var(--s2);
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 14%, transparent);
+}
+.kit-tile.is-lg { width: 168px; height: 64px; }
+.kit-tile img { max-width: 100%; max-height: 22px; object-fit: contain; }
+.kit-tile.is-lg img { max-height: 28px; }
+.kit-tile-note { font-size: var(--t-xs); }
+.kit-preview { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.kit-form { padding: var(--s3); border-radius: var(--radius-sm); background: var(--surface-sunken); }
+.kit-new { display: flex; flex-direction: column; gap: var(--s2); }
+.kit-new-title { margin: 0; font-size: var(--t-sm); font-weight: 600; }
+.kit-color { flex: none; width: 36px; height: 34px; padding: 2px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); cursor: pointer; }
+.brand-form { gap: var(--s5); }
+.brand-group { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: var(--s2); min-width: 0; }
+.brand-group-title { padding: 0; margin-bottom: var(--s1); font-weight: 600; }

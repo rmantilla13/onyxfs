@@ -19,13 +19,17 @@ public struct FinderMenuPlan: Equatable, Sendable {
     public var note: String?
     /// The one item Show in Onyx opens, when there is one.
     public var show: String?
+    /// Zips to unzip beside themselves: Archive Utility cannot unzip a
+    /// downloaded one on a drive (OnyxKit's Unzipper says why).
+    public var unzip: [String] = []
 
     public static let keepTitle = "Keep Offline"
     public static let removeOne = "Remove Offline Copy"
     public static let removeMany = "Remove Offline Copies"
     public static let showTitle = "Show in Onyx"
+    public static let unzipTitle = "Unzip Here"
 
-    public var isEmpty: Bool { keep.isEmpty && remove.isEmpty && note == nil && show == nil }
+    public var isEmpty: Bool { keep.isEmpty && remove.isEmpty && note == nil && show == nil && unzip.isEmpty }
 
     public init() {}
 
@@ -56,7 +60,14 @@ public struct FinderMenuPlan: Equatable, Sendable {
                 : "Kept Offline with Their Folders"
         }
         if states.count == 1 { plan.show = states[0].0 }
+        plan.unzip = states.map(\.0).filter(isZip)
         return plan
+    }
+
+    /// A zip, by its name: "Footage.zip", "FOOTAGE.ZIP".
+    public static func isZip(_ path: String) -> Bool {
+        let name = FinderPath.lastSegment(path)
+        return name.count > 4 && name.lowercased().hasSuffix(".zip")
     }
 
     /// "Kept Offline with “Footage”": the kept folder by its name, or the

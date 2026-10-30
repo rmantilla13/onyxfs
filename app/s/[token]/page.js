@@ -1,22 +1,35 @@
 import { redirect } from 'next/navigation';
-import { loadBrand } from '@/lib/brand-config';
+import { loadBrand, loadShareKit } from '@/lib/brand-config';
 import { presignFileUrls } from '@/lib/storage';
-import { recordShareView, getShareTarget } from '@/lib/db';
+import { recordShareView, getShareTarget, linkSenderName } from '@/lib/db';
 import { resolveLinkAccess } from '@/lib/share-access';
-import { isShareToken } from '@/lib/share-kinds';
+import { isShareToken, resolveShareLook } from '@/lib/share-kinds';
 import { playableProxies, withProxyKeys } from '@/lib/file-listing';
 import { currentGuest } from '@/lib/share-review';
 import { kindLabel } from '@/lib/file-info';
-import { fmtSize, sharedFile } from '@/lib/media';
+import { fmtSize, sharedFile, withoutOriginal } from '@/lib/media';
 import FilePreview from '@/app/components/file/FilePreview';
 import PreviewPreconnect from '@/app/components/PreviewPreconnect';
 import { DownloadButtons } from '@/app/components/download/DownloadAs';
 import UnlockForm from './UnlockForm';
 import ShareReview from './ShareReview';
 import FolderShare from './FolderShare';
-import Shell from './Shell';
+import Shell, { introFrom } from './Shell';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * A look's colours alone — scheme and accent — for a page the link has not
+ * let anyone into yet (its password form): they say nothing about what is
+ * shared, and the page would otherwise change colour once it is unlocked.
+ * A brand kit's accent is a colour too, and is the one taken when the link
+ * chose none of its own; the kit's logo and font wait for the password.
+ */
+const coloursOnly = async (row) => {
+  const look = resolveShareLook(row?.look);
+  const kit = await loadShareKit(look.brand);
+  return { theme: look.theme, accent: look.accent || kit?.accent || null };
+};
 
 /**
  * Not for search engines, and the title says nothing about what is shared —
@@ -47,6 +60,14 @@ export async function generateMetadata({ params }) {
  * A link to a folder shows the folder (FolderShare) — at `?path=`, a folder
  * inside it — and its files open on their own pages under this path
  * (files/[id]), each deciding again.
+ *
+ * How the page looks is the link's (access.look, lib/share-kinds.js): a
+ * view — 'standard', or 'presentation' with the file filling the page —
+ * a scheme, a brand kit, an accent, the logo or none, and the sharer's
+ * words above it.
+ * With its downloads off (access.downloads) the page offers no download and
+ * is not handed the original where a preview shows the file
+ * (withoutOriginal); the download route refuses either way.
  */
 export default async function SharePage({ params, searchParams }) {
   const { token } = params;
@@ -59,7 +80,8 @@ export default async function SharePage({ params, searchParams }) {
 
   if (access.state === 'ok' && folder) {
     const path = typeof searchParams?.path === 'string' ? searchParams.path : '';
-    return <FolderShare token={token} access={access} brand={brand} path={path} />;
+    const kit = await loadShareKit(access.look.brand);
+    return <FolderShare token={token} access={access} brand={brand} kit={kit} path={path} />;
   }
 
   if (access.state === 'ok') {
@@ -73,16 +95,22 @@ export default async function SharePage({ params, searchParams }) {
     // streaming the master, and presignFileUrls signs it only from a key.
     const proxies = await playableProxies([access.file], access.flags);
     const [signed] = await presignFileUrls(withProxyKeys([access.file], proxies), { expiresIn: 21600 });
-    const file = sharedFile(signed);
+    const file = access.downloads ? sharedFile(signed) : withoutOriginal(sharedFile(signed));
     const review = access.review;
+    const { look } = access;
+    const presenting = look.view === 'presentation' && !review;
+    const sender = look.sender ? await linkSenderName(access.row.created_by) : null;
+    const kit = await loadShareKit(look.brand);
+    const Name = look.title ? 'h2' : 'h1';
     return (
-      <Shell brand={brand} wide={!!review}>
+      <Shell brand={brand} kit={kit} wide={!!review || presenting} look={look} view={review ? 'review' : look.view} intro={introFrom(look, sender)}>
         {/* Only once the link has let them in: a locked link connects to nothing. */}
         <PreviewPreconnect urls={[file.thumbnailUrl, file.posterUrl, file.proxyUrl, file.url]} />
         <div className="share-file">
           <div className="share-head">
             <div style={{ minWidth: 0 }}>
-              <h1 className="share-name" title={file.name}>{file.name}</h1>
+              {/* Under the sharer's own heading, the name is the second one. */}
+              <Name className="share-name" title={file.name}>{file.name}</Name>
               <p className="small muted" style={{ margin: 0 }}>
                 {kindLabel(file)}{file.size != null ? ` · ${fmtSize(file.size)}` : ''}
               </p>
@@ -93,17 +121,19 @@ export default async function SharePage({ params, searchParams }) {
             )}
             {/* The original, and Download as… for the same choices a member gets:
                 the proxy and the cover through this link's own download route. */}
-            <DownloadButtons file={file} base={`/s/${token}/download`} primary guest frame=".share-file video" />
+            {access.downloads && (
+              <DownloadButtons file={file} base={`/s/${token}/download`} primary guest frame=".share-file video" />
+            )}
           </div>
           {review
             ? <ShareReview file={file} token={token} level={review} guest={currentGuest(token)} />
-            : <FilePreview file={file} />}
+            : <div className="share-stage"><FilePreview file={file} /></div>}
           <p className="small muted share-foot">
             {access.kind === 'private'
               ? `A private link: it opens only for people in ${brand.name} who can already see this file.`
               : review
                 ? `Shared from ${brand.name} for review. Anyone with this link can read the comments made through it.`
-                : `Shared from ${brand.name}.`}
+                : `Shared from ${brand.name}.${access.downloads ? '' : ' Downloads are turned off for this link.'}`}
           </p>
         </div>
       </Shell>
@@ -112,7 +142,7 @@ export default async function SharePage({ params, searchParams }) {
 
   if (access.state === 'password' || access.state === 'locked') {
     return (
-      <Shell brand={brand} narrow>
+      <Shell brand={brand} narrow look={await coloursOnly(access.row)}>
         <h1 className="share-title">{folder ? 'This folder is password protected' : 'This file is password protected'}</h1>
         <p className="small muted" style={{ margin: '0 0 var(--s4)' }}>Enter the password you were given with the link.</p>
         <UnlockForm token={token} locked={access.state === 'locked'} />

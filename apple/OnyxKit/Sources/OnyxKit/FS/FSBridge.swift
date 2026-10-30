@@ -21,6 +21,8 @@ public final class FSBridge: @unchecked Sendable {
     private var pollCount = 0
     /// Told what each disk moved, as its extension reports it.
     private var activityHandler: (@Sendable (_ scope: String, _ moved: FSActivity) -> Void)?
+    /// Told of an unzip Archive Utility could not do on a disk.
+    private var unzipHandler: (@Sendable (_ scope: String, _ failure: FSUnzipFailure) -> Void)?
 
     /// The resource URL's scheme. Not `onyxfs:`, which is the app's own
     /// sign-in hand-off scheme (CFBundleURLSchemes): a URL of that scheme
@@ -72,6 +74,12 @@ public final class FSBridge: @unchecked Sendable {
     /// scope, and the bytes its extension counted since its last report.
     public func onActivity(_ handler: @escaping @Sendable (_ scope: String, _ moved: FSActivity) -> Void) {
         lock.withLock { activityHandler = handler }
+    }
+
+    /// Hear of an unzip Archive Utility could not do on a disk (`POST
+    /// /fs/v1/unzip`): the drive's scope, and where in it.
+    public func onUnzipFailed(_ handler: @escaping @Sendable (_ scope: String, _ failure: FSUnzipFailure) -> Void) {
+        lock.withLock { unzipHandler = handler }
     }
 
     /// The drive is unmounted, or gone: its sessions and tickets end, and
@@ -171,11 +179,12 @@ public final class FSBridge: @unchecked Sendable {
 
         guard let session = sessions.session(for: request.headers["authorization"]) else { return Self.unauthorized }
         guard let route, Self.readRoutes.contains(route) || Self.writeRoutes.contains(route)
-                || route == "session" || route == "activity" else {
+                || route == "session" || route == "activity" || route == "unzip" else {
             return FSResponder.error(404, "There is no such endpoint.")
         }
         if route == "session" { return Self.notAllowed("POST") }
         if route == "activity" { return activity(request, session: session) }
+        if route == "unzip" { return unzipFailed(request, session: session) }
         if Self.writeRoutes.contains(route) { return await write(route, request, session: session) }
         guard request.method == "GET" || request.method == "HEAD" else { return Self.notAllowed("GET, HEAD") }
         guard let query = Self.query(request.target) else { return FSResponder.error(400, "The query is not valid.") }
@@ -293,6 +302,22 @@ public final class FSBridge: @unchecked Sendable {
         return FSResponder.json(200, ["ok": true])
     }
 
+    /// `POST /fs/v1/unzip`: `{ "folder", "zips", "unpacked",
+    /// "unpackedCount", "placeholders" }` — Archive Utility could not unzip a
+    /// zip from the internet in the session's own drive (FSUnzipFailure).
+    /// Tells the handler, which unzips it; the answer carries nothing. Only
+    /// a disk this account may write to asks: a view-only disk's would fail.
+    private func unzipFailed(_ request: DAVRequest, session: FSSessions.Session) -> DAVResponse {
+        guard request.method == "POST" else { return Self.notAllowed("POST") }
+        guard let failure = try? JSONDecoder().decode(FSUnzipFailure.self, from: request.body), failure.isPlausible else {
+            return FSResponder.error(400, "The body must name a folder in the drive, and the zips, names and placeholders in it.")
+        }
+        guard writer(for: session.scope) != nil else { return FSResponder.error(403, "This drive can only be viewed.") }
+        let handler = lock.withLock { unzipHandler }
+        handler?(session.scope, failure)
+        return FSResponder.json(200, ["ok": true])
+    }
+
     /// `POST /fs/v1/session`: `{ "ticket": "…" }` for a session on the
     /// ticket's drive.
     private func exchange(_ body: Data) async -> DAVResponse {
@@ -397,6 +422,48 @@ public protocol FSWriteTarget: Sendable {
     func makeFolder(path: String) async throws
     func move(from: String, to: String, replace: Bool) async throws
     func remove(path: String) async throws
+}
+
+/// An unzip Archive Utility could not do on a disk (`POST /fs/v1/unzip`, from
+/// OnyxFSCore's UnzipFailure): it unpacked a zip into its scratch folder
+/// beside it and threw it all away, as it always does for a zip from the
+/// internet on a drive, where it may not mark that folder with the zip's
+/// quarantine. Paths are the drive's own; names are single names in it.
+public struct FSUnzipFailure: Decodable, Sendable, Equatable {
+    /// "/Footage": where the zip is.
+    public var folder: String
+    /// The zips there that came from the internet; the one is among them.
+    public var zips: [String]
+    /// The names at the top of what was unpacked — the zip's own — at most
+    /// `maxNames`, and how many there were in all.
+    public var unpacked: [String]
+    public var unpackedCount: Int
+    /// What Archive Utility made beside the zip for the result: still
+    /// empty, named as the result would be. Archive Utility removes it once
+    /// its error is closed, unless it is stopped first.
+    public var placeholders: [String]
+
+    public static let maxNames = 100
+
+    public init(folder: String, zips: [String], unpacked: [String], unpackedCount: Int, placeholders: [String] = []) {
+        self.folder = folder; self.zips = zips; self.unpacked = unpacked
+        self.unpackedCount = unpackedCount; self.placeholders = placeholders
+    }
+
+    /// An absolute path in the drive with no "." or ".." in it; single names
+    /// a file system takes; a zip at least; the counts in reason.
+    var isPlausible: Bool {
+        let segments = folder.split(separator: "/", omittingEmptySubsequences: false).dropFirst()
+        let folderOK = folder == "/" || (folder.hasPrefix("/") && segments.allSatisfy { Self.isName(String($0)) })
+        let names = zips + unpacked + placeholders
+        return folderOK && !zips.isEmpty && zips.count <= Self.maxNames && unpacked.count <= Self.maxNames
+            && placeholders.count <= Self.maxNames && (unpacked.count...1_000_000).contains(unpackedCount)
+            && names.allSatisfy(Self.isName)
+    }
+
+    static func isName(_ name: String) -> Bool {
+        !name.isEmpty && name != "." && name != ".." && !name.contains("/") && !name.contains("\0") && name.utf8.count <= 255
+    }
 }
 
 /// What one disk moved since its last report (`POST /fs/v1/activity`), in

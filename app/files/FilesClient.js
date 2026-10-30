@@ -56,6 +56,7 @@ import FolderMetaDialog from './FolderMetaDialog';
 import CollectionBar from './CollectionBar';
 import DragLayer, { beginDrag, paneDrop } from './DragPreview';
 import { FolderTiles, FolderRows, MAX_TILES } from './FolderItems';
+import { forgetFolderPreviews } from './useFolderPreview';
 import FilesHeader from './FilesHeader';
 import FilesToolbar, { MoreMenu } from './FilesToolbar';
 import DisplayPopover from './DisplayPopover';
@@ -68,6 +69,7 @@ import {
 } from '@/lib/folder-ops';
 import Icon from '@/app/components/ui/Icon';
 import { startActivity, countOf } from '@/lib/activity';
+import { TRASH_RETENTION_DAYS } from '@/lib/storage-report';
 import { readNdjson, isNdjson } from '@/lib/ndjson';
 
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
@@ -138,6 +140,8 @@ const DOWNLOAD_ASK = 10;
 const DOWNLOAD_GAP_MS = 350;
 // Moves in flight at once: each is a copy and a delete in the bucket.
 const MOVE_PARALLEL = 6;
+// Files per restore request: what POST /api/files/trash/restore takes.
+const RESTORE_BATCH = 200;
 
 // Whether the filter panel was left open, and whether the sidebar is shown
 // (lib/views.js SIDEBAR_KEY), per browser.
@@ -230,7 +234,7 @@ const heldCollections = heldList();
  */
 export default function FilesClient({
   flags, canWrite, reviewLinks = false, folderLinks = false, schema: initialSchema, filespaceId, isAdmin = false,
-  library = true, noDrive = false, canMakeCollections: canMakeCollectionsHere = false, viewer = null,
+  library = true, noDrive = false, canMakeCollections: canMakeCollectionsHere = false, canTrash = false, viewer = null,
   drives = [], initial = null, initialFiltersOpen = false, initialSidebarOpen = true, initialStars = [], initialCollections = [],
   view: initialViewDef = null, views: initialViews = [], initialLocal = {}, initialLegacy = null, initialQuery = '',
 }) {
@@ -481,6 +485,8 @@ export default function FilesClient({
 
   const loadFolders = useCallback(async () => {
     loadUsage();
+    // What changed the tree changed what the folders' previews show.
+    forgetFolderPreviews(filespaceId || '');
     try {
       const r = await fetch(`/api/files/folders${filespaceId ? `?filespace=${encodeURIComponent(filespaceId)}` : ''}`);
       if (!r.ok) return;
@@ -1052,6 +1058,30 @@ export default function FilesClient({
 
   const trashSelected = () => removeFiles([...selected]);
 
+  // Put trashed files back (POST /api/files/trash/restore), in the route's
+  // batches: the Undo after a delete, and a folder's "Restore files". The
+  // listing is read again after, so each comes back where — and as what —
+  // the server put it (beside a newer file that took its name, say).
+  const restoreFromTrash = async (ids) => {
+    let back = 0;
+    let failed = 0;
+    for (let i = 0; i < ids.length; i += RESTORE_BATCH) {
+      const r = await fetch('/api/files/trash/restore', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ids: ids.slice(i, i + RESTORE_BATCH) }),
+      }).catch(() => null);
+      const body = await r?.json().catch(() => ({}));
+      if (!r?.ok) { failed += Math.min(RESTORE_BATCH, ids.length - i); continue; }
+      back += (body.restored || []).filter((x) => x.restored).length;
+      failed += (body.failed || []).length;
+    }
+    load();
+    loadFolders();
+    if (failed) toast.error(`${failed} of ${ids.length} could not be restored. They are still in Trash.`);
+    else toast.success(`Restored ${back} file${back === 1 ? '' : 's'}.`);
+  };
+
   // Remove files by id: the selection, or one file from its context menu.
   const removeFiles = async (ids) => {
     if (!ids.length) return;
@@ -1059,12 +1089,13 @@ export default function FilesClient({
     const one = n === 1 ? files.find((f) => f.id === ids[0]) : null;
     const ok = await confirm({
       title: flags.trash
-        ? `Remove ${one ? `“${one.name}”` : `${n} files`} from the library?`
+        ? `Move ${one ? `“${one.name}”` : `${n} files`} to Trash?`
         : `Permanently delete ${one ? `“${one.name}”` : `${n} files`}?`,
       body: flags.trash
-        ? 'The row is hidden and the object is kept, so an admin can restore it from the database. There is no trash screen.'
+        ? `You can restore ${one ? 'it' : 'them'} from Trash for ${TRASH_RETENTION_DAYS} days.`
         : 'This cannot be undone.',
-      confirmLabel: 'Remove',
+      confirmLabel: flags.trash ? 'Move to Trash' : 'Delete',
+      destructive: !flags.trash,
     });
     if (!ok) return;
     // Gone from the page at once, rather than when the last answer is in: a
@@ -1080,17 +1111,24 @@ export default function FilesClient({
       done: 0, total: n, detail: countOf(0, n, 'files'),
     });
     let finished = 0;
-    const results = await Promise.all(ids.map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' }).catch(() => null).then((r) => {
+    const results = await Promise.all(ids.map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' }).catch(() => null).then(async (r) => {
       finished++;
       task.update({ done: finished, detail: countOf(finished, n, 'files') });
-      return r;
+      return { id, ok: !!r?.ok, trashed: r?.ok ? (await r.json().catch(() => ({}))).trashed === true : false };
     })));
     task.end();
-    const failed = results.filter((r) => !r?.ok).length;
+    const failed = results.filter((r) => !r.ok).length;
+    // Undo only what the server says it put in the trash — never a file it
+    // deleted for good, whatever this page took the flag to be.
+    const undoable = results.filter((r) => r.ok && r.trashed).map((r) => r.id);
     load();
     loadFolders();
     if (failed) toast.error(`${failed} of ${n} could not be removed.`);
-    else toast.success(`${n} file${n === 1 ? '' : 's'} removed.`);
+    else if (undoable.length) {
+      toast.success(`${one ? `“${one.name}”` : `${n} files`} moved to Trash.`, {
+        action: { label: 'Undo', onClick: () => restoreFromTrash(undoable) },
+      });
+    } else toast.success(`${n} file${n === 1 ? '' : 's'} deleted.`);
   };
 
   // ── Folders ───────────────────────────────────────────────────────────────
@@ -1297,7 +1335,7 @@ export default function FilesClient({
       body: [
         inside
           ? (flags.trash
-            ? `It holds ${inside}. They are removed from the library; the stored files are moved aside, not destroyed, so an admin can restore them from the database.`
+            ? `It holds ${inside}. The files go to Trash, where you can restore them for ${TRASH_RETENTION_DAYS} days; the folder’s own tags, notes and stars are not kept.`
             : `It holds ${inside}, which will be permanently deleted. This cannot be undone.`)
           : 'The folder is empty.',
         sum.outside ? `${sum.outside} file${sum.outside === 1 ? '' : 's'} from another filespace at this path will stay.` : '',
@@ -1308,6 +1346,7 @@ export default function FilesClient({
     let deleted = 0;
     let failed = 0;
     let lastError = null;
+    const trashedIds = [];
     const total = sum.files || 0;
     const task = startActivity({
       title: `Deleting “${baseName(path)}”`,
@@ -1321,6 +1360,7 @@ export default function FilesClient({
         const body = await d.json().catch(() => ({}));
         if (!d.ok) { lastError = body.error || `HTTP ${d.status}`; break; }
         deleted += body.deleted || 0;
+        if (Array.isArray(body.trashedIds)) trashedIds.push(...body.trashedIds);
         failed = body.failed || 0;
         lastError = body.error;
         if (total) task.update({ done: Math.min(deleted, total), detail: countOf(Math.min(deleted, total), total, 'files') });
@@ -1334,7 +1374,13 @@ export default function FilesClient({
     load();
     loadFolders();
     if (failed || (lastError && !deleted)) toast.error(`${failed ? `${failed} file${failed === 1 ? '' : 's'} could not be removed, so the folder stays.` : ''} ${lastError || ''}`.trim());
-    else toast.success(`Deleted “${baseName(path)}”${deleted ? ` and ${deleted} file${deleted === 1 ? '' : 's'}` : ''}.`);
+    else {
+      // Not "Undo": the files come back, and the folder with them, but not
+      // its own tags, notes or stars, which went with its rows.
+      toast.success(`Deleted “${baseName(path)}”${deleted ? ` and moved ${deleted} file${deleted === 1 ? '' : 's'} to Trash` : ''}.`, trashedIds.length
+        ? { action: { label: 'Restore files', onClick: () => restoreFromTrash(trashedIds) } }
+        : undefined);
+    }
   };
 
   // Move files one request each, a few at a time: PATCH /api/files/[id]
@@ -2730,6 +2776,12 @@ export default function FilesClient({
               </div>
             </Section>
           </div>
+          {canTrash && (
+            <a className="folder-link side-trash" href="/trash">
+              <Icon name="trash" size={14} />
+              <span className="folder-name">Trash</span>
+            </a>
+          )}
         </aside>
 
         <div className="files-content">
@@ -2739,6 +2791,7 @@ export default function FilesClient({
             color={driveColor(filespaceId)}
             canWrite={canWrite && !collectionId}
             onOpen={navigate}
+            onUp={goUp}
             onDrop={onTreeDrop}
             onUploadFiles={() => inputRef.current?.click()}
             onUploadFolder={() => folderInputRef.current?.click()}
@@ -2901,6 +2954,7 @@ export default function FilesClient({
                     <FolderTiles
                       folders={itemFolders}
                       summaries={summaries}
+                      filespace={filespaceId || ''}
                       cardSize={display.size}
                       selected={sel.selectedFolders}
                       handlers={sel.handlers}

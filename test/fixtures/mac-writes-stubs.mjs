@@ -305,13 +305,35 @@ export async function listUnmovedTrash({ limit = 200, maxBytes } = {}) {
     .slice(0, limit)
     .map(copy);
 }
-export async function restoreFile(id, { storageKey = null } = {}) {
+// As the real one: only while it is still trashed, and — when the caller says
+// which trash_key it decided from — only while it still has that one.
+export async function restoreFile(id, { storageKey = null, name = null, trashKey } = {}) {
   const row = s().files.get(id);
   if (!row || !row.deletedAt) return null;
+  if (trashKey !== undefined && (row.trashKey ?? null) !== (trashKey ?? null)) return null;
   if (storageKey) followTranscripts(id, storageKey);
-  Object.assign(row, { deletedAt: null, trashKey: null, deletedBy: null, storageKey: storageKey ?? row.storageKey });
+  Object.assign(row, {
+    deletedAt: null, trashKey: null, deletedBy: null,
+    storageKey: storageKey ?? row.storageKey, name: name ?? row.name,
+  });
   touch(row);
   return copy(row);
+}
+// As the real one: trashed rows the principal could see (canAccessFile, the
+// drive's read rule included) and could have deleted (modifiableFileIds,
+// files.delete), newest deletion first, keyset-paged on (deletedAt, id).
+export async function listTrashForUser(p = {}, { before = null, ids = null, limit = 50 } = {}) {
+  let rows = [...s().files.values()].filter((f) => f.deletedAt);
+  if (Array.isArray(ids)) rows = rows.filter((f) => ids.includes(f.id));
+  rows.sort((a, b) => (b.deletedAt - a.deletedAt) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+  if (before) rows = rows.filter((f) => f.deletedAt < before.deletedAt || (f.deletedAt === before.deletedAt && f.id < before.id));
+  const seen = [];
+  for (const f of rows) if (await canAccessFile(f, p)) seen.push(f);
+  const mine = await modifiableFileIds(seen, p, { action: 'files.delete' });
+  const kept = seen.filter((f) => mine.has(f.id));
+  const n = Math.max(1, Math.min(Number(limit) || 50, 200));
+  const last = kept[n - 1];
+  return { files: kept.slice(0, n).map(copy), cursor: kept.length > n ? { deletedAt: last.deletedAt, id: last.id } : null };
 }
 export async function deleteFile(id) {
   s().tombstones.push({ id, seq: nextSeq() });

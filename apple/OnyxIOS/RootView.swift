@@ -28,6 +28,13 @@ struct CollectionRef: Hashable {
     let name: String
 }
 
+extension EnvironmentValues {
+    /// Open a folder above the one on screen, in the same place — "" its
+    /// top — as Back would after enough taps: Browse sets it on its stack.
+    /// Nil anywhere else, where a folder screen offers no way up but Back.
+    @Entry var openFolderAbove: ((String) -> Void)? = nil
+}
+
 /// The app's three places to be.
 enum AppTab: String, CaseIterable, Identifiable {
     case home, search, browse
@@ -60,12 +67,16 @@ final class AppChrome {
 
 /// The tabs, each keeping its own place, under a tab bar of our own — a
 /// dark glass pill of three line icons that floats over the content — and
-/// the download tray above it.
+/// the download tray above it. On an iPhone Duo the pill stands down the
+/// right edge instead, with the status bar and the system's own bars.
 struct MainTabs: View {
     @State private var tab: AppTab = .home
     @State private var chrome = AppChrome()
     /// The place open in Browse, which Home's cards can open.
     @State private var place: Place?
+    /// The status bar stands in a column down the right edge — an iPhone
+    /// Duo's, open or closed (iOS 27.1) — and the tab bar stands there too.
+    @State private var sideRail = false
 
     var body: some View {
         TabView(selection: $tab) {
@@ -86,18 +97,45 @@ struct MainTabs: View {
             }
         }
         .environment(chrome)
+        // The column shows as a right inset wider than the top's (and than
+        // the left's, which an iPhone on its side has as wide).
+        .onGeometryChange(for: Bool.self) { proxy in
+            let inset = proxy.safeAreaInsets
+            return inset.trailing > max(inset.top, inset.leading) + 20
+        } action: { sideRail = $0 }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 10) {
                 DownloadTray()
-                if !chrome.selecting {
+                if !sideRail, !chrome.selecting {
                     FloatingTabBar(selection: $tab)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .padding(.bottom, 2)
             .animation(Theme.motion(.arrive), value: chrome.selecting)
+            // Bent, an iPhone Duo's fold would run through the middle of
+            // the pill: it moves into one half.
+            .clearOfFold()
             // Typing, the keyboard covers the bar rather than lifting it.
             .ignoresSafeArea(.keyboard, edges: .bottom)
+        }
+        // On an iPhone Duo the pill stands at the foot of the status bar's
+        // column, in line below the system's own buttons there (48 points
+        // wide, 24 in from the screen's edge): clear of the content and of
+        // the fold, and the screen's whole height left to it.
+        .overlay {
+            ZStack {
+                if sideRail, !chrome.selecting {
+                    FloatingTabBar(selection: $tab, axis: .vertical)
+                        .padding(.trailing, 24)
+                        .padding(.bottom, 10)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            .ignoresSafeArea(.container, edges: .trailing)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+            .animation(.spring(duration: 0.3, bounce: 0.15), value: chrome.selecting)
         }
     }
 }
@@ -106,10 +144,13 @@ struct MainTabs: View {
 /// chosen one lit.
 struct FloatingTabBar: View {
     @Binding var selection: AppTab
+    /// Across, or standing down the side as on an iPhone Duo.
+    var axis: Axis = .horizontal
     @Namespace private var lit
 
     var body: some View {
-        HStack(spacing: 2) {
+        let stack = axis == .horizontal ? AnyLayout(HStackLayout(spacing: 2)) : AnyLayout(VStackLayout(spacing: 2))
+        stack {
             ForEach(AppTab.allCases) { tab in
                 let chosen = selection == tab
                 Button {
@@ -119,7 +160,7 @@ struct FloatingTabBar: View {
                         .font(.system(size: 19, weight: chosen ? .semibold : .regular))
                         .foregroundStyle(chosen ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         .replaceSymbol()
-                        .frame(width: 62, height: 46)
+                        .frame(width: axis == .horizontal ? 62 : 38, height: axis == .horizontal ? 46 : 52)
                         .background {
                             if chosen {
                                 // The lit one: glass of its own, sliding
@@ -145,7 +186,7 @@ struct FloatingTabBar: View {
 }
 
 /// Browse: the drives, and the folder open beside them — side by side on
-/// an iPad, one after the other on an iPhone.
+/// an iPad and an open iPhone Duo, one after the other on an iPhone.
 private struct Browser: View {
     @Binding var place: Place?
     @Environment(Session.self) private var session
@@ -155,20 +196,37 @@ private struct Browser: View {
     @State private var pending: [FolderRoute]?
     /// Which column an iPhone shows: a star opened goes to the folder.
     @State private var column = NavigationSplitViewColumn.sidebar
+    /// All of Browse, which side by side its columns' auras are parts of.
+    @State private var canvas: CGRect?
+
+    /// The place open: the one chosen — or, side by side with none chosen,
+    /// the first drive rather than an empty half of the screen. That one
+    /// isn't selected, so one after the other (an iPhone, a closed iPhone
+    /// Duo) the list comes first, unless someone had gone into it.
+    private var shown: Place? {
+        place ?? (width == .regular ? session.drives.first : path.first?.place)
+    }
 
     var body: some View {
         NavigationSplitView(preferredCompactColumn: $column) {
-            PlacesView(selection: $place, open: open)
+            PlacesView(selection: $place, beside: width == .regular ? shown : nil, open: open)
         } detail: {
-            if let place {
+            if let shown {
+                // Up to a folder above, for each folder screen: given to each
+                // one, the pushed ones included — set on the stack, it never
+                // reached them.
+                let above: (String) -> Void = { climb(to: $0, in: shown) }
                 NavigationStack(path: $path) {
-                    FolderView(route: FolderRoute(place: place, folder: ""))
-                        .navigationDestination(for: FolderRoute.self) { FolderView(route: $0) }
+                    FolderView(route: FolderRoute(place: shown, folder: ""))
+                        .environment(\.openFolderAbove, above)
+                        .navigationDestination(for: FolderRoute.self) {
+                            FolderView(route: $0).environment(\.openFolderAbove, above)
+                        }
                 }
                 // Another place starts from its top — or, opened from a
                 // star, at its folder. Set once the stack is there: a path
                 // set before it appears is lost.
-                .id(place.id)
+                .id(shown.id)
                 .onAppear {
                     if let trail = pending {
                         pending = nil
@@ -182,28 +240,55 @@ private struct Browser: View {
                     .background { AuraBackground() }
             }
         }
-        .onChange(of: place) { path = [] }
-        // Side by side, the first drive is open rather than an empty half of
-        // the screen; one after the other (an iPhone), the list comes first.
-        .onChange(of: session.drives, initial: true) {
-            if width == .regular, place == nil { place = session.drives.first }
+        // Side by side — an iPad, an open iPhone Duo — the list and the
+        // folder are lit by one aura, not one each with a seam between them.
+        .environment(\.auraCanvas, width == .regular ? canvas : nil)
+        .background {
+            Color.clear
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { canvas = $0 }
+                .ignoresSafeArea()
+        }
+        // Another place starts from its top; the one already open keeps the
+        // folder it is in.
+        .onChange(of: place) { if path.first?.place != place { path = [] } }
+        // An iPhone Duo closing goes from side by side to one after the
+        // other: the folder that was open stays on screen — in the first
+        // drive too, once someone has gone into it.
+        .onChange(of: width) {
+            guard width == .compact else { return }
+            if place == nil, let opened = path.first?.place { place = opened }
+            if place != nil { column = .detail }
         }
     }
 
     /// Open a starred folder: its place, then each folder on the way down to
     /// it, so Back climbs out one level at a time.
     private func open(_ route: FolderRoute) {
-        let parts = route.folder.split(separator: "/").map(String.init)
         // A collection is one screen; a folder brings the ones above it.
-        let trail = route.collection != nil ? [route] : parts.indices.map { i in
-            FolderRoute(place: route.place, folder: parts[...i].joined(separator: "/"))
+        let trail = route.collection != nil ? [route] : FolderTrail.steps(to: route.folder).map {
+            FolderRoute(place: route.place, folder: $0)
         }
-        if place == route.place {
+        if shown == route.place {
+            place = route.place
             path = trail
         } else {
             pending = trail
             place = route.place
         }
         column = .detail
+    }
+
+    /// Go up to a folder above the one on screen — "" the place's top — by
+    /// cutting the stack back to it, so Back from there still climbs a level
+    /// at a time. The stack holds every folder on the way down (opening a
+    /// folder pushes one level; `open` pushes them all); one that does not is
+    /// given its way down again.
+    private func climb(to folder: String, in place: Place) {
+        guard !folder.isEmpty else { path = []; return }
+        if let i = path.lastIndex(where: { $0.collection == nil && $0.folder == folder }) {
+            path = Array(path[...i])
+        } else {
+            path = FolderTrail.steps(to: folder).map { FolderRoute(place: place, folder: $0) }
+        }
     }
 }

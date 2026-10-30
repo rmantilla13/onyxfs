@@ -52,6 +52,10 @@ public final class ClientBridge: EngineBridge {
         client.meter.add(kind, bytes)
     }
 
+    public func unzipFailed(_ failure: UnzipFailure) async {
+        try? await client.unzipFailed(failure)
+    }
+
     public func reader(for entry: BridgeEntry) async throws -> any ByteSource {
         guard let id = entry.id else { throw BridgeFailure.notFound }
         return Reader(FileReader(fileId: id, version: entry.version, size: entry.size, client: client, store: store,

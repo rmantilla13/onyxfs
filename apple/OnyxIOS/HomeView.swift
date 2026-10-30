@@ -8,6 +8,9 @@ import SwiftUI
 /// Everything here is read as a member reads it: the drives this account
 /// belongs to, their totals as the listing counts them (only the files it
 /// may see), and the newest of those files.
+///
+/// On an open iPhone Duo it is two panes, one either side of the fold: the
+/// drives and their space, and the files that came in last.
 struct HomeView: View {
     /// Opens a place in Browse.
     let open: (Place) -> Void
@@ -24,22 +27,34 @@ struct HomeView: View {
     @State private var showingAll = false
     /// What the rows' pictures are prefetched by (ThumbnailPrefetcher).
     @State private var listing = ThumbnailPrefetcher.Owner()
+    /// The fold the two panes meet at, on a screen that has one.
+    @State private var fold: CGRect?
     @Namespace private var zoom
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 30) {
-                    header
-                    driveCards
-                    storage
-                    recentFiles
+            Group {
+                if let fold {
+                    HStack(spacing: 0) {
+                        pane {
+                            header
+                            driveCards
+                            storage
+                        }
+                        .frame(width: fold.minX)
+                        Color.clear.frame(width: fold.width)
+                        pane { recentFiles }
+                    }
+                } else {
+                    pane {
+                        header
+                        driveCards
+                        storage
+                        recentFiles
+                    }
                 }
-                .padding(.horizontal, Theme.Space.gutter)
-                .padding(.top, 14)
-                .padding(.bottom, 28)
             }
-            .scrollIndicators(.hidden)
+            .onGeometryChange(for: CGRect?.self) { Fold.panes(in: $0) } action: { fold = $0 }
             .background { AuraBackground() }
             .toolbar(.hidden, for: .navigationBar)
             .refreshable { await load(refresh: true) }
@@ -56,6 +71,19 @@ struct HomeView: View {
         .sheet(item: $inspecting) { FileInfoView(file: $0, place: nil) }
         .sheet(item: $linking) { ShareLinkSheet(subject: $0) }
         .sheet(isPresented: $showingAccount) { AccountView() }
+    }
+
+    /// A column of Home, scrolling on its own.
+    private func pane(@ViewBuilder _ content: () -> some View) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 30) {
+                content()
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
+            .padding(.bottom, 28)
+        }
+        .scrollIndicators(.hidden)
     }
 
     /// The rows Recent Files shows; See All has the rest.
@@ -135,6 +163,21 @@ struct HomeView: View {
         .scrollIndicators(.hidden)
         .scrollTargetBehavior(.viewAligned)
         .scrollClipDisabled()
+        // The shadows spill above and below; sideways the cards stop at the
+        // edge of the safe area or the pane, clear of the status bar beside
+        // an iPhone Duo's outer screen and of the fold on its inner one —
+        // fading into the fold, where a hard edge would draw a line down
+        // their glow.
+        .mask {
+            HStack(spacing: 0) {
+                Rectangle()
+                if fold != nil {
+                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 28)
+                }
+            }
+            .padding(.vertical, -40)
+        }
         .padding(.horizontal, -Theme.Space.gutter)
     }
 

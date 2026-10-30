@@ -202,7 +202,7 @@ final class FinderSyncService: ObservableObject {
         case .open:
             openWindow()
             return FinderWire.Reply(ok: true).encoded()
-        case .keep, .remove, .show:
+        case .keep, .remove, .show, .unzip:
             guard body.count <= FinderWire.maxRequestBytes, let request = FinderWire.Request.decode(body) else {
                 return FinderWire.Reply(ok: false, message: "Onyx could not read that request.").encoded()
             }
@@ -216,7 +216,7 @@ final class FinderSyncService: ObservableObject {
 
     /// Only paths inside a drive mounted now, as this app has it mounted —
     /// whatever the extension's copy of the index says — and only as Keep
-    /// Offline and Remove Offline Copy would.
+    /// Offline and Remove Offline Copy would; for Unzip Here, only zips.
     private func perform(_ kind: FinderWire.Message, paths: [String]) async {
         guard let model else { return }
         let finder = model.finder
@@ -244,6 +244,12 @@ final class FinderSyncService: ObservableObject {
                   let page = FinderPins.webPath(scope: domain, path: inside, index: await mirror.index) else { return }
             openWindow()
             model.web.go(page)
+        case .unzip:
+            // One at a time, with any Archive Utility could not do
+            // (UnzipService). What lands shows in Finder as it is copied in,
+            // and goes up as a Finder copy does; a zip that fails says why.
+            model.unzips.unzip(paths.filter { mounted.locate($0) != nil && Unzipper.isZip($0) }
+                .map { URL(fileURLWithPath: $0) })
         case .index, .open:
             break
         }

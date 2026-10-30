@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-guard';
-import { getTrashedFiles, restoreFile, storageKeyInUse } from '@/lib/db';
-import { getStorageConfig, storageMode, s3MoveObject, s3ObjectExists, s3UniqueKey, storageForKey } from '@/lib/storage';
-import { settleLimit } from '@/lib/folder-ops';
+import { getTrashedFiles } from '@/lib/db';
+import { getStorageConfig } from '@/lib/storage';
+import { restoreTrashedFiles } from '@/lib/trash-restore';
 import { audit } from '@/lib/audit';
 
 export const runtime = 'nodejs';
@@ -14,15 +14,16 @@ const MAX = 200;
 /**
  * POST { ids: [...] } → { restored, failed }
  *
- * Put trashed files back. On S3 the object moves from its trash key back to
- * the key it had — or, when a newer file has taken that name in the
- * meantime, to the next free one ("a (2).jpg"), so a restore never
- * overwrites anything. Then restoreFile clears the trash flags and advances
- * the sequence, which is how synced devices learn it is back.
+ * Put trashed files back, as lib/trash-restore.js does it: the object moves
+ * from its trash key back to the key it had — or, when a newer file has taken
+ * that name in the meantime, to the next free one ("a (2).jpg"), so a restore
+ * never overwrites anything — and the row advances its sequence, which is how
+ * synced devices learn it is back.
  *
- * Admins only, as Admin → Trash is: restoring is an admin's call. Unlike the
- * rest of /api/admin this also takes Onyx for Mac's bearer token, for Put
- * Back in Finder (requireAdmin(req)) — held to the same test, so no one
+ * Any trashed file, in any drive. Everyone else restores from their own
+ * Trash (/api/files/trash/restore), held to the rules that decide what they
+ * could have deleted. Unlike the rest of /api/admin this also takes Onyx for
+ * Mac's bearer token (requireAdmin(req)) — held to the same test, so no one
  * restores from the Mac who could not from the web.
  */
 export async function POST(req) {
@@ -35,27 +36,7 @@ export async function POST(req) {
   if (ids.length > MAX) return NextResponse.json({ error: `Restore at most ${MAX} files at once.` }, { status: 400 });
 
   const rows = await getTrashedFiles(ids);
-  const cfg = await getStorageConfig();
-  const s3 = storageMode(cfg) === 's3';
-  const results = await settleLimit(rows, 8, async (f) => {
-    let storageKey = null;
-    if (f.trashKey && f.storage === 's3') {
-      if (!s3) throw new Error('Storage is not configured for S3, so the stored file cannot be moved back.');
-      let target = f.storageKey;
-      // Back where it was trashed: a drive in a bucket of its own keeps its
-      // trash there too.
-      const own = await storageForKey(cfg, f.storageKey);
-      const taken = await storageKeyInUse(target, { exceptId: f.id }) || await s3ObjectExists(own, target).catch(() => false);
-      if (taken) target = await s3UniqueKey(own, target);
-      await s3MoveObject(own, f.trashKey, target, { size: f.size });
-      storageKey = target;
-    }
-    const restored = await restoreFile(f.id, { storageKey });
-    return { id: f.id, name: f.name, movedTo: storageKey !== f.storageKey ? storageKey : null, restored: !!restored };
-  });
-
-  const restored = results.filter((r) => r.ok).map((r) => r.value);
-  const failed = results.map((r, i) => (r.ok ? null : { id: rows[i].id, error: r.error?.message || 'Restore failed.' })).filter(Boolean);
+  const { restored, failed } = await restoreTrashedFiles(rows, { cfg: await getStorageConfig() });
   const missing = ids.filter((id) => !rows.some((f) => f.id === id));
   if (restored.length) {
     await audit(guard.email, 'trash.restore', { type: 'files', id: 'bulk', label: `${restored.length} file${restored.length === 1 ? '' : 's'}` }, {

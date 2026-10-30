@@ -229,6 +229,10 @@ enum Theme {
 /// (body::before) — blue from the top left, magenta from the top right,
 /// and a faint cyan at the foot — or, behind a sheet, a dialog's two
 /// softer ones (dialog.palette) over a card.
+///
+/// Where an auraCanvas is set — Browse side by side, on an iPad or an open
+/// iPhone Duo — a page is its part of one aura lit across it, so the list
+/// and the folder meet without a seam.
 struct AuraBackground: View {
     enum Style {
         /// The page: near-black, three glows.
@@ -239,20 +243,30 @@ struct AuraBackground: View {
         case glow
     }
     var style: Style = .page
+    @Environment(\.auraCanvas) private var canvas
 
     var body: some View {
         GeometryReader { geo in
-            let w = geo.size.width, h = geo.size.height
+            let frame = geo.frame(in: .global)
+            // A page partly outside it — a pager's next page, mid-swipe —
+            // is lit in its own frame, as everything else is.
+            let whole = canvas.flatMap { $0.insetBy(dx: -1, dy: -1).contains(frame) ? $0 : nil }
+            let lit = style == .page ? whole ?? frame : frame
+            let w = lit.width, h = lit.height
             ZStack {
                 switch style {
                 case .page:
                     Theme.page
-                    glow(Theme.auraBlue, 0.26, radii: CGSize(width: 0.60 * w, height: 0.48 * h),
-                         at: CGPoint(x: 0.06 * w, y: -0.08 * h), fade: 0.70)
-                    glow(Theme.auraMagenta, 0.26, radii: CGSize(width: 0.52 * w, height: 0.44 * h),
-                         at: CGPoint(x: 0.98 * w, y: -0.06 * h), fade: 0.70)
-                    glow(Theme.auraCyan, 0.15, radii: CGSize(width: 0.70 * w, height: 0.42 * h),
-                         at: CGPoint(x: 0.55 * w, y: 1.12 * h), fade: 0.72)
+                    Group {
+                        glow(Theme.auraBlue, 0.26, radii: CGSize(width: 0.60 * w, height: 0.48 * h),
+                             at: CGPoint(x: 0.06 * w, y: -0.08 * h), fade: 0.70)
+                        glow(Theme.auraMagenta, 0.26, radii: CGSize(width: 0.52 * w, height: 0.44 * h),
+                             at: CGPoint(x: 0.98 * w, y: -0.06 * h), fade: 0.70)
+                        glow(Theme.auraCyan, 0.15, radii: CGSize(width: 0.70 * w, height: 0.42 * h),
+                             at: CGPoint(x: 0.55 * w, y: 1.12 * h), fade: 0.72)
+                    }
+                    // Lit across the window, seen from where this page is.
+                    .offset(x: lit.minX - frame.minX, y: lit.minY - frame.minY)
                 case .sheet, .glow:
                     if style == .sheet { Theme.surface }
                     glow(Theme.auraBlue, 0.15, radii: CGSize(width: 0.90 * w, height: 0.60 * min(h, 700)),
@@ -274,6 +288,12 @@ struct AuraBackground: View {
             .frame(width: radii.width * 2, height: radii.height * 2)
             .position(center)
     }
+}
+
+extension EnvironmentValues {
+    /// The area, in global coordinates, whose one aura every page in it
+    /// shows its part of. Unset, a page is lit in its own frame.
+    @Entry var auraCanvas: CGRect? = nil
 }
 
 extension View {

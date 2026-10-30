@@ -1,13 +1,14 @@
 import { redirect } from 'next/navigation';
-import { loadBrand } from '@/lib/brand-config';
+import { loadBrand, loadShareKit } from '@/lib/brand-config';
 import { presignFileUrls } from '@/lib/storage';
 import { resolveFolderShareAccess, folderLinkFile } from '@/lib/share-access';
 import { linkCrumbs, linkFolderHref, linkFileHref, relativeTo } from '@/lib/folder-links';
 import { playableProxies, withProxyKeys } from '@/lib/file-listing';
 import { kindLabel } from '@/lib/file-info';
-import { fmtSize, sharedFile } from '@/lib/media';
+import { fmtSize, sharedFile, withoutOriginal } from '@/lib/media';
 import FilePreview from '@/app/components/file/FilePreview';
 import Icon from '@/app/components/ui/Icon';
+import LinkPath from '../../LinkPath';
 import Shell from '../../Shell';
 
 export const dynamic = 'force-dynamic';
@@ -31,13 +32,17 @@ export default async function SharedFolderFilePage({ params }) {
   const access = await resolveFolderShareAccess(token);
   if (access.state !== 'ok') redirect(linkFolderHref(token));
   const brand = await loadBrand();
+  // The folder's look, without its words (they are the folder's, over the
+  // folder) and in the standard layout a single file takes here.
+  const look = { ...access.look, title: '', message: '', sender: false };
+  const kit = await loadShareKit(look.brand);
 
   let file = null;
   try {
     file = await folderLinkFile(access, id);
   } catch {
     return (
-      <Shell brand={brand} narrow>
+      <Shell brand={brand} kit={kit} narrow look={look}>
         <h1 className="share-title">This link can’t be opened right now</h1>
         <p className="small muted" style={{ margin: 0 }}>Try again in a moment.</p>
       </Shell>
@@ -45,7 +50,7 @@ export default async function SharedFolderFilePage({ params }) {
   }
   if (!file) {
     return (
-      <Shell brand={brand} narrow>
+      <Shell brand={brand} kit={kit} narrow look={look}>
         <h1 className="share-title">This file is not in the link</h1>
         <p className="small muted" style={{ margin: 0 }}>It may have been moved or removed since the link was made.</p>
         <p className="small" style={{ margin: 'var(--s4) 0 0' }}>
@@ -60,24 +65,15 @@ export default async function SharedFolderFilePage({ params }) {
   // the link was let in by. Then cut down to what the viewer reads.
   const proxies = await playableProxies([file], access.flags);
   const [signed] = await presignFileUrls(withProxyKeys([file], proxies), { expiresIn: 21600 });
-  const shown = sharedFile(signed);
+  const shown = access.downloads ? sharedFile(signed) : withoutOriginal(sharedFile(signed));
   const sub = relativeTo(access.scope.root, file.folder) ?? '';
   const crumbs = linkCrumbs(access.scope.root, sub);
   const folder = crumbs[crumbs.length - 1];
 
   return (
-    <Shell brand={brand}>
+    <Shell brand={brand} kit={kit} look={look}>
       <div className="share-file">
-        <nav className="crumbs share-file-crumbs" aria-label="Folder path">
-          <ol>
-            {crumbs.map((c) => (
-              <li key={c.sub || '/'} className="crumb-item">
-                <a className="crumb" href={linkFolderHref(token, c.sub)} title={c.name}>{c.name}</a>
-                <Icon name="chevron-right" size={14} className="crumb-sep" />
-              </li>
-            ))}
-          </ol>
-        </nav>
+        <LinkPath token={token} crumbs={crumbs} className="share-file-crumbs" />
         <div className="share-head">
           <a className="btn btn-ghost btn-icon" href={linkFolderHref(token, folder.sub)} aria-label={`Back to ${folder.name}`} title={`Back to ${folder.name}`}>
             <Icon name="arrow-left" size={18} />
@@ -89,10 +85,12 @@ export default async function SharedFolderFilePage({ params }) {
             </p>
           </div>
           <div className="spacer" />
-          <a className="btn btn-primary" href={`${linkFileHref(token, file.id)}/download`}>Download</a>
+          {access.downloads && <a className="btn btn-primary" href={`${linkFileHref(token, file.id)}/download`}>Download</a>}
         </div>
-        <FilePreview file={shown} />
-        <p className="small muted share-foot">Shared from {brand.name}, in “{folder.name}”.</p>
+        <div className="share-stage"><FilePreview file={shown} /></div>
+        <p className="small muted share-foot">
+          Shared from {brand.name}, in “{folder.name}”.{access.downloads ? '' : ' Downloads are turned off for this link.'}
+        </p>
       </div>
     </Shell>
   );

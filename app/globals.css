@@ -683,6 +683,9 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 .menu-item:hover:not(:disabled) { background: var(--hover-bg-strong); }
 .menu-item:disabled { opacity: 0.5; cursor: not-allowed; }
 .menu-item.danger { color: var(--danger); }
+/* An item that is a link (a link page's folders): drawn as the buttons are. */
+a.menu-item { color: var(--ink); text-decoration: none; box-sizing: border-box; }
+a.menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .menu-sep { height: 1px; margin: var(--s1) 0; background: var(--line); }
 
 /* The right-click menu. Fixed, and placed by script after measuring so it
@@ -978,6 +981,89 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 /* A folder's link is public or password: two kinds side by side. */
 @media (min-width: 721px) { .share-kinds.is-two { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .share-folder-note { margin: 0; }
+.share-kind.is-off { opacity: 0.5; cursor: not-allowed; }
+
+/* Templates: chips that fill the form, a person's own with a remove. */
+.share-templates { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin: 0 0 var(--s4); }
+.share-template {
+  display: inline-flex; align-items: center;
+  border: 1px solid var(--line); border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+.share-template.is-on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.share-template-use, .share-template-remove {
+  border: 0; background: none; color: var(--ink); font: inherit; cursor: pointer;
+}
+.share-template-use { padding: 5px var(--s3); font-size: var(--t-sm); font-weight: 500; border-radius: var(--radius-pill); }
+.share-template-remove { display: inline-flex; padding: 5px var(--s2) 5px 0; color: var(--muted); }
+.share-template-remove:hover { color: var(--danger); }
+.share-template-use:focus-visible, .share-template-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The form: who and what on the left, the page's look on the right. */
+.share-form { display: flex; flex-direction: column; gap: var(--s4); }
+.share-form-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s5); align-items: start; }
+.share-form-col { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+.share-section { display: flex; flex-direction: column; gap: var(--s2); margin: 0; padding: 0; border: 0; min-width: 0; }
+.share-section-title {
+  display: flex; align-items: baseline; gap: var(--s2); width: 100%;
+  margin-bottom: var(--s2); padding: 0;
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+.share-look-summary { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: var(--t-xs); color: var(--accent-deep); }
+.share-form-cols .share-kinds { grid-template-columns: minmax(0, 1fr); }
+.share-field { gap: var(--s1); }
+.share-check { display: flex; align-items: flex-start; gap: var(--s2); cursor: pointer; }
+.share-check input { margin-top: 3px; flex: none; }
+.share-check.is-off { cursor: default; opacity: 0.7; }
+.share-expiry { flex: 0 1 200px; width: auto; }
+.share-date { flex: 0 1 230px; width: auto; }
+.share-look { padding: var(--s4); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-sunken); }
+.share-look .share-segments { background: var(--surface); }
+.share-look .share-segment.is-on { background: var(--surface-sunken); }
+.share-look-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); align-items: center; gap: var(--s2); }
+/* A brand kit: chosen by name, its logo beside it as the page will show it. */
+.share-kit-pick { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
+.share-kit-select { flex: 0 1 220px; width: auto; min-width: 0; }
+.share-kit-logo { display: inline-flex; min-width: 0; overflow: hidden; }
+.share-kit-logo img { max-width: 140px; object-fit: contain; object-position: left center; }
+.share-message { resize: vertical; min-height: 64px; font: inherit; }
+/* Accents: the workspace's own, a few to pick, any other. */
+.share-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.share-swatch { position: relative; display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; cursor: pointer; }
+.share-swatch input[type='radio'] { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+.share-swatch-dot { width: 20px; height: 20px; border-radius: 50%; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent); }
+.share-swatch.is-workspace .share-swatch-dot { background: conic-gradient(var(--aura-a), var(--aura-b), var(--aura-c), var(--aura-a)); }
+.share-swatch.is-on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); }
+.share-swatch:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* Any other colour: a dashed ring with a plus until one is chosen, the
+   browser's picker laid invisibly over it. */
+.share-swatch.is-custom .share-swatch-dot {
+  display: grid; place-items: center;
+  border: 1px dashed var(--muted); box-shadow: none; color: var(--muted);
+}
+.share-swatch.is-custom.is-on .share-swatch-dot { border: 0; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent); }
+.share-swatch.is-custom input[type='color'] {
+  position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; cursor: pointer;
+}
+.share-swatch.is-custom:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* Narrow: the look's summary goes under its heading. */
+@media (max-width: 1000px) { .share-section-title { flex-wrap: wrap; } .share-look-summary { margin-left: 0; width: 100%; } }
+.share-actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.share-actions .btn-ghost .icon, .share-actions .btn-ghost svg { margin-right: 4px; }
+.share-naming { display: inline-flex; align-items: center; gap: var(--s2); }
+.share-naming .input { width: 200px; }
+.share-error { margin: 0; color: var(--danger); }
+.share-editing {
+  display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap;
+  padding: var(--s2) var(--s3);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+.share-editing .small { flex: 1; min-width: 200px; }
+.share-row.is-editing { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+@media (max-width: 880px) {
+  .share-form-cols { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* A folder link's page: a folder as the Files view shows one — its path from
    the shared folder down, its subfolders as tiles, its files as cards — for
@@ -1008,6 +1094,76 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .share-more-error { margin: var(--s3) 0 0; text-align: center; color: var(--danger); }
 .share-back { color: var(--accent-deep); text-decoration: underline; text-underline-offset: 2px; }
 .share-file-crumbs { margin-bottom: var(--s3); }
+
+/* What the sharer wrote over what they shared (lib/share-kinds.js look):
+   a heading, a note kept to its own line breaks, and who sent it. */
+.share-intro { width: 100%; max-width: 1100px; display: flex; flex-direction: column; gap: var(--s2); }
+.share-page.is-wide .share-intro { max-width: 1400px; }
+.share-intro-title {
+  margin: 0;
+  font-family: var(--font-display); font-size: clamp(26px, 4vw, 40px); line-height: 1.1; letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.share-intro-message { margin: 0; max-width: 68ch; font-size: var(--t-lg); line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
+.share-intro-sender { margin: 0; }
+/* With no logo the intro, or the content, is the top of the page. */
+.share-page > .share-intro:first-child,
+.share-page > .share-body:first-child { margin-top: var(--s3); }
+
+/* Presentation: the file fills the page, its name and download under it. */
+.share-page.is-view-presentation .share-file { display: flex; flex-direction: column; }
+.share-page.is-view-presentation .share-head { order: 2; margin: var(--s4) 0 0; }
+.share-page.is-view-presentation .share-foot { order: 3; }
+.share-page.is-view-presentation .share-stage > * { min-height: min(72vh, 900px); }
+.share-page.is-view-presentation .share-stage video,
+.share-page.is-view-presentation .share-stage img { max-height: 82vh; }
+
+/* A folder link as rows: its picture, name, kind and size, the download at
+   the end. */
+.share-rows { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.share-rows-item { display: flex; align-items: center; gap: var(--s2); border-bottom: 1px solid var(--line); }
+.share-rows-link {
+  flex: 1; min-width: 0;
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) minmax(0, 180px) 90px; align-items: center; gap: var(--s3);
+  padding: var(--s2) var(--s2);
+  color: inherit; text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+.share-rows-link:hover { background: var(--surface-sunken); }
+.share-rows-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.share-rows-thumb { width: 44px; height: 44px; border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-sunken); }
+.share-rows-thumb > * { width: 100%; height: 100%; }
+.share-rows-name { font-weight: 500; }
+.share-rows-size { text-align: right; font-variant-numeric: tabular-nums; }
+.share-rows-download { flex: none; margin-right: var(--s1); }
+@media (max-width: 720px) {
+  .share-rows-link { grid-template-columns: 40px minmax(0, 1fr) auto; }
+  .share-rows-kind { display: none; }
+}
+
+/* A folder link as a gallery: pictures at their own shapes in columns, edge
+   to edge, each one's name over its foot on hover and focus. */
+.share-gallery { columns: 4 260px; column-gap: var(--s2); }
+.share-gallery-tile {
+  position: relative; display: block; margin: 0 0 var(--s2); break-inside: avoid;
+  border-radius: var(--radius-sm); overflow: hidden;
+  background: var(--surface-sunken); color: inherit;
+}
+.share-gallery-tile img { display: block; width: 100%; height: auto; object-fit: cover; transition: transform var(--dur-2) var(--ease); }
+.share-gallery-tile:hover img { transform: scale(1.015); }
+.share-gallery-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.share-gallery-blank { display: grid; place-items: center; width: 100%; color: var(--muted); }
+.share-gallery-name {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: var(--s5) var(--s3) var(--s2);
+  background: linear-gradient(to top, color-mix(in srgb, #000 62%, transparent), transparent);
+  color: #fff; font-size: var(--t-sm); font-weight: 500;
+  opacity: 0; transition: opacity var(--dur-1) var(--ease);
+}
+.share-gallery-tile:hover .share-gallery-name,
+.share-gallery-tile:focus-visible .share-gallery-name { opacity: 1; }
+@media (hover: none) { .share-gallery-name { opacity: 1; } }
+@media (max-width: 720px) { .share-gallery { columns: 2 140px; } }
 
 /* ── Get info ───────────────────────────────────────────────────────────── */
 .info-head { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s4); min-width: 0; }
@@ -1152,6 +1308,12 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
    at animationend — which still fires under the reduced-motion clamp, so
    one can never stick). */
 .toast[data-leaving] { animation: leave-down var(--dur-2) var(--ease-in) forwards; pointer-events: none; }
+/* The one action a toast can carry (Undo): read as a button, not a glyph. */
+.toast .toast-action {
+  opacity: 1; font-weight: 600; white-space: nowrap;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.toast .toast-action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 2px; }
 
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(var(--s2)); }
@@ -1209,7 +1371,8 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 .hdr-btn { width: 36px; height: 36px; padding: 0; justify-content: center; color: var(--muted); }
 /* Upload: the page's one lit action (see .btn-primary), a 32px control. */
 .hdr-primary { height: 32px; padding: 0 var(--s3); margin-right: var(--s1); }
-.files-up { display: none; }
+/* Back to the folder above: wherever there is one, on every screen. */
+.files-up { margin-left: -10px; margin-right: -8px; }
 .hdr-btn:hover, .hdr-btn[aria-expanded='true'] { color: var(--ink); }
 
 /* The toolbar: what the view shows on the left, the view itself on the
@@ -1275,9 +1438,9 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 /* The card size, from the view (data-card-size on the pane): a card's
    column width — its picture keeps 4:3, so its height follows — a folder
    card's size, a tile row's height and a column's width. */
-.files-pane[data-card-size='s'] { --card-min: 150px; --folder-min: 210px; --folder-h: 80px; --folder-name: 15px; }
-.files-pane[data-card-size='m'] { --card-min: 200px; --folder-min: 240px; --folder-h: 108px; --folder-name: 18px; }
-.files-pane[data-card-size='l'] { --card-min: 280px; --folder-min: 300px; --folder-h: 132px; --folder-name: 20px; }
+.files-pane[data-card-size='s'] { --card-min: 150px; --folder-min: 210px; --folder-h: 80px; --folder-name: 15px; --mosaic: 56px; }
+.files-pane[data-card-size='m'] { --card-min: 200px; --folder-min: 240px; --folder-h: 108px; --folder-name: 18px; --mosaic: 80px; }
+.files-pane[data-card-size='l'] { --card-min: 280px; --folder-min: 300px; --folder-h: 132px; --folder-name: 20px; --mosaic: 100px; }
 /* A folder a move has sprung open (DragPreview): let go anywhere on the page
    and the move goes into it, as the dashed edge — the upload overlay's —
    around its listing says. */
@@ -1448,6 +1611,9 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   color: var(--selected-fg);
   font-weight: 600;
 }
+/* The sidebar's way to Trash, under the folders. */
+.side-trash { align-items: center; margin-top: var(--s3); color: var(--muted); text-decoration: none; }
+.side-trash:hover { color: var(--ink); background: var(--hover-bg); }
 .folder-row { display: flex; align-items: center; padding-left: calc(var(--depth, 0) * var(--s3)); }
 /* Beside its toggle a row's link takes what is left, not 100% of the row, and
    a long name ends in an ellipsis rather than widening the sidebar. */
@@ -1537,6 +1703,44 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   border-radius: calc(var(--glyph) * 2.2 / 24);
   background: var(--folder-front);
   box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 30%, transparent);
+}
+
+/* A folder's picture (FolderMosaic): its newest few pictures in a rounded
+   square — one, two side by side, one large and two small, or four — with a
+   small folder on its corner so it still reads as a folder; the folder alone
+   when there is nothing to show. Pure decoration: clicks, drags and the
+   marquee all belong to the tile around it. */
+.folder-mosaic {
+  position: relative; flex: none;
+  display: inline-grid; place-items: center;
+  width: var(--mosaic, 80px); height: var(--mosaic, 80px);
+  pointer-events: none;
+}
+.folder-mosaic-cells {
+  display: grid; gap: 2px; width: 100%; height: 100%;
+  border-radius: calc(var(--radius) + 2px); overflow: hidden;
+  background: var(--surface-sunken);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.folder-mosaic.is-2 .folder-mosaic-cells { grid-template-columns: 1fr 1fr; }
+.folder-mosaic.is-3 .folder-mosaic-cells { grid-template: 1fr 1fr / 1.4fr 1fr; }
+.folder-mosaic.is-4 .folder-mosaic-cells { grid-template: 1fr 1fr / 1fr 1fr; }
+.folder-mosaic-cell.is-lead { grid-row: span 2; }
+.folder-mosaic-cell {
+  position: relative; min-width: 0; min-height: 0; overflow: hidden;
+  background: var(--surface-sunken) center / cover no-repeat;
+}
+.folder-mosaic-cell img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.folder-mosaic-badge {
+  position: absolute; left: -4px; bottom: -4px;
+  display: grid; place-items: center; padding: 2px;
+  border-radius: 6px; background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+/* About a fifth of the square, whatever its size: a mark, not a second icon. */
+.folder-mosaic-badge > .folder-glyph {
+  width: clamp(12px, calc(var(--mosaic, 80px) * 0.2), 22px);
+  height: clamp(12px, calc(var(--mosaic, 80px) * 0.2), 22px);
 }
 
 /* The open folder's subfolders, above its files: larger than a file's card,
@@ -1826,6 +2030,25 @@ select.input.cell-input { padding-right: 2px; }
 .crumb:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .crumb-drop.is-over .crumb, .crumb-drop[data-drop='ok'] .crumb { color: var(--ink); }
 .crumb-sep { flex: none; color: var(--muted); opacity: 0.6; }
+/* The top folder, below it: a chip in the drive's colour (--dot, set on the
+   path), never folded away. On a phone, the house alone. */
+.crumb-top { flex: 0 2 auto; }
+.crumbs .crumb.crumb-home {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 0; padding: 3px 10px 3px 8px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--dot, var(--accent)) 13%, transparent);
+  color: var(--ink); font-size: var(--t-md); font-weight: 500; letter-spacing: 0;
+}
+.crumbs .crumb.crumb-home:hover { background: color-mix(in srgb, var(--dot, var(--accent)) 22%, transparent); }
+.crumb-drop.is-over .crumb-home, .crumb-drop[data-drop='ok'] .crumb-home { box-shadow: inset 0 0 0 1.5px var(--dot, var(--accent)); }
+.crumb-home-icon { flex: none; color: var(--dot, var(--accent)); }
+.crumb-home-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The folders between, folded: "…" opens a menu of them. A phone folds
+   every one of them (is-narrow), a wider window only past two (is-wide). */
+.crumb-more { flex: none; }
+.crumb-more.is-narrow { display: none; }
+.crumbs .crumb.crumb-more-btn { display: inline-flex; align-items: center; padding: 4px 6px; }
 /* ── Selection action bar (phone) ──────────────────────────────────────────
    The header's Trash button scrolls out of reach on a phone, so a selection
    ends up with nothing to act on. This bar is fixed to the bottom edge and
@@ -2151,16 +2374,17 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   .tb-right { min-width: 0; }
   .tb-chips { order: 3; flex: 1 1 100%; min-width: 0; }
   .files-section { margin-bottom: var(--s5); }
-  .files-pane[data-card-size] { --folder-min: 150px; --folder-h: 64px; --folder-name: 15px; }
-  .files-pane[data-card-size='l'] { --folder-min: 100%; --folder-h: 84px; --folder-name: 17px; }
+  .files-pane[data-card-size] { --folder-min: 150px; --folder-h: 64px; --folder-name: 15px; --mosaic: 48px; }
+  .files-pane[data-card-size='l'] { --folder-min: 100%; --folder-h: 84px; --folder-name: 17px; --mosaic: 64px; }
   .folder-tiles { gap: var(--s2); }
   .folder-tile { gap: var(--s3); padding: var(--s2) var(--s3); }
-  .folder-tile .folder-glyph { width: 36px; height: 36px; }
-  .files-pane[data-card-size='l'] .folder-tile .folder-glyph { width: 48px; height: 48px; }
+  .folder-tile .folder-mosaic.is-empty > .folder-glyph { width: 36px; height: 36px; }
+  .files-pane[data-card-size='l'] .folder-tile .folder-mosaic.is-empty > .folder-glyph { width: 48px; height: 48px; }
 
   /* The sidebar becomes a strip of folders as chips. A 220px column beside a
      150px grid was the whole page. */
   .side-folders h3, .side-starred h3 { display: none; }
+  .side-trash { width: auto; display: inline-flex; margin-top: var(--s2); }
   .side-starred { margin-bottom: var(--s2); }
   .starred-list { overflow-x: auto; }
   .starred-row > .folder-link { padding-right: var(--s3); }
@@ -2199,10 +2423,17 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   .filters-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3) var(--s4); }
   .filters-panel { padding: var(--s3); }
 
-  /* The open folder's name alone, with the way up before it. */
-  .files-up { display: inline-flex; margin-left: -10px; margin-right: -6px; }
-  .crumb-item:not(.crumb-here) { display: none; }
-  .crumb-item.crumb-here .files-title { padding-left: 0; }
+  /* The way back, the top folder's house, every folder between in one
+     "…", and the open folder's name. */
+  .files-up { margin-right: -6px; }
+  .crumb-between, .crumb-more.is-wide { display: none; }
+  .crumb-more.is-narrow { display: flex; }
+  .crumb-home-name { display: none; }
+  .crumbs .crumb.crumb-home { padding: 5px 7px; }
+  /* Every pixel to the open folder's name: the house and "…" sit together. */
+  .crumb-top .crumb-sep { display: none; }
+  .crumb-top { margin-right: 2px; }
+  .crumbs .crumb.crumb-more-btn { padding: 4px 3px; }
 
   /* Columns on a phone: the open folder's column, the width of the page,
      and what is selected in it below — there is no room beside it. */
@@ -2287,6 +2518,99 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   background: color-mix(in srgb, var(--drive, var(--accent)) 16%, var(--surface));
 }
 .drive-icon.is-library { color: var(--ink); background: var(--surface-sunken); }
+/* The sidebar's "Drives" heading is a way to all of them (/drives). */
+.drives-title-link { color: inherit; text-decoration: none; }
+.drives-title-link:hover { color: var(--ink); }
+.drives-title-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+
+/* /drives: every drive as a card — a mosaic of its newest pictures, its
+   colour, its name and what it holds. */
+.drives-page { max-width: 1400px; margin: 0 auto; padding: var(--s5) var(--s5) var(--s6); }
+.drives-page-head { margin-bottom: var(--s5); }
+.drives-page-title { margin: 0; font-size: var(--t-2xl); letter-spacing: -0.02em; }
+.drives-page-count { margin: 2px 0 0; }
+.drives-page-empty { margin: var(--s6) 0; }
+
+/* ── Trash (app/trash) ──────────────────────────────────────────────────── */
+
+.trash-page { max-width: 1100px; margin: 0 auto; padding: var(--s5) var(--s5) var(--s6); }
+.trash-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s4); margin-bottom: var(--s5); }
+.trash-title { margin: 0; font-size: var(--t-2xl); letter-spacing: -0.02em; }
+.trash-sub { margin: 2px 0 0; }
+.trash-head .btn { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.trash-problem {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+  padding: var(--s3) var(--s4); margin-bottom: var(--s4);
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+}
+.trash-problem .btn { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.trash-empty { display: flex; flex-direction: column; align-items: center; gap: var(--s2); margin: var(--s6) 0; color: var(--muted); text-align: center; }
+.trash-empty p { margin: 0; }
+.trash-empty p:first-of-type { color: var(--ink); font-weight: 600; }
+.trash-empty .btn { margin-top: var(--s2); }
+.trash-list { border-top: 1px solid var(--line); }
+.trash-row {
+  display: grid; grid-template-columns: 20px minmax(0, 1fr) minmax(0, 220px) 72px auto;
+  align-items: center; gap: var(--s3);
+  padding: var(--s2) var(--s2);
+  border-bottom: 1px solid var(--line);
+}
+.trash-row.is-selected { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.trash-row-head { padding-top: var(--s1); padding-bottom: var(--s1); }
+.trash-name { display: flex; align-items: center; gap: var(--s3); min-width: 0; color: var(--muted); }
+.trash-name-text { display: flex; flex-direction: column; min-width: 0; color: var(--ink); }
+.trash-col-when { display: flex; flex-direction: column; min-width: 0; }
+.trash-col-size { text-align: right; }
+.trash-more, .trash-loading { display: flex; justify-content: center; margin-top: var(--s4); }
+/* A phone: the name and Restore; when it was deleted goes. After the rules
+   above, which it overrides. */
+@media (max-width: 720px) {
+  .trash-page { padding: var(--s4) var(--s4) var(--s5); }
+  .trash-head { align-items: flex-start; flex-direction: column; }
+  .trash-row { grid-template-columns: 20px minmax(0, 1fr) auto; }
+  .trash-col-when, .trash-col-size { display: none; }
+}
+.drive-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: var(--s4); }
+.drive-card {
+  display: flex; flex-direction: column; min-width: 0;
+  border: 1px solid var(--line); border-radius: calc(var(--radius) + 6px);
+  background: var(--surface); color: var(--ink); text-decoration: none;
+  overflow: hidden;
+  transition: border-color var(--dur-1) var(--ease), transform var(--dur-2) var(--ease), box-shadow var(--dur-2) var(--ease);
+}
+.drive-card:hover { border-color: color-mix(in srgb, var(--drive, var(--accent)) 45%, var(--line)); box-shadow: var(--shadow-2); }
+@media (prefers-reduced-motion: no-preference) { .drive-card:hover { transform: translateY(-2px); } }
+.drive-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.drive-card-cover {
+  position: relative; display: grid; aspect-ratio: 16 / 10;
+  background: color-mix(in srgb, var(--drive, var(--accent)) 14%, var(--surface-sunken));
+  border-bottom: 1px solid var(--line); overflow: hidden;
+}
+/* Laid over the cover rather than in its grid, so the pictures' own size can
+   never stretch the cover past its 16:10. */
+.drive-card-cover .folder-mosaic.drive-card-mosaic { position: absolute; inset: 0; width: auto; height: auto; }
+.drive-card-cover .folder-mosaic-cells { border-radius: 0; box-shadow: none; }
+.drive-card-cover .folder-mosaic-badge { display: none; }
+.drive-card-icon {
+  place-self: center; display: grid; place-items: center;
+  width: 64px; height: 64px; border-radius: 18px;
+  color: color-mix(in srgb, var(--drive, var(--accent)) 78%, var(--ink));
+  background: color-mix(in srgb, var(--drive, var(--accent)) 20%, var(--surface));
+}
+.drive-card-text { display: flex; flex-direction: column; gap: 2px; padding: var(--s3) var(--s4) var(--s4); min-width: 0; }
+.drive-card-name { display: flex; align-items: center; gap: 8px; font-size: var(--t-lg); font-weight: 600; letter-spacing: -0.01em; }
+.drive-card-dot {
+  flex: none; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--drive, var(--accent));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--drive, var(--accent)) 20%, transparent);
+}
+.drive-card-detail { font-size: var(--t-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) {
+  .drives-page { padding: var(--s4); }
+  .drive-cards { grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr)); gap: var(--s3); }
+  .drive-card-text { padding: var(--s2) var(--s3) var(--s3); }
+  .drive-card-name { font-size: var(--t-md); }
+}
 .drive-row.is-active .drive-icon { color: var(--on-aura); background: linear-gradient(135deg, var(--aura-a-deep), var(--aura-b-deep)); }
 /* An open drive keeps its own colour, only stronger: the dot beside its name
    on the page is that colour, and the aura (the library's, the accent) would
@@ -2301,6 +2625,8 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 .drive-row.is-active .drive-name { font-weight: 600; }
 .drive-detail { font-size: var(--t-xs); color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .drives-empty { margin: var(--s1) 6px 0; }
+.drives-all { display: none; }
+.drives-all > .drive-row { color: inherit; text-decoration: none; }
 .fs-members-table { width: 100%; font-size: var(--t-sm); border-collapse: collapse; margin-bottom: var(--s3); }
 .fs-members-table td { padding: var(--s1) var(--s2) var(--s1) 0; border-top: 1px solid var(--line); vertical-align: middle; }
 .fs-members-table select.input { width: auto; }
@@ -2312,6 +2638,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   /* A row of chips above the folders, like the folders themselves. */
   .drives { margin-bottom: var(--s2); }
   .drives-head, .drives-empty { display: none; }
+  .drives-all { display: list-item; }
   .drives-list { flex-direction: row; gap: 6px; overflow-x: auto; padding-bottom: var(--s1); }
   .drives-list > li { flex: 0 0 auto; }
   .drive-row { width: auto; padding: 3px 10px 3px 3px; border: 1px solid var(--line); border-radius: var(--radius-pill); }

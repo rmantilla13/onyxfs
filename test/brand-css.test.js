@@ -20,7 +20,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { brandCssVars, resolveBrand, sanitizeBrandSubmission } = await import('../lib/brand-config.js');
+const { brandCssVars, brandDarkCssVars, resolveBrand, sanitizeBrandSubmission, withAccent, withKit, contrast } = await import('../lib/brand-config.js');
 
 describe('brandCssVars', () => {
   test('emits font families unescaped', () => {
@@ -104,5 +104,69 @@ describe('the radius', () => {
     for (const bad of ['10', '1em', '0.5rem', '8px 8px', '8px}', 'calc(1px)']) {
       assert.deepEqual(sanitizeBrandSubmission({ radius: bad }), {}, bad);
     }
+  });
+});
+
+describe('withAccent (a share link\'s own accent)', () => {
+  test('swaps the accent and draws the aura from it, nothing else', () => {
+    const brand = resolveBrand(null);
+    const b = withAccent(brand, '#1D4ED8');
+    assert.equal(b.visual.palette.accent.toUpperCase(), '#1D4ED8', 'already legible: kept as chosen');
+    assert.notEqual(b.visual.palette.accentAlt, brand.visual.palette.accentAlt);
+    assert.equal(b.visual.palette.paper, brand.visual.palette.paper);
+    assert.equal(b.name, brand.name);
+    assert.deepEqual(b.visual.fonts, brand.visual.fonts);
+    assert.match(brandCssVars(b), /--accent:#1d4ed8/i);
+    assert.match(brandDarkCssVars(b), /--accent:#/);
+  });
+
+  test('a pale accent is deepened until it reads as text on the paper', () => {
+    const brand = resolveBrand(null);
+    const b = withAccent(brand, '#FDE68A');
+    assert.ok(contrast(b.visual.palette.accent, brand.visual.palette.paper) >= 4.5);
+  });
+
+  test('anything but #rrggbb is the brand unchanged', () => {
+    const brand = resolveBrand(null);
+    for (const bad of [null, '', 'red', '#abc', '#abcdef;}</style>']) assert.equal(withAccent(brand, bad), brand, String(bad));
+  });
+});
+
+describe('withKit (a brand kit on a share link\'s page)', () => {
+  const kit = { id: 'kAcme12345', name: 'Acme', logoUrl: '/brand/acme.svg', accent: '#BE185D' };
+
+  test('swaps the logo for the kit\'s, in both schemes, and keeps the rest of the brand', () => {
+    const brand = resolveBrand(null);
+    const b = withKit(brand, kit);
+    assert.deepEqual(b.visual.logo, { markPath: brand.visual.logo.markPath, lockupPath: '/brand/acme.svg', lockupDarkPath: '/brand/acme.svg', onyxWordmark: false });
+    assert.equal(withKit(brand, { ...kit, logoDarkUrl: '/brand/acme-dark.svg' }).visual.logo.lockupDarkPath, '/brand/acme-dark.svg');
+    assert.equal(b.name, brand.name, 'the page still says whose workspace it is');
+    assert.deepEqual(b.visual.palette, brand.visual.palette, 'the accent is laid on after, by withAccent');
+    assert.deepEqual(b.visual.fonts, brand.visual.fonts, 'no font of its own: the workspace\'s');
+  });
+
+  test('a kit\'s display font reaches the stylesheet, sanitized as the brand\'s is', () => {
+    const b = withKit(resolveBrand(null), { ...kit, displayFontFamily: "'Fraunces', serif", displayFontUrl: 'https://fonts.test/f.css' });
+    assert.equal(b.visual.fonts.display.url, 'https://fonts.test/f.css');
+    assert.match(brandCssVars(b), /--font-display:'Fraunces', serif/);
+    assert.equal(b.visual.fonts.body.family, resolveBrand(null).visual.fonts.body.family);
+    const hostile = withKit(resolveBrand(null), { ...kit, displayFontFamily: 'X;}</style><script>' });
+    assert.ok(!/[<>]/.test(brandCssVars(hostile)));
+  });
+
+  test('then a link\'s accent over the kit\'s, in light and dark', () => {
+    const brand = resolveBrand(null);
+    const kitted = withAccent(withKit(brand, kit), kit.accent);
+    assert.equal(kitted.visual.palette.accent.toUpperCase(), '#BE185D');
+    assert.match(brandDarkCssVars(kitted), /--accent:#/);
+    assert.notEqual(brandDarkCssVars(kitted), brandDarkCssVars(brand));
+    const own = withAccent(withKit(brand, kit), '#1D4ED8');
+    assert.equal(own.visual.palette.accent.toUpperCase(), '#1D4ED8');
+    assert.equal(own.visual.logo.lockupPath, '/brand/acme.svg');
+  });
+
+  test('no kit is the brand unchanged', () => {
+    const brand = resolveBrand(null);
+    assert.equal(withKit(brand, null), brand);
   });
 });

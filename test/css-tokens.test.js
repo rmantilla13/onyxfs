@@ -77,6 +77,8 @@ const LITERAL_OK = new Set([
   '.btn-primary', '.btn-primary:hover:not(:disabled)',
   '.folder-glyph-front',
   '.player-stage', '.player:fullscreen', '.player-bigplay', '.player-bigplay .icon', '.player-bigplay:hover', '.player-hover-frame',
+  // A caption over a picture is lit by the picture, not the scheme.
+  '.share-gallery-name',
 ]);
 
 test('a rule names no colour of its own', () => {
