@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import { requestMagicLink, signInWithPassword } from './actions';
 import BrandLogo from '@/app/components/BrandLogo';
+import BlurText from '@/app/components/motion/BlurText';
 import { clearPreviewCaches } from '@/lib/preview-cache';
 
 /**
@@ -31,7 +32,7 @@ export default function SignInClient({ brandName, tagline, logo, oktaEnabled, li
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
       <div className="card" style={{ width: '100%', maxWidth: 400, padding: 32 }}>
         <BrandLogo logo={logo} name={brandName} height={30} markSize={40} className="auth-logo" />
-        <h1 style={{ fontSize: 22, marginBottom: 6 }}>{`Sign in to ${brandName}`}</h1>
+        <h1 style={{ fontSize: 22, marginBottom: 6 }}><BlurText text={`Sign in to ${brandName}`} /></h1>
         <p className="muted small" style={{ margin: '0 0 24px' }}>{tagline}</p>
 
         {error && (

@@ -22,34 +22,82 @@
   /* Native controls, form fields and scrollbars follow the scheme. */
   color-scheme: light;
 
-  /* Spacing. Six steps is enough for this app; a seventh always turns out to
-     be a layout that wanted a different structure. */
+  /* Spacing. Six steps, the half-steps a control's padding wants (2, 6,
+     10), and the two large ones a page's foot or an empty state takes (48,
+     64) — so a 6px or a 64px in a rule is a step, not a literal. */
+  --s0: 2px;
   --s1: 4px;
+  --s1-5: 6px;
   --s2: 8px;
+  --s2-5: 10px;
   --s3: 12px;
   --s4: 16px;
   --s5: 24px;
   --s6: 32px;
+  --s7: 48px;
+  --s8: 64px;
 
-  /* Type. --t-md is the body size everything else is judged against. */
+  /* Type. --t-md is the body size everything else is judged against;
+     --t-2xs is the eyebrow (.eyebrow), the one size under the smallest text.
+     Leading: tight for headings and controls, base for reading, loose for
+     a paragraph of help. --track-wide is the eyebrow's letter-spacing. */
+  --t-2xs: 11px;
   --t-xs: 12px;
   --t-sm: 13px;
   --t-md: 14px;
   --t-lg: 16px;
   --t-xl: 20px;
   --t-2xl: 24px;
+  --t-3xl: 28px;
+  --lh-tight: 1.2;
+  --lh-base: 1.45;
+  --lh-loose: 1.6;
+  --track-wide: 0.06em;
 
+  /* The brand supplies --radius; the rest of the ladder derives from it, so
+     a brand that sets 12px rounds every surface together. xs/sm for what is
+     nested small (a chip, a thumbnail in a row), md for a bar, lg for what
+     floats (menus, popovers, toasts, folder tiles), xl for a dialog. A corner
+     inside another is the outer radius minus the inset, so the two stay
+     concentric — see .filecard-thumb, .drive-icon, .seg-btn. */
+  --radius-xs: 4px;
   --radius-sm: 4px;
+  --radius-md: calc(var(--radius) + 2px);
+  --radius-lg: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 8px);
   --radius-pill: 999px;
 
-  /* Surfaces sit slightly above the page rather than being white. Derived
-     from the brand's paper, so a dark palette gets a lighter card instead of
-     a white one — the bug that #fff hardcoding caused. */
-  --surface: color-mix(in srgb, var(--paper) 92%, #fff 8%);
-  --surface-sunken: color-mix(in srgb, var(--paper) 96%, var(--ink) 4%);
+  /* The page is a step below the brand's paper and a card a step above it,
+     so a card is seen by its tone and not only by its hairline. The paper
+     itself stays the colour the brand gave — it is what darkPalette(), the
+     magic-link email and the iOS colour set read, and none of them move.
+     A well (--surface-sunken) is a step below the page: a placeholder
+     tile, a key cap. Decoration sits on it, not words — --muted is under
+     AA there. All three mix the brand's own paper and ink. */
+  --page: color-mix(in srgb, var(--paper) 97%, var(--ink));
+  --surface: color-mix(in srgb, var(--paper) 40%, #fff);
+  --surface-sunken: color-mix(in srgb, var(--paper) 94%, var(--ink));
+  /* What floats — a menu, a dialog, a toast — sits a step above a card, with
+     its own hairline (dimmer in the dark scheme, where the surface does the
+     separating) and a lit top edge, the same highlight the buttons carry. */
+  --surface-raised: color-mix(in srgb, var(--paper) 10%, #fff);
+  --line-raised: var(--line);
+  --edge-hi: inset 0 1px 0 var(--glass-hi);
+  /* A control's edge: --line is a divider, this is what makes an input or a
+     segmented control read as a control (3:1 against the card it sits on).
+     The dark scheme's line already does. */
+  --line-strong: color-mix(in srgb, var(--ink) 45%, var(--paper));
 
-  --shadow-1: 0 1px 2px color-mix(in srgb, var(--ink) 8%, transparent);
-  --shadow-2: 0 8px 30px color-mix(in srgb, var(--ink) 14%, transparent);
+  /* The second text colour: a card's meta line, a drive's detail, a cell.
+     Darker than --muted, which is kept for eyebrows, placeholders and what
+     is disabled — so three tiers read on a page, not two. */
+  --ink-2: color-mix(in srgb, var(--ink) 72%, var(--paper));
+
+  /* Elevation: a card's rest, a menu, a dialog. Each is a soft shadow with a
+     negative spread, so it reads as height rather than as a dark halo. */
+  --shadow-1: 0 1px 2px color-mix(in srgb, var(--ink) 6%, transparent);
+  --shadow-2: 0 4px 12px -4px color-mix(in srgb, var(--ink) 10%, transparent), 0 12px 32px -12px color-mix(in srgb, var(--ink) 16%, transparent);
+  --shadow-3: 0 24px 64px -24px color-mix(in srgb, var(--ink) 28%, transparent);
 
   /* One ladder, so nothing ever guesses a z-index again. */
   --z-nav: 10;
@@ -61,18 +109,83 @@
   --dur-1: 120ms;
   --dur-2: 200ms;
   --ease: cubic-bezier(0.2, 0, 0.13, 1);
+  /* For what leaves (a toast): it accelerates away rather than easing in. */
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
 
-  /* Glass, for buttons and the search box: a frosted fill the aura shows
-     through, a hairline edge, a lit top edge and a soft drop. Tokens, so the
-     dark scheme and reduced transparency (below) redefine them in one place
-     rather than per control. */
-  --glass-fill: color-mix(in srgb, var(--surface) 58%, transparent);
-  --glass-fill-hover: color-mix(in srgb, var(--surface) 80%, transparent);
+  /* One state language. Hover is a tint of ink, a shade stronger in a menu;
+     what is chosen or on — a toggle, the open drive, a picked row — is the
+     brand's wash, blue leaning to magenta, with the full accent for its
+     edge (the 3:1 non-text cue the wash alone lacks) and the deep accent on
+     its icon. The focus ring is the accent, lifted a little in the dark
+     scheme so it reads on near-black. */
+  --hover-bg: color-mix(in srgb, var(--ink) 7%, transparent);
+  --hover-bg-strong: color-mix(in srgb, var(--ink) 10%, transparent);
+  --selected-bg: linear-gradient(90deg, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent-alt) 9%, transparent));
+  --selected-edge: var(--accent);
+  --selected-fg: var(--ink);
+  --selected-icon: var(--accent-deep);
+  --ring: var(--accent);
+
+  /* Icon sizes (<Icon size>): 14 beside small text, 16 beside body text, 20
+     in a toolbar, 24 standing alone. The stroke follows the size (Icon.js). */
+  --icon-sm: 14px;
+  --icon: 16px;
+  --icon-lg: 20px;
+  --icon-xl: 24px;
+
+  /* A button's material: a fill, a hairline edge, a lit top edge and a soft
+     drop. The fill is near-opaque — on flat paper a frost cannot be told
+     from it, and every frosted button was a layer re-blurring the fixed
+     aura on each scroll frame. Only a control that floats over changing
+     content (.btn-glass) takes the thinner --glass-float and blurs. Tokens,
+     so the dark scheme and reduced transparency (below) redefine them in
+     one place rather than per control. */
+  --glass-fill: color-mix(in srgb, var(--surface) 88%, transparent);
+  --glass-fill-hover: color-mix(in srgb, var(--surface) 96%, transparent);
+  --glass-float: color-mix(in srgb, var(--surface) 58%, transparent);
   --glass-sheen: color-mix(in srgb, #fff 55%, transparent);
-  --glass-edge: color-mix(in srgb, var(--ink) 12%, transparent);
+  --glass-edge: color-mix(in srgb, var(--ink) 24%, transparent);
   --glass-hi: color-mix(in srgb, #fff 85%, transparent);
   --glass-drop: color-mix(in srgb, var(--ink) 9%, transparent);
   --glass-blur: blur(14px) saturate(170%);
+
+  /* A listing kept on screen while the next one loads (.is-pending). */
+  --pending-opacity: 0.55;
+
+  /* The files page: the sticky nav's height, which the sidebar and the
+     list sit under (under html[data-mac-app] the title bar is the nav and
+     its height comes from the app); the toolbar's control height; a card's
+     column width (.files-pane[data-card-size] sets the viewer's choice). */
+  --topnav-h: 57px;
+  --tb-h: 32px;
+  --card-min: 200px;
+
+  /* A folder, drawn solid (FolderGlyph): the kit's folder filled for the
+     back, a lighter front panel over it, both the accent mixed with the
+     page's own colours — deeper at the back in the light scheme, brighter
+     at the front in the dark — so folders read as folders, in any brand's
+     colour. */
+  --folder-back: color-mix(in srgb, var(--accent) 72%, var(--paper));
+  --folder-front: color-mix(in srgb, var(--accent) 48%, var(--paper));
+
+  /* Under the picture that follows a move (DragPreview). */
+  --drag-shadow: color-mix(in srgb, var(--ink) 26%, transparent);
+
+  /* A kind's colour: the wash and glyph of a placeholder tile (a file with
+     no picture), and the storage report's bars. The brand's own accents, so
+     a white-label palette colours its kinds itself. */
+  --kind-video: var(--accent);
+  --kind-image: var(--accent-alt);
+  --kind-audio: var(--accent-cool);
+  --kind-doc: var(--warning);
+  --kind-other: var(--muted);
+
+  /* The aura (end of file): how much of each accent glows behind the page,
+     and the softer share a dialog or the palette catches at its top edge.
+     On paper a glow needs more than it looks: at 13% the light scheme had
+     none to speak of. */
+  --aura-strength: 18%;
+  --aura-soft: 11%;
 }
 
 /* In the dark scheme ink is the light colour, so anything that used it as
@@ -80,25 +193,75 @@
    takes paper, which is now the dark one, instead. */
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --shadow-1: 0 1px 2px color-mix(in srgb, var(--paper) 60%, transparent);
-  --shadow-2: 0 8px 30px color-mix(in srgb, var(--paper) 80%, transparent);
+  /* On near-black a card is seen by its lift alone, so the page is the
+     paper itself, the card the 8% lift darkPalette() tests its text against,
+     and the well a 4% step — none of the light scheme's larger steps. */
+  --page: var(--paper);
+  --surface: color-mix(in srgb, var(--paper) 92%, #fff 8%);
+  --surface-sunken: color-mix(in srgb, var(--paper) 96%, var(--ink) 4%);
+  --shadow-1: 0 1px 2px color-mix(in srgb, var(--paper) 50%, transparent);
+  --shadow-2: 0 4px 12px -4px color-mix(in srgb, var(--paper) 70%, transparent), 0 12px 32px -12px color-mix(in srgb, var(--paper) 70%, transparent);
+  --shadow-3: 0 24px 64px -24px color-mix(in srgb, var(--paper) 85%, transparent);
+  /* Two steps above the card: on near-black a shadow alone does not lift a
+     menu off the page, so the raised surface is lighter and its hairline
+     is a faint ink rather than the card's line. */
+  --surface-raised: color-mix(in srgb, var(--paper) 86%, #fff);
+  --line-raised: color-mix(in srgb, var(--ink) 22%, transparent);
+  --line-strong: var(--line);
+  --hover-bg: color-mix(in srgb, var(--ink) 10%, transparent);
+  --hover-bg-strong: color-mix(in srgb, var(--ink) 14%, transparent);
+  --ring: color-mix(in srgb, var(--accent) 85%, #fff);
   /* On near-black the frost is thinner and the light edge dimmer: at the
      light scheme's strength it reads as a white outline, not glass. */
-  --glass-fill: color-mix(in srgb, var(--surface) 46%, transparent);
-  --glass-fill-hover: color-mix(in srgb, var(--surface) 68%, transparent);
+  --glass-fill: color-mix(in srgb, var(--surface) 80%, transparent);
+  --glass-fill-hover: color-mix(in srgb, var(--surface) 92%, transparent);
+  --glass-float: color-mix(in srgb, var(--surface) 46%, transparent);
   --glass-sheen: color-mix(in srgb, #fff 7%, transparent);
   --glass-edge: color-mix(in srgb, var(--ink) 14%, transparent);
   --glass-hi: color-mix(in srgb, #fff 13%, transparent);
   --glass-drop: color-mix(in srgb, #000 45%, transparent);
+
+  --folder-back: color-mix(in srgb, var(--accent) 46%, var(--paper));
+  --folder-front: color-mix(in srgb, var(--accent) 80%, var(--paper));
+  --drag-shadow: color-mix(in srgb, #000 62%, transparent);
+  /* A glow on near-black reads at a fraction of what it needs on white. */
+  --aura-strength: 26%;
+  --aura-soft: 15%;
 }
 
 /* Someone who asked for less transparency gets solid controls, and a browser
    that cannot blur what is behind gets a fill thick enough to read without it. */
 @media (prefers-reduced-transparency: reduce) {
-  :root, :root[data-theme='dark'] { --glass-fill: var(--surface); --glass-fill-hover: var(--surface); --glass-blur: none; }
+  :root, :root[data-theme='dark'] { --glass-fill: var(--surface); --glass-fill-hover: var(--surface); --glass-float: var(--surface); --glass-blur: none; }
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  :root, :root[data-theme='dark'] { --glass-fill: color-mix(in srgb, var(--surface) 94%, transparent); }
+  :root, :root[data-theme='dark'] { --glass-fill: color-mix(in srgb, var(--surface) 94%, transparent); --glass-float: color-mix(in srgb, var(--surface) 94%, transparent); }
+}
+
+/* Someone who asked for more contrast gets hairlines and control edges that
+   are plainly there, through the same tokens. */
+@media (prefers-contrast: more) {
+  :root, :root[data-theme='dark'] {
+    --line: color-mix(in srgb, var(--ink) 40%, var(--paper));
+    --glass-edge: color-mix(in srgb, var(--ink) 45%, transparent);
+    --line-strong: color-mix(in srgb, var(--ink) 60%, var(--paper));
+  }
+}
+
+/* Forced colours (Windows high contrast): the system paints every fill, so
+   what was said with a tint is said with an outline in the system's own
+   highlight; the aura goes, and a badge over a picture keeps its contrast
+   chip rather than becoming text on the picture. */
+@media (forced-colors: active) {
+  body::before { display: none; }
+  .is-active, .btn[aria-pressed='true'], [aria-selected='true'], .filelist-row.is-selected {
+    background: transparent;
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+  .switch { border: 1px solid ButtonText; }
+  .switch::after { border: 1px solid ButtonText; }
+  .filecard-badge { forced-color-adjust: none; }
 }
 
 /* Motion is decoration here — nothing depends on an animation finishing, so
@@ -119,13 +282,15 @@ html, body {
   padding: 0;
   color: var(--ink);
   font-family: var(--font-body);
+  line-height: var(--lh-base);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
-/* The paper is the canvas (html). body stays transparent: its own background
-   would paint OVER the aura layer below, which sits at z-index -1. */
-html { background: var(--paper); }
+/* The page is the canvas (html) — a step below the brand's paper, so cards
+   stand on it. body stays transparent: its own background would paint OVER
+   the aura layer below, which sits at z-index -1. */
+html { background: var(--page); }
 /* And the paper is at least the window. Onyx for Mac's web view is
    transparent (apple/OnyxMac/WebController.swift, drawsBackground), and while
    anything on the page is animated on a layer of its own — the admin panel's
@@ -140,23 +305,40 @@ html { min-height: 100%; }
 html { scrollbar-gutter: stable; }
 body { background: transparent; }
 
+/* Headings: the display face, tight leading, and tracking that closes as
+   the size grows — the larger the setting, the more the letters crowd. */
 h1, h2, h3, h4 {
   font-family: var(--font-display);
   font-weight: 600;
   letter-spacing: -0.02em;
+  line-height: var(--lh-tight);
   margin: 0;
 }
+h1 { font-size: var(--t-2xl); letter-spacing: -0.025em; text-wrap: balance; }
+h2 { font-size: var(--t-xl); }
+h3 { font-size: var(--t-lg); letter-spacing: -0.01em; }
 
 a { color: inherit; text-decoration: none; }
 button, input, select, textarea { font: inherit; color: inherit; }
 
 code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
 
+/* The ring stands off its element by the gap, and takes the element's own
+   corners (a radius here reshaped anything without one of its own). On an
+   accent fill — a primary button, a chosen toggle, a selected card, a
+   checked switch — it turns to ink, so it is two-tone against the accent
+   with no second shadow: ink is the dark colour on paper and the light one
+   in the dark scheme (darkPalette), so it reads in both. */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
-  border-radius: 3px;
 }
+.btn-primary:focus-visible,
+.is-active:focus-visible,
+.btn[aria-pressed='true']:focus-visible,
+[aria-selected='true']:focus-visible,
+.seg-btn[aria-checked='true']:focus-visible,
+.switch:focus-visible { outline-color: var(--ink); }
 
 /* ── Primitives ─────────────────────────────────────────────────────────── */
 
@@ -170,17 +352,19 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   border: 1px solid var(--glass-edge);
   border-radius: var(--radius);
   background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill);
-  -webkit-backdrop-filter: var(--glass-blur);
-  backdrop-filter: var(--glass-blur);
   box-shadow: inset 0 1px 0 var(--glass-hi), 0 1px 2px var(--glass-drop), 0 6px 16px -12px var(--glass-drop);
   cursor: pointer;
   font-size: var(--t-md);
   font-weight: 500;
+  line-height: var(--lh-tight);
   white-space: nowrap;
   transition:
     border-color var(--dur-1), background-color var(--dur-1), color var(--dur-1),
     box-shadow var(--dur-2) var(--ease), transform var(--dur-1) var(--ease), filter var(--dur-1);
 }
+/* A glyph leading a label sits a little into the padding, so the pair reads
+   centred: an outline has air inside its box that a letter does not. */
+.btn > .icon:first-child:not(:only-child) { margin-inline-start: -2px; }
 /* Guarded, or the hover state sticks after a tap on a touch screen. */
 @media (hover: hover) {
   .btn:hover:not(:disabled) {
@@ -207,18 +391,17 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
       0 1px 2px var(--glass-drop),
       0 10px 24px -16px color-mix(in srgb, var(--danger) 70%, transparent);
   }
-  /* A ghost button is bare until it is pointed at, then it frosts. */
+  /* A ghost button is bare until it is pointed at, then it fills. */
   .btn-ghost:hover:not(:disabled) {
     border-color: var(--glass-edge);
     background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill-hover);
-    -webkit-backdrop-filter: var(--glass-blur);
-    backdrop-filter: var(--glass-blur);
     box-shadow: inset 0 1px 0 var(--glass-hi);
   }
 }
-/* Pressed: the glass gives a little, and the light edge moves inside. */
+/* Pressed: the glass gives a little, and the light edge moves inside. A
+   scale only — a half-pixel translate re-rasterised the label on press. */
 .btn:active:not(:disabled) {
-  transform: translateY(0.5px) scale(0.99);
+  transform: scale(0.98);
   box-shadow: inset 0 1px 3px var(--glass-drop);
 }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -226,7 +409,12 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
    stops above the label, and a lit rim. --on-aura and the *-deep stops are
    computed from the palette (auraCssVars) so the label clears AA on both —
    which is why the sheen fades out by a third of the height, where the
-   letters start. */
+   letters start.
+   At most one per view, on the commit action — Upload on the files page,
+   Post once there is something to post, Download on a share page. Spent on
+   one thing the gradient is a focal point; on two it is decoration. The
+   avatar, the count badge and progress keep it as identity and light
+   moving, not as actions. */
 .btn-primary {
   background:
     linear-gradient(180deg, color-mix(in srgb, #fff 20%, transparent) 0%, transparent 34%),
@@ -251,53 +439,79 @@ code, pre, .mono { font-family: var(--font-mono); font-size: 0.9em; }
   background: transparent;
   border-color: transparent;
   box-shadow: none;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
 }
 .btn-sm { padding: var(--s1) var(--s2); font-size: var(--t-sm); gap: var(--s1); }
 .btn-icon { padding: var(--s2); }
+/* Glass, opted into: a control that floats over changing content — the
+   nav's Mac-app button over the page scrolling under the bar, a download
+   over a card's picture, a HUD over a still — thins its fill and blurs
+   what is under it. Nowhere else: on flat paper the frost is invisible, and
+   each one is a layer the compositor re-blurs on every scroll frame. */
+.btn-glass {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-float);
+}
+/* Over footage that is playing nothing blurs — a blur over moving pixels
+   is a blur pass per frame. The HUD fills until the clip pauses
+   (VideoPlayer puts is-playing on the player). */
+.player.is-playing .btn-glass {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill);
+}
 /* <Icon>: a Lucide outline in currentColor (app/components/ui/Icon.js). */
 .icon { flex: none; vertical-align: middle; }
 
-/* One pressed state for every toggle — tabs, kind chips, folder chips — which
-   were three copies of the same inline literal. Always paired with
-   aria-pressed or aria-selected in the markup: the colour alone says nothing
-   to a screen reader. Solid rather than glass: what is on has to read as on
-   at a glance. */
+/* One "on" state for every toggle — tabs, kind chips, folder chips, the
+   player's In/Out/Loop — and the same wash the open drive, the open folder
+   and a picked row wear (--selected-*): what is on and where you are say it
+   the same way. Always paired with aria-pressed or aria-selected in the
+   markup: the colour alone says nothing to a screen reader. The edge is the
+   full accent, so "on" keeps a 3:1 cue the wash alone would not. */
 .is-active,
 .btn[aria-pressed='true'] {
-  background: var(--ink);
-  color: var(--paper);
-  border-color: var(--ink);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--paper) 22%, transparent), 0 6px 16px -12px var(--glass-drop);
+  background: var(--selected-bg);
+  color: var(--selected-fg);
+  border-color: var(--selected-edge);
+  font-weight: 600;
+  box-shadow: inset 0 1px 0 var(--glass-hi);
 }
+/* A ghost keeps its bare edge; a faint ring inside stands in for it. */
 .btn-ghost.is-active,
 .btn-ghost[aria-pressed='true'] {
-  background: color-mix(in srgb, var(--ink) 8%, transparent);
-  color: inherit;
+  background: var(--selected-bg);
+  color: var(--selected-fg);
   border-color: transparent;
-  box-shadow: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
+.is-active .icon,
+[aria-pressed='true'] .icon { color: var(--selected-icon); }
 
 .input {
   width: 100%;
   padding: 9px var(--s3);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: var(--surface);
   font-size: var(--t-md);
+  line-height: var(--lh-tight);
 }
 .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
-textarea.input { min-height: 80px; resize: vertical; }
+textarea.input { min-height: 80px; resize: vertical; line-height: var(--lh-base); }
 
+/* A card rests on the page: its tone a step above it, and the faintest
+   shadow — the two together are what a hairline alone was not. */
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
 }
 
 /* Visible to a screen reader, not on screen. Status in the diagnostics list
-   is carried by a coloured glyph, which is nothing without the word. */
+   is carried by a coloured glyph, and a player control by its icon — each
+   nothing without the word. */
 .sr-only {
   position: absolute;
   width: 1px; height: 1px;
@@ -310,6 +524,23 @@ textarea.input { min-height: 80px; resize: vertical; }
 
 .muted { color: var(--muted); }
 .small { font-size: var(--t-sm); }
+/* An eyebrow: the small caps that name a group — a sidebar section, "Files
+   · 12", a palette section, a column picker's group. One rule for the nine
+   places that each used to spell it out; each keeps only its own margins.
+   In the body face, as most are headings and would take the display one. */
+.eyebrow,
+.side-title, .files-section-label, .palette-section, .shortcuts-title, .share-list-title,
+.colpick-label, .facet-title, .drives-title, .rail-heading {
+  font-family: var(--font-body);
+  font-size: var(--t-2xs);
+  font-weight: 600;
+  letter-spacing: var(--track-wide);
+  line-height: var(--lh-tight);
+  text-transform: uppercase;
+  /* A shade past --muted: at 11px, and where the top-left eyebrows sit in
+     the aura's glow, muted alone is under AA. */
+  color: color-mix(in srgb, var(--muted) 80%, var(--ink));
+}
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .tag {
@@ -318,7 +549,9 @@ textarea.input { min-height: 80px; resize: vertical; }
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--ink) 6%, transparent);
   font-size: var(--t-xs);
-  color: var(--muted);
+  line-height: var(--lh-tight);
+  /* Darker than --muted: at 12px on its chip, muted alone is under AA. */
+  color: color-mix(in srgb, var(--muted) 70%, var(--ink));
 }
 .tag-warning { background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning); }
 .tag-danger  { background: color-mix(in srgb, var(--danger) 14%, transparent);  color: var(--danger); }
@@ -329,7 +562,7 @@ textarea.input { min-height: 80px; resize: vertical; }
 .stack { display: flex; flex-direction: column; gap: var(--s3); }
 
 .empty {
-  padding: 64px var(--s5);
+  padding: var(--s8) var(--s5);
   text-align: center;
   color: var(--muted);
 }
@@ -351,11 +584,15 @@ textarea.input { min-height: 80px; resize: vertical; }
 
 dialog.dialog {
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
+  border: 1px solid var(--line-raised);
+  border-radius: var(--radius-xl);
+  /* The raised surface, catching a little of the aura's light at its top edge. */
+  background:
+    radial-gradient(110% 50% at 20% -12%, color-mix(in srgb, var(--aura-a) var(--aura-soft), transparent), transparent 62%),
+    radial-gradient(90% 46% at 100% -10%, color-mix(in srgb, var(--aura-b) var(--aura-soft), transparent), transparent 60%),
+    var(--surface-raised);
   color: var(--ink);
-  box-shadow: var(--shadow-2);
+  box-shadow: var(--edge-hi), var(--shadow-3);
   max-width: min(560px, calc(100vw - var(--s6)));
   width: 100%;
   max-height: calc(100vh - var(--s6));
@@ -375,7 +612,7 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   padding: var(--s4) var(--s5);
   border-bottom: 1px solid var(--line);
 }
-.dialog-title { font-size: var(--t-lg); }
+.dialog-title { font-size: var(--t-lg); font-weight: 600; letter-spacing: -0.01em; }
 .dialog-body { padding: var(--s5); }
 .dialog-foot {
   display: flex; align-items: center; gap: var(--s2); justify-content: flex-end;
@@ -425,10 +662,10 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   z-index: var(--z-menu);
   min-width: 180px;
   padding: var(--s1);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-raised);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--edge-hi), var(--shadow-2);
 }
 .menu-item {
   display: flex; align-items: center; gap: var(--s2);
@@ -443,7 +680,7 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   text-align: left;
   cursor: pointer;
 }
-.menu-item:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.menu-item:hover:not(:disabled) { background: var(--hover-bg-strong); }
 .menu-item:disabled { opacity: 0.5; cursor: not-allowed; }
 .menu-item.danger { color: var(--danger); }
 .menu-sep { height: 1px; margin: var(--s1) 0; background: var(--line); }
@@ -458,14 +695,14 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
   max-height: calc(100vh - 16px);
   overflow: auto;
   padding: var(--s1);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-raised);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--edge-hi), var(--shadow-2);
 }
 .ctx-menu .menu-item { justify-content: space-between; }
-.ctx-menu .menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.menu .menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ctx-menu .menu-item:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.menu .menu-item:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 .ctx-heading { padding: var(--s1) var(--s3) var(--s2); max-width: 100%; }
 .ctx-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu { max-width: calc(100vw - 16px); }
@@ -473,7 +710,16 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 /* ── Top nav ────────────────────────────────────────────────────────────── */
 /* The mark, one search box (the ⌘K palette), and the account menu (TopNav).
    Everything else that used to sit here is in that menu or the palette. */
-.topnav { position: sticky; top: 0; z-index: var(--z-nav); background: var(--surface); border-bottom: 1px solid var(--line); }
+/* The nav lets the aura through: a frosted surface over a hairline that
+   fades toward the page. Its gradient twin, .topnav::after, is with the
+   aura at the end of the file. */
+.topnav {
+  position: sticky; top: 0; z-index: var(--z-nav);
+  background: color-mix(in srgb, var(--surface) 76%, transparent);
+  -webkit-backdrop-filter: saturate(160%) blur(14px);
+  backdrop-filter: saturate(160%) blur(14px);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
 .topnav-row { display: flex; align-items: center; gap: var(--s2); height: 56px; min-width: 0; }
 .topnav-brand { display: flex; align-items: center; gap: var(--s2); flex: none; margin-right: var(--s2); }
 
@@ -515,22 +761,38 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
      kept an idle Onyx for Mac waking about 340 times a second (and a browser
      tab doing the same). */
   animation: onyx-fs-sweep 7s linear 1;
-  will-change: transform;
 }
 @keyframes onyx-fs-sweep {
   from { transform: translateX(0); }
   to { transform: translateX(-50%); }
 }
+/* A layer of its own only while it moves: WordmarkMotion puts is-sweeping
+   on for the sweep and takes it off at animationend. Left on, will-change
+   kept a promoted layer per wordmark alive in the Mac window for the life
+   of the page, long after the seven seconds it was for. Under reduced
+   motion the sweep is over in a frame and there is nothing to promote. */
+@media (prefers-reduced-motion: no-preference) {
+  .onyx-fs-sweep.is-sweeping { will-change: transform; }
+}
 .auth-logo { margin-bottom: var(--s5); }
 
+/* Who is signed in: initials on the brand's gradient, or their picture. */
 .avatar {
   display: inline-grid; place-items: center;
+  flex: none;
   width: 28px; height: 28px;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
-  color: var(--ink);
+  overflow: hidden;
+  background: linear-gradient(135deg, var(--aura-a-deep), var(--aura-b-deep));
+  color: var(--on-aura);
   font-size: var(--t-xs); font-weight: 600; letter-spacing: 0.02em;
 }
+/* A profile picture fills the circle instead of the initials. */
+.avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.avatar.has-image { background: var(--surface-sunken); }
+.avatar-lg { width: 88px; height: 88px; font-size: var(--t-2xl); }
+.avatar-edit { display: flex; align-items: center; gap: var(--s4); }
+@media (max-width: 720px) { .avatar-edit { flex-direction: column; align-items: flex-start; } }
 /* Parts of a dropdown that are not items: who is signed in, a group label,
    the build stamp. */
 .menu-heading { display: flex; flex-direction: column; gap: 2px; padding: var(--s2) var(--s3) var(--s1); max-width: 280px; }
@@ -539,15 +801,17 @@ dialog.dialog-wide { max-width: min(1100px, calc(100vw - var(--s6))); }
 .menu-foot { padding: var(--s2) var(--s3) var(--s1); font-size: var(--t-xs); color: var(--muted); white-space: pre-line; }
 a.menu-item { color: inherit; text-decoration: none; }
 
+/* A key: a hairline cap, not a sunken key — the heavier bottom edge outweighed
+   the search box it sits in. */
 kbd {
   display: inline-block;
   min-width: 1.6em;
   padding: 1px 6px;
-  border: 1px solid var(--line);
-  border-bottom-width: 2px;
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   background: var(--surface-sunken);
   font-family: var(--font-mono); font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
   line-height: 1.5;
   text-align: center;
   color: var(--ink);
@@ -560,12 +824,12 @@ kbd {
   flex: 1 1 auto; min-width: 0; max-width: 460px; margin: 0 auto;
   display: flex; align-items: center; gap: var(--s2);
   height: 34px; padding: 0 var(--s1) 0 var(--s3);
-  border: 1px solid var(--line); border-radius: var(--radius);
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
   background: var(--surface);
   color: var(--muted); font-size: var(--t-sm); text-align: left; cursor: pointer;
   transition: border-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
 }
-.topnav-search:hover { color: var(--ink); border-color: color-mix(in srgb, var(--ink) 28%, var(--line)); }
+.topnav-search:hover { color: var(--ink); border-color: color-mix(in srgb, var(--ink) 30%, var(--line-strong)); }
 .topnav-search svg { flex: none; }
 .topnav-search-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .topnav-search-kbd { flex: none; }
@@ -579,15 +843,15 @@ dialog.palette {
   max-height: min(560px, calc(100dvh - 96px));
   margin: 12vh auto auto;
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: calc(var(--radius) + 4px);
+  border: 1px solid var(--line-raised);
+  border-radius: var(--radius-xl);
   color: var(--ink);
   overflow: hidden;
   background:
     radial-gradient(90% 60% at 12% -20%, color-mix(in srgb, var(--aura-a) var(--aura-soft), transparent), transparent 64%),
     radial-gradient(80% 60% at 100% -20%, color-mix(in srgb, var(--aura-b) var(--aura-soft), transparent), transparent 62%),
-    var(--surface);
-  box-shadow: var(--shadow-2), 0 40px 90px -40px color-mix(in srgb, var(--aura-b) 55%, transparent);
+    var(--surface-raised);
+  box-shadow: var(--edge-hi), var(--shadow-3), 0 40px 90px -40px color-mix(in srgb, var(--aura-b) 55%, transparent);
 }
 dialog.palette[open] { display: flex; }
 dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transparent); }
@@ -597,20 +861,17 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .palette-glass { flex: none; color: var(--muted); }
 .palette-input { flex: 1; min-width: 0; padding: var(--s1) 0; border: 0; outline: 0; background: transparent; font-size: var(--t-lg); }
 .palette-list { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: var(--s1) var(--s2) var(--s2); }
-.palette-section { padding: var(--s3) var(--s2) var(--s1); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.palette-section { padding: var(--s3) var(--s2) var(--s1); }
 .palette-item { display: flex; align-items: center; gap: var(--s3); min-width: 0; padding: 6px var(--s2); border-radius: var(--radius-sm); cursor: pointer; }
+/* The row the arrow keys are on: the wash, without the toggle's edge. */
 .palette-item.is-active {
-  background: linear-gradient(90deg,
-    color-mix(in srgb, var(--accent) 16%, transparent),
-    color-mix(in srgb, var(--accent-alt) 9%, transparent));
-  /* Not the shared pressed state (.is-active above), whose paper-on-ink
-     text is nearly invisible on this tint. */
-  color: var(--ink);
+  background: var(--selected-bg);
+  color: var(--selected-fg);
   box-shadow: none;
 }
 .palette-icon { flex: none; display: grid; place-items: center; width: 28px; height: 28px; overflow: hidden; border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--muted); }
 .palette-icon img { width: 100%; height: 100%; object-fit: cover; }
-.palette-item.is-active .palette-icon { color: var(--accent-deep); }
+.palette-item.is-active .palette-icon { color: var(--selected-icon); }
 .palette-dot { width: 6px; height: 6px; border-radius: 50%; background: linear-gradient(135deg, var(--aura-a), var(--aura-b)); }
 .palette-label { flex: 1 1 auto; min-width: 0; font-size: var(--t-md); }
 .palette-hint { flex: 0 1 auto; max-width: 45%; font-size: var(--t-xs); color: var(--muted); }
@@ -619,7 +880,7 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 /* ── Keyboard shortcuts ─────────────────────────────────────────────────── */
 .shortcuts { columns: 2 300px; column-gap: var(--s6); }
 .shortcuts-group { break-inside: avoid; margin-bottom: var(--s5); }
-.shortcuts-title { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: 0 0 var(--s2); }
+.shortcuts-title { margin: 0 0 var(--s2); }
 .shortcuts-list { margin: 0; }
 .shortcuts-row { display: grid; grid-template-columns: minmax(96px, auto) 1fr; align-items: baseline; gap: var(--s3); padding: 4px 0; border-top: 1px solid var(--line); }
 .shortcuts-row:first-child { border-top: 0; }
@@ -648,7 +909,7 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
   text-decoration: underline; text-underline-offset: 2px;
   cursor: pointer;
 }
-.share-guest-change:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.share-guest-change:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: var(--radius-sm); }
 
 /* The Share dialog. */
 .share-dialog-file { margin: 0 0 var(--s4); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -687,13 +948,13 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 /* Still focusable and still a radio to a screen reader; only not drawn. */
 .share-segment input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
 .share-segment.is-on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-1); }
-.share-segment:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.share-segment:has(input:focus-visible) { outline: 2px solid var(--ring); outline-offset: 1px; }
 .share-review:disabled .share-segments { opacity: 0.55; }
 .share-review:disabled .share-segment { cursor: not-allowed; }
 .share-review-detail { margin: 0; }
 .share-options { display: flex; align-items: flex-end; gap: var(--s3); flex-wrap: wrap; }
 .share-create { margin-left: auto; }
-.share-list-title { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin: var(--s5) 0 var(--s2); }
+.share-list-title { margin: var(--s5) 0 var(--s2); }
 .share-list { list-style: none; margin: 0; padding: 0; }
 .share-row { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) 0; border-top: 1px solid var(--line); }
 .share-row:first-child { border-top: 0; }
@@ -738,7 +999,11 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 }
 .share-tile:hover .share-tile-download,
 .share-tile:focus-within .share-tile-download { opacity: 1; }
-@media (hover: none) { .share-tile-download { opacity: 1; } }
+/* Where every download shows at once (no hover), none of them blurs: a
+   grid of twenty frosted buttons is twenty layers on a phone. */
+@media (hover: none) {
+  .share-tile-download { opacity: 1; -webkit-backdrop-filter: none; backdrop-filter: none; background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill); }
+}
 .share-more { display: flex; justify-content: center; padding-top: var(--s5); }
 .share-more-error { margin: var(--s3) 0 0; text-align: center; color: var(--danger); }
 .share-back { color: var(--accent-deep); text-decoration: underline; text-underline-offset: 2px; }
@@ -774,10 +1039,10 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 }
 .dock > * { pointer-events: auto; }
 .upload-panel, .work-panel {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-raised);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--edge-hi), var(--shadow-3);
   overflow: hidden;
   animation: upload-in var(--dur-2) var(--ease);
 }
@@ -814,7 +1079,7 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .upload-error { color: var(--danger); }
 .upload-check { width: 14px; flex: 0 0 14px; color: var(--accent); text-align: center; }
 .upload-row.is-done .upload-check { animation: upload-pop var(--dur-2) var(--ease); }
-.upload-action { flex: 0 0 auto; border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font: inherit; }
+.upload-action { flex: 0 0 auto; border: 0; background: none; color: var(--muted); cursor: pointer; padding: var(--s1) var(--s1-5); font: inherit; }
 .upload-action:hover { color: var(--ink); }
 
 .upbar { position: relative; height: 3px; overflow: hidden; background: color-mix(in srgb, var(--ink) 8%, transparent); }
@@ -822,18 +1087,18 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .upbar-fill {
   position: absolute; inset: 0;
   transform-origin: left center;
-  background: var(--accent);
+  background: linear-gradient(90deg, var(--aura-a), var(--aura-b));   /* Progress, in the brand's gradient. */
   transition: transform 240ms linear, background-color var(--dur-2) var(--ease);
 }
 /* A slow sheen while bytes are moving, so a large file that creeps a percent
    at a time still visibly works. */
 .upbar-uploading .upbar-fill {
-  background: linear-gradient(90deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 55%, var(--paper)) 50%, var(--accent) 100%);
+  background: linear-gradient(90deg, var(--aura-a) 0%, var(--aura-b) 45%, var(--aura-c) 55%, var(--aura-a) 100%);
   background-size: 200% 100%;
   animation: upload-sheen 1.6s linear infinite;
 }
 .upbar-error .upbar-fill { background: var(--danger); }
-.upbar-done .upbar-fill { background: var(--accent-deep); }
+.upbar-done .upbar-fill { background: linear-gradient(90deg, var(--aura-a), var(--aura-b)); }
 
 @keyframes upload-in { from { opacity: 0; transform: translateY(var(--s2)); } to { opacity: 1; transform: none; } }
 @keyframes upload-pop { 0% { transform: scale(0.4); opacity: 0; } 70% { transform: scale(1.2); } 100% { transform: none; opacity: 1; } }
@@ -844,9 +1109,11 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
   position: fixed; inset: var(--s3);
   z-index: var(--z-dialog);
   display: grid; place-items: center;
-  border: 2px dashed var(--accent);
+  border: 2px dashed var(--accent-alt);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--paper) 82%, transparent);
+  background:
+    radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--aura-a) 14%, transparent), transparent 70%),
+    color-mix(in srgb, var(--paper) 82%, transparent);
   pointer-events: none;
   animation: upload-in var(--dur-1) var(--ease);
 }
@@ -861,25 +1128,36 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
   max-width: min(420px, calc(100vw - var(--s5) * 2));
   pointer-events: none;
 }
+/* A toast is a floating surface like a menu, not an inverted slab: a glyph
+   says what happened, and an error's is the danger colour with a bar at the
+   leading edge, not a red card. */
 .toast {
   pointer-events: auto;
-  display: flex; align-items: flex-start; gap: var(--s3);
+  display: flex; align-items: flex-start; gap: var(--s2);
   padding: var(--s3) var(--s4);
-  background: var(--ink);
-  color: var(--paper);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-2);
+  background: var(--surface-raised);
+  color: var(--ink);
+  border: 1px solid var(--line-raised);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--edge-hi), var(--shadow-3);
   font-size: var(--t-md);
   animation: toast-in var(--dur-2) var(--ease);
 }
-.toast-error { background: var(--danger); }
+.toast-error { box-shadow: inset 3px 0 0 var(--danger), var(--edge-hi), var(--shadow-3); }
+.toast-glyph { flex: none; margin-top: 2px; color: var(--accent-deep); }
+.toast-error .toast-glyph { color: var(--danger); }
 .toast button { background: none; border: 0; color: inherit; cursor: pointer; opacity: 0.7; padding: 0; }
 .toast button:hover { opacity: 1; }
+/* Dismissed: it leaves the way it came (Toast.js takes it out of the list
+   at animationend — which still fires under the reduced-motion clamp, so
+   one can never stick). */
+.toast[data-leaving] { animation: leave-down var(--dur-2) var(--ease-in) forwards; pointer-events: none; }
 
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(var(--s2)); }
   to   { opacity: 1; transform: none; }
 }
+@keyframes leave-down { to { opacity: 0; transform: translateY(6px); } }
 
 /* ── Files page ─────────────────────────────────────────────────────────── */
 
@@ -888,7 +1166,6 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
    the shell's padding, level with the top nav's mark — each row a hairline
    apart. The page reaches the bottom of the window, so a right-click below
    a short listing still lands on the page's own menu, not the browser's. */
-:root { --topnav-h: 57px; --tb-h: 36px; --card-min: 200px; }
 html[data-mac-app] { --topnav-h: calc(var(--mac-bar-h, 52px) + 1px); }
 .files-main { min-height: calc(100dvh - var(--topnav-h)); padding-top: var(--s4); }
 /* In the Mac app the window is the app: the page spans it, as the title bar
@@ -910,17 +1187,17 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   overscroll-behavior: contain;
   padding-top: 10px;
 }
-.side-section { margin-bottom: var(--s5); }
-.side-title { margin: 0 0 6px; font-family: var(--font-body); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.side-section { margin-bottom: var(--s4); }
+.side-title { margin: 0 0 var(--s1); }
 .files-content { min-width: 0; }
 .files-error { padding: var(--s3) var(--s4); margin-bottom: var(--s4); border-color: var(--danger); }
 
-/* The title bar: the drive's dot and the path on the left, three icon
-   buttons on the right, a hairline under it. */
+/* The title bar: the drive's dot and the path on the left, Upload and the
+   icon buttons on the right. No hairline of its own — it and the toolbar
+   are one band over the toolbar's. */
 .files-header {
   display: flex; align-items: center; gap: var(--s3);
   min-height: 52px; padding-bottom: var(--s3);
-  border-bottom: 1px solid var(--line);
 }
 .files-header .crumbs { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 .drive-dot {
@@ -930,27 +1207,44 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 }
 .files-header-actions { display: flex; align-items: center; gap: 2px; flex: none; margin-right: -8px; }
 .hdr-btn { width: 36px; height: 36px; padding: 0; justify-content: center; color: var(--muted); }
+/* Upload: the page's one lit action (see .btn-primary), a 32px control. */
+.hdr-primary { height: 32px; padding: 0 var(--s3); margin-right: var(--s1); }
 .files-up { display: none; }
 .hdr-btn:hover, .hdr-btn[aria-expanded='true'] { color: var(--ink); }
 
 /* The toolbar: what the view shows on the left, the view itself on the
-   right. One height and one radius for every control, hairlines between the
-   groups; on a narrow window it wraps rather than running off the side. */
+   right. One height for every control, the spacing grouping them, and the
+   band's one hairline under it; on a narrow window it wraps rather than
+   running off the side. */
 .files-toolbar {
   display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2) var(--s4);
-  padding: var(--s3) 0;
+  padding: var(--s2) 0;
   border-bottom: 1px solid var(--line);
-  margin-bottom: var(--s5);
+  margin-bottom: var(--s4);
 }
 .tb-group { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .tb-left { flex: none; }
 .tb-right { flex: none; margin-left: auto; }
-.tb-btn { height: var(--tb-h); min-height: var(--tb-h); padding: 0 12px; gap: 7px; font-size: var(--t-sm); }
+/* The title bar's and the toolbar's controls are text and icons under the
+   heading, bare until pointed at. The one that is on — a menu while it is
+   open, Filters while its panel is, Display while the view has unsaved
+   changes — takes the bordered button back, so a border means "on". */
+.tb-btn, .hdr-btn { border-color: transparent; background: transparent; box-shadow: none; }
+.tb-btn { height: var(--tb-h); min-height: var(--tb-h); padding: 0 var(--s2-5); gap: var(--s1-5); font-size: var(--t-sm); }
+@media (hover: hover) {
+  .tb-btn:hover:not(:disabled), .hdr-btn:hover:not(:disabled) { border-color: transparent; background: var(--hover-bg); box-shadow: none; }
+}
 .tb-btn .icon { color: var(--muted); }
 .tb-btn:hover .icon, .tb-btn[aria-expanded='true'] .icon { color: var(--ink); }
-.tb-btn.is-open { border-color: color-mix(in srgb, var(--ink) 35%, var(--glass-edge)); }
+.tb-btn.is-dirty, .tb-btn[aria-expanded='true'], .tb-btn.is-open,
+.tb-btn.is-dirty:hover:not(:disabled), .tb-btn[aria-expanded='true']:hover:not(:disabled), .tb-btn.is-open:hover:not(:disabled) {
+  border-color: var(--glass-edge);
+  background: linear-gradient(180deg, var(--glass-sheen), transparent 55%), var(--glass-fill);
+  box-shadow: inset 0 1px 0 var(--glass-hi), 0 1px 2px var(--glass-drop), 0 6px 16px -12px var(--glass-drop);
+}
 .tb-icon { width: var(--tb-h); padding: 0; justify-content: center; }
-.tb-div { flex: none; width: 1px; height: 20px; background: var(--line); }
+/* The dividers FilesToolbar still renders: the spacing does the grouping. */
+.tb-div { display: none; }
 /* Select view: borderless, like the screenshot's, and the view's name. */
 .tb-view { max-width: 240px; padding: 0 10px; }
 .tb-view-name { min-width: 0; }
@@ -968,17 +1262,14 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 }
 .search-chip-edit .icon { color: var(--muted); }
 .search-chip-x {
-  display: inline-grid; place-items: center; flex: none; width: 28px; height: 100%;
+  display: inline-grid; place-items: center; flex: none; width: 32px; height: 100%;
   border: 0; background: none; color: var(--muted); cursor: pointer;
 }
 .search-chip-x:hover { color: var(--ink); }
 
 /* Sections: "Folders · 4", then "Files · 12", on the grid's own edge. */
 .files-section { margin-bottom: var(--s6); }
-.files-section-label {
-  margin: 0 0 var(--s3); font-family: var(--font-body);
-  font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
-}
+.files-section-label { margin: var(--s4) 0 var(--s2); }
 .files-section-count { font-weight: 500; letter-spacing: 0.02em; }
 
 /* The card size, from the view (data-card-size on the pane): a card's
@@ -993,12 +1284,18 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 .files-main[data-drop='ok'] .files-pane { outline: 2px dashed var(--accent-alt); outline-offset: 6px; border-radius: var(--radius); }
 .files-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(var(--card-min), 100%), 1fr)); gap: var(--s4); }
 /* A card is picked, not read: no text selection from a double-click, and no
-   iOS image callout on a long-press (which selects, useLongPress). */
-.filecard { display: block; overflow: hidden; cursor: pointer; text-align: left; -webkit-user-select: none; user-select: none; }
+   iOS image callout on a long-press (which selects, useLongPress). The
+   padding is the mat its picture sits in (below); the grid is virtualized
+   on the first card's height, and every card has the same. */
+.filecard { display: block; overflow: hidden; padding: 3px 3px 0; cursor: pointer; text-align: left; -webkit-user-select: none; user-select: none; }
 /* Focus: a ring standing off the card. Selection: the card's own edge and a
    tint, as a folder tile (its edge ring is with the glow, below). */
-.filecard:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.filecard[aria-selected='true'] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.filecard:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+.filecard[aria-selected='true'] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  box-shadow: 0 0 0 1px var(--accent), 0 10px 30px -14px color-mix(in srgb, var(--aura-b) 70%, transparent);
+}
 [data-theme='dark'] .filecard[aria-selected='true'],
 [data-theme='dark'] .folder-tile[aria-selected='true'] { background: color-mix(in srgb, var(--accent) 22%, var(--surface)); }
 .filecard-thumb {
@@ -1009,6 +1306,20 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   overflow: hidden;
   background: var(--surface-sunken);
 }
+/* A hairline around the picture, over it: a pale photograph would otherwise
+   run into a light card. A pseudo-element, since an inset shadow paints
+   under the picture. */
+.filecard-thumb::after {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent);
+  pointer-events: none;
+}
+/* In a card the picture is an inset plate: three pixels inside the card's
+   edge (the card's padding), its corners three steps tighter so the two
+   stay concentric. */
+.filecard > .filecard-thumb { border-radius: calc(var(--radius) - 3px); }
 .filecard-thumb img { width: 100%; height: 100%; -webkit-touch-callout: none; -webkit-user-drag: none; }
 /* The thumbnail's tiny copy (lib/placeholder.js), under it until it loads:
    stretched, so softened a little further, and scaled past the edges the
@@ -1032,9 +1343,32 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 }
 .thumb-wave { display: block; width: 80%; height: 46%; }
 .filelist-thumb .thumb-wave, .col-thumb .thumb-wave { width: 86%; height: 62%; }
-.filecard-text { padding: 10px 12px 12px; }
+/* A file with no picture: its kind's glyph on a faint wash of its kind's
+   colour (--kind-*), and its extension as a pill in the corner — a drawn
+   form, as the sound tile has its waveform, not a word in a grey box. In a
+   row or a column the glyph goes alone, smaller (Thumb sizes it). */
+.filecard-thumb[data-kind] {
+  --kind: var(--kind-other);
+  background:
+    radial-gradient(120% 90% at 15% 0%, color-mix(in srgb, var(--kind) 12%, transparent), transparent 62%),
+    var(--surface-sunken);
+}
+.filecard-thumb[data-kind='video'] { --kind: var(--kind-video); }
+.filecard-thumb[data-kind='image'] { --kind: var(--kind-image); }
+.filecard-thumb[data-kind='audio'] { --kind: var(--kind-audio); }
+.filecard-thumb[data-kind='doc'] { --kind: var(--kind-doc); }
+/* The glyph leans well into ink: a cyan at a lighter mix was 2:1 on the
+   light well, and a drawn form wants 3:1 like any other. */
+.thumb-kind { display: grid; place-items: center; color: color-mix(in srgb, var(--kind) 60%, var(--ink)); }
+.col-thumb .thumb-kind .icon { width: 14px; height: 14px; }
+.thumb-ext {
+  position: absolute; left: var(--s2); bottom: var(--s2);
+  font-size: var(--t-2xs); letter-spacing: 0.04em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--ink) 75%, var(--muted));
+}
+.filecard-text { padding: var(--s2-5) var(--s3) var(--s3); }
 .filecard-name { font-size: var(--t-sm); min-width: 0; }
-.filecard-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.filecard-meta { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 /* One line tall even when none of the view's fields has a value for this
    file (a document's duration): the grid is virtualized on the first card's
    height, so every card must be the same. */
@@ -1055,7 +1389,7 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
    from flickering. */
 .is-pending > .files-grid,
 .filelist.is-pending .filelist-body {
-  opacity: var(--pending-opacity, 0.55);
+  opacity: var(--pending-opacity);
   transition: opacity var(--dur-2) var(--ease) 150ms;
 }
 /* Placeholders shaped like the cards and rows they stand in for. */
@@ -1070,6 +1404,18 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 .skeleton-line.is-short { width: 40%; }
 .filelist-row.is-skeleton { cursor: default; }
 .filelist-row.is-skeleton .skeleton-line { width: 50%; margin: 0; }
+/* Selection and hover fade in and out — for a keyboard and a finger too, so
+   the transition is not behind the hover query. */
+.filecard, .folder-tile, .filelist-row { transition: box-shadow var(--dur-2) var(--ease), border-color var(--dur-1), background-color var(--dur-1); }
+/* A card glows a little when a pointer rests on it. */
+@media (hover: hover) {
+  .filecard:hover, .folder-tile:hover {
+    box-shadow: 0 10px 28px -16px color-mix(in srgb, var(--aura-a) 60%, transparent);
+  }
+  .filecard[aria-selected='true']:hover {
+    box-shadow: 0 0 0 1px var(--accent), 0 10px 28px -16px color-mix(in srgb, var(--aura-a) 60%, transparent);
+  }
+}
 .filecard-badge {
   position: absolute;
   right: 6px;
@@ -1087,6 +1433,7 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 .folder-link {
   display: flex;
   width: 100%;
+  min-height: 30px;
   gap: 6px;
   padding: var(--s1) 6px;
   border: none;
@@ -1095,7 +1442,12 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   text-align: left;
   cursor: pointer;
 }
-.folder-link.active { background: color-mix(in srgb, var(--ink) 6%, transparent); font-weight: 600; }
+/* Where you are: the selection wash. */
+.folder-link.active {
+  background: var(--selected-bg);
+  color: var(--selected-fg);
+  font-weight: 600;
+}
 .folder-row { display: flex; align-items: center; padding-left: calc(var(--depth, 0) * var(--s3)); }
 /* Beside its toggle a row's link takes what is left, not 100% of the row, and
    a long name ends in an ellipsis rather than widening the sidebar. */
@@ -1130,16 +1482,16 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 .starred-remove {
   position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
   display: inline-flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px; padding: 0;
+  width: 24px; height: 24px; padding: 0;
   border: none; border-radius: var(--radius-sm); background: transparent;
   color: var(--muted); cursor: pointer; opacity: 0;
 }
 .starred-row:hover .starred-remove, .starred-remove:focus-visible { opacity: 1; }
-.starred-remove:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.starred-remove:hover { color: var(--ink); background: var(--hover-bg); }
 /* Collections: the sidebar's list, the bar above one's files, and the editor. */
-.side-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.side-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s1); }
 .side-title-row .side-title { margin: 0; }
-.side-add { width: 24px; height: 24px; padding: 0; justify-content: center; color: var(--muted); }
+.side-add { width: 28px; height: 28px; padding: 0; justify-content: center; color: var(--muted); }
 .side-empty { margin: var(--s1) 6px 0; }
 .collection-list .folder-link { align-items: center; }
 .collection-glyph { flex: none; color: var(--accent); }
@@ -1150,7 +1502,7 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 .collection-bar {
   display: flex; align-items: center; gap: var(--s2);
   margin-bottom: var(--s3); padding: var(--s2) var(--s3);
-  border: 1px solid var(--line); border-radius: var(--radius-md, 10px);
+  border: 1px solid var(--line); border-radius: var(--radius-md);
   background: var(--surface);
 }
 .collection-bar-rules { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -1168,23 +1520,13 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   padding: 4px 10px; border: 1px solid var(--line); border-radius: var(--radius-pill);
   background: var(--surface); color: var(--ink); font: inherit; font-size: var(--t-sm); cursor: pointer;
 }
-.collection-choices .chip.is-on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.collection-choices .chip.is-on { background: var(--selected-bg); color: var(--selected-fg); border-color: var(--selected-edge); font-weight: 600; }
 .collection-rule-remove { width: 32px; height: 32px; padding: 0; justify-content: center; }
 .collection-add-rule { align-self: flex-start; gap: 4px; }
 .collection-delete { margin-right: auto; }
 
-/* A folder, drawn solid (FolderGlyph): the kit's folder filled for the
-   back, a lighter front panel over it, both the accent mixed with the page's
-   own colours — deeper at the back in the light scheme, brighter at the
-   front in the dark — so folders read as folders, in any brand's colour. */
-:root {
-  --folder-back: color-mix(in srgb, var(--accent) 72%, var(--paper));
-  --folder-front: color-mix(in srgb, var(--accent) 48%, var(--paper));
-}
-:root[data-theme='dark'] {
-  --folder-back: color-mix(in srgb, var(--accent) 46%, var(--paper));
-  --folder-front: color-mix(in srgb, var(--accent) 80%, var(--paper));
-}
+/* A folder, drawn solid (FolderGlyph): the back and the front panel in the
+   colours --folder-back / --folder-front (:root) give them. */
 .folder-glyph { position: relative; display: inline-block; flex: none; width: var(--glyph); height: var(--glyph); color: var(--folder-back); }
 .folder-glyph-back { display: block; width: 100%; height: 100%; }
 /* The front panel over the Lucide folder's body (x 2-22, y 8.5-20 of 24). */
@@ -1204,7 +1546,7 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   grid-template-columns: repeat(auto-fill, minmax(min(var(--folder-min, 240px), 100%), 1fr));
   gap: var(--s4);
 }
-.folder-tile-wrap { border-radius: calc(var(--radius) + 4px); min-width: 0; }
+.folder-tile-wrap { border-radius: var(--radius-lg); min-width: 0; }
 .folder-tile {
   display: flex; align-items: center; gap: var(--s4);
   width: 100%; min-width: 0; min-height: var(--folder-h, 92px);
@@ -1212,14 +1554,15 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   padding: var(--s3) var(--s4);
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: calc(var(--radius) + 4px);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
   color: var(--ink);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 .folder-tile:hover { border-color: color-mix(in srgb, var(--ink) 24%, var(--line)); }
-.folder-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.folder-tile:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .folder-tile[aria-selected='true'] {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--surface));
@@ -1248,10 +1591,13 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   align-items: center;
   gap: var(--s3);
 }
-/* Not sticky: the top nav already sticks at top 0 with a height the
-   stylesheet does not know, so a sticky header would slide under it. */
+/* Sticks under the top nav as the list scrolls, in the page's own colour —
+   a solid fill, not a blur, which would re-blur the aura on every frame —
+   over the rows going under it. */
 .filelist-head {
+  position: sticky; top: var(--topnav-h); z-index: 1;
   padding: var(--s1) var(--s2);
+  background: var(--page);
   border-bottom: 1px solid var(--line);
   font-size: var(--t-sm);
 }
@@ -1263,11 +1609,11 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 }
 .filelist-sort:hover, .filelist-sort.active { color: var(--ink); }
 .filelist-sort.active { font-weight: 600; }
-.filelist-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.filelist-sort:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: var(--radius-sm); }
 .filelist-arrow { display: inline-block; width: 1em; }
 .filelist-row {
   width: 100%;
-  height: 48px;
+  height: 44px;
   padding: 0 var(--s2);
   border: 0;
   border-bottom: 1px solid var(--line);
@@ -1278,13 +1624,14 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   cursor: pointer;
   user-select: none;
 }
-.filelist-row:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
-.filelist-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.filelist-row.is-selected { background: color-mix(in srgb, var(--accent) 14%, transparent); }
-.filelist-row.is-selected:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
-.filelist-thumb { display: block; width: 44px; border-radius: var(--radius-sm); overflow: hidden; }
+.filelist-row:hover { background: var(--hover-bg); }
+.filelist-row:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+/* What you picked: the selection wash, with the hover tint over it under
+   the pointer. */
+.filelist-row.is-selected { background: var(--selected-bg); }
+.filelist-row.is-selected:hover { background: linear-gradient(var(--hover-bg), var(--hover-bg)), var(--selected-bg); }
+.filelist-thumb { display: block; width: 36px; border-radius: var(--radius-sm); overflow: hidden; }
 .filelist-thumb .filecard-badge { display: none; }
-.filelist-thumb .filecard-thumb > span { font-size: 9px; line-height: 1; overflow: hidden; }
 .filelist-folder-icon { display: grid; place-items: center; height: 33px; }
 /* A folder row: the solid folder, the name in semibold and a faint tint, so
    the folders read as folders before a word of them is. */
@@ -1292,8 +1639,13 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
 .filelist-folder .filelist-name { font-weight: 600; }
 .filelist-name { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
 .filelist-name .truncate { min-width: 0; }
-.filelist-cell { display: flex; align-items: center; min-width: 0; overflow: hidden; font-size: var(--t-sm); }
-.filelist-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.filelist-cell { display: flex; align-items: center; min-width: 0; overflow: hidden; font-size: var(--t-sm); color: var(--ink-2); }
+/* Numbers — a size, a duration, dimensions — read from the right, header
+   included; its arrow moves to the other side so the words stay flush. */
+.filelist-num { font-variant-numeric: tabular-nums; white-space: nowrap; justify-self: end; text-align: right; }
+.filelist-sort.filelist-num { flex-direction: row-reverse; }
+/* The format as the placeholder tile wears it. */
+.filelist-type { flex: none; }
 .filelist-date { white-space: nowrap; font-variant-numeric: tabular-nums; text-overflow: ellipsis; }
 .filelist-head .filelist-sort { font-size: var(--t-sm); }
 .filelist-sort { max-width: 100%; }
@@ -1325,7 +1677,7 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   cursor: text;
 }
 .cell-edit:hover { border-color: var(--line); background: var(--surface); }
-.cell-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.cell-edit:focus-visible { outline: 2px solid var(--ring); outline-offset: -1px; }
 .cell-empty { color: var(--muted); opacity: 0.5; }
 .cell-edit:hover .cell-empty { opacity: 1; }
 .cell-chips { display: flex; gap: 4px; min-width: 0; overflow: hidden; }
@@ -1344,10 +1696,10 @@ select.input.cell-input { padding-right: 2px; }
   z-index: var(--z-menu);
   width: max(100%, 260px);
   padding: var(--s2);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-raised);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--edge-hi), var(--shadow-2);
   cursor: default;
   user-select: text;
 }
@@ -1360,7 +1712,7 @@ select.input.cell-input { padding-right: 2px; }
   font-size: var(--t-sm);
   cursor: pointer;
 }
-.cell-pop-row:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.cell-pop-row:hover { background: var(--hover-bg); }
 .cell-pop-add {
   display: block; width: 100%;
   padding: 6px var(--s1);
@@ -1377,10 +1729,7 @@ select.input.cell-input { padding-right: 2px; }
 .popover { padding: var(--s2); }
 .colpick { width: 260px; max-height: min(70vh, 520px); overflow-y: auto; }
 .colpick-head { display: flex; align-items: center; gap: var(--s2); padding: 0 var(--s1) var(--s1); }
-.colpick-label {
-  margin: var(--s2) 0 2px; padding: 0 var(--s1);
-  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
-}
+.colpick-label { margin: var(--s2) 0 2px; padding: 0 var(--s1); }
 .colpick-row {
   display: flex; align-items: center; gap: var(--s2);
   min-height: 30px; padding: 0 var(--s1);
@@ -1388,11 +1737,11 @@ select.input.cell-input { padding-right: 2px; }
   font-size: var(--t-sm);
   cursor: pointer;
 }
-.colpick-row:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.colpick-row:hover { background: var(--hover-bg); }
 .colpick-row.is-locked { cursor: default; color: var(--muted); }
 .colpick-row.is-locked:hover { background: none; }
 .colpick-check { display: flex; align-items: center; gap: var(--s2); flex: 1; min-width: 0; cursor: pointer; }
-.colpick-move { padding: 0 6px; min-height: 0; line-height: 22px; }
+.colpick-move { padding: 0 var(--s1-5); min-height: 24px; line-height: 22px; }
 .colpick-hint { margin-left: auto; font-size: var(--t-xs); color: var(--muted); white-space: nowrap; }
 .colpick-note { margin: 2px 0 var(--s1); padding: 0 var(--s1); }
 .colpick-foot { margin-top: var(--s2); padding: var(--s2) var(--s1) 0; border-top: 1px solid var(--line); }
@@ -1404,8 +1753,8 @@ select.input.cell-input { padding-right: 2px; }
 /* The folder picker (Move dialog). */
 .picker-list { max-height: min(50vh, 360px); overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s1); }
 .picker-row { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--s1); text-align: left; border: 0; background: none; color: inherit; font: inherit; padding: 6px var(--s2); border-radius: var(--radius-sm); cursor: pointer; }
-.picker-row:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 5%, transparent); }
-.picker-row.active { background: color-mix(in srgb, var(--accent) 14%, transparent); font-weight: 600; }
+.picker-row:hover:not(:disabled) { background: var(--hover-bg); }
+.picker-row.active { background: var(--selected-bg); color: var(--selected-fg); font-weight: 600; }
 .picker-row:disabled { cursor: default; opacity: 0.6; }
 
 .only-mobile { display: none; }
@@ -1416,10 +1765,10 @@ select.input.cell-input { padding-right: 2px; }
   display: inline-grid; place-items: center;
   min-width: 18px; height: 18px; padding: 0 5px;
   border-radius: var(--radius-pill);
-  background: var(--ink); color: var(--paper);
+  background: linear-gradient(120deg, var(--aura-a-deep), var(--aura-b-deep)); color: var(--on-aura);
   font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
 }
-.filters-panel { padding: var(--s3) var(--s4) var(--s4); margin: calc(var(--s2) - var(--s5)) 0 var(--s5); animation: filters-in var(--dur-2) var(--ease); }
+.filters-panel { padding: var(--s3) var(--s4) var(--s4); margin: calc(var(--s2) - var(--s5)) 0 var(--s5); border-radius: var(--radius-lg); animation: filters-in var(--dur-2) var(--ease); }
 @keyframes filters-in {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: none; }
@@ -1427,10 +1776,7 @@ select.input.cell-input { padding-right: 2px; }
 .filters-head { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s3); }
 .filters-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--s4) var(--s5); }
 .facet { margin: 0; padding: 0; border: 0; min-width: 0; }
-.facet-title {
-  padding: 0; margin-bottom: 6px;
-  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
-}
+.facet-title { padding: 0; margin-bottom: 6px; }
 .facet-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; min-width: 0; font-size: var(--t-sm); cursor: pointer; }
 .facet-row .truncate { flex: 1; min-width: 0; }
 .facet-count { font-variant-numeric: tabular-nums; }
@@ -1441,7 +1787,7 @@ select.input.cell-input { padding-right: 2px; }
   display: inline-flex; align-items: center; gap: 6px;
   max-width: 280px; min-width: 0;
   padding: 4px 8px 4px 10px;
-  border: 1px solid var(--line); border-radius: var(--radius-pill);
+  border: 1px solid var(--line-strong); border-radius: var(--radius-pill);
   background: var(--surface); color: var(--ink);
   font: inherit; font-size: var(--t-sm);
   cursor: pointer;
@@ -1457,9 +1803,12 @@ select.input.cell-input { padding-right: 2px; }
 .crumbs ol { display: flex; align-items: center; gap: 2px; min-width: 0; margin: 0; padding: 0; list-style: none; }
 .crumb-item { display: flex; align-items: center; min-width: 0; flex: 0 3 auto; }
 .crumb-here { flex: 0 1 auto; min-width: 3em; }
+/* The page title carries the display face; the crumbs before it are the
+   same size in the body face, regular and muted, so the open folder is the
+   one thing in the row set like a heading. */
 .files-title {
   margin: 0; padding: 2px 6px;
-  font-family: var(--font-body); font-size: 18px; font-weight: 500; letter-spacing: -0.01em; line-height: 1.35;
+  font-family: var(--font-display); font-size: var(--t-xl); font-weight: 600; letter-spacing: -0.02em; line-height: var(--lh-tight);
 }
 .crumb-item:only-child .files-title { padding-left: 0; }
 .crumb-drop { display: flex; min-width: 0; }
@@ -1469,12 +1818,12 @@ select.input.cell-input { padding-right: 2px; }
   padding: 2px 6px;
   border: 0; border-radius: var(--radius-sm);
   background: none; color: var(--muted);
-  font: inherit; font-size: 18px; letter-spacing: -0.01em; line-height: 1.35;
+  font: inherit; font-size: var(--t-xl); font-weight: 400; letter-spacing: -0.02em; line-height: var(--lh-tight);
   cursor: pointer;
 }
 .crumb-item:first-child .crumb { margin-left: -6px; }
-.crumb:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
-.crumb:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.crumb:hover { color: var(--ink); background: var(--hover-bg); }
+.crumb:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .crumb-drop.is-over .crumb, .crumb-drop[data-drop='ok'] .crumb { color: var(--ink); }
 .crumb-sep { flex: none; color: var(--muted); opacity: 0.6; }
 /* ── Selection action bar (phone) ──────────────────────────────────────────
@@ -1523,7 +1872,7 @@ select.input.cell-input { padding-right: 2px; }
 .display-pop { width: 380px; max-width: calc(100vw - 16px); max-height: min(80vh, 660px); overflow-y: auto; padding: var(--s3); }
 .seg {
   display: flex; gap: 2px; padding: 3px;
-  border: 1px solid var(--line); border-radius: var(--radius);
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
   background: color-mix(in srgb, var(--ink) 5%, var(--surface));
 }
 .seg-btn {
@@ -1547,7 +1896,7 @@ select.input.cell-input { padding-right: 2px; }
   background: var(--surface); color: var(--ink);
   box-shadow: 0 0 0 1px var(--line), var(--shadow-1);
 }
-.seg-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.seg-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .seg-btn:disabled { cursor: not-allowed; opacity: 0.5; }
 .seg-sm { padding: 2px; }
 .seg-sm .seg-btn { flex: none; width: 34px; height: 26px; padding: 0; }
@@ -1562,14 +1911,14 @@ select.input.cell-input { padding-right: 2px; }
 .display-select {
   display: inline-flex; align-items: center; gap: 6px;
   height: 32px; padding: 0 10px;
-  border: 1px solid var(--line); border-radius: var(--radius);
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
   background: var(--surface); color: var(--ink);
   font: inherit; font-size: var(--t-sm);
   cursor: pointer;
 }
 .display-select > .icon { color: var(--muted); }
 select.display-select { -webkit-appearance: none; appearance: none; padding-right: 30px; }
-.display-select:hover:not(:disabled) { border-color: color-mix(in srgb, var(--ink) 28%, var(--line)); }
+.display-select:hover:not(:disabled) { border-color: color-mix(in srgb, var(--ink) 30%, var(--line-strong)); }
 .display-select:disabled { opacity: 0.5; cursor: not-allowed; }
 .display-note { margin: var(--s1) 0 0; }
 .display-foot {
@@ -1599,14 +1948,16 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   background: var(--on-aura, var(--paper)); box-shadow: var(--shadow-1);
   transition: transform var(--dur-1) var(--ease);
 }
-.switch:checked { background: var(--accent); }
+/* On: the deep accent, not the raw one — the knob is --on-aura, computed
+   against the deep stops, and clears 3:1 on this track in both schemes
+   where the dark scheme's lifted accent did not. */
+.switch:checked { background: var(--aura-a-deep); }
 .switch:checked::after { transform: translateX(16px); }
 .switch:disabled { opacity: 0.5; cursor: not-allowed; }
-.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ── Tile layout (TileGrid): justified rows of pictures ────────────────── */
 .tiles { position: relative; }
-.tiles.is-pending { opacity: var(--pending-opacity, 0.55); transition: opacity var(--dur-2) var(--ease) 150ms; }
+.tiles.is-pending { opacity: var(--pending-opacity); transition: opacity var(--dur-2) var(--ease) 150ms; }
 .tile { position: absolute; display: flex; flex-direction: column; cursor: pointer; -webkit-user-select: none; user-select: none; outline: none; }
 /* Before the width is measured: the first tiles in plain flow, at the
    target height, so the folder is in the first paint. */
@@ -1624,7 +1975,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 .tile-name { font-size: var(--t-sm); }
 .tile-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .tile-meta .field-line { flex: 1; }
-.tile:focus-visible .tile-pic { outline: 2px solid var(--accent); outline-offset: 3px; }
+.tile:focus-visible .tile-pic { outline: 2px solid var(--ring); outline-offset: 3px; }
 .tile[aria-selected='true'] .tile-pic { box-shadow: 0 0 0 2px var(--accent), 0 10px 30px -14px color-mix(in srgb, var(--aura-b) 70%, transparent); }
 .tile[aria-selected='true'] .tile-name { color: var(--accent-deep); }
 @media (hover: hover) {
@@ -1636,10 +1987,10 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 .colview {
   display: flex; overflow-x: auto; overflow-y: hidden;
   min-height: 360px;
-  border: 1px solid var(--line); border-radius: calc(var(--radius) + 4px);
+  border: 1px solid var(--line); border-radius: var(--radius-lg);
   background: var(--surface);
 }
-.colview.is-pending .col.is-current { opacity: var(--pending-opacity, 0.55); transition: opacity var(--dur-2) var(--ease) 150ms; }
+.colview.is-pending .col.is-current { opacity: var(--pending-opacity); transition: opacity var(--dur-2) var(--ease) 150ms; }
 .col { flex: none; display: flex; flex-direction: column; gap: 1px; height: 100%; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; overscroll-behavior: contain; padding: var(--s1); border-right: 1px solid var(--line); }
 .col > .folder-drop { flex: none; }
 .col-row {
@@ -1650,21 +2001,16 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   font: inherit; font-size: var(--t-sm); text-align: left;
   cursor: pointer; -webkit-user-select: none; user-select: none;
 }
-.col-row:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.col-row:hover { background: var(--hover-bg); }
 .col-row.is-folder .col-name { font-weight: 500; }
 /* The way down: each column's open folder, quietly. */
 .col-row.is-open { background: color-mix(in srgb, var(--ink) 9%, transparent); }
-.col-row.is-selected {
-  background: linear-gradient(90deg,
-    color-mix(in srgb, var(--accent) 18%, transparent),
-    color-mix(in srgb, var(--accent-alt) 10%, transparent));
-}
-.col-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.col-row.is-selected { background: var(--selected-bg); color: var(--selected-fg); }
+.col-row:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 .col-name { flex: 1; min-width: 0; }
 .col-chevron { flex: none; color: var(--muted); }
-.col-thumb { flex: none; width: 22px; height: 22px; border-radius: 4px; overflow: hidden; }
+.col-thumb { flex: none; width: 22px; height: 22px; border-radius: var(--radius-sm); overflow: hidden; }
 .col-thumb .filecard-thumb { width: 22px; height: 22px; aspect-ratio: auto; }
-.col-thumb .filecard-thumb > span { font-size: 7px; line-height: 1; overflow: hidden; }
 .col-thumb .filecard-badge { display: none; }
 .col-note { margin: 0; padding: var(--s2); }
 .col-details { padding: var(--s4); gap: 0; border-right: 0; }
@@ -1687,13 +2033,13 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   background: none; color: inherit; font: inherit; text-align: left;
   cursor: pointer;
 }
-.activity-row:hover, .activity-row:focus-visible { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.activity-row:hover, .activity-row:focus-visible { background: var(--hover-bg); }
 .activity-row.is-skeleton { cursor: default; }
 .activity-row.is-skeleton .skeleton-line { flex: 1; margin: 0; }
 .activity-thumb {
   flex: none; display: grid; place-items: center;
   width: 34px; height: 34px; overflow: hidden;
-  border-radius: 6px; background: var(--surface-sunken); color: var(--muted);
+  border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--muted);
 }
 .activity-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .activity-text { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
@@ -1788,10 +2134,19 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   .side-section { margin-bottom: 0; }
   .files-title, .crumb { font-size: var(--t-lg); }
   /* Icons, not labels, and the view's name kept short, so the toolbar is
-     one line on a phone; chips go to the next. */
-  .tb-label, .tb-div, .tb-count { display: none; }
-  .tb-btn:not(.tb-view) { width: var(--tb-h); padding: 0; justify-content: center; }
+     one line on a phone; chips go to the next. Every control a thumb's
+     44px. Download is on the selection bar here (it needs a selection
+     anyway); More stays — Select all, New folder and Refresh live in it. */
+  .tb-label, .tb-div, .tb-count, .tb-download { display: none; }
+  .tb-btn { height: 44px; min-height: 44px; }
+  .tb-btn:not(.tb-view) { width: 44px; padding: 0; justify-content: center; }
   .tb-view { max-width: 118px; padding: 0 8px; gap: 5px; }
+  .hdr-btn { width: 44px; height: 44px; }
+  /* Upload keeps its gradient and loses its word; the folder upload and the
+     new folder behind "…" are in the toolbar's More, so "…" goes. */
+  .hdr-primary { width: 44px; height: 44px; padding: 0; margin-right: 0; justify-content: center; }
+  .hdr-primary .hdr-label { display: none; }
+  .hdr-more { display: none; }
   .tb-view.is-default .tb-view-name { display: none; }
   .tb-right { min-width: 0; }
   .tb-chips { order: 3; flex: 1 1 100%; min-width: 0; }
@@ -1812,6 +2167,9 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   .starred-remove, .starred-where { display: none; }
   .side-collections h3, .side-collections .side-add, .side-empty { display: none; }
   .side-collections { margin-bottom: var(--s2); }
+  /* With no collection to show, nothing is left of the section but its
+     margin: a blank band between the drives and the files. */
+  .side-collections:not(:has(.folder-link)) { display: none; }
   .collection-group { display: contents; }
   .collection-group-title { display: none; }
   .collection-list { overflow-x: auto; }
@@ -1828,7 +2186,13 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
     background: var(--surface);
     font-weight: 400;
   }
-  .folder-list .folder-link.active { background: var(--ink); color: var(--paper); border-color: var(--ink); font-weight: 500; }
+  .folder-list .folder-link.active { background: var(--selected-bg); color: var(--selected-fg); border-color: var(--selected-edge); font-weight: 600; }
+  /* The strip's first chip is the root — the drive, with its dot. Open, it
+     would say what the drive chip and the title already say, so it goes;
+     with no folders under it either, so does the strip. */
+  .folder-list .folder-root .folder-link::before { content: ''; flex: none; align-self: center; width: 8px; height: 8px; border-radius: 50%; background: var(--dot, var(--accent)); }
+  .folder-list .folder-root.is-here { display: none; }
+  .side-folders:has(.folder-root.is-here):not(:has(.folder-row)) { display: none; }
   .folder-list .folder-row { flex: 0 0 auto; padding-left: 0; }
   .folder-list span.folder-toggle { display: none; }
   .folder-list .folder-link .muted { color: inherit; opacity: 0.6; }
@@ -1851,7 +2215,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   .files-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); }
   .files-pane[data-card-size='s'] .files-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2); }
   .files-pane[data-card-size='l'] .files-grid { grid-template-columns: minmax(0, 1fr); }
-  .empty { padding: 48px var(--s4); }
+  .empty { padding: var(--s7) var(--s4); }
 
   /* A dialog on a phone is a bottom sheet: full width, anchored to the
      bottom edge, clear of the home indicator. */
@@ -1860,7 +2224,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
     max-width: 100vw;
     width: 100vw;
     margin: auto auto 0;
-    border-radius: var(--radius) var(--radius) 0 0;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     border-bottom: 0;
     max-height: 90vh;
     padding-bottom: env(safe-area-inset-bottom);
@@ -1887,8 +2251,8 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
     box-shadow: var(--shadow-2);
   }
   /* Clear the bar so the last row of cards is not sitting underneath it. */
-  .files-grid { padding-bottom: 72px; }
-  .filelist-body { margin-bottom: 72px; }
+  .files-grid { padding-bottom: calc(var(--s8) + var(--s2)); }
+  .filelist-body { margin-bottom: calc(var(--s8) + var(--s2)); }
 
   /* The list on a phone: thumbnail, name and the first two chosen columns
      (FileList trims them), with dates losing their time. */
@@ -1903,27 +2267,22 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
    the name, and under it how full it is (or, for someone who does not look
    after it, what they may do there). */
 .drives { margin-bottom: var(--s5); }
-.drives-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-.drives-title { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
-.drives-new { width: 24px; height: 24px; padding: 0; justify-content: center; font-size: 17px; line-height: 1; color: var(--muted); }
+.drives-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s1); }
+.drives-new { width: 28px; height: 28px; padding: 0; justify-content: center; font-size: 17px; line-height: 1; color: var(--muted); }
 .drives-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .drive-row {
   display: flex; align-items: center; gap: var(--s2);
-  width: 100%; padding: 5px 6px;
+  width: 100%; min-height: 30px; padding: 5px 6px;
   border: 0; border-radius: var(--radius-sm);
   background: transparent; color: inherit; text-align: left; cursor: pointer;
 }
-.drive-row:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.drive-row:hover { background: var(--hover-bg); }
 /* Opening: the drive's page is being rendered. */
-.drive-row.is-pending { opacity: var(--pending-opacity, 0.55); cursor: progress; }
-.drive-row.is-active {
-  background: linear-gradient(90deg,
-    color-mix(in srgb, var(--accent) 16%, transparent),
-    color-mix(in srgb, var(--accent-alt) 9%, transparent));
-}
+.drive-row.is-pending { opacity: var(--pending-opacity); cursor: progress; }
+.drive-row.is-active { background: var(--selected-bg); color: var(--selected-fg); }
 .drive-icon {
   flex: none; display: grid; place-items: center;
-  width: 28px; height: 28px; border-radius: 7px;
+  width: 28px; height: 28px; border-radius: calc(var(--radius) - 1px);
   color: color-mix(in srgb, var(--drive, var(--accent)) 78%, var(--ink));
   background: color-mix(in srgb, var(--drive, var(--accent)) 16%, var(--surface));
 }
@@ -1940,7 +2299,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 .drive-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .drive-name { font-size: var(--t-sm); font-weight: 500; }
 .drive-row.is-active .drive-name { font-weight: 600; }
-.drive-detail { font-size: var(--t-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+.drive-detail { font-size: var(--t-xs); color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .drives-empty { margin: var(--s1) 6px 0; }
 .fs-members-table { width: 100%; font-size: var(--t-sm); border-collapse: collapse; margin-bottom: var(--s3); }
 .fs-members-table td { padding: var(--s1) var(--s2) var(--s1) 0; border-top: 1px solid var(--line); vertical-align: middle; }
@@ -1970,7 +2329,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 /* The container takes focus for the keyboard shortcuts. The ring is drawn on
    the stage rather than the whole column so it frames the picture. */
 .player:focus { outline: none; }
-.player:focus-visible .player-stage { outline: 2px solid var(--accent); outline-offset: 2px; }
+.player:focus-visible .player-stage { outline: 2px solid var(--ring); outline-offset: 2px; }
 
 /* The stage takes its size from the clip's aspect ratio (--ratio, set by
    VideoPlayer), not from the <video> element: before its metadata loads that
@@ -2042,7 +2401,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 .player-scrub > span { position: absolute; top: 0; height: 100%; pointer-events: none; }
 .player-buffered { background: color-mix(in srgb, var(--ink) 18%, transparent); border-radius: var(--radius-pill); }
 .player-range { background: color-mix(in srgb, var(--accent) 24%, transparent); }
-.player-played { left: 0; background: var(--accent); border-radius: var(--radius-pill); }
+.player-played { left: 0; background: linear-gradient(90deg, var(--aura-a), var(--aura-b)); border-radius: var(--radius-pill); }
 
 .player-head {
   width: 12px; height: 12px; top: -3px;
@@ -2088,12 +2447,6 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 .player-volume input { width: 80px; }
 .cover-scrub { flex: 1 1 auto; min-width: 0; accent-color: var(--accent); }
 
-/* Screen-reader-only label, for the controls whose icon carries the meaning. */
-.sr-only {
-  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
-}
-
 @media (max-width: 720px) {
   /* On a phone the frame preview is wider than the viewport is useful, and the
      controls need to wrap rather than shrink to nothing. */
@@ -2124,8 +2477,6 @@ body.is-marqueeing * { cursor: default !important; }
    size once shrunk. States are attributes: data-compact once it is down to
    size, data-verdict ok/no over a folder, data-phase land/return at the end,
    data-hidden with the pointer out of the window. */
-:root { --drag-shadow: color-mix(in srgb, var(--ink) 26%, transparent); }
-:root[data-theme='dark'] { --drag-shadow: color-mix(in srgb, #000 62%, transparent); }
 /* No will-change: it would pin the layer's raster to the scale it started at,
    and a list row's picture starts small and grows. The 3D translate the
    script writes keeps it on a layer of its own all the same. */
@@ -2201,7 +2552,7 @@ body.is-marqueeing * { cursor: default !important; }
   display: flex; align-items: center; gap: 0.55em;
   height: 100%; max-width: 20em;
   padding: 0 1em 0 0.6em;
-  border-radius: calc((var(--radius) + 4px) * var(--k, 1));
+  border-radius: calc(var(--radius-lg) * var(--k, 1));
   background: var(--surface);
   font-size: 1.1em; font-weight: 500;
   white-space: nowrap;
@@ -2232,7 +2583,7 @@ body.is-marqueeing * { cursor: default !important; }
 /* /storage and /storage/duplicates. Kinds keep one colour everywhere they
    appear — the bar, the legend, the formats — taken from the brand's accents
    so a white-label palette colours its own report. */
-.storage-page { display: flex; flex-direction: column; gap: var(--s4); padding-top: var(--s5); padding-bottom: 64px; }
+.storage-page { display: flex; flex-direction: column; gap: var(--s4); padding-top: var(--s5); padding-bottom: var(--s8); }
 .storage-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s3) var(--s4); flex-wrap: wrap; }
 .storage-title { font-size: var(--t-2xl); }
 .storage-sub { margin: var(--s1) 0 0; }
@@ -2240,7 +2591,7 @@ body.is-marqueeing * { cursor: default !important; }
 .storage-card { padding: var(--s4) var(--s5); }
 .storage-h2 { margin: 0 0 var(--s3); font-size: var(--t-lg); }
 .storage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: var(--s4); }
-.storage-stat { margin: 0 0 var(--s3); font-size: var(--t-xl); }
+.storage-stat { margin: 0 0 var(--s3); font-size: var(--t-xl); font-variant-numeric: tabular-nums; }
 .storage-stat strong { font-variant-numeric: tabular-nums; }
 .storage-foot { margin: 0; }
 /* The cost estimate's small print: what it counts, then a line per service. */
@@ -2264,7 +2615,7 @@ body.is-marqueeing * { cursor: default !important; }
   grid-template-areas: 'name value' 'track track' 'note note';
   gap: 4px var(--s3); padding: var(--s2); border-radius: var(--radius-sm); color: inherit;
 }
-a.meter-row:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+a.meter-row:hover { background: var(--hover-bg); }
 .meter-name { grid-area: name; min-width: 0; font-weight: 500; }
 .meter-value { grid-area: value; font-variant-numeric: tabular-nums; }
 .meter-track { grid-area: track; height: 6px; overflow: hidden; border-radius: var(--radius-pill); background: var(--surface-sunken); }
@@ -2272,20 +2623,20 @@ a.meter-row:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); 
 .meter-fill.is-quiet { background: color-mix(in srgb, var(--muted) 55%, transparent); }
 .meter-note { grid-area: note; }
 
-/* After .meter-fill, so a format's bar takes its kind's colour. */
-.kind-video { background: var(--accent); }
-.kind-image { background: var(--accent-alt); }
-.kind-audio { background: var(--accent-cool); }
-.kind-doc { background: var(--warning); }
-.kind-other { background: color-mix(in srgb, var(--muted) 70%, transparent); }
+/* After .meter-fill, so a format's bar takes its kind's colour (--kind-*,
+   the same the placeholder tiles wear). */
+.kind-video { background: var(--kind-video); }
+.kind-image { background: var(--kind-image); }
+.kind-audio { background: var(--kind-audio); }
+.kind-doc { background: var(--kind-doc); }
+.kind-other { background: color-mix(in srgb, var(--kind-other) 70%, transparent); }
 
 .big-files { list-style: none; margin: 0; padding: 0; }
 .big-files > li + li { border-top: 1px solid var(--line); }
 .big-file { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto 44px; align-items: center; gap: var(--s3); padding: var(--s2); border-radius: var(--radius-sm); color: inherit; }
-.big-file:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.big-file:hover { background: var(--hover-bg); }
 .big-file-thumb, .dup-thumb { overflow: hidden; border-radius: var(--radius-sm); }
 .big-file-thumb .filecard-badge, .dup-thumb .filecard-badge { display: none; }
-.big-file-thumb .filecard-thumb > span, .dup-thumb .filecard-thumb > span { overflow: hidden; font-size: 9px; line-height: 1; }
 .big-file-text, .dup-text { display: flex; flex-direction: column; min-width: 0; }
 .big-file-name, .dup-name { font-weight: 500; }
 .big-file-size { font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -2298,8 +2649,9 @@ a.meter-row:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); 
   display: flex; align-items: center; gap: var(--s3);
   padding: var(--s2) var(--s2) var(--s2) var(--s4);
   border: 1px solid var(--line); border-radius: var(--radius);
-  background: color-mix(in srgb, var(--surface) 86%, transparent);
-  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  /* Solid: frosted, it re-blurred the page under it on every scroll frame
+     in the Mac window, for a tint nobody could tell from the surface. */
+  background: var(--surface);
   box-shadow: var(--shadow-1);
 }
 .dup-groups { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s3); }
@@ -2338,11 +2690,9 @@ a.meter-row:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); 
    accents behind everything, strongest at the top edge, faint enough that
    text never sits on anything but paper. --aura-* are the raw accents from
    the brand (auraCssVars), so a white-label palette glows in its own hues;
-   the dark scheme turns the strength up, since a glow on near-black reads
-   at a fraction of what it needs on white. */
-:root { --aura-strength: 13%; --aura-soft: 8%; }
-:root[data-theme='dark'] { --aura-strength: 26%; --aura-soft: 15%; }
-
+   --aura-strength and --aura-soft (:root) say how much, more in the dark
+   scheme. The same light is on the nav (.topnav), a dialog and the palette,
+   and the brand's gradient on the avatar, the count badge and progress. */
 body::before {
   content: '';
   position: fixed;
@@ -2355,13 +2705,7 @@ body::before {
     radial-gradient(70vw 42vh at 55% 112%, color-mix(in srgb, var(--aura-c) var(--aura-soft), transparent), transparent 72%);
 }
 
-/* The nav lets the aura through, and draws a gradient hairline under it. */
-.topnav {
-  background: color-mix(in srgb, var(--surface) 76%, transparent);
-  -webkit-backdrop-filter: saturate(160%) blur(14px);
-  backdrop-filter: saturate(160%) blur(14px);
-  border-bottom-color: color-mix(in srgb, var(--line) 60%, transparent);
-}
+/* The gradient hairline under the nav. */
 .topnav::after {
   content: '';
   position: absolute;
@@ -2373,68 +2717,6 @@ body::before {
     color-mix(in srgb, var(--aura-a) 60%, transparent) 22%,
     color-mix(in srgb, var(--aura-b) 60%, transparent) 70%,
     transparent 100%);
-}
-
-.avatar { background: linear-gradient(135deg, var(--aura-a-deep), var(--aura-b-deep)); color: var(--on-aura); }
-/* A profile picture fills the circle instead of the initials. */
-.avatar { overflow: hidden; flex: none; }
-.avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.avatar.has-image { background: var(--surface-sunken); }
-.avatar-lg { width: 88px; height: 88px; font-size: var(--t-2xl); }
-.avatar-edit { display: flex; align-items: center; gap: var(--s4); }
-@media (max-width: 720px) { .avatar-edit { flex-direction: column; align-items: flex-start; } }
-.count-badge { background: linear-gradient(120deg, var(--aura-a-deep), var(--aura-b-deep)); color: var(--on-aura); }
-
-/* Where you are, and what you picked: a tint that leans from blue to magenta. */
-.folder-link.active {
-  background: linear-gradient(90deg,
-    color-mix(in srgb, var(--accent) 16%, transparent),
-    color-mix(in srgb, var(--accent-alt) 9%, transparent));
-}
-.filelist-row.is-selected {
-  background: linear-gradient(90deg,
-    color-mix(in srgb, var(--accent) 15%, transparent),
-    color-mix(in srgb, var(--accent-alt) 10%, transparent));
-}
-.filelist-row.is-selected:hover {
-  background: linear-gradient(90deg,
-    color-mix(in srgb, var(--accent) 19%, transparent),
-    color-mix(in srgb, var(--accent-alt) 13%, transparent));
-}
-.filecard[aria-selected='true'] {
-  box-shadow: 0 0 0 1px var(--accent), 0 10px 30px -14px color-mix(in srgb, var(--aura-b) 70%, transparent);
-}
-/* A card glows a little when a pointer rests on it. */
-@media (hover: hover) {
-  .filecard, .folder-tile { transition: box-shadow var(--dur-2) var(--ease), border-color var(--dur-1); }
-  .filecard:hover, .folder-tile:hover {
-    box-shadow: 0 10px 28px -16px color-mix(in srgb, var(--aura-a) 60%, transparent);
-  }
-  .filecard[aria-selected='true']:hover {
-    box-shadow: 0 0 0 1px var(--accent), 0 10px 28px -16px color-mix(in srgb, var(--aura-a) 60%, transparent);
-  }
-}
-
-/* Progress, in the brand's gradient. */
-.upbar-fill, .upbar-done .upbar-fill { background: linear-gradient(90deg, var(--aura-a), var(--aura-b)); }
-.upbar-uploading .upbar-fill {
-  background: linear-gradient(90deg, var(--aura-a) 0%, var(--aura-b) 45%, var(--aura-c) 55%, var(--aura-a) 100%);
-  background-size: 200% 100%;
-}
-.player-played { background: linear-gradient(90deg, var(--aura-a), var(--aura-b)); }
-
-/* A dialog and a menu catch a little of the light at their top edge. */
-dialog.dialog {
-  background:
-    radial-gradient(110% 50% at 20% -12%, color-mix(in srgb, var(--aura-a) var(--aura-soft), transparent), transparent 62%),
-    radial-gradient(90% 46% at 100% -10%, color-mix(in srgb, var(--aura-b) var(--aura-soft), transparent), transparent 60%),
-    var(--surface);
-}
-.drop-overlay {
-  border-color: var(--accent-alt);
-  background:
-    radial-gradient(60% 60% at 50% 50%, color-mix(in srgb, var(--aura-a) 14%, transparent), transparent 70%),
-    color-mix(in srgb, var(--paper) 82%, transparent);
 }
 
 /* ─── Download for Mac (/download) ─────────────────────────────────────── */
@@ -2484,10 +2766,10 @@ html[data-mac-app][data-mac-fullscreen] .topnav-row { padding-left: var(--s3); }
   background: var(--on-aura, var(--paper)); box-shadow: var(--shadow-1);
   transition: transform var(--dur-1) var(--ease);
 }
-.finder-switch input:checked { background: var(--accent); }
+.finder-switch input:checked { background: var(--aura-a-deep); }
 .finder-switch input:checked::after { transform: translateX(12px); }
 .finder-switch input:disabled { opacity: 0.5; cursor: default; }
-.finder-switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.finder-switch input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .finder-name { min-width: 0; }
 .finder-busy { color: var(--muted); animation: finder-spin 0.9s linear infinite; }
 @keyframes finder-spin { to { transform: rotate(360deg); } }

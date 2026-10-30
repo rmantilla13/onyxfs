@@ -102,7 +102,7 @@ export default function ActivityPopover(props) {
       label="Recent activity"
       buttonClassName="btn btn-ghost btn-icon hdr-btn"
       className="activity-pop"
-      trigger={<Icon name="clock" size={18} />}
+      trigger={<Icon name="clock" size={20} />}
     >
       {({ close }) => <ActivityList {...props} close={close} />}
     </Popover>

@@ -11,14 +11,11 @@ struct FinderMenusRow: View {
     var body: some View {
         if service.isBundled {
             let on = service.enabled == true
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(lucide: "download").foregroundStyle(.secondary)
-                Text(on
-                     ? "Onyx is in Finder's menus: right-click a file or folder on a drive and choose Keep Offline to have it on this Mac, or Remove Offline Copy to let it go. What is kept is marked with a tick."
-                     : "Keep files offline from Finder, too: switch on Onyx's Finder extension in System Settings. Then right-click a file or folder on a drive and choose Keep Offline.")
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer()
+            // icons: download
+            NoteCard(tone: on ? .info : .warning, icon: "download",
+                     message: on
+                         ? "Onyx is in Finder's menus: right-click a file or folder on a drive and choose Keep Offline to have it on this Mac, or Remove Offline Copy to let it go. What is kept is marked with a tick."
+                         : "Keep files offline from Finder, too: switch on Onyx's Finder extension in System Settings. Then right-click a file or folder on a drive and choose Keep Offline.") {
                 if !on {
                     Button("System Settings…") { service.openSettings() }
                 }

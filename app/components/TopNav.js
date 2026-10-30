@@ -102,13 +102,13 @@ export default function TopNav({ brandName, logo, email, isAdmin, build, filespa
         </Link>
 
         <button type="button" className="topnav-search" onClick={() => setPalette(true)} aria-label="Search and commands" aria-keyshortcuts="Meta+K Control+K">
-          <Icon name="search" size={15} />
+          <Icon name="search" size={16} />
           <span className="topnav-search-text">Search files, folders, drives…</span>
           <kbd className="topnav-search-kbd">{mod}K</kbd>
         </button>
 
         {offerMacApp && (
-          <Link href="/download" className="btn btn-sm topnav-get-app" title="Download the Mac app">
+          <Link href="/download" className="btn btn-sm btn-glass topnav-get-app" title="Download the Mac app">
             <Icon name="download" size={14} />
             Mac app
           </Link>

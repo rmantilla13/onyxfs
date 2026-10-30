@@ -49,7 +49,7 @@ export default function FilesToolbar({
           {query && (
             <span className="filter-chip search-chip">
               <button type="button" className="search-chip-edit" onClick={onEditQuery} title="Change the search">
-                <Icon name="search" size={13} />
+                <Icon name="search" size={14} />
                 <span className="muted">Search:</span>
                 <span className="truncate">{query}</span>
               </button>
@@ -67,7 +67,7 @@ export default function FilesToolbar({
         <span className="tb-div" aria-hidden />
         <button
           type="button"
-          className="btn tb-btn tb-icon"
+          className="btn tb-btn tb-icon tb-download"
           onClick={onDownload}
           disabled={!downloadCount}
           aria-label={downloadCount ? `Download ${downloadCount} file${downloadCount === 1 ? '' : 's'}` : 'Download the selection'}

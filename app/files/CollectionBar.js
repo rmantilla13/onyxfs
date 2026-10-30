@@ -12,7 +12,7 @@ import { describeRule } from '@/lib/collections';
 export default function CollectionBar({ collection, schema, onEdit, onClose }) {
   return (
     <div className="collection-bar">
-      <Icon name="layers" size={15} className="collection-glyph" />
+      <Icon name="layers" size={16} className="collection-glyph" />
       <div className="collection-bar-rules small">
         {collection ? (
           <>

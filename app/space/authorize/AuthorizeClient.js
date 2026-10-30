@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import BrandLogo from '@/app/components/BrandLogo';
+import BlurText from '@/app/components/motion/BlurText';
 
 export default function AuthorizeClient({ brandName, logo, email, challenge, state, label }) {
   const [status, setStatus] = useState(challenge ? 'ready' : 'missing');
@@ -36,7 +37,7 @@ export default function AuthorizeClient({ brandName, logo, email, challenge, sta
 
         {status === 'missing' ? (
           <>
-            <h1 style={{ fontSize: 22, marginBottom: 8 }}>Nothing to authorize</h1>
+            <h1 style={{ fontSize: 22, marginBottom: 8 }}><BlurText text="Nothing to authorize" /></h1>
             <p className="muted small" style={{ margin: 0 }}>
               Open this page from the {brandName} app — it needs to supply its own challenge.
               You can also use a <a href="/space/pair" style={{ textDecoration: 'underline' }}>pairing code</a>.
@@ -44,12 +45,12 @@ export default function AuthorizeClient({ brandName, logo, email, challenge, sta
           </>
         ) : status === 'done' ? (
           <>
-            <h1 style={{ fontSize: 22, marginBottom: 8 }}>Approved</h1>
+            <h1 style={{ fontSize: 22, marginBottom: 8 }}><BlurText text="Approved" /></h1>
             <p className="muted small" style={{ margin: 0 }}>Return to {brandName} to finish signing in. You can close this tab.</p>
           </>
         ) : (
           <>
-            <h1 style={{ fontSize: 22, marginBottom: 8 }}>Connect {brandName}</h1>
+            <h1 style={{ fontSize: 22, marginBottom: 8 }}><BlurText text={`Connect ${brandName}`} /></h1>
             <p className="muted small" style={{ marginBottom: 20 }}>
               This will let {label ? <strong>{label}</strong> : 'the app on this device'} access the drives granted to <strong>{email}</strong>.
               It can be revoked at any time.

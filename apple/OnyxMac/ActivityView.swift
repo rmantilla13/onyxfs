@@ -16,6 +16,11 @@ import OnyxKit
 struct ActivityBar: View {
     @ObservedObject var clock: ActivityClock
     @ObservedObject var downloads: WebDownloads
+    /// The page's paper (PageTheme), so the bar and the page above it are
+    /// one surface in either scheme; the window's own colour until the page
+    /// has said. A colour, not a material: a material would be a blur the
+    /// WindowServer keeps up for as long as the window is open.
+    var paper: NSColor?
 
     static let height: CGFloat = 44
     /// How far back the graphs go.
@@ -27,25 +32,27 @@ struct ActivityBar: View {
         // Read, so each tick redraws the graphs.
         let _ = clock.tick
         let transfers = clock.transfers
-        HStack(spacing: 0) {
+        // Space, not dividers, between the meters: each is a label and a
+        // graph, and the gap says where one ends.
+        HStack(spacing: 16) {
             ForEach(Meter.all) { meter in
-                if meter != Meter.all.first { Divider().padding(.vertical, 10) }
                 MeterCell(meter: meter,
                           samples: Sparkline.smoothed(transfers.history(meter.kind, seconds: Self.seconds)),
                           rate: transfers.rate(meter.kind))
             }
             if let item = downloads.shown {
-                Divider()
+                Divider().padding(.vertical, 10)
                 // Room for a name before the graphs get theirs.
                 DownloadsSlot(item: item, downloads: downloads)
                     .frame(minWidth: 240, maxWidth: 340)
                     .layoutPriority(1)
             }
         }
+        .padding(.horizontal, 12)
         .frame(maxWidth: .infinity)
         .frame(height: Self.height)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .overlay(alignment: .top) { Divider() }
+        .background(Color(nsColor: paper ?? .windowBackgroundColor))
+        .overlay(alignment: .top) { Hairline() }
         .onAppear { clock.attach() }
         .onDisappear { clock.detach() }
     }
@@ -152,7 +159,7 @@ private struct MeterTile: View {
                 .padding(.top, 3)
         }
         .padding(8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+        .panelGroup()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(meter.title)
         .accessibilityValue(ActivityFormat.spoken(rate))
@@ -199,7 +206,6 @@ private struct MeterCell: View {
                                      startPoint: .leading, endPoint: .trailing))
                 .padding(.vertical, 9)
         }
-        .padding(.horizontal, 12)
         .frame(minWidth: 110, maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(meter.title)
@@ -289,8 +295,11 @@ private struct DownloadsSlot: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Color.accentColor.opacity(downloads.flashed == item.id ? 0.22 : 0)))
-        .animation(.easeOut(duration: 0.25), value: downloads.flashed)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(Theme.accent.opacity(downloads.flashed == item.id ? 0.22 : 0)))
+        // The flash — a download clicked twice, found here — fades as
+        // `flashed` goes; it snaps instead with Reduce Motion.
+        .animation(Motion.gated(Motion.quick), value: downloads.flashed)
         .padding(.horizontal, 4)
     }
 }
@@ -337,8 +346,8 @@ struct DownloadRow: View {
                     .lineLimit(1).truncationMode(.middle)
                 if item.isActive { ProgressLine(fraction: item.fraction) }
                 Text(ActivityFormat.status(item))
-                    .font(.system(size: 10).monospacedDigit())
-                    .foregroundStyle(failed ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(failed ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(.secondary))
                     .lineLimit(1).truncationMode(.tail)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -348,14 +357,19 @@ struct DownloadRow: View {
             if item.isActive {
                 RowButton(icon: "x", help: "Stop this download") { downloads.cancel(item.id) }
             } else {
-                if item.state == .finished {
-                    RowButton(icon: "search", help: "Show in Finder") { downloads.showInFinder(item.id) }
-                } else if item.canRetry {
-                    RowButton(icon: "refresh-ccw", help: "Try again") { downloads.retry(item.id) }
+                Group {
+                    if item.state == .finished {
+                        RowButton(icon: "search", help: "Show in Finder") { downloads.showInFinder(item.id) }
+                    } else if item.canRetry {
+                        RowButton(icon: "refresh-ccw", help: "Try again") { downloads.retry(item.id) }
+                    }
+                    RowButton(icon: "x", help: "Clear from the list; the file stays where it is") { downloads.dismiss(item.id) }
                 }
-                RowButton(icon: "x", help: "Clear from the list; the file stays where it is") { downloads.dismiss(item.id) }
+                // Done, or not: the bar goes and these take its place, once.
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
         }
+        .animation(Motion.gated(Motion.arrive), value: item.isActive)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(item.name ?? "Download")
     }
@@ -385,7 +399,10 @@ struct ProgressLine: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(.quaternary)
                 if let fraction {
-                    Capsule().fill(Color.accentColor).frame(width: max(3, geometry.size.width * fraction))
+                    Capsule().fill(Theme.accent).frame(width: max(3, geometry.size.width * fraction))
+                        // Slides to each fraction it is given while bytes
+                        // move; steps instead with Reduce Motion.
+                        .animation(Motion.gated(Motion.glide), value: fraction)
                 }
             }
         }
@@ -400,12 +417,12 @@ private struct RowButton: View {
     let action: () -> Void
 
     var body: some View {
+        // The system's bar button: a highlight under the pointer, a focus
+        // ring, and a hit area a little around the glyph.
         Button(action: action) {
-            Image(lucide: icon, size: 13).foregroundStyle(.secondary)
-                .frame(width: 20, height: 20)
-                .contentShape(Rectangle())
+            Image(lucide: icon, size: 13)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.accessoryBar)
         .help(help)
         .accessibilityLabel(help)
     }

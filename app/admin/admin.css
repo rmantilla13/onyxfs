@@ -11,7 +11,7 @@
 
 /* ── Frame: the rail beside the section ─────────────────────────────────── */
 
-.admin-shell { padding-top: var(--s5); padding-bottom: 64px; }
+.admin-shell { padding-top: var(--s5); padding-bottom: var(--s8); }
 .admin-main { min-width: 0; }
 
 @media (min-width: 900px) {
@@ -40,7 +40,7 @@
   color: var(--muted);
   font-size: var(--t-sm);
 }
-.admin-parent:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.admin-parent:hover { color: var(--ink); background: var(--hover-bg); }
 .admin-title { font-size: var(--t-2xl); }
 .admin-desc { margin: var(--s1) 0 0; max-width: 72ch; }
 .admin-actions { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
@@ -143,7 +143,7 @@ a.stat-tile:hover {
   font-variant-numeric: tabular-nums;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.stat-sub { color: var(--muted); font-size: var(--t-sm); overflow-wrap: anywhere; }
+.stat-sub { color: var(--ink-2); font-size: var(--t-sm); overflow-wrap: anywhere; }
 /* The tone goes on the words that say what is wrong, not on the number:
    "4" drives is not the problem, "2 have no owner" is. Only a failure
    tints the border, so a warning and a failure never read alike. */
@@ -215,12 +215,12 @@ a.stat-tile:hover {
   font: inherit;
   cursor: pointer;
 }
-.dt-sort:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.dt-sort:hover { color: var(--ink); background: var(--hover-bg); }
 .dt-sort-mark { width: 1em; text-align: center; opacity: 0.35; }
 th[aria-sort='ascending'] .dt-sort, th[aria-sort='descending'] .dt-sort { color: var(--ink); }
 th[aria-sort='ascending'] .dt-sort-mark, th[aria-sort='descending'] .dt-sort-mark { opacity: 1; }
 .dt-row.is-clickable { cursor: pointer; }
-.dt-row.is-clickable:hover > td { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.dt-row.is-clickable:hover > td { background: var(--hover-bg); }
 .dt-primary { font-weight: 500; }
 .dt-primary a { color: inherit; }
 .dt-primary a:hover { text-decoration: underline; text-underline-offset: 2px; }
@@ -326,7 +326,7 @@ dialog.dialog-sheet > .dialog-foot { flex: none; border-top: 1px solid var(--lin
   font-weight: 500;
   white-space: nowrap;
 }
-.drawer-nav a:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.drawer-nav a:hover { color: var(--ink); background: var(--hover-bg); }
 .drawer-nav a[aria-current] { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
 .drawer-section { padding: 0 0 var(--s5); scroll-margin-top: 56px; }
 .drawer-section + .drawer-section { padding-top: var(--s5); border-top: 1px solid var(--line); }
@@ -342,7 +342,7 @@ dialog.dialog-sheet > .dialog-foot { flex: none; border-top: 1px solid var(--lin
     height: 92dvh; max-height: 92dvh;
     margin: auto auto 0;
     border-width: 1px 0 0;
-    border-radius: var(--radius) var(--radius) 0 0;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   }
   .drawer-nav { margin: 0 calc(var(--s4) * -1) var(--s4); padding: var(--s2) var(--s4); }
 }
@@ -366,7 +366,14 @@ dialog.dialog-sheet > .dialog-foot { flex: none; border-top: 1px solid var(--lin
   white-space: nowrap;
 }
 .admin-seg a:hover { color: var(--ink); }
-.admin-seg a[aria-current='page'] { background: var(--ink); color: var(--paper); }
+/* The one that is on: the selection wash, with a faint ring inside the pill
+   for its edge (--selected-*, globals.css). */
+.admin-seg a[aria-current='page'] {
+  background: var(--selected-bg);
+  color: var(--selected-fg);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
 .admin-seg-count { font-variant-numeric: tabular-nums; opacity: 0.75; }
 
 /* ── Overview ───────────────────────────────────────────────────────────── */

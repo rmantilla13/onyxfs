@@ -8,7 +8,7 @@ import { listHits, overlaps } from '@/lib/marquee';
 import { LIST_COLUMNS, columnOf, nextSortFor, columnTemplate, fitColumns } from '@/lib/list-columns';
 import { deriveAuto } from '@/lib/dam';
 import { whenCreated, whenModified } from '@/lib/file-dates';
-import { fmtDuration } from '@/lib/media';
+import { fileFormat, fmtDuration } from '@/lib/media';
 import { fileKey } from '@/lib/selection';
 import { rowsPerViewport } from '@/lib/nav-geometry';
 import { createEditIntent } from '@/lib/edit-intent';
@@ -51,6 +51,8 @@ import Icon from '@/app/components/ui/Icon';
  */
 const OVERSCAN_ROWS = 8;
 const NAME = LIST_COLUMNS[0];
+// Read from the right, header and cells alike (globals.css .filelist-num).
+const NUMERIC = new Set(['size', 'duration', 'dimensions']);
 
 // A phone gets a smaller thumbnail, a narrower name and tighter gaps (the
 // stylesheet's phone breakpoint), so its columns are fitted with those.
@@ -86,7 +88,7 @@ function SortButton({ col, sort, onSort }) {
   return (
     <button
       type="button"
-      className={`filelist-sort${on ? ' active' : ''}`}
+      className={`filelist-sort${on ? ' active' : ''}${NUMERIC.has(col.key) ? ' filelist-num' : ''}`}
       aria-pressed={on}
       aria-label={`${col.label}${on ? `, sorted ${dir === 'asc' ? 'ascending' : 'descending'}` : ''}. Sort ${next}.`}
       onClick={() => onSort?.(nextSortFor(col.key, sort))}
@@ -104,7 +106,7 @@ export function FileListHeader({ sort, onSort, columns = [], waiting = [] }) {
       <SortButton col={NAME} sort={sort} onSort={onSort} />
       {columns.map((c) => (c.asc
         ? <SortButton key={c.key} col={c} sort={sort} onSort={onSort} />
-        : <span key={c.key} className="filelist-label truncate" title={c.label}>{c.label}</span>))}
+        : <span key={c.key} className={`filelist-label truncate${NUMERIC.has(c.key) ? ' filelist-num' : ''}`} title={c.label}>{c.label}</span>))}
       <span className="filelist-colpick">
         {waiting.length > 0 && (
           <span
@@ -201,7 +203,7 @@ function FileList({
   // fixed pitch safe.
   const measure = useCallback(() => {
     const row = ref.current?.firstElementChild;
-    const h = row ? row.getBoundingClientRect().height : 48;
+    const h = row ? row.getBoundingClientRect().height : 44;
     setPitch((p) => (Math.abs(p - h) < 0.5 ? p : Math.max(1, h)));
   }, []);
 
@@ -416,15 +418,23 @@ function Cell({ file, col, ctx, tabbable, selected, editing }) {
     case 'size':
       return <span className="filelist-cell filelist-num muted">{fmtSize(file.size) || '—'}</span>;
     case 'type': {
+      // The format as the pill a placeholder tile wears; the kind's words
+      // (and the MIME type) are the title.
       const type = ctx.labelFor?.(file) || file.kind || '';
-      return <span className="filelist-cell muted truncate" title={file.mime || undefined}>{type || '—'}</span>;
+      const format = fileFormat(file.name, file.mime);
+      return (
+        <span className="filelist-cell truncate" title={[type, file.mime].filter(Boolean).join(' · ') || undefined}>
+          {format ? <span className="tag mono filelist-type">{format}</span> : <span className="muted">{type || '—'}</span>}
+        </span>
+      );
     }
     // The file's own dates where it came with them (lib/file-dates.js), which
-    // is also what these two columns sort on.
+    // is also what these two columns sort on — as "Today, 2:25 PM" while they
+    // are recent (When).
     case 'modified':
-      return <span className="filelist-cell filelist-date muted"><When at={whenModified(file)} /></span>;
+      return <span className="filelist-cell filelist-date muted"><When at={whenModified(file)} relative /></span>;
     case 'added':
-      return <span className="filelist-cell filelist-date muted"><When at={whenCreated(file)} /></span>;
+      return <span className="filelist-cell filelist-date muted"><When at={whenCreated(file)} relative /></span>;
     case 'added_by':
       return <span className="filelist-cell muted truncate" title={file.createdBy || undefined}>{file.createdBy || '—'}</span>;
     case 'duration':

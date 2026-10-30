@@ -39,7 +39,7 @@ const StarredFolders = memo(function StarredFolders({
               data-star-drive={here ? undefined : s.driveId}
               data-star-folder={here ? undefined : s.folder}
             >
-              <Icon name="star" size={13} className="starred-glyph" />
+              <Icon name="star" size={14} className="starred-glyph" />
               <span className="folder-name">{baseName(s.folder)}</span>
               {where && <span className="muted folder-count starred-where">{where}</span>}
             </button>

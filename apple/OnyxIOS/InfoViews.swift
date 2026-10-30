@@ -17,15 +17,15 @@ struct FileInfoView: View {
                     HStack(spacing: 14) {
                         Thumbnail(file: file, size: .row)
                             .frame(width: 64, height: 64)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous))
                             .overlay {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .strokeBorder(Theme.edge, lineWidth: 0.5)
+                                RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
+                                    .strokeBorder(Theme.edge, lineWidth: Theme.hairline)
                             }
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(file.name).font(.headline).lineLimit(3)
+                            Text(file.name).font(Theme.Text.section).lineLimit(3)
                             Text(FileFormat.kindName(file) + (FileFormat.format(file).map { " · \($0)" } ?? ""))
-                                .font(.subheadline)
+                                .font(Theme.Text.detail)
                                 .foregroundStyle(.secondary)
                         }
                     }

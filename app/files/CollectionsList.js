@@ -41,7 +41,7 @@ const CollectionsList = memo(function CollectionsList({ groups, activeId, schema
                     : c.rules.map((r) => describeRule(r, schema)).join(c.match === 'any' ? ', or ' : ', and ')}
                   onClick={() => (g.stranded ? onStranded?.(c) : onOpen(c))}
                 >
-                  <Icon name="layers" size={13} className="collection-glyph" />
+                  <Icon name="layers" size={14} className="collection-glyph" />
                   <span className="folder-name">{c.name}</span>
                 </button>
               </div>

@@ -19,19 +19,66 @@ import { whenCreated, whenModified } from '@/lib/file-dates';
  */
 
 const dateFmt = typeof Intl !== 'undefined' ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }) : null;
+const dayFmt = typeof Intl !== 'undefined' ? new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }) : null;
 const timeFmt = typeof Intl !== 'undefined' ? new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }) : null;
 const utcDateFmt = typeof Intl !== 'undefined' ? new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: 'UTC' }) : null;
 const utcTimeFmt = typeof Intl !== 'undefined' ? new Intl.DateTimeFormat('en-US', { timeStyle: 'short', timeZone: 'UTC' }) : null;
 const noSubscribe = () => () => {};
 export const useHydrated = () => useSyncExternalStore(noSubscribe, () => true, () => false);
 
-/** A moment as a date and (unless `dateOnly`) a time, in the viewer's zone once hydrated. */
-export function When({ at, dateOnly = false }) {
+const DAY_MS = 24 * 60 * 60 * 1000;
+const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+
+/**
+ * How a recent moment is said: "Today" and "Yesterday" (with the time), up
+ * to six days as "3 days ago", else nothing — the date is written. Local
+ * calendar days, as a person counts them; a moment ahead of the clock (a
+ * file from a machine whose clock runs fast) is written as a date too.
+ */
+export function relativeDay(d, now = new Date()) {
+  if (d.getTime() > now.getTime() + 60 * 1000) return null;
+  const days = Math.round((startOfDay(now) - startOfDay(d)) / DAY_MS);
+  if (days === 0) return { words: 'Today', withTime: true };
+  if (days === 1) return { words: 'Yesterday', withTime: true };
+  if (days < 7) return { words: `${days} days ago`, withTime: false };
+  return null;
+}
+
+/**
+ * A moment as a date and (unless `dateOnly`) a time, in the viewer's zone
+ * once hydrated. `relative` says a recent one as "Today, 2:25 PM" or "3 days
+ * ago", and an older one by its day with the year only when it is not this
+ * one — the listing's dates, where a full date was the part that truncated.
+ * The absolute moment is always the title, and Get info keeps the full form.
+ * Decided at render, never on a timer: the words are right when they are
+ * drawn, and a listing redraws as it is used.
+ */
+export function When({ at, dateOnly = false, relative = false }) {
   const local = useHydrated();
   if (!at || !dateFmt) return <span className="muted">—</span>;
   const d = new Date(Number(at));
   if (Number.isNaN(d.getTime())) return <span className="muted">—</span>;
   const [df, tf] = local ? [dateFmt, timeFmt] : [utcDateFmt, utcTimeFmt];
+  // Relative only once hydrated: "Today" is the viewer's today, which the
+  // server does not know.
+  if (local && relative) {
+    const now = new Date();
+    const recent = relativeDay(d, now);
+    const title = d.toLocaleString();
+    if (recent) {
+      return (
+        <time dateTime={d.toISOString()} title={title}>
+          {recent.words}{recent.withTime && !dateOnly && <span className="filelist-time">, {tf.format(d)}</span>}
+        </time>
+      );
+    }
+    const day = d.getFullYear() === now.getFullYear() && dayFmt ? dayFmt.format(d) : df.format(d);
+    return (
+      <time dateTime={d.toISOString()} title={title}>
+        {day}{!dateOnly && <span className="filelist-time"> {tf.format(d)}</span>}
+      </time>
+    );
+  }
   return (
     <time dateTime={d.toISOString()} title={local ? d.toLocaleString() : undefined}>
       {df.format(d)}{!dateOnly && <span className="filelist-time"> {tf.format(d)}</span>}
@@ -99,7 +146,7 @@ export function FieldLine({ file, fields, rootName, className = 'field-line' }) 
         <Fragment key={p.key}>
           {i > 0 && <span className="field-sep" aria-hidden> · </span>}
           <span className="field-part" title={p.label}>
-            {typeof p.v === 'string' ? p.v : p.v.at ? <When at={p.v.at} dateOnly /> : <Day value={p.v.day} />}
+            {typeof p.v === 'string' ? p.v : p.v.at ? <When at={p.v.at} dateOnly relative /> : <Day value={p.v.day} />}
           </span>
         </Fragment>
       ))}

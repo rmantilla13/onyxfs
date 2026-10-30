@@ -31,6 +31,9 @@ final class WebController: NSObject, ObservableObject {
     /// Set when the workspace could not be opened; the window says so, with a
     /// way to try again, rather than showing a blank page.
     @Published var failure: String?
+    /// The page's scheme and paper, as it last said (the bridge's `theme`),
+    /// or as the last launch's page did: what the window wears (PageTheme).
+    @Published private(set) var pageTheme: PageTheme?
 
     private var observations: [NSKeyValueObservation] = []
     private var lastHandoff: Date?
@@ -61,6 +64,10 @@ final class WebController: NSObject, ObservableObject {
         webView.allowsMagnification = true
         if #available(macOS 13.3, *) { webView.isInspectable = true }
         webView.setValue(false, forKey: "drawsBackground")
+        // The window opens in the colours the page wore last time, before
+        // this page has loaded: no grey between launch and first paint.
+        pageTheme = PageThemeStore.last
+        if let paper = pageTheme?.paper { webView.underPageBackgroundColor = paper }
         observations = [
             webView.observe(\.canGoBack, options: [.new]) { [weak self] v, _ in
                 Task { @MainActor in self?.canGoBack = v.canGoBack; self?.publishOfflineState() }
@@ -206,6 +213,21 @@ final class WebController: NSObject, ObservableObject {
         },
       };
       post({ type: 'ready' });
+      // The page's scheme and the colour it paints, for the window to wear
+      // (PageTheme): once the page has painted, then only as the theme
+      // changes — nothing runs between. The colour is what <html> computes,
+      // whatever token it came from, so a rebrand reaches the window too.
+      const theme = () => {
+        const scheme = root?.dataset.theme;
+        if (!scheme) return;
+        post({ type: 'theme', dark: scheme === 'dark', paper: getComputedStyle(root).backgroundColor });
+      };
+      if (root) {
+        new MutationObserver(theme).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+        addEventListener('DOMContentLoaded', theme);
+        addEventListener('load', theme);
+        theme();
+      }
     })();
     """
 
@@ -265,6 +287,7 @@ final class WebController: NSObject, ObservableObject {
     /// The window moved into or out of full screen, or first appeared.
     func windowChanged(_ window: NSWindow) {
         WindowChrome.apply(to: window)
+        pageTheme?.apply(to: window)
         window.title = title
         let next = WindowChrome.metrics(of: window)
         webView.titlebarHeight = next.height
@@ -322,11 +345,30 @@ final class WebController: NSObject, ObservableObject {
                 // flight while it says so (WorkActivity).
                 WorkActivity.app.set(.pageUploads, msg["active"] as? Bool ?? false)
                 return
+            case "theme":
+                // The page's scheme and paper: the window wears them, so
+                // the traffic lights, a sheet and the bar match the page.
+                // A page that has not painted yet sends no colour; the
+                // last one known stays.
+                guard let dark = msg["dark"] as? Bool else { return }
+                let paper = (msg["paper"] as? String).flatMap { NSColor(css: $0) }
+                wear(PageTheme(dark: dark, paper: paper ?? pageTheme?.paper))
+                return
             default:
                 break
             }
             publishOfflineState()
         }
+    }
+
+    /// The page's scheme and paper, on the window now and kept for the next
+    /// launch, whose window opens in them before its page has loaded.
+    private func wear(_ theme: PageTheme) {
+        guard theme != pageTheme else { return }
+        pageTheme = theme
+        PageThemeStore.last = theme
+        if let window = webView.window { theme.apply(to: window) }
+        if let paper = theme.paper { webView.underPageBackgroundColor = paper }
     }
 
     /// `[x, y, width, height]` from the page.

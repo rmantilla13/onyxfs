@@ -4,6 +4,8 @@ import { fmtSize } from '@/lib/media';
 import { plural } from '@/lib/admin-format';
 import { healthChecks, isHealthReport } from '@/lib/health-checks';
 import { attentionItems } from '@/lib/admin-overview';
+import CountUp from '@/app/components/motion/CountUp';
+import ShinyText from '@/app/components/motion/ShinyText';
 import AdminPage, { AdminCard } from './_ui/AdminPage';
 import AttentionItem from './_ui/AttentionItem';
 import { StatTile } from './_ui/StatTile';
@@ -11,6 +13,12 @@ import { useAdminResource } from './_ui/api';
 import ClaimDrives from './drives/ClaimDrives';
 
 const size = (n) => fmtSize(n) || '0 B';
+// A size's figure and unit apart, so it counts in the unit it lands in
+// instead of climbing through B, KB and MB on the way there.
+const sizeCount = (n) => {
+  const [figure, unit] = size(n).split(' ');
+  return { to: Number(figure), decimals: figure.includes('.') ? 1 : 0, grouping: false, suffix: ` ${unit}` };
+};
 const HEALTH_WORD = { ok: 'Working', warn: 'Needs a look', fail: 'Failing' };
 const HEALTH_TONE = { warn: 'warning', fail: 'danger' };
 
@@ -38,19 +46,19 @@ export default function Overview({ pending, drives, totals }) {
         {/* People waiting is the queue doing its job, not an alarm: no tone. */}
         <StatTile
           label="Access requests"
-          value={pending.length.toLocaleString('en-US')}
+          value={<CountUp to={pending.length} />}
           sub={pending.length ? 'waiting for a decision' : 'No one is waiting'}
           href="/admin/requests"
         />
         <StatTile
           label="Storage used"
-          value={size(totals.live.bytes)}
+          value={<CountUp {...sizeCount(totals.live.bytes)} />}
           sub={`${plural(totals.live.files, 'file')} · ${size(totals.trash.bytes)} in the trash`}
           href="/admin/usage"
         />
         <StatTile
           label="Drives"
-          value={drives.count.toLocaleString('en-US')}
+          value={<CountUp to={drives.count} />}
           sub={drives.count === 0
             ? 'None yet'
             : drives.withoutOwner.length
@@ -63,7 +71,7 @@ export default function Overview({ pending, drives, totals }) {
         <StatTile
           label="Health"
           value={h ? HEALTH_WORD[h.status] : health.error ? 'Unknown' : '…'}
-          sub={h ? h.label : health.error ? 'The checks could not be run.' : 'Checking…'}
+          sub={h ? h.label : health.error ? 'The checks could not be run.' : <ShinyText>Checking…</ShinyText>}
           href="/admin/health"
           tone={h ? HEALTH_TONE[h.status] : health.error ? 'warning' : undefined}
         />
@@ -72,7 +80,7 @@ export default function Overview({ pending, drives, totals }) {
       <AdminCard title="Needs attention" id="attention">
         {items.length === 0 ? (
           <p className="attention-clear muted">
-            {health.loading && !h ? 'Checking…' : 'Nothing needs attention.'}
+            {health.loading && !h ? <ShinyText>Checking…</ShinyText> : 'Nothing needs attention.'}
           </p>
         ) : (
           <ul className="attention">
@@ -84,7 +92,7 @@ export default function Overview({ pending, drives, totals }) {
           </ul>
         )}
         {health.loading && !h && items.length > 0 && (
-          <p className="small muted attention-foot" role="status">Checking health…</p>
+          <p className="small muted attention-foot" role="status"><ShinyText>Checking health…</ShinyText></p>
         )}
         {health.error && (
           <p className="small muted attention-foot">

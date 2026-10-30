@@ -81,9 +81,9 @@ function Facts({ rows, onOpenFolder }) {
   );
 }
 
-const FolderIcon = () => <Icon name="folder" size={28} strokeWidth={1.5} />;
+const FolderIcon = () => <Icon name="folder" size={28} />;
 
-const DriveIcon = () => <Icon name="hard-drive" size={28} strokeWidth={1.5} />;
+const DriveIcon = () => <Icon name="hard-drive" size={28} />;
 
 const ROLE_LABELS = {
   owner: 'Owner — can edit, and manage its members',

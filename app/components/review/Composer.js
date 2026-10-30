@@ -45,6 +45,11 @@ export default function Composer({
   const anchorFrame = draft.frame ?? frame ?? 0;
   const useRange = hasRange && draft.frame == null;
   const drawn = draft.shapes.length > 0;
+  // Post is lit once there is something to post. Lit over an empty field
+  // the gradient said nothing; arriving with the first character, it says
+  // the comment is ready. Not `disabled`: the button stays reachable, and
+  // submit() already explains an empty one.
+  const ready = body.trim().length > 0 || drawn;
 
   let chip = 'General';
   if (video && draft.anchored) chip = useRange ? `In ${tc(range.inFrame)} → Out ${tc(range.outFrame)}` : tc(anchorFrame);
@@ -129,7 +134,13 @@ export default function Composer({
         )}
 
         <div className="spacer" />
-        <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
+        <button
+          type="button"
+          className={`btn btn-sm review-post${ready ? ' btn-primary' : ''}`}
+          onClick={submit}
+          disabled={busy}
+          aria-disabled={!ready || undefined}
+        >
           {busy ? 'Posting…' : 'Post'}
         </button>
       </div>

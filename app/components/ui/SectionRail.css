@@ -9,12 +9,8 @@
 
 .rail { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
 .rail-group { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.rail-heading {
-  margin: 0 0 2px;
-  padding: 0 var(--s2);
-  font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--muted);
-}
+/* An eyebrow (globals.css); only its own margins here. */
+.rail-heading { margin: 0 0 2px; padding: 0 var(--s2); }
 .rail-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 
 .rail-link {
@@ -27,20 +23,18 @@
   font-size: var(--t-sm); font-weight: 500;
   transition: background-color var(--dur-1) var(--ease);
 }
-.rail-link:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
-/* The shared .is-active is a solid ink pill; here, where you are is the same
-   blue-to-magenta tint the drive list uses, which reads as a place rather
-   than as a pressed button. */
+.rail-link:hover { background: var(--hover-bg); }
+/* Where you are: the selection wash (--selected-*), as the drive list and
+   the open folder wear it, without the toggle's edge — a place, not a
+   pressed button. */
 .rail .rail-link.is-active {
-  background: linear-gradient(90deg,
-    color-mix(in srgb, var(--accent) 16%, transparent),
-    color-mix(in srgb, var(--accent-alt) 9%, transparent));
-  color: var(--ink);
+  background: var(--selected-bg);
+  color: var(--selected-fg);
   border-color: transparent;
   box-shadow: none;
   font-weight: 600;
 }
-.rail-link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius-sm); }
+.rail-link:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; border-radius: var(--radius-sm); }
 .rail-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-count { flex: none; }
 

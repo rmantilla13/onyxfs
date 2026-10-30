@@ -78,7 +78,7 @@ export default function FolderFiles({ token, sub = '', initial = [], cursor: fir
           <div key={f.id} className="share-tile">
             <FileCard file={f} href={fileHref(f)} label={labelFor(f)} eager={i < EAGER_CARDS} />
             <a
-              className="btn btn-icon share-tile-download"
+              className="btn btn-icon btn-glass share-tile-download"
               href={`${fileHref(f)}/download`}
               aria-label={`Download ${f.name}`}
               title="Download"

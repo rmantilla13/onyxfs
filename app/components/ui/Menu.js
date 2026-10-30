@@ -138,10 +138,10 @@ export function MenuItem({ onClick, danger = false, disabled = false, checked, i
       disabled={disabled}
       onClick={onClick}
     >
-      {icon && <Icon name={icon} size={15} className="menu-item-icon" />}
+      {icon && <Icon name={icon} size={16} className="menu-item-icon" />}
       <span className="menu-item-text">{children}</span>
       {hint && <span className="menu-item-hint">{hint}</span>}
-      {choice && <span className="menu-item-check" aria-hidden>{checked && <Icon name="check" size={15} />}</span>}
+      {choice && <span className="menu-item-check" aria-hidden>{checked && <Icon name="check" size={16} />}</span>}
     </button>
   );
 }

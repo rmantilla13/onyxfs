@@ -47,9 +47,8 @@ struct PlacesView: View {
                     .listRowBackground(PlaceCard(chosen: chosen(place)).padding(.horizontal, 16).padding(.vertical, 5))
                 }
                 if session.drives.isEmpty {
-                    Text("Drives you're added to on the web appear here.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    EmptyState(symbol: "externaldrive", title: "No Drives Yet",
+                               message: "Drives you're added to on the web appear here.")
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                         .selectionDisabled()
@@ -120,15 +119,8 @@ struct PlacesView: View {
         .overlay {
             if !session.placesLoaded {
                 if let problem = session.problem, !session.loadingPlaces {
-                    ContentUnavailableView {
-                        Label("Can't Load Your Drives", systemImage: "exclamationmark.triangle")
-                    } description: {
-                        Text(problem)
-                    } actions: {
-                        Button("Try Again") { Task { await session.loadPlaces() } }
-                            .buttonStyle(BrandButtonStyle())
-                    }
-                    .onyxStyle()
+                    EmptyState(symbol: "exclamationmark.triangle", title: "Can't Load Your Drives", message: problem,
+                               action: ("Try Again", { Task { await session.loadPlaces() } }))
                 } else {
                     ProgressView().controlSize(.large)
                 }
@@ -173,7 +165,7 @@ private struct PlaceCard: View {
                 if chosen {
                     shape.strokeBorder(Theme.brand, lineWidth: 1.5)
                 } else {
-                    shape.strokeBorder(Theme.edge, lineWidth: 0.5)
+                    shape.strokeBorder(Theme.edge, lineWidth: Theme.hairline)
                 }
             }
     }
@@ -186,7 +178,7 @@ private struct CollectionRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
                 .fill(place.cardFill)
                 .frame(width: 50, height: 50)
                 .overlay {
@@ -195,8 +187,8 @@ private struct CollectionRow: View {
                         .foregroundStyle(.white)
                 }
                 .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(.white.opacity(0.16), lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
+                        .strokeBorder(.white.opacity(0.16), lineWidth: Theme.hairline)
                 }
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
@@ -229,7 +221,7 @@ private struct StarRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
                 .fill(place.cardFill)
                 .frame(width: 50, height: 50)
                 .overlay {
@@ -238,8 +230,8 @@ private struct StarRow: View {
                         .foregroundStyle(.white)
                 }
                 .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(.white.opacity(0.16), lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
+                        .strokeBorder(.white.opacity(0.16), lineWidth: Theme.hairline)
                 }
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
@@ -266,7 +258,7 @@ private struct PlaceRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
                 .fill(place.cardFill)
                 .frame(width: 50, height: 50)
                 .overlay {
@@ -275,8 +267,8 @@ private struct PlaceRow: View {
                         .foregroundStyle(.white)
                 }
                 .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(.white.opacity(0.16), lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
+                        .strokeBorder(.white.opacity(0.16), lineWidth: Theme.hairline)
                 }
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {

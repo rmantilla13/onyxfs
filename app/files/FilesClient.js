@@ -2710,7 +2710,11 @@ export default function FilesClient({
           <div className="side-folders">
             <Section title={activeDrive ? `Folders in ${activeDrive.name}` : 'Folders'}>
               <div className="folder-list edge-scroll">
-                <FolderDrop target="" enabled={canWrite} onDrop={onTreeDrop}>
+                {/* The root is the drive: on a phone the strip's first chip
+                    wears its dot, and with the root open the chip is not
+                    shown — the drive chip and the title already say it
+                    (globals.css, .folder-root). */}
+                <FolderDrop target="" enabled={canWrite} onDrop={onTreeDrop} className={`folder-root${folder ? '' : ' is-here'}`} style={{ '--dot': driveColor(filespaceId) }}>
                   <FolderLink active={!folder} onClick={() => navigate('')} path=""><span className="folder-name">{rootName}</span>{keptFolder('') && <OfflineMark size={12} />}</FolderLink>
                 </FolderDrop>
                 <FolderTree
@@ -2939,8 +2943,12 @@ export default function FilesClient({
         <div className="files-selbar" role="toolbar" aria-label="Selection">
           <span className="small">{anySelected} selected</span>
           <div className="spacer" />
-          {/* More is the menu a long-press would have opened: the one a
-              right-click on the selection opens. */}
+          {/* Download is here rather than in the toolbar on a phone (the
+              toolbar has scrolled away, and it needs a selection anyway);
+              More is the menu a long-press would have opened: the one a
+              right-click on the selection opens. Done clears, it commits
+              nothing, so it is not the page's lit button. */}
+          {selected.size > 0 && <button type="button" className="btn" onClick={downloadSelection}>Download</button>}
           <button type="button" className="btn" aria-haspopup="menu" onClick={(e) => openSelectionMenu(e.currentTarget)}>More</button>
           {selected.size > 0 && canForSome(selected, files, 'delete', { canWrite }) && (
             // Folders go through their own menu: with some selected, the
@@ -2949,7 +2957,7 @@ export default function FilesClient({
               {sel.selectedFolders.size ? `Remove ${selected.size}` : 'Remove'}
             </button>
           )}
-          <button type="button" className="btn btn-primary" onClick={() => sel.clear()}>Done</button>
+          <button type="button" className="btn" onClick={() => sel.clear()}>Done</button>
         </div>
       )}
       <UploadPanel

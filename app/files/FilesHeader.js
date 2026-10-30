@@ -2,7 +2,7 @@
 
 import FolderDrop from './FolderDrop';
 import ActivityPopover from './ActivityPopover';
-import Menu, { MenuItem, MenuSeparator } from '@/app/components/ui/Menu';
+import Menu, { MenuItem } from '@/app/components/ui/Menu';
 import Icon from '@/app/components/ui/Icon';
 import { crumbsFor } from '@/lib/folder-ops';
 
@@ -17,10 +17,12 @@ import { crumbsFor } from '@/lib/folder-ops';
  * that folder. A crumb held under a drag does not spring open (DragPreview):
  * opening it would take away the crumb being aimed at.
  *
- * Right: Upload (files, a folder, a new folder — for someone who may add
- * here), Share (a link to the open folder, when there is one and this person
- * may make its links: `onShare`), Activity (what changed most recently), and
- * the sidebar's toggle.
+ * Right: Upload — the page's one lit action (globals.css .btn-primary), for
+ * someone who may add here — with a folder upload and a new folder behind
+ * "…" (on a phone those are in the toolbar's More, and "…" is not shown);
+ * Share (a link to the open folder, when there is one and this person may
+ * make its links: `onShare`); Activity (what changed most recently); and the
+ * sidebar's toggle.
  */
 /* icons: upload folder-open folder-plus */
 export default function FilesHeader({
@@ -42,7 +44,7 @@ export default function FilesHeader({
           aria-label={`Up to ${up.name}`}
           title={`Up to ${up.name}`}
         >
-          <Icon name="chevron-left" size={18} />
+          <Icon name="chevron-left" size={20} />
         </button>
       )}
       <nav className="crumbs" aria-label="Folder path">
@@ -65,17 +67,27 @@ export default function FilesHeader({
       </nav>
       <div className="files-header-actions">
         {canWrite && (
-          <Menu
-            ariaLabel="Upload"
-            title="Upload"
-            buttonClassName="btn btn-ghost btn-icon hdr-btn"
-            trigger={<Icon name="cloud-upload" size={18} />}
-          >
-            <MenuItem icon="upload" onClick={onUploadFiles}>Upload files…</MenuItem>
-            <MenuItem icon="folder-open" onClick={onUploadFolder}>Upload folder…</MenuItem>
-            <MenuSeparator />
-            <MenuItem icon="folder-plus" onClick={onNewFolder}>New folder…</MenuItem>
-          </Menu>
+          <>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm hdr-primary"
+              onClick={onUploadFiles}
+              aria-label="Upload files"
+              title="Upload files"
+            >
+              <Icon name="upload" size={16} />
+              <span className="hdr-label">Upload</span>
+            </button>
+            <Menu
+              ariaLabel="More ways to add"
+              title="Upload a folder, or make one"
+              buttonClassName="btn btn-ghost btn-icon hdr-btn hdr-more"
+              trigger={<Icon name="ellipsis" size={20} />}
+            >
+              <MenuItem icon="folder-open" onClick={onUploadFolder}>Upload folder…</MenuItem>
+              <MenuItem icon="folder-plus" onClick={onNewFolder}>New folder…</MenuItem>
+            </Menu>
+          </>
         )}
         {onShare && (
           <button
@@ -85,7 +97,7 @@ export default function FilesHeader({
             aria-label={`Share “${here.name}”`}
             title="Share this folder"
           >
-            <Icon name="link" size={18} />
+            <Icon name="link" size={20} />
           </button>
         )}
         <ActivityPopover filespaceId={filespaceId} folder={folder} rootName={rootName} onOpen={onOpenFile} onShowAll={onShowRecent} />
@@ -98,7 +110,7 @@ export default function FilesHeader({
           title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
           onClick={onToggleSidebar}
         >
-          <Icon name="panel-left" size={18} />
+          <Icon name="panel-left" size={20} />
         </button>
       </div>
     </header>

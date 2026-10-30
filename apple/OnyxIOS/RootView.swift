@@ -95,7 +95,7 @@ struct MainTabs: View {
                 }
             }
             .padding(.bottom, 2)
-            .animation(.spring(duration: 0.3, bounce: 0.15), value: chrome.selecting)
+            .animation(Theme.motion(.arrive), value: chrome.selecting)
             // Typing, the keyboard covers the bar rather than lifting it.
             .ignoresSafeArea(.keyboard, edges: .bottom)
         }
@@ -107,7 +107,6 @@ struct MainTabs: View {
 struct FloatingTabBar: View {
     @Binding var selection: AppTab
     @Namespace private var lit
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 2) {
@@ -119,11 +118,14 @@ struct FloatingTabBar: View {
                     Image(systemName: tab.symbol(selected: chosen))
                         .font(.system(size: 19, weight: chosen ? .semibold : .regular))
                         .foregroundStyle(chosen ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                        .replaceSymbol()
                         .frame(width: 62, height: 46)
                         .background {
                             if chosen {
-                                Capsule()
-                                    .fill(Color.white.opacity(0.14))
+                                // The lit one: glass of its own, sliding
+                                // between the three.
+                                Color.clear
+                                    .glassSurface(Capsule())
                                     .matchedGeometryEffect(id: "lit", in: lit)
                             }
                         }
@@ -136,8 +138,9 @@ struct FloatingTabBar: View {
         }
         .padding(5)
         .glassSurface(Capsule())
-        .shadow(color: .black.opacity(0.55), radius: 22, y: 10)
-        .animation(reduceMotion ? nil : .spring(duration: 0.32, bounce: 0.22), value: selection)
+        .elevation(.raised)
+        .sensoryFeedback(.selection, trigger: selection)
+        .animation(Theme.motion(.arrive), value: selection)
     }
 }
 
@@ -173,9 +176,8 @@ private struct Browser: View {
                     }
                 }
             } else {
-                ContentUnavailableView("Choose a drive", systemImage: "externaldrive",
-                                       description: Text("Its folders and files open here."))
-                    .onyxStyle()
+                EmptyState(symbol: "externaldrive", title: "Choose a Drive",
+                           message: "Its folders and files open here.")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background { AuraBackground() }
             }

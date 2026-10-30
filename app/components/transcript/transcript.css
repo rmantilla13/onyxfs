@@ -99,7 +99,7 @@
 }
 .tx-seg.is-active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .tx-seg.is-active .tx-time { color: var(--accent-deep); font-weight: 600; }
-.tx-seg:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tx-seg:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 .tx-time { padding-top: 1px; color: var(--muted); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
 .tx-text { overflow-wrap: anywhere; }
 

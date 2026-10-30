@@ -9,11 +9,18 @@ import ICONS from './icon-data';
  *   <Icon name="search" />              decorative (aria-hidden)
  *   <Icon name="trash" label="Delete" /> meaningful on its own
  *
+ * Sizes are the ladder in globals.css (--icon-sm 14, --icon 16, --icon-lg
+ * 20, --icon-xl 24). The stroke follows the size unless one is given: the
+ * kit's 2 units is right at 14, where it draws about a pixel, and heavier
+ * than the text beside it from 16 up — at 20 it is thicker than a 500-weight
+ * label — so a larger glyph takes a lighter line and the row reads as one
+ * weight.
+ *
  * Only icons the app names are bundled: after using a new one, run
  * `npm run icons` (scripts/gen-icons.mjs). A name chosen at run time needs an
  * `icons:` comment listing the candidates so the generator sees them.
  */
-export default function Icon({ name, size = 16, strokeWidth = 2, label, className, ...rest }) {
+export default function Icon({ name, size = 16, strokeWidth, label, className, ...rest }) {
   const shapes = ICONS[name];
   if (!shapes) {
     if (process.env.NODE_ENV !== 'production') console.warn(`<Icon name="${name}">: not in icon-data.js — run \`npm run icons\`.`);
@@ -27,7 +34,7 @@ export default function Icon({ name, size = 16, strokeWidth = 2, label, classNam
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={strokeWidth}
+      strokeWidth={strokeWidth ?? (size <= 14 ? 2 : size <= 20 ? 1.75 : 1.5)}
       strokeLinecap="round"
       strokeLinejoin="round"
       className={className ? `icon ${className}` : 'icon'}
