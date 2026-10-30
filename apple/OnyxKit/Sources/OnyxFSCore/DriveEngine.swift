@@ -43,6 +43,10 @@ public actor DriveEngine {
         /// it, and it is not written, moved or deleted (BridgeEntry.readOnly).
         var readOnly = false
         var localOnly: Bool
+        /// Set aside by a safe save (setAside): the drive's file at this
+        /// path, which the server still has there. Local-only and hidden,
+        /// read from the server, never sent.
+        var setAsideFrom: String? = nil
         /// Made here and not yet handed to the app.
         var unsent: Bool
         /// Its listing, by folded name → id; nil until fetched.
@@ -79,6 +83,10 @@ public actor DriveEngine {
     private var sendingNow: Set<UInt64> = []
     /// Archive Utility's scratch folders, by id; nearly always none.
     private var scratches: [UInt64: ArchiveScratch] = [:]
+    /// Paths (folded) whose file a safe save has set aside, and what stands
+    /// in for it: the server still has it there, and a listing that shows
+    /// it is not believed. Nearly always none.
+    private var setAside: [String: UInt64] = [:]
     /// Readers by file and version, the most recently used last: a file
     /// open in several places shares one, and its read-ahead.
     private var readers: [(key: String, source: any ByteSource)] = []
@@ -145,8 +153,9 @@ public actor DriveEngine {
             return data
         }
         // Finder's own files (.DS_Store and the rest) never leave this Mac,
-        // and are not the drive's: not counted.
-        if node.localOnly {
+        // and are not the drive's: not counted. A file a safe save set aside
+        // is still the drive's, and read from it.
+        if node.localOnly, node.setAsideFrom == nil {
             if Self.isRootMarker(node) { return Data() }
             return try await wrap { try await self.local.read(node.path, at: offset, count: count) }
         }
@@ -172,7 +181,9 @@ public actor DriveEngine {
             // the web's own trash.
             throw VolumeError.posix(EPERM)
         }
-        if dir.localOnly || LocalOnly.isLocalOnly(name) {
+        // A safe save's folder for its new copy is this Mac's too: the copy
+        // goes up only once it is moved into the drive (promote).
+        if dir.localOnly || LocalOnly.isLocalOnly(name) || LocalOnly.isSafeSave(name) {
             try await wrap {
                 if isDirectory { try await self.local.createDirectory(path) } else { try await self.local.createFile(path) }
             }
@@ -190,6 +201,9 @@ public actor DriveEngine {
         }
         let node = insert(name: name, parent: dir.id, isDirectory: false, size: 0, modified: now(),
                           fileId: nil, version: "", localOnly: false, unsent: true)
+        // Made where a safe save set a file aside: it goes up to that path
+        // as the file's new contents, and the one set aside is only this Mac's.
+        if !setAside.isEmpty { setAside[Self.fold(path)] = nil }
         try await wrap { _ = try await self.staging.create(node.id) }
         // A new file goes up even if nothing is ever written to it.
         writing[node.id] = Writing(dirty: true)
@@ -311,9 +325,17 @@ public actor DriveEngine {
         if let over, over.id != id, replacing == nil { throw VolumeError.posix(EEXIST) }
         if !scratches.isEmpty { noteMoved(node, to: to, newName: newName) }
 
+        // A sandboxed app's safe save setting the document aside, and the
+        // document set aside put back, or moved on.
+        if !node.localOnly, !node.isDirectory, !to.localOnly, LocalOnly.isSafeSave(newName) {
+            return try await setAside(id, from: from, to: to, newName: newName, over: over)
+        }
+        if node.setAsideFrom != nil, !to.localOnly, !LocalOnly.isLocalOnly(newName), !LocalOnly.isSafeSave(newName) {
+            return try await putBack(id, from: from, to: to, newName: newName, over: over)
+        }
         // What macOS made for itself, renamed into the drive under a name of
         // its own: Archive Utility's unpacked files, an app's safe save.
-        if node.localOnly, !to.localOnly, !LocalOnly.isLocalOnly(newName) {
+        if node.localOnly, !to.localOnly, !LocalOnly.isLocalOnly(newName), !LocalOnly.isSafeSave(newName) {
             return try await promote(id, from: from, to: to, newName: newName, over: over)
         }
         if let over, over.id != id {
@@ -344,12 +366,17 @@ public actor DriveEngine {
             // Out of a locked folder, into one, or a locked item itself: the
             // app would move the real file the locked one stands for.
             guard !readOnly, !node.readOnly, !from.readOnly, !to.readOnly else { throw VolumeError.posix(EACCES) }
+            // Into the place of a file a safe save set aside, which the
+            // server still has there: it replaces that file.
+            let setAsideThere = !setAside.isEmpty && setAside[Self.fold(newPath)] != nil
             if node.unsent {
                 // Not on the server yet: it goes up under the new name.
                 if let over, over.id != id { try await removeFromServer(over) }
             } else {
-                _ = try await wrap { try await self.bridge.rename(oldPath, to: newPath, replace: over != nil && over?.id != id) }
+                let replace = (over != nil && over?.id != id) || setAsideThere
+                _ = try await wrap { try await self.bridge.rename(oldPath, to: newPath, replace: replace) }
             }
+            if setAsideThere { setAside[Self.fold(newPath)] = nil }
             if let over, over.id != id { drop(over.id) }
             move(id, from: from.id, to: to.id, newName: newName)
             await self.local.move(oldPath, to: newPath)
@@ -421,6 +448,9 @@ public actor DriveEngine {
             drop(replaced.id)
         }
         move(id, from: from.id, to: to.id, newName: newName)
+        // Into the place of the document a safe save set aside (setAside):
+        // the same, a new version of the file the server has there.
+        if !setAside.isEmpty { setAside[Self.fold(newPath)] = nil }
         await local.move(oldPath, to: newPath)
 
         var sending: [UInt64] = []
@@ -460,6 +490,79 @@ public actor DriveEngine {
         await local.subtree(path).filter { !LocalOnly.isLocalOnly(path: $0.relative) }
     }
 
+    /// A safe save setting the document aside. A sandboxed app's NSDocument
+    /// (TextEdit, Preview, Pages) on a volume with no item replacement
+    /// folder — a drive's disk has none, as it is not MNT_LOCAL — and no
+    /// atomic swap (FSKit refuses RENAME_SWAP) writes the new copy into a
+    /// "<name>.sb-…" folder beside the document, renames the document to
+    /// another "<name>.sb-…", moves the copy into its place and removes the
+    /// one set aside. Done on the server, every such save failed (0.5.27):
+    /// a listing the change feed set off while the rename was on its way
+    /// came back with it, older than it, put the document's name back and
+    /// lost what was set aside — so the copy could not be moved in (EEXIST)
+    /// nor the document put back (ESTALE), and the document was left under
+    /// the "….sb-…" name. Had it worked, each save would have made a new
+    /// file and sent the document to the trash.
+    ///
+    /// Here the server never sees it go. What is set aside stands in for the
+    /// document on this Mac — hidden, read from the server, never sent —
+    /// and the server's file there is not listed meanwhile. The copy moved
+    /// into its place goes up to its path as its new contents: the same
+    /// file, a new version (promote). Put back instead, nothing changes
+    /// (putBack); removed with nothing in its place, the document goes.
+    private func setAside(_ id: UInt64, from: Node, to: Node, newName: String, over: Node?) async throws -> VolumeNode {
+        guard let node = nodes[id] else { throw VolumeError.posix(ESTALE) }
+        guard !readOnly, !node.readOnly, !from.readOnly, !to.readOnly else { throw VolumeError.posix(EACCES) }
+        // Its bytes must be the server's: with changes of its own still on
+        // their way there, it is not set aside, and the save fails whole.
+        guard !node.unsent, node.fileId != nil, writing[id]?.dirty != true, !sendingNow.contains(id) else {
+            throw VolumeError.posix(EBUSY)
+        }
+        if let over, over.id != id {
+            // Under a safe save's name, only one of its own can be there.
+            guard over.localOnly, over.setAsideFrom == nil, !over.isDirectory else { throw VolumeError.posix(EEXIST) }
+            drop(over.id)
+            await local.remove(over.path)
+        }
+        let oldPath = node.path
+        writing[id] = nil
+        move(id, from: from.id, to: to.id, newName: newName)
+        nodes[id]?.localOnly = true
+        nodes[id]?.setAsideFrom = oldPath
+        setAside[Self.fold(oldPath)] = id
+        await local.move(oldPath, to: Self.join(to.path, newName))
+        guard let moved = nodes[id] else { throw VolumeError.posix(ESTALE) }
+        return Self.public(moved)
+    }
+
+    /// The document a safe save set aside, put back where it was — the save
+    /// failed, and NSFileManager undoes its first move — with nothing asked
+    /// of the server, which never saw it go; or moved on under a name of its
+    /// own, which is the server's rename of the document.
+    private func putBack(_ id: UInt64, from: Node, to: Node, newName: String, over: Node?) async throws -> VolumeNode {
+        guard let node = nodes[id], let original = node.setAsideFrom else { throw VolumeError.posix(ESTALE) }
+        guard !readOnly, !node.readOnly, !to.readOnly else { throw VolumeError.posix(EACCES) }
+        // Something took its place meanwhile (the save's copy): its old
+        // contents are not put back over that.
+        guard setAside[Self.fold(original)] == id else { throw VolumeError.posix(EPERM) }
+        let oldPath = node.path, newPath = Self.join(to.path, newName)
+        if Self.fold(newPath) != Self.fold(original) {
+            if let over, over.id != id {
+                if over.isDirectory { throw VolumeError.posix(EISDIR) }
+                guard !over.readOnly else { throw VolumeError.posix(EACCES) }
+            }
+            _ = try await wrap { try await self.bridge.rename(original, to: newPath, replace: over != nil && over?.id != id) }
+            if let over, over.id != id { drop(over.id) }
+        }
+        setAside[Self.fold(original)] = nil
+        move(id, from: from.id, to: to.id, newName: newName)
+        nodes[id]?.localOnly = false
+        nodes[id]?.setAsideFrom = nil
+        await local.move(oldPath, to: newPath)
+        guard let moved = nodes[id] else { throw VolumeError.posix(ESTALE) }
+        return Self.public(moved)
+    }
+
     public func remove(_ id: UInt64, name: String, from directory: UInt64) async throws {
         guard let node = nodes[id] else { throw VolumeError.posix(ESTALE) }
         if node.isDirectory {
@@ -470,6 +573,13 @@ public actor DriveEngine {
             guard (nodes[id]?.children ?? [:]).isEmpty else { throw VolumeError.posix(ENOTEMPTY) }
         }
         if node.localOnly {
+            if let original = node.setAsideFrom, setAside[Self.fold(original)] == id {
+                // Set aside, and removed with nothing moved into its place:
+                // the document is removed, as it would be on any disk.
+                guard !readOnly, !node.readOnly else { throw VolumeError.posix(EACCES) }
+                try await wrap { try await self.bridge.delete(original) }
+                setAside[Self.fold(original)] = nil
+            }
             await local.remove(node.path)
         } else {
             guard !readOnly, !node.readOnly else { throw VolumeError.posix(EACCES) }
@@ -671,6 +781,9 @@ public actor DriveEngine {
                 throw VolumeError.posix(failure.errno)
             }
             for entry in entries where !LocalOnly.isLocalOnly(entry.name) {
+                // Set aside by a safe save: listed where it was set aside,
+                // not where the server still has it.
+                if !setAside.isEmpty, setAside[Self.fold(Self.join(dir.path, entry.name))] != nil { continue }
                 listing[Self.fold(entry.name)] = upsert(entry, parent: id)
             }
         }
@@ -777,6 +890,18 @@ public actor DriveEngine {
             nodes[childID] = childID == id ? node : child
             byPath[Self.fold(childID == id ? newPath : child.path)] = childID
         }
+        // A folder moved with a document in it set aside: on the server the
+        // document went with it.
+        if !setAside.isEmpty {
+            let old = Self.fold(oldPath)
+            for (key, aside) in setAside where key.hasPrefix(old + "/") {
+                setAside[key] = nil
+                setAside[Self.fold(newPath) + key.dropFirst(old.count)] = aside
+                if let original = nodes[aside]?.setAsideFrom, original.count > oldPath.count {
+                    nodes[aside]?.setAsideFrom = newPath + original.dropFirst(oldPath.count)
+                }
+            }
+        }
     }
 
     private func drop(_ id: UInt64, fromParent: Bool = true) {
@@ -788,6 +913,7 @@ public actor DriveEngine {
             writing[childID] = nil
         }
         nodes[id] = nil
+        if !setAside.isEmpty { setAside = setAside.filter { nodes[$0.value] != nil } }
     }
 
     private func removeFromServer(_ node: Node) async throws {
