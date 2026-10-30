@@ -1031,6 +1031,12 @@ dialog.palette::backdrop { background: color-mix(in srgb, var(--ink) 24%, transp
 .toast-error { background: var(--danger); }
 .toast button { background: none; border: 0; color: inherit; cursor: pointer; opacity: 0.7; padding: 0; }
 .toast button:hover { opacity: 1; }
+/* The one action a toast can carry (Undo): read as a button, not a glyph. */
+.toast .toast-action {
+  opacity: 1; font-weight: 600; white-space: nowrap;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.toast .toast-action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 2px; }
 
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(var(--s2)); }
@@ -1253,6 +1259,9 @@ html[data-mac-app] .files-main { max-width: none; padding-left: var(--s4); paddi
   cursor: pointer;
 }
 .folder-link.active { background: color-mix(in srgb, var(--ink) 6%, transparent); font-weight: 600; }
+/* The sidebar's way to Trash, under the folders. */
+.side-trash { align-items: center; margin-top: var(--s3); color: var(--muted); text-decoration: none; }
+.side-trash:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
 .folder-row { display: flex; align-items: center; padding-left: calc(var(--depth, 0) * var(--s3)); }
 /* Beside its toggle a row's link takes what is left, not 100% of the row, and
    a long name ends in an ellipsis rather than widening the sidebar. */
@@ -2020,6 +2029,7 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
   /* The sidebar becomes a strip of folders as chips. A 220px column beside a
      150px grid was the whole page. */
   .side-folders h3, .side-starred h3 { display: none; }
+  .side-trash { width: auto; display: inline-flex; margin-top: var(--s2); }
   .side-starred { margin-bottom: var(--s2); }
   .starred-list { overflow-x: auto; }
   .starred-row > .folder-link { padding-right: var(--s3); }
@@ -2161,6 +2171,46 @@ select.display-select { -webkit-appearance: none; appearance: none; padding-righ
 .drives-page-title { margin: 0; font-size: var(--t-2xl); letter-spacing: -0.02em; }
 .drives-page-count { margin: 2px 0 0; }
 .drives-page-empty { margin: var(--s6) 0; }
+
+/* ── Trash (app/trash) ──────────────────────────────────────────────────── */
+
+.trash-page { max-width: 1100px; margin: 0 auto; padding: var(--s5) var(--s5) var(--s6); }
+.trash-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s4); margin-bottom: var(--s5); }
+.trash-title { margin: 0; font-size: var(--t-2xl); letter-spacing: -0.02em; }
+.trash-sub { margin: 2px 0 0; }
+.trash-head .btn { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.trash-problem {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+  padding: var(--s3) var(--s4); margin-bottom: var(--s4);
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+}
+.trash-problem .btn { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.trash-empty { display: flex; flex-direction: column; align-items: center; gap: var(--s2); margin: var(--s6) 0; color: var(--muted); text-align: center; }
+.trash-empty p { margin: 0; }
+.trash-empty p:first-of-type { color: var(--ink); font-weight: 600; }
+.trash-empty .btn { margin-top: var(--s2); }
+.trash-list { border-top: 1px solid var(--line); }
+.trash-row {
+  display: grid; grid-template-columns: 20px minmax(0, 1fr) minmax(0, 220px) 72px auto;
+  align-items: center; gap: var(--s3);
+  padding: var(--s2) var(--s2);
+  border-bottom: 1px solid var(--line);
+}
+.trash-row.is-selected { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.trash-row-head { padding-top: var(--s1); padding-bottom: var(--s1); }
+.trash-name { display: flex; align-items: center; gap: var(--s3); min-width: 0; color: var(--muted); }
+.trash-name-text { display: flex; flex-direction: column; min-width: 0; color: var(--ink); }
+.trash-col-when { display: flex; flex-direction: column; min-width: 0; }
+.trash-col-size { text-align: right; }
+.trash-more, .trash-loading { display: flex; justify-content: center; margin-top: var(--s4); }
+/* A phone: the name and Restore; when it was deleted goes. After the rules
+   above, which it overrides. */
+@media (max-width: 720px) {
+  .trash-page { padding: var(--s4) var(--s4) var(--s5); }
+  .trash-head { align-items: flex-start; flex-direction: column; }
+  .trash-row { grid-template-columns: 20px minmax(0, 1fr) auto; }
+  .trash-col-when, .trash-col-size { display: none; }
+}
 .drive-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: var(--s4); }
 .drive-card {
   display: flex; flex-direction: column; min-width: 0;
