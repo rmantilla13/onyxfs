@@ -486,11 +486,15 @@ final class DriveService: ObservableObject {
     }
 
     /// After a change Finder made: the drive's mirror now, not at the next
-    /// tick, so the next listing already shows it.
-    func syncForWrites(_ scope: SyncDomain) async {
+    /// tick, so the next listing already shows it — from a pass begun after
+    /// the change (DriveMirror.syncAfterWrite): one under way may have asked
+    /// the server before it. After an upload (`afterWrite: false`, syncSoon)
+    /// any pass will do: the file is listed meanwhile, and leaves pending
+    /// only once the mirror shows it.
+    func syncForWrites(_ scope: SyncDomain, afterWrite: Bool = true) async {
         noteActivity()
         guard let mirror = mirrors[scope.identifier] else { return }
-        if let diff = try? await sync(mirror) { onMirrorSynced?(mirror, diff) }
+        if let diff = try? await sync(mirror, afterWrite: afterWrite) { onMirrorSynced?(mirror, diff) }
         await writers[scope.identifier]?.mirrorChanged()
     }
 
@@ -499,10 +503,10 @@ final class DriveService: ObservableObject {
     /// bringing pages goes at full speed with the window closed. A quiet
     /// pass, a few hundred bytes, is over well before and never touches the
     /// activity: its timer is called off unfired.
-    private func sync(_ mirror: DriveMirror) async throws -> Replica.Diff {
+    private func sync(_ mirror: DriveMirror, afterWrite: Bool = false) async throws -> Replica.Diff {
         let hold = WorkActivity.app.begin(.sync, grace: Self.syncGrace)
         defer { hold.end() }
-        return try await mirror.sync()
+        return try await afterWrite ? mirror.syncAfterWrite() : mirror.sync()
     }
 
     static let syncGrace: Duration = .seconds(2)
@@ -525,7 +529,7 @@ final class DriveService: ObservableObject {
             while started == generation, soonSyncs[id]?.generation == started {
                 soonSyncs[id]?.again = false
                 let began = ContinuousClock.now
-                await syncForWrites(scope)
+                await syncForWrites(scope, afterWrite: false)
                 try? await Task.sleep(until: began + .seconds(1), clock: .continuous)
                 guard soonSyncs[id]?.generation == started, soonSyncs[id]?.again == true else { break }
             }

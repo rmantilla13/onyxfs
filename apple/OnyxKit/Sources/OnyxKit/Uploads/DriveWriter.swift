@@ -22,7 +22,8 @@ public protocol DriveTree: Sendable {
     /// updatedAt); nil when there is no file there.
     func changed(at path: String) async -> Date?
     /// Bring the mirror up to date now, after a change made here, so the
-    /// next listing already shows it.
+    /// next listing already shows it: from a pass begun after the change
+    /// (DriveMirror.syncAfterWrite), not one already under way.
     func refresh() async
     /// Bring the mirror up to date before long: after an upload finishes,
     /// whose file is listed meanwhile (pending, read from this Mac's copy).

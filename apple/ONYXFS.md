@@ -474,9 +474,11 @@ called "Collections (Onyx)".
   before the record is asked for. A crash between the two records the key
   again, and the 409 says done; without the key the bytes would go up under
   a new one, "name (2)", as a second file.
-- The mirror is updated at once from each response (the delta confirms it
-  later), so Finder, the menus and the web page inside the app agree
-  immediately.
+- After each change the writer brings the drive's mirror up to date before
+  it answers (`DriveTree.refresh`), so Finder, the menus and the web page
+  inside the app agree at once. Nothing is taken from the change's own
+  response: the mirror is the feed's, from a pass begun after the change
+  (`DriveMirror.syncAfterWrite`, below).
 - A queue with progress ("Uploading 3 files — 42%" in the menu bar), per
   file retries with backoff, and a failure reported (menu bar + the file
   stays pending, and the error in the log) rather than silently dropped.
@@ -494,6 +496,13 @@ called "Collections (Onyx)".
   macOS's own files in it count (ENOTEMPTY) — and a file and a folder never
   replace each other (EISDIR, ENOTDIR). The server's replace takes what is
   there whole; before, a folder moved over another took what it held.
+- A file renamed or removed while its bytes are on their way to the app
+  (the last close comes first, and the send takes a moment) follows once
+  they have arrived: renamed on the server then, over what the rename
+  replaced — whose new contents it becomes, not a new file with the
+  document in the trash — or removed with them. Until it has caught up it
+  moves only here, so a second move meanwhile is followed too; the tree
+  keeps it where it went, not where it was sent from.
 - **Local-only names** (`.DS_Store`, `._*`, `.Trashes`, `.Spotlight-V100`,
   `.fseventsd`, `.TemporaryItems`, `Icon\r`) live only in the extension's
   container; they are never uploaded and never listed by the bridge. They
@@ -538,6 +547,43 @@ A file written here is listed as pending (served from this Mac) until the
 mirror shows that change itself — its id, and an entry at least as new as
 the server's `updatedAt` for the change — not merely a file by that name;
 otherwise a save could briefly read back its old bytes.
+
+**A change made here is not undone by a look from before it.** On 0.5.27
+every TextEdit save on a drive failed so (below), and any rename could: a
+listing older than the rename came back in the same millisecond as it.
+Two things let it:
+- *The app answered before its mirror had the change.* The writer's
+  refresh joined a sync already under way, which had asked the server
+  before the change, and the bridge's next listing showed the drive as it
+  was. A refresh after a mkdir, rename or delete now takes a pass begun
+  after the change (`DriveMirror.syncAfterWrite`): one under way is waited
+  out and one more runs after it, shared by every change that asks
+  meanwhile, so a burst of Finder's mkdirs costs one pass more, not one
+  each. A sync after an upload finishes (`syncSoon`) still joins: the file
+  is listed from this Mac's copy until the mirror has it.
+- *The extension merged a listing asked for before a change it made.* The
+  old name came back as a new item (EEXIST for whatever moved there next)
+  and the renamed one was dropped (ESTALE in the kernel). The engine now
+  keeps the names it is changing on the server — a rename's two, a
+  remove's, a file's while it is sent, and the name the server still has
+  a set-aside document under — and when each change ended
+  (`DriveEngine.nameChanges`), for as long as a listing of their folder is
+  out. Such a listing says nothing of a name changed after it was asked
+  for, or being changed still: the name stays as this Mac has it. The rest
+  of the listing is taken as it came, so nothing is thrown away and
+  nothing is listed again for it. A folder this Mac moved, or is moving,
+  that its own listing finds gone is somewhere else, not empty: what it
+  held stays, and it is listed again where it is.
+
+Measured on 2026-10-30, in a simulated Finder copy of 40 folders with
+uploads syncing the mirror about once a second (passes of 100 to 250 ms):
+before, 1 to 6 of the 40 refreshes answered without their own folder;
+after, none did, for 4 to 8 passes more (40 to 45 became 45 to 50) and 3
+to 10% more time. In the engine (release build): a rename among 2,000
+files costs the same as before (1.72 ms), re-listing 10,000 files is within
+noise (11.5 ms), and a thousand moves out of a folder while its listing
+was out left a thousand old names in it before and none after, merged in
+0.4 ms, with no listing more.
 
 ### Where it lives
 - App: `OnyxKit/FS/` (FSBridge, FSResponder, MirrorFSSource),
@@ -785,6 +831,10 @@ with nothing else looking at the folder.
   `.rtfd`) is still the server's own rename. A `….sb-…` item the server
   already has (one a failed save left) is listed as the drive's, and can
   be renamed back.
+- **The race itself** is closed for every rename since, the package's
+  included (Keeping them the same): a listing from before a change no
+  longer undoes it. Setting the document aside still matters — the save is
+  one `PUT`, and the document keeps its id, comments and links.
 
 ## Thumbnails
 

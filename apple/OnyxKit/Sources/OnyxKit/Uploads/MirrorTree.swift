@@ -2,7 +2,8 @@ import Foundation
 
 /// A drive's mirror as DriveWriter asks it: what is at a path, and "bring
 /// yourself up to date now". `refresh` is the app's, which syncs the mirror
-/// and passes the change on (to the bridge's listings, to the page).
+/// from a pass begun after the change (DriveMirror.syncAfterWrite) and
+/// passes the change on (to the bridge's listings, to the page).
 /// `refreshSoon` is the app's too, for uploads finishing: it syncs at most
 /// once a second however many finish, and tells the writer after.
 public struct MirrorTree: DriveTree {

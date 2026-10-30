@@ -29,11 +29,15 @@ private actor FakeBridge: EngineBridge {
     func push(_ changes: BridgeChanges) { pendingChanges.append(changes) }
 
     /// The next listing of a path is answered as the folder is when it is
-    /// asked for, but only once released: a listing on its way while the
-    /// engine goes on answering other calls.
+    /// asked for — or, `asOfRelease`, as it is by then — but only once
+    /// released: a listing on its way while the engine goes on answering
+    /// other calls.
     private var holdNext: Set<String> = []
+    private var holdNextLate: Set<String> = []
     private var held: [String: CheckedContinuation<Void, Never>] = [:]
-    func holdNextListing(of path: String) { holdNext.insert(path) }
+    func holdNextListing(of path: String, asOfRelease: Bool = false) {
+        if asOfRelease { holdNextLate.insert(path) } else { holdNext.insert(path) }
+    }
     func isHolding(_ path: String) -> Bool { held[path] != nil }
     func release(_ path: String) { held.removeValue(forKey: path)?.resume() }
     func replaceBytes(_ path: String, _ bytes: Data) {
@@ -47,6 +51,7 @@ private actor FakeBridge: EngineBridge {
 
     func list(_ path: String) async throws -> [BridgeEntry] {
         calls.append("list \(path)")
+        if holdNextLate.remove(path) != nil { await withCheckedContinuation { held[path] = $0 } }
         guard folders.contains(path) else { throw BridgeFailure.notFound }
         let out = entries(in: path)
         if holdNext.remove(path) != nil { await withCheckedContinuation { held[path] = $0 } }
@@ -73,8 +78,9 @@ private actor FakeBridge: EngineBridge {
     func releasePut() { heldPut?.resume(); heldPut = nil }
 
     func putFile(_ path: String, from: URL, modified: Date?, created: Date?) async throws -> BridgeEntry {
-        if holdPut { holdPut = false; await withCheckedContinuation { heldPut = $0 } }
+        // The bytes are sent before the answer comes, which a hold keeps back.
         let bytes = try Data(contentsOf: from)
+        if holdPut { holdPut = false; await withCheckedContinuation { heldPut = $0 } }
         calls.append("put \(path) \(bytes.count)")
         dates[path] = (modified, created)
         if readOnly { throw BridgeFailure.forbidden("You can view this drive but not add to it.") }
@@ -97,22 +103,45 @@ private actor FakeBridge: EngineBridge {
         return BridgeEntry(name: (path as NSString).lastPathComponent, isDirectory: true)
     }
 
+    /// The next rename or delete is made at once, but answered only once
+    /// released: the server has it, and the engine has not heard.
+    private var holdChange = false
+    private var heldChange: CheckedContinuation<Void, Never>?
+    func holdNextChange() { holdChange = true }
+    func isHoldingChange() -> Bool { heldChange != nil }
+    func releaseChange() { heldChange?.resume(); heldChange = nil }
+    private func answerChange() async {
+        if holdChange { holdChange = false; await withCheckedContinuation { heldChange = $0 } }
+    }
+
     func rename(_ from: String, to: String, replace: Bool) async throws -> BridgeEntry {
         calls.append("rename \(from) -> \(to)\(replace ? " (replace)" : "")")
+        let entry: BridgeEntry
         if let file = files.removeValue(forKey: from) {
             files[to] = file
-            return BridgeEntry(name: (to as NSString).lastPathComponent, isDirectory: false, id: file.id,
-                               size: Int64(file.bytes.count), version: file.version)
+            entry = BridgeEntry(name: (to as NSString).lastPathComponent, isDirectory: false, id: file.id,
+                                size: Int64(file.bytes.count), version: file.version)
+        } else {
+            // A folder moves with everything in it.
+            for folder in folders where folder == from || folder.hasPrefix(from + "/") {
+                folders.remove(folder)
+                folders.insert(to + folder.dropFirst(from.count))
+            }
+            for (path, file) in files where path.hasPrefix(from + "/") {
+                files[path] = nil
+                files[to + path.dropFirst(from.count)] = file
+            }
+            entry = BridgeEntry(name: (to as NSString).lastPathComponent, isDirectory: true)
         }
-        folders.remove(from)
-        folders.insert(to)
-        return BridgeEntry(name: (to as NSString).lastPathComponent, isDirectory: true)
+        await answerChange()
+        return entry
     }
 
     func delete(_ path: String) async throws {
         calls.append("delete \(path)")
         files[path] = nil
         folders.remove(path)
+        await answerChange()
     }
 
     /// What the app was told Archive Utility could not unzip.
@@ -460,6 +489,298 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
         _ = try await engine.write(cut.id, at: 0, data: Data("take".utf8))
         try await engine.finishWriting(cut.id)
         #expect(await bridge.bytes("/Selects/cut.mov") == Data("take".utf8))
+    }
+
+    /// A plain rename — Finder's — made while a listing of its folder is on
+    /// its way (the change feed's, set off by something else). The listing
+    /// has the old name: merged after the rename, it brought that name back
+    /// as a new item (EEXIST for whatever moved there next) and dropped the
+    /// renamed one (ESTALE in the kernel). The rename stands, it costs no
+    /// listing more, and a listing asked for after it is believed again.
+    @Test func aRenameOutlastsAListingAskedForBeforeIt() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Cuts")
+        await bridge.addFile("/Cuts/take.mov", Data([1]))
+        await bridge.addFile("/Cuts/other.mov", Data([2]))
+        let engine = try await makeEngine(bridge)
+        let cuts = try await engine.lookup("Cuts", in: DriveEngine.rootID)
+        let take = try await engine.lookup("take.mov", in: cuts.id)
+
+        await bridge.holdNextListing(of: "/Cuts")
+        let listing = Task { await engine.apply(BridgeChanges(generation: 1, paths: ["/Cuts"])) }
+        try await eventually { await bridge.isHolding("/Cuts") }
+        let renamed = try await engine.rename(take.id, from: cuts.id, name: "take.mov", to: cuts.id,
+                                              newName: "final.mov", replacing: nil)
+        await bridge.release("/Cuts")
+        await listing.value
+        let listings = await bridge.calls.filter { $0.hasPrefix("list") }.count
+
+        #expect(renamed.id == take.id)
+        #expect(try await engine.children(of: cuts.id).map(\.name) == ["final.mov", "other.mov"])
+        #expect(try await engine.lookup("final.mov", in: cuts.id).id == take.id)
+        await #expect(throws: VolumeError.posix(ENOENT)) { try await engine.lookup("take.mov", in: cuts.id) }
+        // Still the kernel's item, under its new name.
+        _ = try await engine.rename(take.id, from: cuts.id, name: "final.mov", to: cuts.id, newName: "final 2.mov", replacing: nil)
+        #expect(await bridge.calls.filter { $0.hasPrefix("list") }.count == listings, "the listing stood: none asked for again")
+
+        // Renamed on the web after it: a listing asked for now is believed.
+        _ = try await bridge.rename("/Cuts/final 2.mov", to: "/Cuts/web.mov", replace: false)
+        await engine.apply(BridgeChanges(generation: 2, paths: ["/Cuts"]))
+        #expect(try await engine.children(of: cuts.id).map(\.name) == ["other.mov", "web.mov"])
+    }
+
+    /// The same for a remove: a listing from before it does not bring the
+    /// file back; and one that already lacks it, landing while the server's
+    /// answer is on its way, leaves it to the remove.
+    @Test func aRemoveOutlastsAListingFromEitherSideOfIt() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Cuts")
+        await bridge.addFile("/Cuts/a.mov", Data([1]))
+        await bridge.addFile("/Cuts/b.mov", Data([2]))
+        let engine = try await makeEngine(bridge)
+        let cuts = try await engine.lookup("Cuts", in: DriveEngine.rootID)
+        let a = try await engine.lookup("a.mov", in: cuts.id)
+        let b = try await engine.lookup("b.mov", in: cuts.id)
+
+        await bridge.holdNextListing(of: "/Cuts")
+        let listing = Task { await engine.apply(BridgeChanges(generation: 1, paths: ["/Cuts"])) }
+        try await eventually { await bridge.isHolding("/Cuts") }
+        try await engine.remove(a.id, name: "a.mov", from: cuts.id)
+        await bridge.release("/Cuts")
+        await listing.value
+        #expect(try await engine.children(of: cuts.id).map(\.name) == ["b.mov"])
+
+        await bridge.holdNextChange()
+        let removing = Task { try await engine.remove(b.id, name: "b.mov", from: cuts.id) }
+        try await eventually { await bridge.isHoldingChange() }
+        await engine.apply(BridgeChanges(generation: 2, paths: ["/Cuts"]))
+        #expect(try await engine.lookup("b.mov", in: cuts.id).id == b.id, "the remove's, until it has answered")
+        await bridge.releaseChange()
+        try await removing.value
+        #expect(try await engine.children(of: cuts.id).isEmpty)
+    }
+
+    /// The other side of a rename: the server has made it, and a listing
+    /// with the new name lands while the answer is on its way. It neither
+    /// drops the item the kernel is renaming (the rename then said ESTALE)
+    /// nor makes another under the new name: the rename, once answered,
+    /// moves the item there.
+    @Test func aListingWithTheRenameInItLeavesItToTheRename() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Cuts")
+        await bridge.addFile("/Cuts/take.mov", Data([1]))
+        let engine = try await makeEngine(bridge)
+        let cuts = try await engine.lookup("Cuts", in: DriveEngine.rootID)
+        let take = try await engine.lookup("take.mov", in: cuts.id)
+
+        await bridge.holdNextChange()
+        let renaming = Task {
+            try await engine.rename(take.id, from: cuts.id, name: "take.mov", to: cuts.id, newName: "final.mov", replacing: nil)
+        }
+        try await eventually { await bridge.isHoldingChange() }
+        await engine.apply(BridgeChanges(generation: 1, paths: ["/Cuts"]))
+        #expect(try await engine.lookup("take.mov", in: cuts.id).id == take.id, "where the kernel has it, until the rename answers")
+        await #expect(throws: VolumeError.posix(ENOENT)) { try await engine.lookup("final.mov", in: cuts.id) }
+        await bridge.releaseChange()
+        #expect(try await renaming.value.id == take.id)
+        #expect(try await engine.children(of: cuts.id).map(\.name) == ["final.mov"])
+        #expect(try await engine.lookup("final.mov", in: cuts.id).id == take.id)
+    }
+
+    /// Word's save, with the folder's listing on its way throughout: the new
+    /// copy written beside the document, the document renamed away, the copy
+    /// renamed into its place, the old document deleted. The listing from
+    /// before brings none of the old names back, and the document is the copy.
+    @Test func aWordStyleSaveOutlastsAListingFromBeforeIt() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Docs")
+        await bridge.addFile("/Docs/Report.docx", Data("v1".utf8))
+        let engine = try await makeEngine(bridge)
+        let docs = try await engine.lookup("Docs", in: DriveEngine.rootID)
+        let report = try await engine.lookup("Report.docx", in: docs.id)
+        let copy = try await engine.create("~WRD0001.tmp", in: docs.id, isDirectory: false)
+        _ = try await engine.write(copy.id, at: 0, data: Data("v2".utf8))
+        try await engine.finishWriting(copy.id)
+
+        await bridge.holdNextListing(of: "/Docs")
+        let listing = Task { await engine.apply(BridgeChanges(generation: 1, paths: ["/Docs"])) }
+        try await eventually { await bridge.isHolding("/Docs") }
+        let old = try await engine.rename(report.id, from: docs.id, name: "Report.docx", to: docs.id,
+                                          newName: "~WRL0002.tmp", replacing: nil)
+        let saved = try await engine.rename(copy.id, from: docs.id, name: "~WRD0001.tmp", to: docs.id,
+                                            newName: "Report.docx", replacing: nil)
+        try await engine.remove(old.id, name: "~WRL0002.tmp", from: docs.id)
+        await bridge.release("/Docs")
+        await listing.value
+
+        #expect(try await engine.children(of: docs.id).map(\.name) == ["Report.docx"])
+        #expect(try await engine.lookup("Report.docx", in: docs.id).id == saved.id)
+        #expect(try await engine.read(saved.id, at: 0, count: 8) == Data("v2".utf8))
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") } == [
+            "put /Docs/~WRD0001.tmp 2", "rename /Docs/Report.docx -> /Docs/~WRL0002.tmp",
+            "rename /Docs/~WRD0001.tmp -> /Docs/Report.docx", "delete /Docs/~WRL0002.tmp",
+        ])
+    }
+
+    /// A folder renamed while a listing of it is on its way, asked for under
+    /// the path the server no longer has by the time it answers — after the
+    /// rename, or while its answer is on its way. Nothing there means it
+    /// moved, not that it is empty: what it holds stays, under the same ids,
+    /// and it is listed again where it is.
+    @Test func aFolderMovedWhileItIsListedKeepsWhatItHolds() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Old")
+        await bridge.addFile("/Old/a.mov", Data([1]))
+        let engine = try await makeEngine(bridge)
+        let folder = try await engine.lookup("Old", in: DriveEngine.rootID)
+        let a = try await engine.lookup("a.mov", in: folder.id)
+
+        await bridge.holdNextListing(of: "/Old", asOfRelease: true)
+        let listing = Task { await engine.apply(BridgeChanges(generation: 1, paths: ["/Old"])) }
+        try await eventually { await bridge.isHolding("/Old") }
+        _ = try await engine.rename(folder.id, from: DriveEngine.rootID, name: "Old", to: DriveEngine.rootID,
+                                    newName: "New", replacing: nil)
+        await bridge.release("/Old")
+        await listing.value
+        #expect(try await engine.lookup("a.mov", in: folder.id).id == a.id)
+        #expect(await bridge.calls.last == "list /New", "listed again where it is now")
+
+        await bridge.holdNextChange()
+        let renaming = Task {
+            try await engine.rename(folder.id, from: DriveEngine.rootID, name: "New", to: DriveEngine.rootID,
+                                    newName: "Newer", replacing: nil)
+        }
+        try await eventually { await bridge.isHoldingChange() }
+        await engine.apply(BridgeChanges(generation: 2, paths: ["/New"]))
+        #expect(try await engine.children(of: folder.id).map(\.id) == [a.id])
+        await bridge.releaseChange()
+        _ = try await renaming.value
+        #expect(try await engine.lookup("a.mov", in: folder.id).id == a.id)
+    }
+
+    /// A file Finder copied, sent to the app while a listing from before
+    /// that is on its way: it stays, rather than dropped for being missing
+    /// from a listing that could not have had it.
+    @Test func aFileSentWhileAListingIsOnItsWayStaysListed() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Selects")
+        let engine = try await makeEngine(bridge)
+        let selects = try await engine.lookup("Selects", in: DriveEngine.rootID)
+        let cut = try await engine.create("cut.mov", in: selects.id, isDirectory: false)
+        _ = try await engine.write(cut.id, at: 0, data: Data("take".utf8))
+
+        await bridge.holdNextListing(of: "/Selects")
+        let listing = Task { await engine.apply(BridgeChanges(generation: 1, paths: ["/Selects"])) }
+        try await eventually { await bridge.isHolding("/Selects") }
+        try await engine.finishWriting(cut.id)
+        await bridge.release("/Selects")
+        await listing.value
+        #expect(try await engine.lookup("cut.mov", in: selects.id).id == cut.id)
+        #expect(try await engine.read(cut.id, at: 0, count: 8) == Data("take".utf8))
+    }
+
+    /// An app's save closed before it is moved over the document, as FSKit
+    /// orders it, while the copy is still on its way to the app: it follows
+    /// once it has arrived, over the document — whose new contents it becomes
+    /// (DriveWriter) — rather than the document going to the trash first. The
+    /// tree keeps it where it went, not where it was sent from.
+    @Test func aCopyMovedOverTheDocumentWhileItIsSentFollowsIt() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFile("/Script.fdx", Data("v1".utf8))
+        let engine = try await makeEngine(bridge)
+        let script = try await engine.lookup("Script.fdx", in: DriveEngine.rootID)
+        let copy = try await engine.create("Script.fdx.tmp", in: DriveEngine.rootID, isDirectory: false)
+        _ = try await engine.write(copy.id, at: 0, data: Data("v2".utf8))
+
+        await bridge.holdNextPut()
+        let closing = Task { try await engine.finishWriting(copy.id) }
+        try await eventually { await bridge.isHoldingPut() }
+        let moved = try await engine.rename(copy.id, from: DriveEngine.rootID, name: "Script.fdx.tmp", to: DriveEngine.rootID,
+                                            newName: "Script.fdx", replacing: script.id)
+        await bridge.releasePut()
+        try await closing.value
+
+        #expect(moved.id == copy.id)
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") } == [
+            "put /Script.fdx.tmp 2", "rename /Script.fdx.tmp -> /Script.fdx (replace)",
+        ], "nothing deleted")
+        #expect(try await engine.node(copy.id).name == "Script.fdx")
+        #expect(try await engine.lookup("Script.fdx", in: DriveEngine.rootID).id == copy.id)
+        await #expect(throws: VolumeError.posix(ENOENT)) { try await engine.lookup("Script.fdx.tmp", in: DriveEngine.rootID) }
+        #expect(await bridge.bytes("/Script.fdx") == Data("v2".utf8))
+    }
+
+    /// Moved again while it follows: it follows again, and it ends where the
+    /// kernel put it, here and on the server — the second move made here
+    /// alone, as the first was, rather than asked of the server for a path
+    /// it did not have yet.
+    @Test func aCopyMovedTwiceWhileItIsSentEndsWhereItWent() async throws {
+        let bridge = FakeBridge()
+        let engine = try await makeEngine(bridge)
+        let copy = try await engine.create("a.txt", in: DriveEngine.rootID, isDirectory: false)
+        _ = try await engine.write(copy.id, at: 0, data: Data("x".utf8))
+        await bridge.holdNextPut()
+        let closing = Task { try await engine.finishWriting(copy.id) }
+        try await eventually { await bridge.isHoldingPut() }
+        _ = try await engine.rename(copy.id, from: DriveEngine.rootID, name: "a.txt", to: DriveEngine.rootID, newName: "b.txt", replacing: nil)
+        await bridge.holdNextChange()
+        await bridge.releasePut()
+        try await eventually { await bridge.isHoldingChange() }
+        _ = try await engine.rename(copy.id, from: DriveEngine.rootID, name: "b.txt", to: DriveEngine.rootID, newName: "c.txt", replacing: nil)
+        await bridge.releaseChange()
+        try await closing.value
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") } == [
+            "put /a.txt 1", "rename /a.txt -> /b.txt (replace)", "rename /b.txt -> /c.txt (replace)",
+        ])
+        #expect(try await engine.lookup("c.txt", in: DriveEngine.rootID).id == copy.id)
+        #expect(await bridge.bytes("/c.txt") == Data("x".utf8))
+    }
+
+    /// Removed while it is sent: what was sent goes too.
+    @Test func aCopyRemovedWhileItIsSentGoesToo() async throws {
+        let bridge = FakeBridge()
+        let engine = try await makeEngine(bridge)
+        let copy = try await engine.create("draft.txt", in: DriveEngine.rootID, isDirectory: false)
+        _ = try await engine.write(copy.id, at: 0, data: Data("x".utf8))
+        await bridge.holdNextPut()
+        let closing = Task { try await engine.finishWriting(copy.id) }
+        try await eventually { await bridge.isHoldingPut() }
+        try await engine.remove(copy.id, name: "draft.txt", from: DriveEngine.rootID)
+        await bridge.releasePut()
+        try await closing.value
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") } == ["put /draft.txt 1", "delete /draft.txt"])
+        #expect(try await engine.children(of: DriveEngine.rootID).filter { !$0.localOnly }.isEmpty)
+        await #expect(throws: VolumeError.posix(ESTALE)) { try await engine.node(copy.id) }
+    }
+
+    /// Finder moving fifty files out of a folder while the change feed's
+    /// listing of it is on its way: the listing is merged once, none of the
+    /// moves is undone, and none costs a listing more.
+    @Test func aBurstOfMovesOutlastsOneListing() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/In")
+        await bridge.addFolder("/Out")
+        for i in 0..<50 { await bridge.addFile("/In/\(i).jpg", Data([UInt8(i)])) }
+        let engine = try await makeEngine(bridge)
+        let inbox = try await engine.lookup("In", in: DriveEngine.rootID)
+        let out = try await engine.lookup("Out", in: DriveEngine.rootID)
+        let files = try await engine.children(of: inbox.id)
+        _ = try await engine.children(of: out.id)
+
+        await bridge.holdNextListing(of: "/In")
+        let listing = Task { await engine.apply(BridgeChanges(generation: 1, paths: ["/In"])) }
+        try await eventually { await bridge.isHolding("/In") }
+        for file in files {
+            _ = try await engine.rename(file.id, from: inbox.id, name: file.name, to: out.id, newName: file.name, replacing: nil)
+        }
+        await bridge.release("/In")
+        await listing.value
+        let listings = await bridge.calls.filter { $0.hasPrefix("list") }
+        #expect(listings == ["list /", "list /In", "list /Out", "list /In"])
+
+        #expect(try await engine.children(of: inbox.id).isEmpty)
+        #expect(Set(try await engine.children(of: out.id).map(\.id)) == Set(files.map(\.id)))
+        #expect(await bridge.calls.filter { $0.hasPrefix("list") } == listings)
     }
 
     @Test func finderGetsNoTrashAndDeletesToTheWebsInstead() async throws {

@@ -563,6 +563,29 @@ private final class TestClock: @unchecked Sendable {
     func advance(_ seconds: TimeInterval) { lock.withLock { value += seconds } }
 }
 
+/// Polls until `condition` holds, for up to five seconds.
+private func until(_ condition: () -> Bool) async throws {
+    for _ in 0..<2500 {
+        if condition() { return }
+        try await Task.sleep(nanoseconds: 2_000_000)
+    }
+    struct TimedOut: Error {}
+    throw TimedOut()
+}
+
+/// The server's write routes, as far as a rename goes: made on the stub, so
+/// that the feed's next page has it.
+private struct RenamingRoutes: DriveWriteAPI {
+    let renamed: @Sendable (String, String) -> Void
+    func updateFile(id: String, name: String?, folder: String?, filespaceId: String?) async throws {
+        if let name { renamed(id, name) }
+    }
+    func deleteFile(id: String) async throws {}
+    func createFolder(path: String, filespaceId: String?) async throws {}
+    func moveFolder(from: String, to: String, filespaceId: String?) async throws {}
+    func deleteFolder(path: String, filespaceId: String?) async throws {}
+}
+
 /// What a sync threw, or nil.
 private func failure(of mirror: DriveMirror) async -> Error? {
     do { _ = try await mirror.sync(); return nil } catch { return error }
@@ -1245,6 +1268,95 @@ struct DriveMirrorTests {
         let (one, two) = try await (first, second)
         #expect(one == two && one.updated == ["a"])
         #expect(stub.server.requests(to: "/api/files/delta").count == 1)
+    }
+
+    /// After a write the mirror needs a pass begun after it: one under way
+    /// may have asked the server before the write, and Finder's next listing,
+    /// read from it, undid the rename just made. A plain sync joins that pass;
+    /// syncAfterWrite waits it out and runs one more.
+    @Test func aSyncAfterAWriteIsAPassBegunAfterIt() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "take.mov")], cursor: 5))
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        stub.server.page(at: 5, page([], cursor: 5))
+        stub.server.slow(0.3)
+        let tick = Task { try await mirror.sync() }
+        try await until { stub.server.requests(to: "/api/files/delta").count == 2 }
+        // Renamed on the server now, after the tick's pass asked.
+        stub.server.page(at: 5, page([item("a", "final.mov", version: 2)], cursor: 6))
+        stub.server.page(at: 6, page([], cursor: 6))
+        let joined = Task { try await mirror.sync() }
+        let after = try await mirror.syncAfterWrite()
+        #expect(try await joined.value.isEmpty, "a plain sync joined the pass under way")
+        #expect(try await tick.value.isEmpty)
+        #expect(after.updated == ["a"])
+        #expect(await mirror.index.entry(at: "final.mov")?.fileId == "a")
+        #expect(stub.server.requests(to: "/api/files/delta").count == 3)
+    }
+
+    /// A burst of writes, each asking for a pass after it — a Finder copy
+    /// making twenty folders while a pass is under way — share one more, not
+    /// one each. One asked for while that one is under way gets another.
+    @Test func writesInABurstShareOnePassMore() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "a.png")], cursor: 5))
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        stub.server.page(at: 5, page([], cursor: 5))
+        stub.server.slow(0.2)
+        let asked = { stub.server.requests(to: "/api/files/delta").count }
+        let tick = Task { try await mirror.sync() }
+        try await until { asked() == 2 }
+        let writes = (0..<20).map { _ in Task { try await mirror.syncAfterWrite() } }
+        for write in writes { _ = try await write.value }
+        _ = try await tick.value
+        #expect(asked() == 3, "the pass under way, then one for all twenty")
+
+        let first = Task { try await mirror.syncAfterWrite() }
+        try await until { asked() == 4 }
+        _ = try await mirror.syncAfterWrite()
+        _ = try await first.value
+        #expect(asked() == 5)
+    }
+
+    /// The writer's rename, made while a sync was under way, is in the mirror
+    /// by the time the writer answers — so the bridge's next listing, read
+    /// from the mirror, has the new name. Joined to that sync, it had the old.
+    @Test func aRenameIsInTheMirrorOnceTheWriterAnswers() async throws {
+        let stub = try MirrorStubbedAPI()
+        defer { stub.tearDown() }
+        let dir = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        stub.server.page(at: 0, page([item("a", "take.mov")], cursor: 5))
+        let mirror = DriveMirror(scope: .library, directory: dir, server: server,
+                                 account: "me@example.com", api: { stub.api })
+        _ = try await mirror.sync()
+        stub.server.page(at: 5, page([], cursor: 5))
+        let feed = stub.server
+        let routes = RenamingRoutes { id, name in
+            // The server's rename, in its feed from the next cursor.
+            feed.page(at: 5, page([item(id, name, version: 2)], cursor: 6))
+            feed.page(at: 6, page([], cursor: 6))
+        }
+        let tree = MirrorTree(mirror: mirror, refresh: { _ = try? await mirror.syncAfterWrite() })
+        let writer = DriveWriter(scope: "library", filespaceId: nil, api: routes, tree: tree,
+                                 uploads: try UploadQueue(directory: scratch(), transport: FakeServer(), settle: 0))
+        stub.server.slow(0.3)
+        let tick = Task { try await mirror.sync() }
+        try await until { stub.server.requests(to: "/api/files/delta").count == 2 }
+        try await writer.rename(from: "/take.mov", to: "/final.mov", replace: false)
+        #expect(await tree.item(at: "/final.mov") == .file(id: "a"))
+        #expect(await tree.item(at: "/take.mov") == nil)
+        _ = try await tick.value
     }
 
     @Test func aFailedPassKeepsItsProgressAndReportsItLater() async throws {
