@@ -172,9 +172,31 @@ import VideoToolbox
 enum Clip {
     /// `color`: the clip's colour properties (`hdr`); `tenBit`: HEVC's
     /// Main 10 profile, as an iPhone shoots HDR in.
+    ///
+    /// Written on a thread of its own. Filling the frames is seconds of
+    /// work in a debug build, and the writer's calls wait on the encoder
+    /// (to start, and on its pixel buffer pool's lock). Made on Swift
+    /// concurrency's threads, a few shared by every test, each clip held
+    /// one throughout: two at a time, in a sample of two runs of the suite
+    /// at once. Here a slow encoder only slows the tests that make clips.
     static func make(at url: URL, width: Int, height: Int, fps: Int32, seconds: Double, codec: AVVideoCodecType,
                      transform: CGAffineTransform = .identity, audio: Bool,
                      color: [String: Any]? = nil, tenBit: Bool = false) async throws {
+        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
+            let thread = Thread {
+                done.resume(with: Result {
+                    try write(at: url, width: width, height: height, fps: fps, seconds: seconds, codec: codec,
+                              transform: transform, audio: audio, color: color, tenBit: tenBit)
+                })
+            }
+            thread.name = "Clip.make"
+            thread.start()
+        }
+    }
+
+    /// The clip, on the calling thread, which waits on the encoder as it must.
+    private static func write(at url: URL, width: Int, height: Int, fps: Int32, seconds: Double, codec: AVVideoCodecType,
+                              transform: CGAffineTransform, audio: Bool, color: [String: Any]?, tenBit: Bool) throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: url.pathExtension == "mov" ? .mov : .mp4)
         var settings: [String: Any] = [AVVideoCodecKey: codec, AVVideoWidthKey: width, AVVideoHeightKey: height]
         if let color { settings[AVVideoColorPropertiesKey] = color }
@@ -202,34 +224,48 @@ enum Clip {
         guard writer.startWriting() else { throw writer.error ?? CancellationError() }
         writer.startSession(atSourceTime: .zero)
 
-        // Sound written alongside the frames, as a camera writes them: the
-        // writer interleaves, and holds one track back while the other is
-        // too far behind — all the video first would wait forever.
+        // Sound written alongside the frames, as a camera writes them: each
+        // in time order, the track behind first. The writer interleaves, and
+        // holds one track back while it wants more of the other, so whichever
+        // it will take goes next. Waiting on the next frame alone, with sound
+        // fed only up to that frame's time, a 4K clip with sound once sat for
+        // minutes, the writer idle.
         let frames = Int(seconds * Double(fps))
-        let rate = 48_000, chunk = 1024
-        var sound = 0
-        func soundUpTo(_ sample: Int) async throws {
-            guard let tone else { return }
-            while sound < min(sample, Int(seconds * Double(rate))) {
-                while !tone.isReadyForMoreMediaData { try await Task.sleep(nanoseconds: 1_000_000) }
-                tone.append(try pcm(start: sound, count: chunk, rate: rate))
-                sound += chunk
-            }
-        }
-        for frame in 0..<frames {
-            try await soundUpTo((frame + 1) * rate / Int(fps))
-            while !video.isReadyForMoreMediaData { try await Task.sleep(nanoseconds: 1_000_000) }
+        let rate = 48_000, chunk = 1024, samples = tone == nil ? 0 : Int(seconds * Double(rate))
+        var frame = 0, sound = 0
+        /// The next frame, if the writer takes one now.
+        func addFrame() throws -> Bool {
+            guard frame < frames, video.isReadyForMoreMediaData else { return false }
             guard let pool = adaptor.pixelBufferPool else { throw CancellationError() }
             var buffer: CVPixelBuffer?
             CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
             guard let buffer else { throw CancellationError() }
             fill(buffer, shade: UInt8(frame * 255 / max(1, frames - 1)))
             adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: fps))
+            frame += 1
+            // Finished the moment it is: until then the writer may wait for more.
+            if frame == frames { video.markAsFinished() }
+            return true
         }
-        video.markAsFinished()
-        try await soundUpTo(Int(seconds * Double(rate)))
-        tone?.markAsFinished()
-        await writer.finishWriting()
+        /// The next stretch of sound, if the writer takes it now.
+        func addSound() throws -> Bool {
+            guard let tone, sound < samples, tone.isReadyForMoreMediaData else { return false }
+            tone.append(try pcm(start: sound, count: chunk, rate: rate))
+            sound += chunk
+            if sound >= samples { tone.markAsFinished() }
+            return true
+        }
+        while frame < frames || sound < samples {
+            // A writer that has failed takes nothing again: that throws,
+            // rather than waiting forever.
+            guard writer.status == .writing else { throw writer.error ?? CancellationError() }
+            let soundFirst = sound * Int(fps) < (frame + 1) * rate
+            let added = try soundFirst ? (addSound() || addFrame()) : (addFrame() || addSound())
+            if !added { usleep(1000) }
+        }
+        let finished = DispatchSemaphore(value: 0)
+        writer.finishWriting { finished.signal() }
+        finished.wait()
         if writer.status != .completed { throw writer.error ?? CancellationError() }
     }
 
