@@ -19,6 +19,13 @@ const viewer = { isAdmin: false, email: 'someone@example.com', roleId: 'member',
 /** Every `$n` referenced by the SQL, in order of first appearance. */
 const placeholders = (text) => [...text.matchAll(/\$(\d+)/g)].map((m) => Number(m[1]));
 
+/** What the filespace clause binds: [its `=` arm, its LIKE arm]. */
+const filespaceArms = (text, params) => {
+  const m = text.match(/\(f\.storage_key = \$(\d+) OR f\.storage_key LIKE \$(\d+)\)/);
+  assert.ok(m, 'filespace clause missing');
+  return [params[m[1] - 1], params[m[2] - 1]];
+};
+
 describe('parameter binding', () => {
   test('every placeholder has a parameter, and every parameter is used', () => {
     const { text, params } = buildFileQuery({
@@ -170,6 +177,24 @@ describe('filters', () => {
     const { params } = buildFileQuery({ opts: { storagePrefix: 'clients/acme' }, principal: admin });
     assert.ok(params.includes('clients/acme'));
     assert.ok(params.includes('clients/acme/%'));
+  });
+
+  test('a filespace prefix is literal in its LIKE arm, and only there', () => {
+    // LIKE reads `_` as any one character and `%` as any run, so an unescaped
+    // 'brand_assets/%' would also take in brand-assets/… and brandXassets/….
+    // The `=` arm compares plain text, where an escape is a backslash too many.
+    for (const [prefix, exact, like] of [
+      ['brand_assets', 'brand_assets', 'brand\\_assets/%'],
+      ['100%', '100%', '100\\%/%'],
+      ['a\\b', 'a\\b', 'a\\\\b/%'],
+      ['/brand_assets/', 'brand_assets', 'brand\\_assets/%'],
+    ]) {
+      const q = buildFileQuery({ opts: { storagePrefix: prefix }, principal: admin });
+      assert.deepEqual(filespaceArms(q.text, q.params), [exact, like], prefix);
+      assert.deepEqual(filespaceArms(q.countText, q.countParams), [exact, like], `${prefix}: the count`);
+      const tree = buildFolderCountQuery({ opts: { storagePrefix: prefix }, principal: viewer });
+      assert.deepEqual(filespaceArms(tree.text, tree.params), [exact, like], `${prefix}: the folder tree`);
+    }
   });
 
   test('tags use containment, not the key-existence operators', () => {
