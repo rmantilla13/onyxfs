@@ -9,7 +9,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildFileQuery, buildFolderCountQuery, artifactClauses, nextCursor, sortSpec, encodeCursor, decodeCursor, SORT_KEYS, FILE_COLUMNS,
+  buildFileQuery, buildFolderCountQuery, buildTrashQuery, artifactClauses, nextCursor, sortSpec, encodeCursor, decodeCursor, SORT_KEYS, FILE_COLUMNS,
 } from '../lib/file-query.js';
 import { drivePatterns } from '../lib/drive-access.js';
 
@@ -483,4 +483,56 @@ test('the listing selects the preview and sibling columns', () => {
   assert.ok(cols.includes('thumb_sizes'));
   const { text } = buildFileQuery({ opts: {}, principal: { isAdmin: true } });
   assert.ok(text.includes('f.poster_key') && text.includes('f.thumb_sizes'));
+});
+
+describe('the trash query', () => {
+  // A person's Trash (GET /api/files/trash) and what their restore may act
+  // on: trashed rows they could see were they live, and in a drive could
+  // change. A mistake here hands someone another drive's deleted files.
+  const drives = [{ id: 'brand', prefix: 'brand' }, { id: 'acme', prefix: 'clients/acme' }];
+  const member = {
+    ...viewer,
+    drivePatterns: { all: drivePatterns(drives), mine: drivePatterns(drives), write: drivePatterns(drives.slice(0, 1)) },
+  };
+
+  test('only trashed rows, newest deletion first, with who deleted them', () => {
+    const { text } = buildTrashQuery({ principal: member });
+    assert.match(text, /f\.deleted_at IS NOT NULL/);
+    assert.ok(!/f\.deleted_at IS NULL/.test(text));
+    assert.match(text, /ORDER BY f\.deleted_at DESC, f\.id DESC\nLIMIT \$\d+$/);
+    assert.match(text, /, f\.deleted_by\nFROM files f/);
+  });
+
+  test('the listing’s access rule and the drive write rule both apply', () => {
+    const { text, params } = buildTrashQuery({ principal: member });
+    // accessClauses: owner, org-visible, a grant; then the drive boundary.
+    assert.match(text, /lower\(coalesce\(f\.created_by, ''\)\) = \$\d+/);
+    assert.match(text, /f\.visibility = 'org'/);
+    // driveWriteClauses: inside a drive, only one they may change.
+    assert.ok(params.some((p) => Array.isArray(p) && p.length === 1 && p[0] === 'brand/%'), 'the drives they edit, alone');
+    assert.match(text, /a\.access IN \('editor', 'owner'\)/);
+  });
+
+  test('an admin has every trashed row', () => {
+    const { text } = buildTrashQuery({ principal: admin });
+    assert.ok(!/lower\(coalesce\(f\.created_by/.test(text), 'no owner rule');
+    assert.ok(!/LIKE ANY/.test(text), 'no drive rule');
+  });
+
+  test('ids narrow it, and the keyset carries on past the last row read', () => {
+    const { text, params } = buildTrashQuery({ principal: member, ids: ['a', 'b'], before: { deletedAt: 1700000000000, id: 'z' } });
+    assert.match(text, /f\.id = ANY\(\$\d+::text\[\]\)/);
+    assert.match(text, /\(f\.deleted_at, f\.id\) < \(\$\d+::bigint, \$\d+::text\)/);
+    assert.ok(params.some((p) => Array.isArray(p) && p.join() === 'a,b'));
+    assert.ok(params.includes(1700000000000) && params.includes('z'));
+  });
+
+  test('every placeholder has a parameter, and the limit stays sane', () => {
+    const { text, params, limit } = buildTrashQuery({ principal: member, ids: ['a'], before: { deletedAt: 5, id: 'x' }, limit: 10_000 });
+    const used = new Set(placeholders(text));
+    assert.equal(used.size, params.length);
+    for (const n of used) assert.ok(n >= 1 && n <= params.length);
+    assert.equal(limit, 500);
+    assert.equal(buildTrashQuery({ principal: member, limit: -3 }).limit, 50);
+  });
 });

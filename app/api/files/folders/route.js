@@ -462,7 +462,7 @@ export async function PATCH(req) {
 }
 
 /**
- * DELETE /api/files/folders?name=&filespace= → { deleted, failed, outside, more }
+ * DELETE /api/files/folders?name=&filespace= → { deleted, failed, outside, more, trashed, trashedIds }
  *
  * Delete a folder and everything in it, each file exactly as DELETE
  * /api/files/[id] would: with the `trash` flag on (read here, never from the
@@ -564,5 +564,7 @@ export async function DELETE(req) {
     outside: plan.outside.length,
     more,
     trashed: flags.trash !== false,
+    // The files this call put in the trash, for the web's "Restore files".
+    trashedIds: flags.trash !== false ? batch.filter((_, i) => results[i]?.ok).map((w) => w.id) : [],
   });
 }

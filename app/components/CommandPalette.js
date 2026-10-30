@@ -136,6 +136,9 @@ export default function CommandPalette({ open, onClose, drives = [], library = n
     onFiles && { id: 'new-folder', label: 'New folder…', run: () => command('new-folder') },
     onFiles && { id: 'upload', label: 'Upload files…', run: () => command('upload') },
     onFiles && { id: 'info', label: 'Get info', hint: 'Open folder', run: () => command('info') },
+    // Anyone's: /trash sends someone without a Trash (no delete, or the
+    // trash off) on to Files.
+    { id: 'trash', label: 'Trash', hint: 'Restore deleted files', run: () => go('/trash') },
     isAdmin && { id: 'new-drive', label: 'New drive…', run: () => (onFiles ? command('new-drive') : go('/files?new=drive')) },
     isAdmin && { id: 'storage', label: 'Storage usage', hint: 'What is using the space', run: () => go('/admin/usage') },
     isAdmin && { id: 'duplicates', label: 'Find duplicate files', hint: 'Storage', run: () => go('/admin/usage/duplicates') },
