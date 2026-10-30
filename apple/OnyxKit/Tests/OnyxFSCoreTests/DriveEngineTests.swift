@@ -710,6 +710,190 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
         #expect(String(decoding: try await engine.read(now.id, at: 0, count: 20), as: UTF8.self) == "brand new")
     }
 
+    /// The same save from deeper in, as NSDocument makes it on a disk that
+    /// has an item replacement folder (/.TemporaryItems/folders.<uid>/…):
+    /// the copy is macOS's only for where it sits, its name is the
+    /// document's, and it may still be open when it is moved over the
+    /// document. Its bytes go up to the document's path — the same file, a
+    /// new version of it — nothing is deleted or sent from .TemporaryItems,
+    /// and the web's next listing does not make it macOS's again.
+    @Test func aSafeSaveFromDeepInTemporaryItemsReachesTheWebOpenOrClosed() async throws {
+        for closedFirst in [false, true] {
+            let bridge = FakeBridge()
+            await bridge.addFile("/Report.rtf", Data("old".utf8))
+            let engine = try await makeEngine(bridge)
+            let document = try await engine.lookup("Report.rtf", in: DriveEngine.rootID)
+            let temp = try await engine.create(".TemporaryItems", in: DriveEngine.rootID, isDirectory: true)
+            let user = try await engine.create("folders.501", in: temp.id, isDirectory: true)
+            let copy = try await engine.create("Report.rtf", in: user.id, isDirectory: false)
+            #expect(copy.localOnly && copy.hidden, "macOS's, for where it sits")
+            let saved = Data("{\\rtf1 new}".utf8)
+            try await engine.beginWriting(copy.id, truncating: false)
+            _ = try await engine.write(copy.id, at: 0, data: saved)
+            if closedFirst { try await engine.finishWriting(copy.id) }
+            let moved = try await engine.rename(copy.id, from: user.id, name: "Report.rtf", to: DriveEngine.rootID,
+                                                newName: "Report.rtf", replacing: document.id)
+            #expect(!moved.localOnly && !moved.hidden, "the drive's now, and shown")
+            if !closedFirst { try await engine.finishWriting(copy.id) }
+            #expect(try await sent(bridge, "/Report.rtf", saved))
+            #expect(await bridge.fileID("/Report.rtf") == "f1", "the same file on the server, a new version of it")
+            #expect(await bridge.calls.filter { !$0.hasPrefix("list") } == ["put /Report.rtf \(saved.count)"],
+                    "nothing deleted, and nothing sent from .TemporaryItems")
+
+            await engine.apply(BridgeChanges(generation: 1, paths: ["/"]))
+            let listed = try await engine.lookup("Report.rtf", in: DriveEngine.rootID)
+            #expect(listed.id == copy.id && !listed.localOnly)
+            #expect(try await engine.read(listed.id, at: 0, count: 64) == saved)
+            #expect(try await engine.children(of: user.id).isEmpty)
+        }
+    }
+
+    /// TextEdit saving on a drive, as watched on one (0.5.27, where every
+    /// such save failed): a sandboxed app's NSDocument, with no item
+    /// replacement folder on the disk and no swap, writes its copy into
+    /// "<name>.sb-…" beside the document, renames the document to another
+    /// "<name>.sb-…", moves the copy into its place, and removes the one set
+    /// aside and the folder. The server is asked for one thing — the copy,
+    /// put to the document's path: the same file, a new version of it — and
+    /// the listing the copy sets off meanwhile, which still has the document
+    /// where it was, does not bring its name back.
+    @Test func aSandboxedAppsSaveIsANewVersionOfTheDocument() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Docs")
+        await bridge.addFile("/Docs/Report.rtf", Data("old".utf8))
+        let engine = try await makeEngine(bridge)
+        let docs = try await engine.lookup("Docs", in: DriveEngine.rootID)
+        let document = try await engine.lookup("Report.rtf", in: docs.id)
+
+        let saving = try await engine.create("Report.rtf.sb-d22dcccc-3mKm0y", in: docs.id, isDirectory: true)
+        #expect(saving.localOnly, "the copy's folder is this Mac's")
+        let copy = try await engine.create("Report.rtf", in: saving.id, isDirectory: false)
+        let saved = Data("{\\rtf1 new}".utf8)
+        try await engine.beginWriting(copy.id, truncating: false)
+        _ = try await engine.write(copy.id, at: 0, data: saved)
+        try await engine.finishWriting(copy.id)
+
+        let aside = try await engine.rename(document.id, from: docs.id, name: "Report.rtf", to: docs.id,
+                                            newName: "Report.rtf.sb-d22dcccc-MMh3N9", replacing: nil)
+        #expect(aside.id == document.id && aside.hidden)
+        #expect(try await engine.read(aside.id, at: 0, count: 10) == Data("old".utf8), "still the server's bytes")
+        await engine.apply(BridgeChanges(generation: 1, paths: ["/Docs"]))
+        await #expect(throws: VolumeError.posix(ENOENT)) { try await engine.lookup("Report.rtf", in: docs.id) }
+
+        let moved = try await engine.rename(copy.id, from: saving.id, name: "Report.rtf", to: docs.id,
+                                            newName: "Report.rtf", replacing: nil)
+        #expect(!moved.localOnly)
+        try await engine.remove(aside.id, name: "Report.rtf.sb-d22dcccc-MMh3N9", from: docs.id)
+        try await engine.remove(saving.id, name: "Report.rtf.sb-d22dcccc-3mKm0y", from: docs.id)
+
+        #expect(try await sent(bridge, "/Docs/Report.rtf", saved))
+        #expect(await bridge.fileID("/Docs/Report.rtf") == "f1", "the same file on the server, a new version of it")
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") } == ["put /Docs/Report.rtf \(saved.count)"],
+                "no folder made, nothing renamed or trashed on the server")
+        #expect(try await engine.children(of: docs.id).map(\.name) == ["Report.rtf"])
+        let now = try await engine.lookup("Report.rtf", in: docs.id)
+        #expect(now.id == copy.id && !now.hidden)
+        #expect(try await engine.read(now.id, at: 0, count: 64) == saved)
+    }
+
+    /// What made every such save fail on 0.5.27: the copy's upload sets off
+    /// a listing of the folder, which comes back with the document still
+    /// under its name just as the document is set aside. Merged after it,
+    /// that listing put the old name back and lost what was set aside: the
+    /// copy could not be moved in (EEXIST), nor the document put back.
+    @Test func aListingOnItsWayWhileTheDocumentIsSetAsideChangesNothing() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFile("/Report.rtf", Data("old".utf8))
+        let engine = try await makeEngine(bridge)
+        let document = try await engine.lookup("Report.rtf", in: DriveEngine.rootID)
+        let saving = try await engine.create("Report.rtf.sb-d22dcccc-3mKm0y", in: DriveEngine.rootID, isDirectory: true)
+        let copy = try await engine.create("Report.rtf", in: saving.id, isDirectory: false)
+        _ = try await engine.write(copy.id, at: 0, data: Data("new".utf8))
+        try await engine.finishWriting(copy.id)
+
+        await bridge.holdNextListing(of: "/")
+        let listing = Task { await engine.apply(BridgeChanges(generation: 1, paths: ["/"])) }
+        while !(await bridge.isHolding("/")) { try await Task.sleep(nanoseconds: 1_000_000) }
+        let aside = try await engine.rename(document.id, from: DriveEngine.rootID, name: "Report.rtf", to: DriveEngine.rootID,
+                                            newName: "Report.rtf.sb-d22dcccc-MMh3N9", replacing: nil)
+        await bridge.release("/")
+        await listing.value
+
+        _ = try await engine.rename(copy.id, from: saving.id, name: "Report.rtf", to: DriveEngine.rootID,
+                                    newName: "Report.rtf", replacing: nil)
+        try await engine.remove(aside.id, name: "Report.rtf.sb-d22dcccc-MMh3N9", from: DriveEngine.rootID)
+        #expect(try await sent(bridge, "/Report.rtf", Data("new".utf8)))
+        #expect(await bridge.fileID("/Report.rtf") == "f1")
+    }
+
+    /// The same save failing once the document is set aside: NSFileManager
+    /// puts it back. Nothing reached the server, and the document is as it
+    /// was, under its id.
+    @Test func aSafeSaveThatFailsPutsTheDocumentBackAsItWas() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFile("/Report.rtf", Data("old".utf8))
+        let engine = try await makeEngine(bridge)
+        let document = try await engine.lookup("Report.rtf", in: DriveEngine.rootID)
+        let aside = try await engine.rename(document.id, from: DriveEngine.rootID, name: "Report.rtf", to: DriveEngine.rootID,
+                                            newName: "Report.rtf.sb-d22dcccc-MMh3N9", replacing: nil)
+        let back = try await engine.rename(aside.id, from: DriveEngine.rootID, name: "Report.rtf.sb-d22dcccc-MMh3N9",
+                                           to: DriveEngine.rootID, newName: "Report.rtf", replacing: nil)
+        #expect(back.id == document.id && !back.localOnly)
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") }.isEmpty)
+        await engine.apply(BridgeChanges(generation: 1, paths: ["/"]))
+        #expect(try await engine.lookup("Report.rtf", in: DriveEngine.rootID).id == document.id)
+        #expect(try await engine.read(document.id, at: 0, count: 10) == Data("old".utf8))
+        #expect(try await engine.children(of: DriveEngine.rootID).filter { !$0.hidden }.map(\.name) == ["Report.rtf"])
+    }
+
+    /// Set aside and removed, with nothing moved into its place: the
+    /// document is removed (to the web's trash), as on any disk. One with
+    /// changes still on their way to the server is not set aside at all.
+    @Test func aDocumentSetAsideAndRemovedIsRemoved() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFile("/Report.rtf", Data("old".utf8))
+        await bridge.addFile("/Notes.txt", Data("n".utf8))
+        let engine = try await makeEngine(bridge)
+        let document = try await engine.lookup("Report.rtf", in: DriveEngine.rootID)
+        let aside = try await engine.rename(document.id, from: DriveEngine.rootID, name: "Report.rtf", to: DriveEngine.rootID,
+                                            newName: "Report.rtf.sb-d22dcccc-MMh3N9", replacing: nil)
+        try await engine.remove(aside.id, name: "Report.rtf.sb-d22dcccc-MMh3N9", from: DriveEngine.rootID)
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") } == ["delete /Report.rtf"])
+
+        let notes = try await engine.lookup("Notes.txt", in: DriveEngine.rootID)
+        try await engine.beginWriting(notes.id, truncating: true)
+        _ = try await engine.write(notes.id, at: 0, data: Data("unsent".utf8))
+        await #expect(throws: VolumeError.posix(EBUSY)) {
+            _ = try await engine.rename(notes.id, from: DriveEngine.rootID, name: "Notes.txt", to: DriveEngine.rootID,
+                                        newName: "Notes.txt.sb-0badf00d-a1B2c3", replacing: nil)
+        }
+        #expect(try await engine.lookup("Notes.txt", in: DriveEngine.rootID).id == notes.id)
+    }
+
+    /// What a save left on the server under a safe save's name before this
+    /// (0.5.27 left the document so) is the drive's: listed, and renamed
+    /// back by the server. A folder — a package document — set aside is the
+    /// server's rename too, as it always was.
+    @Test func safeSaveNamesTheServerHasStayTheDrives() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFile("/Report.rtf.sb-d22dcccc-MMh3N9", Data("old".utf8))
+        await bridge.addFolder("/Letter.rtfd")
+        let engine = try await makeEngine(bridge)
+        let left = try await engine.lookup("Report.rtf.sb-d22dcccc-MMh3N9", in: DriveEngine.rootID)
+        #expect(!left.localOnly && !left.hidden)
+        _ = try await engine.rename(left.id, from: DriveEngine.rootID, name: "Report.rtf.sb-d22dcccc-MMh3N9", to: DriveEngine.rootID,
+                                    newName: "Report.rtf", replacing: nil)
+        let package = try await engine.lookup("Letter.rtfd", in: DriveEngine.rootID)
+        _ = try await engine.rename(package.id, from: DriveEngine.rootID, name: "Letter.rtfd", to: DriveEngine.rootID,
+                                    newName: "Letter.rtfd.sb-d22dcccc-Qw3rTy", replacing: nil)
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") } == [
+            "rename /Report.rtf.sb-d22dcccc-MMh3N9 -> /Report.rtf", "rename /Letter.rtfd -> /Letter.rtfd.sb-d22dcccc-Qw3rTy",
+        ])
+        #expect(LocalOnly.isSafeSave("Report.rtf.sb-d22dcccc-3mKm0y"))
+        #expect(!LocalOnly.isSafeSave("Report.sb-d22dcccc-3mKm0") && !LocalOnly.isSafeSave(".sb-d22dcccc-3mKm0y")
+                && !LocalOnly.isSafeSave("Report.rtf.sb-D22DCCCC-3mKm0y") && !LocalOnly.isSafeSave("Report.rtf.sb-d22dcccc_3mKm0y"))
+    }
+
     /// macOS's own files moving among themselves stay its own, and a real file
     /// still cannot become one.
     @Test func macOSOwnFilesMovingAmongThemselvesStayOnThisMac() async throws {
