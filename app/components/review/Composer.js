@@ -27,6 +27,10 @@ const TOOL_ICON = { pen: 'pencil', arrow: 'arrow-up-right', rect: 'square' }; /*
  *
  * Posting clears the composer at once — the comment appears optimistically —
  * and a failure puts everything back, with the reason.
+ *
+ * One piece (review.css .review-write): what the comment is pinned to on a
+ * line above the words, the drawing tools and Post on a line below, and the
+ * frame around all of it is what takes the focus.
  */
 export default function Composer({
   fileId, kind, model, knownRate, frame, range, draftApi, onPost, onFocus, onAnchor, textareaRef, srcSize = { w: 0, h: 0 },
@@ -45,6 +49,11 @@ export default function Composer({
   const anchorFrame = draft.frame ?? frame ?? 0;
   const useRange = hasRange && draft.frame == null;
   const drawn = draft.shapes.length > 0;
+  // Post is lit once there is something to post. Lit over an empty field
+  // the gradient said nothing; arriving with the first character, it says
+  // the comment is ready. Not `disabled`: the button stays reachable, and
+  // submit() already explains an empty one.
+  const ready = body.trim().length > 0 || drawn;
 
   let chip = 'General';
   if (video && draft.anchored) chip = useRange ? `In ${tc(range.inFrame)} → Out ${tc(range.outFrame)}` : tc(anchorFrame);
@@ -85,22 +94,8 @@ export default function Composer({
   };
 
   return (
-    <div className="review-composer">
-      <MentionTextarea
-        fileId={fileId}
-        value={body}
-        onChange={(v) => { setBody(v); if (error) setError(null); }}
-        people={people}
-        onPeopleChange={setPeople}
-        onSubmit={submit}
-        onFocus={onFocus}
-        onEscape={(e) => { set({ tool: null, placing: false }); e.currentTarget.blur(); }}
-        textareaRef={textareaRef}
-        placeholder={video ? 'Comment on this frame…' : 'Add a comment…'}
-        mentions={!guest}
-      />
-
-      <div className="review-composer-row">
+    <div className="review-composer review-write">
+      <div className="review-write-head">
         <button
           type="button"
           className={`review-chip${chip === 'General' ? ' is-general' : ''}`}
@@ -121,61 +116,84 @@ export default function Composer({
           {((video && draft.anchored && !drawn) || (!video && draft.pin)) && <Icon name="x" size={12} />}
         </button>
 
+        <div className="spacer" />
         {!guest && (
           <label className="review-internal small" title="Only people signed in to this workspace see it — never guests on a review link.">
             <input type="checkbox" checked={internal} onChange={(e) => setInternal(e.target.checked)} />
             Internal
           </label>
         )}
-
-        <div className="spacer" />
-        <button type="button" className="btn btn-primary btn-sm" onClick={submit} disabled={busy}>
-          {busy ? 'Posting…' : 'Post'}
-        </button>
       </div>
 
-      <div className="review-tools" role="toolbar" aria-label="Draw on the picture">
-        {ANNOTATION_TOOLS.map((t) => (
-          <button
-            key={t}
-            type="button"
-            className="btn btn-sm btn-ghost"
-            aria-pressed={draft.tool === t}
-            title={TOOL_LABEL[t]}
-            onClick={() => set({ tool: draft.tool === t ? null : t, placing: false })}
-          >
-            <Icon name={TOOL_ICON[t]} size={14} />
-            <span className="sr-only">{TOOL_LABEL[t]}</span>
-          </button>
-        ))}
-        {!video && (
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            aria-pressed={draft.placing}
-            onClick={() => set({ placing: !draft.placing, tool: null })}
-          >
-            Pin
-          </button>
-        )}
-        <span className="review-swatches" role="group" aria-label="Colour">
-          {Array.from({ length: ANNOTATION_COLORS }, (_, c) => (
+      <MentionTextarea
+        fileId={fileId}
+        value={body}
+        onChange={(v) => { setBody(v); if (error) setError(null); }}
+        people={people}
+        onPeopleChange={setPeople}
+        onSubmit={submit}
+        onFocus={onFocus}
+        onEscape={(e) => { set({ tool: null, placing: false }); e.currentTarget.blur(); }}
+        textareaRef={textareaRef}
+        placeholder={video ? 'Comment on this frame…' : 'Add a comment…'}
+        mentions={!guest}
+      />
+
+      <div className="review-write-foot">
+        <div className="review-tools" role="toolbar" aria-label="Draw on the picture">
+          {ANNOTATION_TOOLS.map((t) => (
             <button
-              key={c}
+              key={t}
               type="button"
-              className={`review-swatch review-fill-c${c}`}
-              aria-pressed={draft.color === c}
-              aria-label={`Colour ${c + 1}`}
-              onClick={() => set({ color: c })}
-            />
+              className="btn btn-sm btn-ghost"
+              aria-pressed={draft.tool === t}
+              title={TOOL_LABEL[t]}
+              onClick={() => set({ tool: draft.tool === t ? null : t, placing: false })}
+            >
+              <Icon name={TOOL_ICON[t]} size={14} />
+              <span className="sr-only">{TOOL_LABEL[t]}</span>
+            </button>
           ))}
-        </span>
-        {drawn && (
-          <>
-            <button type="button" className="btn btn-sm btn-ghost" onClick={undo}>Undo</button>
-            <button type="button" className="btn btn-sm btn-ghost" onClick={clearDrawing}>Clear</button>
-          </>
-        )}
+          {!video && (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              aria-pressed={draft.placing}
+              onClick={() => set({ placing: !draft.placing, tool: null })}
+            >
+              Pin
+            </button>
+          )}
+          <span className="review-swatches" role="group" aria-label="Colour">
+            {Array.from({ length: ANNOTATION_COLORS }, (_, c) => (
+              <button
+                key={c}
+                type="button"
+                className={`review-swatch review-fill-c${c}`}
+                aria-pressed={draft.color === c}
+                aria-label={`Colour ${c + 1}`}
+                onClick={() => set({ color: c })}
+              />
+            ))}
+          </span>
+          {drawn && (
+            <>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={undo}>Undo</button>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={clearDrawing}>Clear</button>
+            </>
+          )}
+        </div>
+        {/* Post keeps the right edge, on the tools' line or, where the aside
+            is too narrow for both, on one of its own (review.css). */}
+        <button
+          type="button"
+          className={`btn btn-sm review-post${ready ? ' btn-primary' : ''}`}
+          onClick={submit}
+          disabled={busy}
+          aria-disabled={!ready || undefined}
+        >
+          {busy ? 'Posting…' : 'Post'}
+        </button>
       </div>
 
       {video && !knownRate && <p className="small muted review-note">Frame rate unknown — timecodes are approximate.</p>}

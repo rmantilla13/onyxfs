@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import BrandLogo from '@/app/components/BrandLogo';
+import BlurText from '@/app/components/motion/BlurText';
+import DecryptedText from '@/app/components/motion/DecryptedText';
 
 export default function PairClient({ brandName, logo }) {
   const [code, setCode] = useState(null);
@@ -33,7 +35,7 @@ export default function PairClient({ brandName, logo }) {
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
       <div className="card" style={{ width: '100%', maxWidth: 420, padding: 32 }}>
         <BrandLogo logo={logo} name={brandName} height={30} markSize={40} className="auth-logo" />
-        <h1 style={{ fontSize: 22, marginBottom: 8 }}>Pair {brandName}</h1>
+        <h1 style={{ fontSize: 22, marginBottom: 8 }}><BlurText text={`Pair ${brandName}`} /></h1>
         <p className="muted small" style={{ marginBottom: 20 }}>
           Type this code into the Mac or iPhone app. It works once and expires in five minutes.
         </p>
@@ -44,7 +46,7 @@ export default function PairClient({ brandName, logo }) {
               className="mono"
               style={{ fontSize: 30, letterSpacing: '0.18em', textAlign: 'center', padding: '18px 0', border: '1px solid var(--line)', borderRadius: 'var(--radius)' }}
             >
-              {code}
+              <DecryptedText text={code} />
             </div>
             {expires && (
               <p className="muted small" style={{ textAlign: 'center', marginTop: 10 }}>

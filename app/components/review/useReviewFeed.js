@@ -13,8 +13,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * the background asks nothing, and catches up the moment it is shown.
  *
  * What you post appears at once — inserted optimistically, then replaced by
- * the server's row. Rows are merged by `seq`, the server's change counter, so
- * a poll that raced a mutation can never put an older copy back.
+ * the server's row, which carries the optimistic one's id as `clientKey` so
+ * the panel keeps the same element for it (and the row arrives once). Rows
+ * are merged by `seq`, the server's change counter, so a poll that raced a
+ * mutation can never put an older copy back.
  *
  * `base` is where the review is served: a member's is the file's API; a
  * review link's guests' is the link itself (/s/<token> — app/s/[token]),
@@ -40,7 +42,9 @@ export default function useReviewFeed(fileId, { enabled = true, interval = 8000,
     const comments = new Map(prev.comments);
     for (const c of payload.comments || []) {
       const old = comments.get(c.id);
-      if (!old || (old.seq ?? 0) <= (c.seq ?? 0)) comments.set(c.id, c);
+      // A row posted here keeps its clientKey through every later copy of
+      // itself, so the panel's element for it is never remade.
+      if (!old || (old.seq ?? 0) <= (c.seq ?? 0)) comments.set(c.id, old?.clientKey ? { ...c, clientKey: old.clientKey } : c);
     }
     const decisions = new Map(prev.decisions);
     for (const d of payload.decisions || []) {
@@ -133,7 +137,7 @@ export default function useReviewFeed(fileId, { enabled = true, interval = 8000,
         const comments = new Map(s.comments);
         comments.delete(temp.id);
         const old = comments.get(out.comment.id);
-        if (!old || (old.seq ?? 0) <= out.comment.seq) comments.set(out.comment.id, out.comment);
+        if (!old || (old.seq ?? 0) <= out.comment.seq) comments.set(out.comment.id, { ...out.comment, clientKey: temp.id });
         return { ...s, comments, status: out.status, openComments: out.openComments };
       });
       return out.comment;

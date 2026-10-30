@@ -8,9 +8,12 @@ import SwiftUI
 ///
 /// Views take their colours from here, and these from the asset catalog,
 /// never a hex value: the web is white-label, and so the brand's colours
-/// live where a rebrand changes them in one place. The glass is Liquid
-/// Glass from iOS 26; before it, a material with the web's hairline edge
-/// and sheen (its --glass-* tokens); with Reduce Transparency, solid.
+/// live where a rebrand changes them in one place. Their type, corners,
+/// spacing and shade come from here too — the ladders the web's --t-*,
+/// --radius-*, --s* and --shadow-* tokens are — so a size is a step on one
+/// rather than a number typed where it is used. The glass is Liquid Glass
+/// from iOS 26; before it, a material with the web's hairline edge and
+/// sheen (its --glass-* tokens); with Reduce Transparency, solid.
 enum Theme {
     // MARK: - Colours
 
@@ -30,6 +33,9 @@ enum Theme {
     static var auraBlueDeep: Color { Color("AuraBlueDeep") }
     static var auraMagentaDeep: Color { Color("AuraMagentaDeep") }
     static var onAura: Color { Color("OnAura") }
+    /// Secondary text and marks (--muted): the system's secondary label,
+    /// which is what the app's second lines already are.
+    static var muted: Color { .secondary }
 
     // MARK: - Glass (globals.css --glass-*, dark scheme)
 
@@ -65,26 +71,138 @@ enum Theme {
                        startPoint: .leading, endPoint: .trailing)
     }
 
-    /// The mark's glow, and a spinner's ring: all three hues around.
-    static var halo: AngularGradient {
-        AngularGradient(colors: [auraBlue, auraMagenta, auraCyan, auraBlue], center: .center)
-    }
-
     // MARK: - The page
 
-    /// Pure black: the media and the aura's accents bring the colour.
-    static let page = Color.black
+    /// The page is the paper (--paper), as the launch screen and the web's
+    /// body are — not pure black, which agreed with neither, nor with the
+    /// contrast DriveTint works out against the paper.
+    static var page: Color { paper }
     /// A card on it, and a tile with no picture: near-black grey.
     static var card: Color { surface.opacity(0.82) }
+    /// Footage is looked at on black whatever the scheme (the web's
+    /// --stage): a preview's ground, never a page's.
+    static let stage = Color.black
+    /// The shade a badge sits on over a picture (.filecard-badge): dark
+    /// enough for a white label on any picture, in either scheme.
+    static let scrim = Color.black.opacity(0.55)
+    /// A check not yet chosen, over a picture (SelectionCheck): a lighter
+    /// shade than the scrim, so the picture still reads through it.
+    static let dim = Color.black.opacity(0.28)
+    /// The lit rim of a badge over a picture — a check, a review dot — so it
+    /// stands on a light picture and on a dark one (the web's --on-stage).
+    static let rim = Color.white.opacity(0.9)
 
     // MARK: - Shape
 
-    /// A tile's picture: big, continuous corners.
-    static let tileCorner: CGFloat = 24
+    /// Corners, in steps, as the web's --radius ladder: a control, a chip,
+    /// a row's picture, a tile's, a card. One inside another takes the
+    /// step below, so the corners stay concentric.
+    /// A small control, a note (--radius-md).
+    static let controlCorner: CGFloat = 10
+    /// A chip, a badge's tile (--radius-lg).
+    static let chipCorner: CGFloat = 12
     /// A row's picture.
     static let rowCorner: CGFloat = 14
+    /// A tile's picture: big, continuous corners.
+    static let tileCorner: CGFloat = 24
     /// A card: the Home's cards, the download tray, a sheet's header.
     static let cardCorner: CGFloat = 28
+    /// The edge drawn round a picture or a card: half a point, a pixel on
+    /// every screen that runs this (the web's 1px).
+    static let hairline: CGFloat = 0.5
+
+    /// Spacing, in the web's steps (--s1…--s6) and the screen's gutter. A
+    /// nudge between steps — 14 between rows, 3 under a name — is optical,
+    /// and typed where it is used.
+    enum Space {
+        static let s1: CGFloat = 4
+        static let s2: CGFloat = 8
+        static let s3: CGFloat = 12
+        static let s4: CGFloat = 16
+        static let s5: CGFloat = 24
+        static let s6: CGFloat = 32
+        /// The page's side margin on a phone.
+        static let gutter: CGFloat = 20
+    }
+
+    // MARK: - Type
+
+    /// The type scale (the web's --t-* ladder): every text on a screen is
+    /// one of these, so a tile's name and a row's, a headline and a
+    /// section's, agree across Home, Browse and Info. System text styles,
+    /// so Dynamic Type scales each; the headline through @ScaledMetric.
+    enum Text {
+        /// The page's headline (EditorialTitle, Home's greeting): bold, set
+        /// tight, 40pt before Dynamic Type. `display(at:)` takes the size
+        /// Dynamic Type has scaled `displaySize` to.
+        static let displaySize: CGFloat = 40
+        static func display(at size: CGFloat) -> Font { .system(size: size, weight: .bold) }
+        static func displayTracking(at size: CGFloat) -> CGFloat { -size * 0.025 }
+        /// A section's name ("Recent Files").
+        static let title: Font = .title2.weight(.bold)
+        static let titleTracking: CGFloat = -0.4
+        /// A card's name: a drive's.
+        static let card: Font = .title3.weight(.bold)
+        /// A card's heading, a sheet's: the system's headline.
+        static let section: Font = .headline
+        /// A row's name.
+        static let row: Font = .body.weight(.medium)
+        /// A tile's name, under its picture.
+        static let tile: Font = .subheadline.weight(.medium)
+        /// A row's second line: its size, when it came.
+        static let detail: Font = .subheadline
+        /// A tile's second line, a card's count.
+        static let meta: Font = .footnote
+        /// A number that changes — a size, a count, a time — in digits of
+        /// one width, so it does not jostle as it does.
+        static let numeric: Font = .subheadline.monospacedDigit()
+    }
+
+    // MARK: - Elevation
+
+    /// How far something floats, as the shade under it (the web's
+    /// --shadow-1/-2/-3): a badge just off its picture, a bar or a button
+    /// over the page, a tray or a card over everything. Always through
+    /// `elevation(_:)`.
+    struct Elevation {
+        let radius: CGFloat
+        let y: CGFloat
+        static let low = Elevation(radius: 2, y: 1)
+        static let raised = Elevation(radius: 10, y: 4)
+        static let floating = Elevation(radius: 18, y: 8)
+    }
+
+    // MARK: - Motion
+
+    /// How things move, in three lengths — the web's --dur-1/--dur-2 and its
+    /// ease — so every cue is one of these and none is typed by hand. Always
+    /// through `motion(_:)`, which is where Reduce Motion turns them all off.
+    enum Motion {
+        /// A press, a label swapping: felt, not watched.
+        case quick
+        /// Something arriving or leaving — a bar, a chip, a ring on a tile.
+        case arrive
+        /// A sheet or a tray opening: more travel, a little more give.
+        case sheet
+
+        var animation: Animation {
+            switch self {
+            case .quick: .easeOut(duration: 0.12)
+            case .arrive: .spring(duration: 0.3, bounce: 0.15)
+            case .sheet: .spring(duration: 0.35, bounce: 0.18)
+            }
+        }
+    }
+
+    /// The animation to run — or none, with Reduce Motion on: the state
+    /// still changes, it just does not travel.
+    @MainActor static func motion(_ motion: Motion) -> Animation? {
+        Self.motion(motion.animation)
+    }
+
+    @MainActor static func motion(_ animation: Animation) -> Animation? {
+        UIAccessibility.isReduceMotionEnabled ? nil : animation
+    }
 
     // MARK: - Which glass
 
@@ -201,6 +319,71 @@ extension View {
     }
 }
 
+// MARK: - Symbols
+
+extension View {
+    /// The symbol bounces when `value` changes — a star starred, a check
+    /// checked. Not with Reduce Motion: symbol effects do not turn
+    /// themselves off, so this does.
+    func bounce<V: Equatable>(on value: V) -> some View {
+        modifier(SymbolBounce(value: value))
+    }
+
+    /// One symbol becoming the next — play into pause — rather than the
+    /// next in its place. Plain with Reduce Motion.
+    func replaceSymbol() -> some View {
+        modifier(SymbolReplace())
+    }
+}
+
+// MARK: - Type, shade, edges
+
+extension View {
+    /// Set as the page's headline, at the size Dynamic Type gave it.
+    func displayText(size: CGFloat) -> some View {
+        font(Theme.Text.display(at: size))
+            .tracking(Theme.Text.displayTracking(at: size))
+    }
+
+    /// The shade under this view at `depth`: --glass-drop's black, or a
+    /// colour of the view's own (a drive's card, in its tint).
+    func elevation(_ depth: Theme.Elevation, color: Color = Theme.drop) -> some View {
+        shadow(color: color, radius: depth.radius, y: depth.y)
+    }
+
+    /// Under a bar on iOS 26, the content fades into it as it scrolls
+    /// rather than meeting a hard line: the system's scroll-edge effect,
+    /// soft. Nothing before 26, which has no such edge.
+    @ViewBuilder func softScrollEdge() -> some View {
+        if #available(iOS 26, *) {
+            scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            self
+        }
+    }
+}
+
+private struct SymbolBounce<V: Equatable>: ViewModifier {
+    let value: V
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        if reduceMotion {
+            content
+        } else {
+            content.symbolEffect(.bounce, value: value)
+        }
+    }
+}
+
+private struct SymbolReplace: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+    }
+}
+
 private struct SheetBackground: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -218,10 +401,13 @@ private struct SheetBackground: ViewModifier {
 private struct GlassRowBackground: View {
     var selected = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         ZStack {
-            if reduceTransparency { Theme.surface } else { Theme.frost }
+            // Solid with Reduce Transparency, and with Increase Contrast: a
+            // frost the page shows through is the one thing it asks not for.
+            if reduceTransparency || contrast == .increased { Theme.surface } else { Theme.frost }
             if selected { Rectangle().fill(Theme.selection) }
         }
     }
@@ -243,16 +429,21 @@ private struct GlassSurface<S: InsettableShape>: ViewModifier {
     let shape: S
     let interactive: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
 
     func body(content: Content) -> some View {
         if reduceTransparency {
             content.background { SolidGlass(shape: shape) }
         } else if Theme.liquidGlass {
             if #available(iOS 26, *) {
+                // Liquid Glass answers Increase Contrast on its own.
                 content.glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
             } else {
                 content.background { MaterialGlass(shape: shape) }
             }
+        } else if contrast == .increased {
+            // The glass we draw ourselves does not: solid, its edge drawn.
+            content.background { SolidGlass(shape: shape) }
         } else {
             content.background { MaterialGlass(shape: shape) }
         }
@@ -334,7 +525,7 @@ struct BrandButtonStyle: ButtonStyle {
                 .contentShape(Capsule())
                 .scaleEffect(configuration.isPressed ? 0.98 : 1)
                 .opacity(isEnabled ? 1 : 0.45)
-                .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+                .animation(Theme.motion(.quick), value: configuration.isPressed)
         }
     }
 }
@@ -387,7 +578,7 @@ struct GlassButtonStyle: ButtonStyle {
                 .contentShape(Capsule())
                 .scaleEffect(configuration.isPressed ? 0.97 : 1)
                 .opacity(isEnabled ? 1 : 0.45)
-                .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+                .animation(Theme.motion(.quick), value: configuration.isPressed)
         }
     }
 }
@@ -425,23 +616,16 @@ struct GradientProgressBar: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.12))
+                // The track: the glass edge's white, so it sits on glass too.
+                Capsule().fill(Theme.edge)
                 if let fraction {
                     Capsule().fill(Theme.meter)
                         .frame(width: max(height, geo.size.width * min(max(fraction, 0), 1)))
-                        .animation(.easeOut(duration: 0.25), value: fraction)
+                        .animation(Theme.motion(.easeOut(duration: 0.25)), value: fraction)
                 } else if reduceMotion {
                     Capsule().fill(Theme.meter).opacity(0.6)
                 } else {
-                    TimelineView(.animation) { timeline in
-                        let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.4) / 1.4
-                        Capsule()
-                            .fill(LinearGradient(colors: [Theme.auraBlue, Theme.auraMagenta, Theme.auraCyan, Theme.auraBlue],
-                                                 startPoint: .leading, endPoint: .trailing))
-                            .frame(width: geo.size.width * 0.4)
-                            .offset(x: (geo.size.width * 1.4) * phase - geo.size.width * 0.4)
-                    }
-                    .clipShape(Capsule())
+                    SlidingGradient(width: geo.size.width)
                 }
             }
         }
@@ -449,6 +633,34 @@ struct GradientProgressBar: View {
         .accessibilityElement()
         .accessibilityLabel("Progress")
         .accessibilityValue(fraction.map { "\(Int(($0 * 100).rounded())) percent" } ?? "In progress")
+    }
+}
+
+/// The gradient running along a bar whose end is unknown. Core Animation
+/// moves it — one offset, repeated, the view drawn once — rather than a
+/// timeline that would have SwiftUI redraw the tray every frame for as long
+/// as a download is preparing.
+private struct SlidingGradient: View {
+    let width: CGFloat
+    @State private var slid = false
+
+    var body: some View {
+        Capsule()
+            .fill(LinearGradient(colors: [Theme.auraBlue, Theme.auraMagenta, Theme.auraCyan, Theme.auraBlue],
+                                 startPoint: .leading, endPoint: .trailing))
+            .frame(width: width * 0.4)
+            .offset(x: slid ? width : -width * 0.4)
+            .frame(width: width, alignment: .leading)
+            .clipShape(Capsule())
+            .onAppear {
+                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { slid = true }
+            }
+            .onDisappear {
+                // Stopped, not left running on a layer nobody draws.
+                var still = Transaction()
+                still.disablesAnimations = true
+                withTransaction(still) { slid = false }
+            }
     }
 }
 
@@ -460,14 +672,14 @@ struct GradientRing: View {
 
     var body: some View {
         ZStack {
-            Circle().stroke(Color.white.opacity(0.14), lineWidth: lineWidth)
+            Circle().stroke(Theme.edge, lineWidth: lineWidth)
             if let fraction {
                 Circle()
                     .trim(from: 0, to: max(0.02, min(fraction, 1)))
                     .stroke(AngularGradient(colors: [Theme.auraBlue, Theme.auraMagenta, Theme.auraBlue], center: .center),
                             style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                    .animation(.easeOut(duration: 0.25), value: fraction)
+                    .animation(Theme.motion(.easeOut(duration: 0.25)), value: fraction)
             } else {
                 ProgressView().controlSize(.mini).tint(.white)
             }
@@ -485,25 +697,68 @@ struct SymbolChip: View {
     var tint: Color = .accentColor
     var chosen = false
     var size: CGFloat = 30
+    /// On glass, rather than on the tint's own wash: an empty state's tile.
+    var glass = false
 
     var body: some View {
-        Image(systemName: systemName)
+        let shape = RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
+        let symbol = Image(systemName: systemName)
             .font(.system(size: size * 0.5, weight: .semibold))
             .foregroundStyle(chosen ? Theme.onAura : tint)
             .frame(width: size, height: size)
-            .background {
-                if chosen {
-                    BrandFill(shape: RoundedRectangle(cornerRadius: size * 0.3, style: .continuous), glow: false)
-                } else {
-                    RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-                        .fill(tint.opacity(0.16))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
-                                .strokeBorder(tint.opacity(0.28), lineWidth: 0.5)
-                        }
+        Group {
+            if glass, !chosen {
+                symbol.glassSurface(shape)
+            } else {
+                symbol.background {
+                    if chosen {
+                        BrandFill(shape: shape, glow: false)
+                    } else {
+                        shape.fill(tint.opacity(0.16))
+                            .overlay { shape.strokeBorder(tint.opacity(0.28), lineWidth: Theme.hairline) }
+                    }
                 }
             }
-            .accessibilityHidden(true)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// Nothing here, nothing found, nothing could be loaded: a symbol on a glass
+/// tile, a title, the line that says what would change it, and — where
+/// there is one — the one thing to do about it. One shape on every screen,
+/// as the web's .empty is.
+struct EmptyState: View {
+    let symbol: String
+    let title: String
+    var message: String? = nil
+    var action: (title: String, run: () -> Void)? = nil
+
+    var body: some View {
+        VStack(spacing: Theme.Space.s4) {
+            SymbolChip(systemName: symbol, tint: Theme.auraBlueDeep, size: 56, glass: true)
+                .symbolRenderingMode(.hierarchical)
+            VStack(spacing: 6) {
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                if let message {
+                    Text(message)
+                        .font(Theme.Text.detail)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .multilineTextAlignment(.center)
+            if let action {
+                Button(action.title, action: action.run)
+                    .buttonStyle(BrandButtonStyle())
+                    .padding(.top, Theme.Space.s1)
+            }
+        }
+        .frame(maxWidth: 320)
+        .padding(.horizontal, Theme.Space.s5)
+        .padding(.vertical, 28)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -538,24 +793,24 @@ extension Color {
 // MARK: - Editorial
 
 /// A screen's name as the page's headline: huge, bold, left-aligned, set
-/// tight — the folder's own name over its files. Grows with Dynamic Type.
+/// tight (Theme.Text.display) — the folder's own name over its files, in
+/// the same type as Home's greeting. Grows with Dynamic Type.
 struct EditorialTitle: View {
     let text: String
     var subtitle: String?
-    @ScaledMetric(relativeTo: .largeTitle) private var size: CGFloat = 42
+    @ScaledMetric(relativeTo: .largeTitle) private var size: CGFloat = Theme.Text.displaySize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(text)
-                .font(.system(size: size, weight: .bold))
-                .tracking(-size * 0.028)
+                .displayText(size: size)
                 .lineLimit(3)
                 .minimumScaleFactor(0.7)
                 .multilineTextAlignment(.leading)
                 .accessibilityAddTraits(.isHeader)
             if let subtitle {
                 Text(subtitle)
-                    .font(.subheadline)
+                    .font(Theme.Text.detail)
                     .foregroundStyle(.secondary)
             }
         }
@@ -571,13 +826,13 @@ struct SectionHeading: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(title)
-                .font(.title2.weight(.bold))
-                .tracking(-0.4)
+                .font(Theme.Text.title)
+                .tracking(Theme.Text.titleTracking)
                 .accessibilityAddTraits(.isHeader)
             Spacer()
             if let action {
                 Button(action.title, action: action.run)
-                    .font(.subheadline.weight(.medium))
+                    .font(Theme.Text.detail.weight(.medium))
                     .foregroundStyle(.secondary)
             }
         }
@@ -600,6 +855,7 @@ struct RoundIconButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .hoverEffect(.highlight)
         .glassSurface(Circle(), interactive: true)
         .accessibilityLabel(label)
     }
@@ -620,7 +876,7 @@ struct WhiteSquareButton: View {
                 .foregroundStyle(.black)
                 .frame(width: size, height: size)
                 .background(.white, in: RoundedRectangle(cornerRadius: size * 0.32, style: .continuous))
-                .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+                .elevation(.raised)
                 .contentShape(RoundedRectangle(cornerRadius: size * 0.32, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -643,13 +899,5 @@ extension Place {
             return LinearGradient(colors: [top, bottom], startPoint: .topLeading, endPoint: .bottomTrailing)
         }
         return Theme.brand
-    }
-}
-
-extension ContentUnavailableView {
-    /// An empty, failed or searching state on the aura.
-    func onyxStyle() -> some View {
-        foregroundStyle(.primary)
-            .symbolRenderingMode(.hierarchical)
     }
 }

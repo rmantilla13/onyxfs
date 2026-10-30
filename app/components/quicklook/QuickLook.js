@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useId, useRef } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef } from 'react';
 import { effectiveKind, drawableKind, fmtSize, fmtDuration } from '@/lib/media';
 import { thumbSources } from '@/lib/renditions';
 import { probedNow, decodeProbe } from '@/lib/decode-probe';
@@ -20,6 +20,15 @@ import Icon from '@/app/components/ui/Icon';
 
 function mark(name, key) {
   try { performance.mark(`onyx:ql:${name}`, { detail: { key } }); } catch {}
+}
+
+/** The tile standing for `key` in the files view, if it is on screen. */
+function tileFor(key) {
+  if (typeof document === 'undefined') return null;
+  const p = parseKey(key);
+  if (!p) return null;
+  const attr = p.type === 'file' ? 'data-file-id' : 'data-folder';
+  return document.querySelector(`.files-pane [${attr}="${CSS.escape(String(p.id))}"]`);
 }
 
 /** The picture a tile is showing for `id`, if it is on screen and loaded: the cheapest first layer there is. */
@@ -109,6 +118,7 @@ export default function QuickLookHost({ apiRef, pending, find, onOpen, onInfo, o
 
 function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
   const root = useRef(null);
+  const panel = useRef(null);
   const titleId = useId();
   const key = ql.currentKey;
   const p = key ? parseKey(key) : null;
@@ -168,6 +178,26 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
     return () => window.removeEventListener('keydown', onKey, true);
   }, [ql.isOpen]);
 
+  // Where it grows from (quicklook.css ql-grow): the tile that stands for
+  // the item, when it is on screen — its centre and size against the
+  // panel's, as custom properties the keyframe reads. Measured once per
+  // opening, before the first paint; a step to a neighbour keeps the panel
+  // where it is, and with no tile on screen it rises from the centre.
+  useLayoutEffect(() => {
+    const el = panel.current;
+    if (!ql.isOpen || !el) return;
+    const tile = tileFor(key);
+    if (!tile) return;
+    const to = el.getBoundingClientRect();
+    const from = tile.getBoundingClientRect();
+    if (!to.width || !to.height || !from.width || !from.height) return;
+    el.style.setProperty('--ql-dx', `${Math.round(from.left + from.width / 2 - (to.left + to.width / 2))}px`);
+    el.style.setProperty('--ql-dy', `${Math.round(from.top + from.height / 2 - (to.top + to.height / 2))}px`);
+    el.style.setProperty('--ql-s', String(Math.min(1, Math.max(0.08, Math.max(from.width / to.width, from.height / to.height)))));
+  // Once per opening: the key it opened on, not the ones stepped to.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ql.isOpen]);
+
   // Swipes.
   const touch = useRef(null);
   const onTouchStart = (e) => {
@@ -219,7 +249,7 @@ function QuickLook({ ql, find, onOpen, onInfo, onOriginalBlob }) {
       tabIndex={-1}
     >
       <div className="ql-backdrop" onClick={() => ql.close()} aria-hidden />
-      <div className="ql-panel">
+      <div className="ql-panel" ref={panel}>
         <header className="ql-head">
           <div className="ql-title">
             <h2 id={titleId} className="truncate" title={name}>{name}</h2>

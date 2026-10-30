@@ -79,7 +79,7 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 30) {
                 content()
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, Theme.Space.gutter)
             .padding(.top, 14)
             .padding(.bottom, 28)
         }
@@ -121,6 +121,7 @@ struct HomeView: View {
                     Avatar(initial: avatarInitial)
                 }
                 .buttonStyle(PressableStyle())
+                .hoverEffect(.highlight)
                 .accessibilityLabel("Account")
             }
             .padding(.top, 4)
@@ -140,20 +141,23 @@ struct HomeView: View {
                 if session.placesLoaded {
                     ForEach(session.drives) { place in
                         DriveCard(place: place, usage: session.usage[place.id]) { open(place) }
+                            .modifier(CarouselEdge())
                     }
                     if !session.drivesOnly {
                         DriveCard(place: .library, usage: session.usage[Place.library.id]) { open(.library) }
+                            .modifier(CarouselEdge())
                     }
                 } else {
                     ForEach(0..<3, id: \.self) { _ in
                         DriveCard(place: .library, usage: nil) {}
                             .redacted(reason: .placeholder)
                             .disabled(true)
+                            .modifier(CarouselEdge())
                     }
                 }
             }
             .scrollTargetLayout()
-            .padding(.horizontal, 20)
+            .padding(.horizontal, Theme.Space.gutter)
             .padding(.vertical, 6)
         }
         .scrollIndicators(.hidden)
@@ -174,17 +178,18 @@ struct HomeView: View {
             }
             .padding(.vertical, -40)
         }
-        .padding(.horizontal, -20)
+        .padding(.horizontal, -Theme.Space.gutter)
     }
 
     // MARK: - Storage
 
     @ViewBuilder private var storage: some View {
-        if let summary = StorageSummary(drives: session.drives, usage: session.usage, drivesOnly: session.drivesOnly) {
-            StorageCard(summary: summary)
-        } else if session.placesLoaded {
-            StorageCard(summary: .placeholder)
-                .redacted(reason: .placeholder)
+        let summary = StorageSummary(drives: session.drives, usage: session.usage, drivesOnly: session.drivesOnly)
+        // One card from its first paint: the bar's parts take their places
+        // as the counts come, rather than a card replacing a card.
+        if summary != nil || session.placesLoaded {
+            StorageCard(summary: summary ?? .placeholder)
+                .redacted(reason: summary == nil ? .placeholder : [])
         }
     }
 
@@ -203,11 +208,10 @@ struct HomeView: View {
                     .symbolRenderingMode(.multicolor)
                     .foregroundStyle(.secondary)
             } else if recent.isEmpty {
-                Text("Files added on the web or from a Mac show up here.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                EmptyState(symbol: "clock.arrow.circlepath", title: "No Recent Files",
+                           message: "Files added on the web or from a Mac show up here.")
             } else {
-                VStack(spacing: 12) {
+                VStack(spacing: Theme.Space.s3) {
                     ForEach(recent.prefix(Self.recentShown)) { file in
                         FileListRow(file: file, open: { previewing = file }, info: { inspecting = file },
                                     share: session.mayLink(file) ? { linking = .file(file) } : nil)
@@ -219,24 +223,37 @@ struct HomeView: View {
     }
 }
 
+/// A card at the carousel's edge, a little smaller and fainter until it is
+/// scrolled in: there reads as more to the side. Only a scroll moves it;
+/// still, it is just the card.
+private struct CarouselEdge: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.scrollTransition(.interactive) { card, phase in
+            card.scaleEffect(reduceMotion || phase.isIdentity ? 1 : 0.95)
+                .opacity(phase.isIdentity ? 1 : 0.85)
+        }
+    }
+}
+
 /// "Hello, / Ricky", large; "Good evening" for an address that names no one.
 private struct Greeting: View {
     let name: String?
-    @ScaledMetric(relativeTo: .largeTitle) private var size: CGFloat = 40
+    @ScaledMetric(relativeTo: .largeTitle) private var size: CGFloat = Theme.Text.displaySize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let name {
+                // The headline's type, lighter and a step down, over the name.
                 Text("Hello,")
-                    .font(.system(size: size * 0.82, weight: .regular))
+                    .font(Theme.Text.display(at: size * 0.82).weight(.regular))
                     .foregroundStyle(.secondary)
                 Text(name)
-                    .font(.system(size: size, weight: .bold))
-                    .tracking(-size * 0.025)
+                    .displayText(size: size)
             } else {
                 Text(Self.timeOfDay)
-                    .font(.system(size: size, weight: .bold))
-                    .tracking(-size * 0.025)
+                    .displayText(size: size)
             }
         }
         .lineLimit(1)
@@ -290,15 +307,20 @@ private struct DriveCard: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(place.name)
-                        .font(.title3.weight(.bold))
+                        .font(Theme.Text.card)
                         .lineLimit(2)
                         .minimumScaleFactor(0.8)
+                    // The counts roll in when usage arrives.
                     Text(sizeText)
-                        .font(.subheadline.weight(.semibold))
+                        .font(Theme.Text.numeric.weight(.semibold))
                         .opacity(0.9)
+                        .contentTransition(.numericText())
+                        .animation(Theme.motion(.arrive), value: sizeText)
                     Text(filesText)
-                        .font(.footnote)
+                        .font(Theme.Text.meta)
                         .opacity(0.75)
+                        .contentTransition(.numericText())
+                        .animation(Theme.motion(.arrive), value: filesText)
                 }
                 .foregroundStyle(.white)
                 .padding(18)
@@ -314,9 +336,11 @@ private struct DriveCard: View {
                 RoundedRectangle(cornerRadius: Theme.cardCorner, style: .continuous)
                     .strokeBorder(.white.opacity(0.16), lineWidth: 1)
             }
-            .shadow(color: place.tint.opacity(0.28), radius: 18, y: 10)
+            // Its shade in its own colour, softly.
+            .elevation(.raised, color: place.tint.opacity(0.2))
         }
         .buttonStyle(PressableStyle())
+        .hoverEffect(.lift)
         .accessibilityElement(children: .combine)
         .accessibilityHint("Opens it in Browse")
     }
@@ -334,8 +358,8 @@ private struct DriveCard: View {
 
 /// Where the space goes: each drive's share of what this account can see,
 /// and whatever is in no drive.
-struct StorageSummary {
-    struct Part: Identifiable {
+struct StorageSummary: Equatable {
+    struct Part: Identifiable, Equatable {
         let id: String
         let name: String
         let amount: Int64
@@ -349,8 +373,8 @@ struct StorageSummary {
     let weighed: Bool
 
     static let placeholder = StorageSummary(parts: [
-        Part(id: "a", name: "Drive", amount: 3, label: "0 GB", color: .gray),
-        Part(id: "b", name: "Drive", amount: 2, label: "0 GB", color: .gray),
+        Part(id: "a", name: "Drive", amount: 3, label: "0 GB", color: Theme.line),
+        Part(id: "b", name: "Drive", amount: 2, label: "0 GB", color: Theme.line),
     ], total: "0 GB", weighed: true)
 
     init(parts: [Part], total: String, weighed: Bool) {
@@ -384,7 +408,7 @@ struct StorageSummary {
         let rest = amount(all) - inDrives
         if rest > 0 {
             let restLabel = weighed ? (SavePlan.size(rest) ?? "—") : FileFormat.items(Int(rest))
-            parts.append(Part(id: "rest", name: "Not in a drive", amount: rest, label: restLabel, color: Color.white.opacity(0.45)))
+            parts.append(Part(id: "rest", name: "Not in a drive", amount: rest, label: restLabel, color: Theme.muted))
         }
         self.parts = parts
         self.weighed = weighed
@@ -401,37 +425,38 @@ private struct StorageCard: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Storage")
-                    .font(.headline)
+                    .font(Theme.Text.section)
                 Spacer()
                 Text(summary.weighed ? "\(summary.total) used" : summary.total)
-                    .font(.subheadline.monospacedDigit())
+                    .font(Theme.Text.numeric)
                     .foregroundStyle(.secondary)
             }
             SegmentedBar(parts: summary.parts)
                 .frame(height: 14)
+                .animation(Theme.motion(.arrive), value: summary)
             VStack(spacing: 13) {
                 ForEach(summary.parts) { part in
                     HStack(spacing: 12) {
                         Circle().fill(part.color).frame(width: 10, height: 10)
                         Text(part.name)
-                            .font(.subheadline)
+                            .font(Theme.Text.detail)
                             .lineLimit(1)
                         Spacer()
                         Text(part.label)
-                            .font(.subheadline.monospacedDigit())
+                            .font(Theme.Text.numeric)
                             .foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .combine)
                 }
             }
         }
-        .padding(20)
+        .padding(Theme.Space.gutter)
         .background {
             RoundedRectangle(cornerRadius: Theme.cardCorner, style: .continuous)
                 .fill(Theme.card)
                 .overlay {
                     RoundedRectangle(cornerRadius: Theme.cardCorner, style: .continuous)
-                        .strokeBorder(Theme.edge, lineWidth: 0.5)
+                        .strokeBorder(Theme.edge, lineWidth: Theme.hairline)
                 }
         }
     }
@@ -452,7 +477,7 @@ private struct SegmentedBar: View {
                         .frame(width: max(6, (geo.size.width - gaps) * CGFloat(part.amount) / CGFloat(total)))
                 }
                 if shown.isEmpty {
-                    Rectangle().fill(Color.white.opacity(0.12))
+                    Rectangle().fill(Theme.edge)
                 }
             }
             .frame(width: geo.size.width, alignment: .leading)
@@ -468,10 +493,10 @@ private struct PlaceholderRow: View {
         HStack(spacing: 14) {
             RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
                 .fill(Theme.card)
-                .frame(width: 58, height: 58)
+                .frame(width: 52, height: 52)
             VStack(alignment: .leading, spacing: 6) {
-                Text("A file's name here").font(.body)
-                Text("0 MB · now").font(.subheadline)
+                Text("A file's name here").font(Theme.Text.row)
+                Text("0 MB · now").font(Theme.Text.detail)
             }
             .redacted(reason: .placeholder)
             Spacer()
@@ -497,9 +522,9 @@ struct RecentFilesView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: Theme.Space.s3) {
                 EditorialTitle(text: "Recent", subtitle: "Every drive, newest first")
-                    .padding(.bottom, 12)
+                    .padding(.bottom, Theme.Space.s3)
                 ForEach(files) { file in
                     FileListRow(file: file, showsFolder: true, open: { previewing = file }, info: { inspecting = file },
                                 share: session.mayLink(file) ? { linking = .file(file) } : nil)
@@ -515,10 +540,11 @@ struct RecentFilesView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
-            .padding(.bottom, 24)
+            .padding(.horizontal, Theme.Space.gutter)
+            .padding(.top, Theme.Space.s2)
+            .padding(.bottom, Theme.Space.s5)
         }
+        .softScrollEdge()
         .background { AuraBackground() }
         .navigationTitle("Recent")
         .navigationBarTitleDisplayMode(.inline)

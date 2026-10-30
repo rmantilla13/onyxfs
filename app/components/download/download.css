@@ -42,7 +42,7 @@
 /* Still focusable and still a radio to a screen reader; only not drawn. */
 .dl-segment input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
 .dl-segment.is-on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-1); }
-.dl-segment:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dl-segment:has(input:focus-visible) { outline: 2px solid var(--ring); outline-offset: 1px; }
 
 /* The sizes, and a video's choices: a list of radios with what each comes to. */
 .dl-options { display: flex; flex-direction: column; gap: var(--s1); }

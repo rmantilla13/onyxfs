@@ -94,6 +94,19 @@ describe('the logo', () => {
   });
 });
 
+// Every other corner is calc()'d from --radius (globals.css), and
+// calc(10 + 2px) is invalid: a radius saved without px would have broken
+// every derived corner at once.
+describe('the radius', () => {
+  test('is saved only as a px length', () => {
+    assert.deepEqual(sanitizeBrandSubmission({ radius: '10px' }), { radius: '10px' });
+    assert.deepEqual(sanitizeBrandSubmission({ radius: ' 12.5px ' }), { radius: ' 12.5px ' });
+    for (const bad of ['10', '1em', '0.5rem', '8px 8px', '8px}', 'calc(1px)']) {
+      assert.deepEqual(sanitizeBrandSubmission({ radius: bad }), {}, bad);
+    }
+  });
+});
+
 describe('withAccent (a share link\'s own accent)', () => {
   test('swaps the accent and draws the aura from it, nothing else', () => {
     const brand = resolveBrand(null);

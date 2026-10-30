@@ -92,6 +92,8 @@ struct SoundPage: View {
                 seek(to: time + Double(direction) * Self.skip)
             }
             .frame(height: file.metadata?.waveform == nil ? 44 : 160)
+            // The finger lifting off the scrubber: a tap's worth of feedback.
+            .sensoryFeedback(.impact(weight: .light), trigger: scrubbing == nil) { _, released in released }
             .disabled(player == nil || length <= 0)
 
             HStack {
@@ -110,6 +112,7 @@ struct SoundPage: View {
                     Image(systemName: playing ? "pause.fill" : "play.fill")
                         .font(.system(size: 30, weight: .semibold))
                         .foregroundStyle(Theme.onAura)
+                        .replaceSymbol()
                         .offset(x: playing ? 0 : 2)
                         .frame(width: 78, height: 78)
                         .background { BrandFill(shape: Circle()) }

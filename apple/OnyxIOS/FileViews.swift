@@ -21,7 +21,7 @@ struct FileTile: View {
             Thumbnail(file: file, size: .card)
                 .aspectRatio(1, contentMode: .fit)
                 .clipShape(shape)
-                .overlay { shape.strokeBorder(Theme.edge, lineWidth: 0.5) }
+                .overlay { shape.strokeBorder(Theme.edge, lineWidth: Theme.hairline) }
                 .overlay(alignment: .bottomTrailing) {
                     if let length = FileFormat.duration(file) {
                         Text(length)
@@ -29,7 +29,7 @@ struct FileTile: View {
                             .foregroundStyle(.white)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 3)
-                            .background(.black.opacity(0.55), in: Capsule())
+                            .background(Theme.scrim, in: Capsule())
                             .padding(10)
                     }
                 }
@@ -38,20 +38,20 @@ struct FileTile: View {
                     if selection != nil { SelectionCheck(chosen: chosen).padding(10) }
                 }
                 .overlay {
-                    if chosen { shape.strokeBorder(Theme.brand, lineWidth: 3) }
+                    if chosen { shape.strokeBorder(Theme.brand, lineWidth: 2) }
                 }
-                .scaleEffect(chosen ? 0.95 : 1)
-                .animation(.spring(duration: 0.25, bounce: 0.2), value: chosen)
+                .scaleEffect(chosen ? 0.97 : 1)
+                .animation(Theme.motion(.arrive), value: chosen)
             VStack(alignment: .leading, spacing: 2) {
                 Text(file.name)
-                    .font(.subheadline.weight(.medium))
+                    .font(Theme.Text.tile)
                     .lineLimit(1)
                 Text(showsFolder ? FileFormat.folderName(file) : FileFormat.when(file))
-                    .font(.footnote)
+                    .font(Theme.Text.meta)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            .padding(.horizontal, 4)
+            .padding(.horizontal, Theme.Space.s1)
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
@@ -71,18 +71,18 @@ struct FileRow: View {
         HStack(spacing: 14) {
             if selection != nil { SelectionCheck(chosen: chosen) }
             Thumbnail(file: file, size: .row)
-                .frame(width: 56, height: 56)
+                .frame(width: 52, height: 52)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
-                        .strokeBorder(Theme.edge, lineWidth: 0.5)
+                        .strokeBorder(Theme.edge, lineWidth: Theme.hairline)
                 }
             VStack(alignment: .leading, spacing: 3) {
                 Text(file.name)
-                    .font(.body.weight(.medium))
+                    .font(Theme.Text.row)
                     .lineLimit(1)
                 Text(showsFolder ? "\(FileFormat.folderName(file)) · \(FileFormat.summary(file))" : FileFormat.summary(file))
-                    .font(.subheadline)
+                    .font(Theme.Text.detail)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -99,31 +99,29 @@ struct FileRow: View {
 struct FolderTile: View {
     let node: FolderNode
     let items: Int
+    /// The drive's colour, which its folders are drawn in.
+    var tint: Color = .accentColor
     @Environment(\.fileSelection) private var selection
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             RoundedRectangle(cornerRadius: Theme.tileCorner, style: .continuous)
-                .fill(Color(.secondarySystemFill))
+                .fill(Theme.card)
                 .aspectRatio(1, contentMode: .fit)
-                .overlay {
-                    Image(systemName: "folder.fill")
-                        .font(.system(size: 42, weight: .regular))
-                        .foregroundStyle(.white.opacity(0.9))
-                }
+                .overlay { FolderGlyph(tint: tint, size: 66) }
                 .overlay {
                     RoundedRectangle(cornerRadius: Theme.tileCorner, style: .continuous)
-                        .strokeBorder(Theme.edge, lineWidth: 0.5)
+                        .strokeBorder(Theme.edge, lineWidth: Theme.hairline)
                 }
             VStack(alignment: .leading, spacing: 2) {
                 Text(node.name)
-                    .font(.subheadline.weight(.medium))
+                    .font(Theme.Text.tile)
                     .lineLimit(1)
                 Text(FileFormat.items(items))
-                    .font(.footnote)
+                    .font(Theme.Text.meta)
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 4)
+            .padding(.horizontal, Theme.Space.s1)
         }
         .contentShape(Rectangle())
         // Choosing files: a folder is not one of them.
@@ -135,24 +133,25 @@ struct FolderTile: View {
 struct FolderRow: View {
     let node: FolderNode
     let items: Int
+    var tint: Color = .accentColor
     @Environment(\.fileSelection) private var selection
 
     var body: some View {
         HStack(spacing: 14) {
             RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
-                .fill(Color(.secondarySystemFill))
-                .frame(width: 56, height: 56)
+                .fill(Theme.card)
+                .frame(width: 52, height: 52)
+                .overlay { FolderGlyph(tint: tint, size: 28) }
                 .overlay {
-                    Image(systemName: "folder.fill")
-                        .font(.title3)
-                        .foregroundStyle(.white.opacity(0.9))
+                    RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
+                        .strokeBorder(Theme.edge, lineWidth: Theme.hairline)
                 }
             VStack(alignment: .leading, spacing: 3) {
                 Text(node.name)
-                    .font(.body.weight(.medium))
+                    .font(Theme.Text.row)
                     .lineLimit(1)
                 Text(FileFormat.items(items))
-                    .font(.subheadline)
+                    .font(Theme.Text.detail)
                     .foregroundStyle(.secondary)
             }
         }
@@ -166,19 +165,64 @@ struct SelectionCheck: View {
 
     var body: some View {
         ZStack {
-            if chosen {
-                Circle().fill(Theme.brand)
-                Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .heavy))
-                    .foregroundStyle(Theme.onAura)
-            } else {
-                Circle().fill(.black.opacity(0.28))
-            }
-            Circle().strokeBorder(.white.opacity(0.9), lineWidth: 1.5)
+            Circle().fill(chosen ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Theme.dim))
+            Image(systemName: "checkmark")
+                .font(.system(size: 11, weight: .heavy))
+                .foregroundStyle(Theme.onAura)
+                .opacity(chosen ? 1 : 0)
+                .bounce(on: chosen)
+            Circle().strokeBorder(Theme.rim, lineWidth: 1.5)
         }
         .frame(width: 24, height: 24)
-        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+        .elevation(.low)
         .accessibilityHidden(true)
+    }
+}
+
+/// A folder, drawn solid in the drive's colour: a back panel with its tab,
+/// a lighter front panel over it — as the web draws one (FolderGlyph,
+/// --folder-back/--folder-front in the dark scheme) — so a folder reads as
+/// a folder beside the files' pictures, in any drive's colour. Two fills,
+/// no picture.
+struct FolderGlyph: View {
+    var tint: Color = .accentColor
+    /// Its width; the kit's folder is 24 wide by 17 and a bit tall.
+    var size: CGFloat = 64
+
+    var body: some View {
+        let unit = size / 24
+        ZStack(alignment: .topLeading) {
+            FolderBack().fill(tint.opacity(0.46))
+            // The front panel over the body (x 1.6–22.4, y 8.3–20.4 of 24).
+            RoundedRectangle(cornerRadius: unit * 2.2, style: .continuous)
+                .fill(tint.opacity(0.80))
+                .overlay(alignment: .top) {
+                    // Its lit top edge.
+                    Capsule().fill(Theme.highlight)
+                        .frame(height: 1)
+                        .padding(.horizontal, unit * 2.2)
+                        .padding(.top, 1)
+                }
+                .frame(width: unit * 20.8, height: unit * 12.1)
+                .offset(x: unit * 1.6, y: unit * 5.3)
+        }
+        .frame(width: size, height: unit * 17.4, alignment: .topLeading)
+        .accessibilityHidden(true)
+    }
+}
+
+/// The kit's folder outline, filled: the tab at its top left over its body
+/// (lucide 'folder': x 2–22, y 3–20 of 24, here from y 0).
+private struct FolderBack: Shape {
+    func path(in rect: CGRect) -> Path {
+        let u = rect.width / 24
+        let corner = CGSize(width: 2 * u, height: 2 * u)
+        var path = Path()
+        path.addRoundedRect(in: CGRect(x: rect.minX + 2 * u, y: rect.minY, width: 10 * u, height: 6 * u),
+                            cornerSize: corner, style: .continuous)
+        path.addRoundedRect(in: CGRect(x: rect.minX + 2 * u, y: rect.minY + 3 * u, width: 20 * u, height: 14 * u),
+                            cornerSize: corner, style: .continuous)
+        return path
     }
 }
 
@@ -200,7 +244,7 @@ struct ReviewBadge: View {
                 Circle()
                     .fill(color)
                     .frame(width: 10, height: 10)
-                    .overlay(Circle().strokeBorder(.white.opacity(0.9), lineWidth: 1.5))
+                    .overlay(Circle().strokeBorder(Theme.rim, lineWidth: 1.5))
                     .accessibilityLabel(FileFormat.reviewName(status))
             }
         }
@@ -249,7 +293,9 @@ struct Thumbnail: View {
     }
 
     var body: some View {
-        Color(.secondarySystemFill)
+        // The ground under a picture, and the tile of a file without one: the
+        // card's grey, as a folder's tile and the Storage card are.
+        Theme.card
             .overlay {
                 ZStack {
                     if let still {

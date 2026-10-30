@@ -146,23 +146,41 @@ private struct PairingSheet: View {
 }
 
 /// The Onyx mark — the slash from the ONYX/FS wordmark on its near-black —
-/// in the light the web's glow throws behind it.
+/// in the light the web's glow throws behind it. Drawn, not a picture: the
+/// tile is the page's colour and the slash a template filled with the
+/// aura's hues (public/onyx-mark.svg), so a rebrand's colour sets reach
+/// it; the glow is two gradients fading to clear, as the page's own are,
+/// not a blur rendered offscreen.
 struct Mark: View {
     let size: CGFloat
 
     var body: some View {
         ZStack {
-            Circle()
-                .fill(Theme.halo)
-                .frame(width: size * 1.5, height: size * 1.5)
-                .blur(radius: size * 0.42)
-                .opacity(0.55)
-            Image("Mark")
-                .resizable()
-                .interpolation(.high)
-                .frame(width: size, height: size)
-                .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
+            glow(Theme.auraBlue, 0.30, at: CGPoint(x: -0.12, y: -0.14))
+            glow(Theme.auraMagenta, 0.35, at: CGPoint(x: 0.10, y: 0.12))
+            ZStack {
+                RoundedRectangle(cornerRadius: size * 112 / 512, style: .continuous)
+                    .fill(Theme.paper)
+                Image("MarkSlash")
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(LinearGradient(colors: [Theme.auraBlue, Theme.auraMagenta, Theme.auraCyan],
+                                                    startPoint: .bottom, endPoint: .top))
+                    // The slash is 300 of the tile's 512.
+                    .padding(size * 0.207)
+            }
+            .frame(width: size, height: size)
+            .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
         }
         .accessibilityHidden(true)
+    }
+
+    /// One of the glow's hues, centred a little off the mark (in units of
+    /// its size), fading out by 1.2 marks from its centre.
+    private func glow(_ color: Color, _ strength: Double, at offset: CGPoint) -> some View {
+        EllipticalGradient(colors: [color.opacity(strength), color.opacity(0)], center: .center)
+            .frame(width: size * 2.4, height: size * 2.4)
+            .offset(x: size * offset.x, y: size * offset.y)
     }
 }

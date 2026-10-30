@@ -20,18 +20,18 @@ struct FileListRow: View {
             Button(action: open) {
                 HStack(spacing: 14) {
                     Thumbnail(file: file, size: .row)
-                        .frame(width: 58, height: 58)
+                        .frame(width: 52, height: 52)
                         .clipShape(RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous))
                         .overlay {
                             RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
-                                .strokeBorder(Theme.edge, lineWidth: 0.5)
+                                .strokeBorder(Theme.edge, lineWidth: Theme.hairline)
                         }
                     VStack(alignment: .leading, spacing: 3) {
                         Text(file.name)
-                            .font(.body.weight(.medium))
+                            .font(Theme.Text.row)
                             .lineLimit(1)
                         Text(detail)
-                            .font(.subheadline)
+                            .font(Theme.Text.detail)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -91,6 +91,6 @@ struct PressableStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.easeOut(duration: 0.14), value: configuration.isPressed)
+            .animation(Theme.motion(.quick), value: configuration.isPressed)
     }
 }

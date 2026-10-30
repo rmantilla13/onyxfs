@@ -138,7 +138,6 @@ struct SelectionBar: View {
 /// progress, and a way to stop it, try it again or send it elsewhere.
 struct DownloadTray: View {
     @State private var expanded = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var center: DownloadCenter { .shared }
 
@@ -157,8 +156,8 @@ struct DownloadTray: View {
         .frame(maxWidth: 560)
         .padding(.horizontal, 16)
         .padding(.bottom, items.isEmpty && notice == nil ? 0 : 8)
-        .animation(reduceMotion ? nil : .spring(duration: 0.35, bounce: 0.18), value: expanded)
-        .animation(reduceMotion ? nil : .spring(duration: 0.35, bounce: 0.18), value: items.isEmpty && notice == nil)
+        .animation(Theme.motion(.sheet), value: expanded)
+        .animation(Theme.motion(.sheet), value: items.isEmpty && notice == nil)
         .onChange(of: items.isEmpty) { if items.isEmpty { expanded = false } }
     }
 
@@ -205,7 +204,7 @@ private struct TrayPill: View {
         .buttonStyle(.plain)
         .disabled(items.isEmpty)
         .glassSurface(Capsule(), interactive: true)
-        .shadow(color: Theme.drop, radius: 14, y: 6)
+        .elevation(.floating)
         .accessibilityHint(items.isEmpty ? "" : "Shows each download")
     }
 
@@ -299,7 +298,7 @@ private struct TrayCard: View {
                     ForEach(items.reversed()) { item in
                         TrayRow(item: item)
                         if item.id != items.first?.id {
-                            Rectangle().fill(Theme.edge.opacity(0.6)).frame(height: 0.5).padding(.leading, 66)
+                            Rectangle().fill(Theme.edge.opacity(0.6)).frame(height: Theme.hairline).padding(.leading, 66)
                         }
                     }
                 }
@@ -309,7 +308,7 @@ private struct TrayCard: View {
             .fixedSize(horizontal: false, vertical: true)
         }
         .glassSurface(RoundedRectangle(cornerRadius: Theme.cardCorner, style: .continuous))
-        .shadow(color: Theme.drop, radius: 18, y: 8)
+        .elevation(.floating)
     }
 }
 

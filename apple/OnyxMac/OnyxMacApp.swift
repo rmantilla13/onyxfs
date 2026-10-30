@@ -53,6 +53,9 @@ struct OnyxMacApp: App {
         Settings {
             SettingsView().environmentObject(model).environmentObject(model.updater).environmentObject(model.finder)
         }
+        // As tall as the tab's form, within what SettingsView allows, rather
+        // than a fixed box.
+        .windowResizability(.contentSize)
     }
 }
 

@@ -8,7 +8,8 @@ import '@/app/components/review/review.css';
 
 /**
  * An image on a stage the shape of the image, the way the player stages a
- * video, with Fit and 100%.
+ * video, with Fit and 100% on a HUD over the stage's corner (review.css
+ * .stage-hud).
  *
  *   Fit   the picture contained in the stage, from the thumbnail to the
  *         large preview (lib/stage-sources.js); the frame that
@@ -71,12 +72,14 @@ export default function ImageStage({ file, overlay = null, onFailed, handoff = n
           {overlay && <div className="image-overlay">{overlay({ width: natural.w, height: natural.h })}</div>}
         </ProgressiveImage>
       </div>
-      <div className="image-stage-bar">
+      {/* The HUD sits over the wrap, not the stage, so at 100% it stays in
+          the corner while the picture scrolls under it. */}
+      <div className="stage-hud">
         <div className="view-toggle" role="group" aria-label="Zoom">
           <button type="button" className="btn btn-sm" aria-pressed={!actual} disabled={shell} onClick={() => setActual(false)}>Fit</button>
           <button type="button" className="btn btn-sm" aria-pressed={actual} disabled={shell} onClick={() => setActual(true)}>100%</button>
         </div>
-        {natural.w > 0 && <span className="small muted mono">{natural.w} × {natural.h}</span>}
+        {natural.w > 0 && <span className="stage-hud-dim mono">{natural.w} × {natural.h}</span>}
       </div>
     </div>
   );

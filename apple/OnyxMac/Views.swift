@@ -41,7 +41,8 @@ struct UpdateSheet: View {
             }
             if let release = updater.available, let notes = release.notes, !notes.isEmpty {
                 ScrollView {
-                    Text(notes).font(.callout).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                    Text(ReleaseNotes.render(notes)).font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                 }
                 .frame(height: 140)
                 .padding(8)
@@ -104,6 +105,35 @@ struct UpdateSheet: View {
     }
 }
 
+/// A release's notes as GitHub has them, in Markdown, set for the sheet:
+/// headings as bold lines, list items with a bullet, and emphasis, links and
+/// code as written. Text's own reading of Markdown takes only what is
+/// inline, so `##` and `-` would show as punctuation.
+enum ReleaseNotes {
+    static func render(_ markdown: String) -> AttributedString {
+        var out = AttributedString()
+        var first = true
+        for raw in markdown.components(separatedBy: .newlines) {
+            if !first { out += AttributedString("\n") }
+            first = false
+            var line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { continue }
+            var heading = false
+            if line.hasPrefix("#") {
+                line = line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
+                heading = true
+            } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
+                line = "•\u{2002}" + String(line.dropFirst(2))
+            }
+            var piece = (try? AttributedString(markdown: line, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+                ?? AttributedString(line)
+            if heading { piece.swiftUI.font = .callout.weight(.semibold) }
+            out += piece
+        }
+        return out
+    }
+}
+
 // MARK: - Signing in
 
 /// A view's own editing state. (Not @State: in current SDKs that is a macro
@@ -114,51 +144,59 @@ final class FormState: ObservableObject {
     @Published var serverText = ""
 }
 
+/// The window before anyone is signed in: the web's sign-in page, drawn
+/// natively — the mark in its halo over the aura, the one lit button, the
+/// pairing code on a card — so the two sign-ins are one identity. Nothing on
+/// it moves: the aura is gradients drawn once (AuraBackground).
 struct SignInView: View {
     @EnvironmentObject var model: AppModel
     @StateObject private var form = FormState()
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         VStack(spacing: 22) {
             Spacer()
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable().frame(width: 88, height: 88)
+            AppMark(size: 88)
             VStack(spacing: 6) {
                 Text("Sign in to Onyx").font(.title).fontWeight(.semibold)
                 Text("Your drives, in Finder and in this window.")
                     .foregroundStyle(.secondary)
             }
 
+            // The page's one lit action.
             Button {
                 Task { await model.signInWithBrowser() }
             } label: {
                 Text("Sign in with your browser").frame(minWidth: 240)
             }
+            .prominent()
+            .tint(Theme.accent)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
             .disabled(model.phase == .signingIn)
 
-            HStack(spacing: 10) {
-                VStack { Divider() }.frame(width: 80)
+            // The other way in, on a card of its own.
+            VStack(spacing: 12) {
                 Text("or use a pairing code").font(.caption).foregroundStyle(.secondary)
-                VStack { Divider() }.frame(width: 80)
+                HStack(spacing: 8) {
+                    TextField("XXXX-XXXX-XXXX", text: $form.code)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(width: 180)
+                        .onSubmit(pair)
+                    Button("Pair", action: pair)
+                        .disabled(form.code.filter { $0.isLetter || $0.isNumber }.count < 12 || model.phase == .signingIn)
+                }
+                Text("Make one at \(model.serverLabel)/space/pair, signed in on any browser.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
-
-            HStack(spacing: 8) {
-                TextField("XXXX-XXXX-XXXX", text: $form.code)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(width: 180)
-                    .onSubmit(pair)
-                Button("Pair", action: pair)
-                    .disabled(form.code.filter { $0.isLetter || $0.isNumber }.count < 12 || model.phase == .signingIn)
-            }
-            Text("Make one at \(model.serverLabel)/space/pair, signed in on any browser.")
-                .font(.caption).foregroundStyle(.secondary)
+            .padding(16)
+            .background { pairingCard }
 
             if model.phase == .signingIn { ProgressView().controlSize(.small) }
             if let problem = model.problem {
-                Text(problem).font(.callout).foregroundStyle(.red)
+                Text(problem).font(.callout).foregroundStyle(Theme.danger)
                     .multilineTextAlignment(.center).frame(maxWidth: 420)
             }
             Spacer()
@@ -186,6 +224,21 @@ struct SignInView: View {
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background { AuraBackground() }
+        // The title bar is hidden and there is no page to show where it
+        // ends: a hairline says where the window is held.
+        .overlay(alignment: .top) { Hairline().padding(.top, 52) }
+    }
+
+    /// The pairing group's card: glass over the aura, solid with Reduce
+    /// Transparency, a hairline round it either way.
+    @ViewBuilder private var pairingCard: some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        if reduceTransparency {
+            shape.fill(Theme.surface).overlay(shape.strokeBorder(Theme.line))
+        } else {
+            shape.fill(.regularMaterial).overlay(shape.strokeBorder(Theme.line))
+        }
     }
 
     private func pair() {
@@ -216,12 +269,15 @@ struct WorkspaceView: View {
                             Button("Try Again") { web.reload() }.keyboardShortcut(.defaultAction)
                         }
                         .padding(28)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        // Arrives once, when the page could not be opened.
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
                     }
                 }
+                .animation(Motion.gated(Motion.arrive), value: web.failure)
             // What the drives and the window are moving, and the downloads.
             if showsActivity {
-                ActivityBar(clock: model.activity, downloads: web.downloads)
+                ActivityBar(clock: model.activity, downloads: web.downloads, paper: web.pageTheme?.paper)
             }
         }
         .task { if web.webView.url == nil { web.signIn() } }
@@ -255,10 +311,10 @@ enum MenuBarStatus: Equatable {
     /// while syncing, orange when something needs a look.
     var tint: Color {
         switch self {
-        case .idle, .mounted: return .green
-        case .syncing: return .accentColor
+        case .idle, .mounted: return Theme.success
+        case .syncing: return Theme.accent
         case .signedOut, .offline: return .secondary
-        case .attention: return .orange
+        case .attention: return Theme.warning
         }
     }
 
@@ -319,11 +375,15 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
-            AccountSettings().tabItem { Label { Text("General") } icon: { Image(lucide: "circle-user") } }
-            FinderSettings(finder: model.finder).tabItem { Label { Text("Finder") } icon: { Image(lucide: "hard-drive") } }
-            StorageSettings(finder: model.finder).tabItem { Label { Text("Storage") } icon: { Image(lucide: "database") } }
+            AccountSettings().tabItem { Label { Text("General") } icon: { Image(lucide: "circle-user", size: 18) } }
+            FinderSettings(finder: model.finder).tabItem { Label { Text("Finder") } icon: { Image(lucide: "hard-drive", size: 18) } }
+            StorageSettings(finder: model.finder).tabItem { Label { Text("Storage") } icon: { Image(lucide: "database", size: 18) } }
         }
-        .frame(width: 480, height: 420)
+        // As tall as a tab's form wants, within reason, and the window
+        // follows (windowResizability, OnyxMacApp) — not a fixed box that
+        // cuts General's form short.
+        .frame(width: 480)
+        .frame(minHeight: 420, idealHeight: 560, maxHeight: 820)
     }
 }
 
@@ -350,12 +410,10 @@ struct AccountSettings: View {
                 }
             }
             if model.phase == .signedIn {
-                LabeledContent("") {
-                    Button("Sign Out") { Task { await model.signOut() } }
-                }
+                Button("Sign Out") { Task { await model.signOut() } }
             }
             if let problem = model.problem {
-                Text(problem).foregroundStyle(.red).font(.callout)
+                Text(problem).foregroundStyle(Theme.danger).font(.callout)
             }
             Section {
                 Text("Changing servers signs you out: a sign-in belongs to the server that issued it.")
@@ -387,10 +445,8 @@ struct AccountSettings: View {
                     Text(BuildInfo.build.map { "\(BuildInfo.version) (\($0))" } ?? BuildInfo.version)
                 }
                 Toggle("Check for updates automatically", isOn: $updater.automatic)
-                LabeledContent("") {
-                    Button("Check Now") { Task { await updater.check(userInitiated: true) } }
-                        .disabled(updater.state == .checking)
-                }
+                Button("Check Now") { Task { await updater.check(userInitiated: true) } }
+                    .disabled(updater.state == .checking)
             }
         }
         .formStyle(.grouped)
@@ -409,35 +465,49 @@ struct FinderSettings: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(finder.drivesAreDisks
-                 ? "Each drive you turn on is a disk of its own in Finder, under Locations and on the Desktop. It is exactly what the web shows you, files stream as you open them, and what you copy onto it is uploaded to Onyx."
-                 : "Each drive you turn on appears in Finder, in your Onyx folder and under Locations. It is exactly what the web shows you, and files stream as you open them — nothing downloads until something reads it.")
-                .font(.callout).foregroundStyle(.secondary)
-            DiskModeNote(finder: finder)
-            FullDiskAccessRow()
-            List {
+        // A grouped form, as the other two tabs are: the drives as rows of
+        // one section, what needs a look as notes beneath.
+        Form {
+            Section {
                 ForEach(model.finderDrives) { drive in
                     row(.drive(id: drive.id), name: drive.name, icon: DriveIcons.image(for: drive))
                 }
                 if !model.drivesOnly {
                     row(.library, name: "Library", icon: DriveIcons.library)
                 }
-            }
-            HStack {
+                HStack {
+                    Text(finder.drivesAreDisks
+                         ? "Copy, rename, move and delete in Finder as on any disk; the web shows the same. A drive you can only view is read-only."
+                         : "Read-only in Finder for now; add and change files in the Onyx window.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Sync Now") { Task { await model.syncNow() } }
+                }
+            } header: {
+                Text("Drives")
+            } footer: {
                 Text(finder.drivesAreDisks
-                     ? "Copy, rename, move and delete in Finder as on any disk; the web shows the same. A drive you can only view is read-only."
-                     : "Read-only in Finder for now; add and change files in the Onyx window.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("Sync Now") { Task { await model.syncNow() } }
+                     ? "Each drive you turn on is a disk of its own in Finder, under Locations and on the Desktop. It is exactly what the web shows you, files stream as you open them, and what you copy onto it is uploaded to Onyx."
+                     : "Each drive you turn on appears in Finder, in your Onyx folder and under Locations. It is exactly what the web shows you, and files stream as you open them — nothing downloads until something reads it.")
             }
-            FinderMenusRow(service: model.finderSync)
+            // Each note draws its own card (NoteCard), so the row around
+            // them is bare: no box of the form's inside which to nest them.
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    DiskModeNote(finder: finder)
+                    FullDiskAccessRow()
+                    FinderMenusRow(service: model.finderSync)
+                }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+            }
             if let problem = finder.problem ?? model.problem {
-                Text(problem).foregroundStyle(.red).font(.caption)
+                Text(problem).foregroundStyle(Theme.danger).font(.caption)
             }
         }
-        .padding(20)
+        .formStyle(.grouped)
         .task {
             // Switched on in System Settings since Onyx last asked: said
             // here at once, and the drives in ~/Onyx become disks.
@@ -460,7 +530,7 @@ struct FinderSettings: View {
             case .mounting?:
                 ProgressView().controlSize(.small)
             case let .failed(message)?:
-                Image(lucide: "triangle-alert").foregroundStyle(.orange).help(message)
+                Image(lucide: "triangle-alert").foregroundStyle(Theme.warning).help(message)
             case .mounted?:
                 Button("Show") { model.reveal(scope) }.buttonStyle(.link)
             case nil:
@@ -579,59 +649,36 @@ struct DiskModeNote: View {
     @ObservedObject var finder: DriveService
 
     var body: some View {
+        // icons: hard-drive
         switch finder.diskMode {
         case .disks:
             if let failure = finder.diskFailure {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Image(lucide: "hard-drive").foregroundStyle(.secondary)
-                    Text("A drive could not be a disk of its own, so it is in your Onyx folder instead: \(failure)")
-                        .font(.caption)
-                    Spacer()
-                }
-                .padding(10)
-                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+                NoteCard(tone: .problem, icon: "hard-drive", title: "A drive is in the Onyx folder, not a disk",
+                         message: "A drive could not be a disk of its own, so it is in your Onyx folder instead: \(failure)")
             }
         case .needsEnabling:
             // System Settings' switch is the way macOS lets people switch it
             // on (FileSystemSwitch); Onyx's own Turn On only where macOS may
             // allow that (offersTurnOn, DiskMounter.enableExtension).
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Image(lucide: "hard-drive").foregroundStyle(.secondary)
-                    Text("Each drive can be a disk of its own, under Locations and on the Desktop. Switch Onyx on in System Settings › General › Login Items & Extensions › File System Extensions to have them there.")
-                        .font(.caption)
-                    Spacer()
-                    Button("System Settings…") { finder.openFileSystemSettings() }
-                        .keyboardShortcut(.defaultAction)
-                    if finder.offersTurnOn {
-                        Button(finder.turningOnDisks ? "Turning On…" : "Turn On") {
-                            Task { await finder.turnOnDisks() }
-                        }
-                        .disabled(finder.turningOnDisks)
+            NoteCard(tone: .warning, icon: "hard-drive", title: "Your drives aren't disks right now",
+                     message: "Each drive can be a disk of its own, under Locations and on the Desktop. Switch Onyx on in System Settings › General › Login Items & Extensions › File System Extensions to have them there."
+                         + (finder.switchDidNotTake ? " If Onyx won't stay switched on there, restart your Mac, then switch it on." : ""),
+                     problem: finder.turnOnProblem) {
+                Button("System Settings…") { finder.openFileSystemSettings() }
+                    .keyboardShortcut(.defaultAction)
+                if finder.offersTurnOn {
+                    Button(finder.turningOnDisks ? "Turning On…" : "Turn On") {
+                        Task { await finder.turnOnDisks() }
                     }
-                }
-                if finder.switchDidNotTake {
-                    Text("If Onyx won't stay switched on there, restart your Mac, then switch it on.")
-                        .font(.caption)
-                }
-                if let problem = finder.turnOnProblem {
-                    Text(problem).font(.caption).foregroundStyle(.red)
+                    .disabled(finder.turningOnDisks)
                 }
             }
-            .padding(10)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
         case .needsRestart:
             // macOS has not taken in this copy's file system yet
             // (DiskMounter.Availability.notLoaded); nothing Onyx can do
             // about it but say so.
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(lucide: "hard-drive").foregroundStyle(.secondary)
-                Text("Drives are in your Onyx folder, read-only, because macOS is still using an earlier copy of the Onyx file system. Restart your Mac to make each drive a disk of its own again.")
-                    .font(.caption)
-                Spacer()
-            }
-            .padding(10)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+            NoteCard(tone: .warning, icon: "hard-drive", title: "Restart to make your drives disks again",
+                     message: "Drives are in your Onyx folder, read-only, because macOS is still using an earlier copy of the Onyx file system. Restart your Mac to make each drive a disk of its own again.")
         case .folder:
             EmptyView()
         }
@@ -650,13 +697,11 @@ struct FullDiskAccessRow: View {
         VStack(alignment: .leading, spacing: 0) {
             if access.answer != .unknown {
                 let granted = access.answer == .granted
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Image(lucide: granted ? "shield-check" : "shield").foregroundStyle(.secondary) /* icons: shield-check shield */
-                    Text(granted
-                         ? "Full Disk Access is on: Onyx can reach files anywhere on this Mac you point it to."
-                         : "Full Disk Access is off. Turn it on for Onyx to reach files in every folder on this Mac.")
-                        .font(.caption)
-                    Spacer()
+                // icons: shield-check shield
+                NoteCard(tone: granted ? .info : .warning, icon: granted ? "shield-check" : "shield",
+                         message: granted
+                             ? "Full Disk Access is on: Onyx can reach files anywhere on this Mac you point it to."
+                             : "Full Disk Access is off. Turn it on for Onyx to reach files in every folder on this Mac.") {
                     if !granted {
                         Button("Privacy & Security…") { FullDiskAccess.openSettings() }
                     }

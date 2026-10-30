@@ -721,7 +721,7 @@ private struct KindTag: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(tint.opacity(0.16), in: Capsule())
-            .overlay(Capsule().strokeBorder(tint.opacity(0.3), lineWidth: 0.5))
+            .overlay(Capsule().strokeBorder(tint.opacity(0.3), lineWidth: Theme.hairline))
     }
 
     private var symbol: String {
@@ -767,7 +767,7 @@ private struct SubjectHeader: View {
                 .clipShape(RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
-                        .strokeBorder(Theme.edge, lineWidth: 0.5)
+                        .strokeBorder(Theme.edge, lineWidth: Theme.hairline)
                 }
             VStack(alignment: .leading, spacing: 3) {
                 Text(subject.name)
@@ -787,13 +787,9 @@ private struct SubjectHeader: View {
         switch subject {
         case let .file(file):
             Thumbnail(file: file, size: .row)
-        case .folder:
-            Color(.secondarySystemFill)
-                .overlay {
-                    Image(systemName: "folder.fill")
-                        .font(.title2)
-                        .foregroundStyle(.white.opacity(0.9))
-                }
+        case let .folder(_, place):
+            Theme.card
+                .overlay { FolderGlyph(tint: place.tint, size: 28) }
                 .accessibilityHidden(true)
         }
     }

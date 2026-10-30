@@ -751,7 +751,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
 
         {!started && !proxy && (
           <button className="player-bigplay" onClick={togglePlay} aria-label="Play">
-            <Icon name="play" size={48} strokeWidth={1.5} fill="currentColor" />
+            <Icon name="play" size={48} fill="currentColor" />
           </button>
         )}
       </div>
@@ -823,7 +823,7 @@ const VideoPlayer = forwardRef(function VideoPlayer({
         </div>
 
         <div className="player-controls">
-          <button className="btn btn-icon" onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'} aria-pressed={playing}>
+          <button className="btn btn-icon" onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'}>
             <Icon name={playing ? 'pause' : 'play'} /* icons: pause play */ />
           </button>
           <button className="btn btn-icon" onClick={() => step(-1)} aria-label="Previous frame">

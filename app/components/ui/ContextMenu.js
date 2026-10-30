@@ -14,6 +14,23 @@ import { placeMenu } from '@/lib/menu-place';
 export const MENU_ITEMS = ['menuitem', 'menuitemradio', 'menuitemcheckbox']
   .map((r) => `[role="${r}"]:not(:disabled)`).join(', ');
 
+/**
+ * A popup's rectangle at rest. Read on the frame it mounts it is mid-
+ * arrival: the first keyframe of `arrive` (globals.css .menu, .ctx-menu,
+ * .cell-pop) has it a step up and 4% smaller, and getBoundingClientRect
+ * reports the transformed box — so a menu that just fit was placed as
+ * though it did and ran off the bottom. The animation is switched off for
+ * the read and back on in the same task, which starts it again from its
+ * first frame; nothing paints in between.
+ */
+export function measureStill(el) {
+  const was = el.style.animation;
+  el.style.animation = 'none';
+  const r = el.getBoundingClientRect();
+  el.style.animation = was;
+  return r;
+}
+
 export function menuKeyNav(e, container) {
   if (!container) return false;
   const items = [...container.querySelectorAll(MENU_ITEMS)];
@@ -88,7 +105,7 @@ function ContextMenuPopup({ x, y, anchor, items, onClose }) {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
+    const r = measureStill(el);
     setPos(placeMenu({ x, y, w: r.width, h: r.height, vw: window.innerWidth, vh: window.innerHeight, anchor }));
   }, [x, y, anchor]);
 
@@ -129,6 +146,12 @@ function ContextMenuPopup({ x, y, anchor, items, onClose }) {
     queueMicrotask(() => item.onSelect?.());
   };
 
+  // The corner it grows from (globals.css .ctx-menu): the point it was asked
+  // at, unless placeMenu flipped it up or to the left to stay on screen.
+  const from = pos
+    ? `${pos.top < (anchor ? anchor.bottom : y) ? 'bottom' : 'top'} ${pos.left < (anchor ? anchor.left : x) ? 'right' : 'left'}`
+    : 'top left';
+
   return createPortal(
     <div
       ref={ref}
@@ -137,7 +160,7 @@ function ContextMenuPopup({ x, y, anchor, items, onClose }) {
       aria-label={items.find((i) => i?.heading)?.heading || 'Actions'}
       onKeyDown={onKeyDown}
       onContextMenu={(e) => e.preventDefault()}
-      style={pos ? { left: pos.left, top: pos.top } : { left: 0, top: 0, visibility: 'hidden' }}
+      style={pos ? { left: pos.left, top: pos.top, '--from': from } : { left: 0, top: 0, visibility: 'hidden' }}
     >
       {items.map((item, i) => {
         if (item === '-') return <div key={`s${i}`} className="menu-sep" role="separator" />;

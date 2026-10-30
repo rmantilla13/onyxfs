@@ -55,7 +55,9 @@ struct PreviewView: View {
             .scrollTargetBehavior(.paging)
             .scrollPosition(id: $current)
             .scrollIndicators(.hidden)
-            .background(Theme.page.ignoresSafeArea())
+            // Footage on black, by token: the stage is black in every
+            // scheme, so the preview needs no scheme of its own.
+            .background(Theme.stage.ignoresSafeArea())
             // On its side, each page is the whole screen — the notch's side
             // too — so what it shows is centred on the screen, not on what
             // is left between insets.
@@ -80,9 +82,8 @@ struct PreviewView: View {
         }
         .statusBarHidden(chromeHidden || immersive)
         .persistentSystemOverlays(immersive ? .hidden : .automatic)
-        .animation(.easeInOut(duration: 0.2), value: chromeHidden)
-        .animation(.easeInOut(duration: 0.25), value: immersive)
-        .preferredColorScheme(.dark)
+        .animation(Theme.motion(.arrive), value: chromeHidden)
+        .animation(Theme.motion(.arrive), value: immersive)
         .sheet(item: $inspecting) { FileInfoView(file: $0, place: nil) }
         .sheet(item: $linking) { ShareLinkSheet(subject: $0) }
         .task(id: current) { await lookUpStreamable() }
@@ -162,6 +163,7 @@ struct PreviewView: View {
     private func pillButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { pillIcon(symbol) }
             .buttonStyle(.plain)
+            .hoverEffect(.highlight)
             .accessibilityLabel(label)
     }
 
@@ -475,7 +477,7 @@ private struct PosterImage: View {
 
     var body: some View {
         Group {
-            if let image { Image(uiImage: image).resizable().scaledToFit() } else { Color.black }
+            if let image { Image(uiImage: image).resizable().scaledToFit() } else { Theme.stage }
         }
         .task(id: source) { if image == nil { image = await ThumbnailStore.shared.image(source) } }
     }
@@ -527,11 +529,11 @@ private struct DocumentPage: View {
                         .scaleEffect(1.6)
                         .frame(width: 112, height: 112)
                         .background {
-                            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            RoundedRectangle(cornerRadius: Theme.cardCorner, style: .continuous)
                                 .fill(Theme.frost)
                                 .overlay {
-                                    RoundedRectangle(cornerRadius: 28, style: .continuous)
-                                        .strokeBorder(Theme.edge, lineWidth: 0.5)
+                                    RoundedRectangle(cornerRadius: Theme.cardCorner, style: .continuous)
+                                        .strokeBorder(Theme.edge, lineWidth: Theme.hairline)
                                 }
                         }
                         .padding(.bottom, 10)

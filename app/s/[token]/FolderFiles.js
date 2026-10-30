@@ -146,7 +146,7 @@ export default function FolderFiles({ token, sub = '', initial = [], cursor: fir
         {files.map((f, i) => (
           <div key={f.id} className="share-tile">
             <FileCard file={f} href={fileHref(f)} label={labelFor(f)} eager={i < EAGER_CARDS} />
-            {download(f, 'share-tile-download')}
+            {download(f, 'btn-glass share-tile-download')}
           </div>
         ))}
       </div>

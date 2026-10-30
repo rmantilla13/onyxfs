@@ -114,7 +114,7 @@ export function ManageViewsDialog({ open, onClose, views, drives, onRename, onRe
                 {drives.map((d) => <option key={d.id} value={d.id}>Only in {d.name}</option>)}
               </select>
               <button type="button" className="btn btn-ghost btn-sm btn-icon" aria-label={`Delete ${v.name}`} title="Delete view" onClick={() => run(v.id, () => onDelete(v))}>
-                <Icon name="trash" size={15} />
+                <Icon name="trash" size={16} />
               </button>
               {errors[v.id] && <p className="small views-manage-error" role="alert">{errors[v.id]}</p>}
             </li>

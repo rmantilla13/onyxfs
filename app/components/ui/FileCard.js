@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useEffect, useRef, useState } from 'react';
-import { effectiveKind, drawableKind, fmtDuration, fmtSize, isThumbKey } from '@/lib/media';
+import { effectiveKind, drawableKind, fileFormat, fmtDuration, fmtSize, isThumbKey } from '@/lib/media';
 import { isUndersizedPoster, thumbSiblingSizes } from '@/lib/poster';
 import { thumbSources } from '@/lib/renditions';
 import { fileKey } from '@/lib/selection';
@@ -42,6 +42,16 @@ export { fmtSize };
 
 // A card's box before the grid is measured: a 240px column's 4:3 picture.
 const CARD_BOX = { width: 240, height: 180 };
+
+// A file with no picture is drawn as its kind: a glyph on a wash of the
+// kind's colour (globals.css, .filecard-thumb[data-kind]) with its extension
+// as a pill — on a card; in a row, a column or the storage report the glyph
+// alone, smaller. A spreadsheet is a table rather than a page of text.
+/* icons: film image audio-lines file-text table file */
+const KIND_GLYPH = { video: 'film', image: 'image', audio: 'audio-lines', doc: 'file-text', other: 'file' };
+const SHEET_FORMAT = /^(?:csv|tsv|xlsx?|numbers|ods)$/i;
+const GLYPH_SIZE = { card: 28, info: 20 };
+const kindGlyph = (kind, format) => (kind === 'doc' && SHEET_FORMAT.test(format) ? 'table' : KIND_GLYPH[kind] || 'file');
 
 /** How many bars a sound's waveform is drawn with on a surface: about one every five pixels of a card. */
 function waveBars(surface, sizes) {
@@ -159,8 +169,10 @@ export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface 
 
   const duration = kind === 'video' || kind === 'audio' ? fmtDuration(file.metadata?.duration) : '';
   const drawn = !src && wave;
+  const blank = !src && !drawn;
+  const format = blank ? fileFormat(file.name, file.mime) : '';
   return (
-    <div ref={ref} className={drawn ? 'filecard-thumb is-sound' : 'filecard-thumb'}>
+    <div ref={ref} className={drawn ? 'filecard-thumb is-sound' : 'filecard-thumb'} data-kind={blank ? kind : undefined}>
       {placeholder && loadedSrc !== src && (
         <img className="thumb-ph" src={placeholder} alt="" aria-hidden draggable={false} style={{ objectFit: fit }} />
       )}
@@ -188,9 +200,14 @@ export const Thumb = memo(function Thumb({ file, label, onMissingThumb, surface 
         )
         : drawn
           ? <Waveform waveform={wave} count={waveBars(surface, sizes)} tone="aura" className="thumb-wave" />
-          : <span className="muted small mono">{label || kind}</span>}
-      {kind === 'video' && <span className="filecard-badge"><Icon name="play" size={10} strokeWidth={2.5} fill="currentColor" />{duration}</span>}
-      {kind === 'audio' && duration && <span className="filecard-badge"><Icon name="audio-lines" size={10} strokeWidth={2.5} />{duration}</span>}
+          : (
+            <>
+              <span className="thumb-kind" aria-hidden><Icon name={kindGlyph(kind, format)} size={GLYPH_SIZE[surface] || 16} /></span>
+              {surface === 'card' && (format || label) && <span className="tag mono thumb-ext">{format || label}</span>}
+            </>
+          )}
+      {kind === 'video' && <span className="filecard-badge"><Icon name="play" size={12} fill="currentColor" />{duration}</span>}
+      {kind === 'audio' && duration && <span className="filecard-badge"><Icon name="audio-lines" size={12} />{duration}</span>}
     </div>
   );
 });

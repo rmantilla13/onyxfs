@@ -65,7 +65,7 @@ struct SearchView: View {
                     chips
                     content
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, Theme.Space.gutter)
                 .padding(.top, 14)
                 .padding(.bottom, 28)
             }
@@ -131,7 +131,7 @@ struct SearchView: View {
                                     BrandFill(glow: false)
                                 } else {
                                     Capsule().fill(Theme.card)
-                                        .overlay { Capsule().strokeBorder(Theme.edge, lineWidth: 0.5) }
+                                        .overlay { Capsule().strokeBorder(Theme.edge, lineWidth: Theme.hairline) }
                                 }
                             }
                             .contentShape(Capsule())
@@ -140,10 +140,11 @@ struct SearchView: View {
                     .accessibilityAddTraits(on ? .isSelected : [])
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, Theme.Space.gutter)
         }
         .scrollIndicators(.hidden)
-        .padding(.horizontal, -20)
+        .sensoryFeedback(.selection, trigger: kind)
+        .padding(.horizontal, -Theme.Space.gutter)
     }
 
     // MARK: - Answers
@@ -173,9 +174,9 @@ struct SearchView: View {
                     .padding(.top, 12)
             case .done:
                 if results.isEmpty {
-                    ContentUnavailableView.search(text: ask.query.isEmpty ? (ask.kind?.title ?? "") : ask.query)
-                        .onyxStyle()
-                        .padding(.top, 24)
+                    EmptyState(symbol: "magnifyingglass", title: "No Results",
+                               message: "Nothing matches “\(ask.query.isEmpty ? (ask.kind?.title ?? "") : ask.query)” in the drives you're in.")
+                        .padding(.top, 12)
                 } else {
                     rows
                 }

@@ -292,8 +292,11 @@ export default function FileDetail({
         <h1 className="truncate" style={{ fontSize: 'var(--t-xl)', minWidth: 0 }} title={file.name}>{file.name}</h1>
         {review && <ReviewStatusTag status={status} className="review-status-head" />}
         <div className="spacer" />
-        {canShare && <button type="button" className="btn" onClick={() => setSharing(true)}>Share</button>}
-        <DownloadButtons file={file} frame={playerVideo} proxy={proxies ? proxyOffer : null} />
+        {/* Share and Download as one joined control (globals.css .file-actions). */}
+        <div className="file-actions">
+          {canShare && <button type="button" className="btn" onClick={() => setSharing(true)}>Share</button>}
+          <DownloadButtons file={file} frame={playerVideo} proxy={proxies ? proxyOffer : null} />
+        </div>
         {canWrite && (
           <Menu label="File actions">
             <MenuItem onClick={() => { setName(file.name); setRenaming(true); }}>Rename…</MenuItem>

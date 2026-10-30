@@ -15,7 +15,7 @@ import { clearPreviewCaches } from '@/lib/preview-cache';
 // router.refresh() would do that too, but it resets a scrolled file list.)
 let changedHere;
 
-/* icons: sun moon sun-moon */
+/* icons: sun moon sun-moon monitor */
 const THEMES = [
   { key: 'light', label: 'Light', icon: 'sun' },
   { key: 'dark', label: 'Dark', icon: 'moon' },
@@ -37,12 +37,12 @@ function signOut(e) {
 
 /**
  * The account menu at the top right: who is signed in, Admin and Storage for
- * admins, the theme, the shortcuts, which build is serving the page, and signing out —
+ * admins, the theme, the screen saver, the shortcuts, which build is serving the page, and signing out —
  * everything that was spread along the nav, in the one place people look for
  * it. Admin access is still decided on the server (ADMIN_EMAILS); this only
  * shows the way in.
  */
-export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts, avatarUrl = null, inApp = false }) {
+export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts, onScreensaver, avatarUrl = null, inApp = false }) {
   // The picture, kept here too so a new one shows the moment it is saved.
   const [avatar, setAvatar] = useState(() => (changedHere !== undefined ? changedHere : avatarUrl));
   const [editingAvatar, setEditingAvatar] = useState(false);
@@ -108,6 +108,12 @@ export default function ProfileMenu({ email, isAdmin = false, build, onShortcuts
           {pref === t.key && <><span className="spacer" /><Icon name="check" /></>}
         </button>
       ))}
+      {onScreensaver && (
+        <>
+          <MenuSeparator />
+          <MenuItem icon="monitor" onClick={onScreensaver}>Screen saver…</MenuItem>
+        </>
+      )}
       <MenuSeparator />
       <a href="/api/auth/signout" role="menuitem" className="menu-item" onClick={signOut}>Sign out</a>
       {/* Which build is serving this page. The first question when something

@@ -1,0 +1,68 @@
+/* Motion adapted from React Bits (LICENSE-react-bits.md, beside this file).
+   Each piece moves because something happened — a page arrived, a code was
+   minted, a check is running — and is still once it has. Durations are
+   multiples of --dur-1 and --dur-2, which reduced motion sets to 0, so the
+   end state is simply there; the one loop (.shiny-text) is switched off by
+   the same preference. */
+
+/* BlurText: a word at a time, down into place. React Bits blurs each word
+   in as well; here it is opacity and transform alone, as every arrival is
+   (globals.css, Motion) — a filter re-rasterises the word on each frame it
+   runs, and at heading size the drop reads the same. Backwards only, never
+   forwards: an animation that keeps filling after it ends stays in effect,
+   and a word's own style is already where the animation ends. */
+.blur-text-word {
+  display: inline-block;
+  animation: blur-text-in calc(var(--dur-2) * 2) var(--ease) backwards;
+  animation-delay: calc(var(--blur-i) * var(--dur-1) / 2);
+}
+@keyframes blur-text-in {
+  from { opacity: 0; transform: translateY(-0.35em); }
+}
+
+/* The copy a screen reader hears is not copied a second time with the
+   words a selection already holds. WebKit, which Onyx for Mac draws the
+   site with, still wants the prefix. */
+.blur-text > .sr-only, .decrypted-text > .sr-only { -webkit-user-select: none; user-select: none; }
+
+/* DecryptedText: the characters still scrambling, a step back from those
+   that have landed. */
+.decrypted-text-scrambled { color: var(--muted); }
+
+/* CountUp: the number as it is, for a screen reader and for anyone who has
+   asked for less motion, and the one that counts to it for everyone else.
+   The counting copy is in the server's HTML at its start, so hydrating
+   moves nothing that was already on screen. */
+.count-up { font-variant-numeric: tabular-nums; }
+.count-up-run { display: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .count-up { position: relative; }
+  .count-up-value {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .count-up-run { display: inline; }
+}
+
+/* ShinyText: a band of ink passing over a word that is waiting on
+   something. It loops — the only thing here that does — so it goes only on
+   a label whose wait is real, and stops when the label goes. The band
+   travels exactly one tile (250% of the text, so 166.667% in position
+   terms) and the loop has no seam. */
+@media (prefers-reduced-motion: no-preference) {
+  .shiny-text {
+    background: linear-gradient(110deg, currentColor 40%, var(--ink) 50%, currentColor 60%) 0 0 / 250% 100% repeat-x;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shiny-text 2s linear infinite;
+  }
+}
+@keyframes shiny-text { from { background-position: 166.667% 0; } to { background-position: 0 0; } }

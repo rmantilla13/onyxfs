@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { measureStill } from './ContextMenu';
 
 /**
  * A panel that opens from a button and stays open while you work in it —
@@ -48,7 +49,7 @@ export default function Popover({
     if (!open) { setShift({ x: 0, up: false }); return; }
     const el = pop.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
+    const r = measureStill(el);
     const margin = 8;
     let x = 0;
     if (r.right > window.innerWidth - margin) x = window.innerWidth - margin - r.right;
@@ -62,10 +63,13 @@ export default function Popover({
     if (open) pop.current?.querySelector('input, button, select')?.focus({ preventScroll: true });
   }, [open]);
 
+  // As Menu: the shift on `translate`, the arrival on `transform`, and the
+  // corner it grows from in --from.
   const place = {
     ...(align === 'left' ? { right: 'auto', left: 0 } : null),
-    ...(shift.x ? { transform: `translateX(${shift.x}px)` } : null),
+    ...(shift.x ? { translate: `${shift.x}px 0` } : null),
     ...(shift.up ? { top: 'auto', bottom: 'calc(100% + var(--s1))' } : null),
+    '--from': `${shift.up ? 'bottom' : 'top'} ${align === 'left' ? 'left' : 'right'}`,
   };
 
   return (
@@ -89,7 +93,7 @@ export default function Popover({
           role="dialog"
           aria-label={label}
           ref={pop}
-          style={Object.keys(place).length ? place : undefined}
+          style={place}
         >
           {typeof children === 'function' ? children({ close }) : children}
         </div>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { menuKeyNav, MENU_ITEMS } from './ContextMenu';
+import { menuKeyNav, measureStill, MENU_ITEMS } from './ContextMenu';
 import Icon from '@/app/components/ui/Icon';
 
 /**
@@ -52,7 +52,7 @@ export default function Menu({
     if (!open) { setShift({ x: 0, up: false }); return; }
     const el = pop.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
+    const r = measureStill(el);
     const margin = 8;
     let x = 0;
     if (r.right > window.innerWidth - margin) x = window.innerWidth - margin - r.right;
@@ -73,10 +73,14 @@ export default function Menu({
     if (open) pop.current?.querySelector(MENU_ITEMS)?.focus({ preventScroll: true });
   }, [open]);
 
+  // The shift is on `translate`, not `transform`: the popup's arrival
+  // animates `transform` (globals.css .menu), and the two compose. --from is
+  // the corner it grows from — towards its trigger, whichever way it opened.
   const place = {
     ...(align === 'left' ? { right: 'auto', left: 0 } : null),
-    ...(shift.x ? { transform: `translateX(${shift.x}px)` } : null),
+    ...(shift.x ? { translate: `${shift.x}px 0` } : null),
     ...(shift.up ? { top: 'auto', bottom: 'calc(100% + var(--s1))' } : null),
+    '--from': `${shift.up ? 'bottom' : 'top'} ${align === 'left' ? 'left' : 'right'}`,
   };
 
   return (
@@ -104,7 +108,7 @@ export default function Menu({
           ref={pop}
           onClick={close}
           onKeyDown={(e) => menuKeyNav(e, pop.current)}
-          style={Object.keys(place).length ? place : undefined}
+          style={place}
         >
           {children}
         </div>
@@ -138,10 +142,10 @@ export function MenuItem({ onClick, danger = false, disabled = false, checked, i
       disabled={disabled}
       onClick={onClick}
     >
-      {icon && <Icon name={icon} size={15} className="menu-item-icon" />}
+      {icon && <Icon name={icon} size={16} className="menu-item-icon" />}
       <span className="menu-item-text">{children}</span>
       {hint && <span className="menu-item-hint">{hint}</span>}
-      {choice && <span className="menu-item-check" aria-hidden>{checked && <Icon name="check" size={15} />}</span>}
+      {choice && <span className="menu-item-check" aria-hidden>{checked && <Icon name="check" size={16} />}</span>}
     </button>
   );
 }

@@ -112,7 +112,7 @@ struct MainTabs: View {
                 }
             }
             .padding(.bottom, 2)
-            .animation(.spring(duration: 0.3, bounce: 0.15), value: chrome.selecting)
+            .animation(Theme.motion(.arrive), value: chrome.selecting)
             // Bent, an iPhone Duo's fold would run through the middle of
             // the pill: it moves into one half.
             .clearOfFold()
@@ -135,7 +135,7 @@ struct MainTabs: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             .ignoresSafeArea(.container, edges: .trailing)
             .ignoresSafeArea(.keyboard, edges: .bottom)
-            .animation(.spring(duration: 0.3, bounce: 0.15), value: chrome.selecting)
+            .animation(Theme.motion(.arrive), value: chrome.selecting)
         }
     }
 }
@@ -147,7 +147,6 @@ struct FloatingTabBar: View {
     /// Across, or standing down the side as on an iPhone Duo.
     var axis: Axis = .horizontal
     @Namespace private var lit
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let stack = axis == .horizontal ? AnyLayout(HStackLayout(spacing: 2)) : AnyLayout(VStackLayout(spacing: 2))
@@ -160,11 +159,17 @@ struct FloatingTabBar: View {
                     Image(systemName: tab.symbol(selected: chosen))
                         .font(.system(size: 19, weight: chosen ? .semibold : .regular))
                         .foregroundStyle(chosen ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                        .replaceSymbol()
                         .frame(width: axis == .horizontal ? 62 : 38, height: axis == .horizontal ? 46 : 52)
                         .background {
                             if chosen {
+                                // The lit one, sliding between the three:
+                                // a frost with a lit rim, not glass of its
+                                // own — Liquid Glass asks not to be nested
+                                // in Liquid Glass, and the bar is glass.
                                 Capsule()
-                                    .fill(Color.white.opacity(0.14))
+                                    .fill(Theme.frost)
+                                    .overlay(Capsule().strokeBorder(Theme.highlight, lineWidth: Theme.hairline))
                                     .matchedGeometryEffect(id: "lit", in: lit)
                             }
                         }
@@ -177,8 +182,9 @@ struct FloatingTabBar: View {
         }
         .padding(5)
         .glassSurface(Capsule())
-        .shadow(color: .black.opacity(0.55), radius: 22, y: 10)
-        .animation(reduceMotion ? nil : .spring(duration: 0.32, bounce: 0.22), value: selection)
+        .elevation(.raised)
+        .sensoryFeedback(.selection, trigger: selection)
+        .animation(Theme.motion(.arrive), value: selection)
     }
 }
 
@@ -231,9 +237,8 @@ private struct Browser: View {
                     }
                 }
             } else {
-                ContentUnavailableView("Choose a drive", systemImage: "externaldrive",
-                                       description: Text("Its folders and files open here."))
-                    .onyxStyle()
+                EmptyState(symbol: "externaldrive", title: "Choose a Drive",
+                           message: "Its folders and files open here.")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background { AuraBackground() }
             }

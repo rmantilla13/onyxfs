@@ -33,8 +33,9 @@ enum StillRunningNote {
         panel.setFrameOrigin(origin(for: panel.frame.size))
         panel.alphaValue = 0
         panel.orderFrontRegardless()
+        // In with a fade, unless the Mac is set to Reduce Motion.
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.2
+            context.duration = Motion.reduced ? 0 : 0.2
             panel.animator().alphaValue = 1
         }
         self.panel = panel
@@ -57,7 +58,7 @@ enum StillRunningNote {
             return
         }
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.3
+            context.duration = Motion.reduced ? 0 : 0.3
             panel.animator().alphaValue = 0
         }, completionHandler: { panel.orderOut(nil) })
     }

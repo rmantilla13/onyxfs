@@ -52,7 +52,7 @@ struct FolderView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(.spring(duration: 0.3, bounce: 0.15), value: selecting)
+        .animation(Theme.motion(.arrive), value: selecting)
         .navigationTitle(selecting ? selectionTitle : title)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(selecting)
@@ -163,15 +163,16 @@ struct FolderView: View {
     private var grid: some View {
         ScrollView {
             header
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-                .padding(.bottom, 8)
+                .padding(.horizontal, Theme.Space.gutter)
+                .padding(.top, Theme.Space.gutter)
+                .padding(.bottom, Theme.Space.s2)
             // Two big tiles across a phone, more on an iPad.
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 250), spacing: 14, alignment: .top)],
                       spacing: 22) {
                 ForEach(listing.subfolders) { node in
                     NavigationLink(value: FolderRoute(place: route.place, folder: node.folder)) {
-                        FolderTile(node: node, items: listing.itemCounts[node.folder] ?? node.count)
+                        FolderTile(node: node, items: listing.itemCounts[node.folder] ?? node.count,
+                                   tint: route.place.tint)
                     }
                     .buttonStyle(.plain)
                     .disabled(selecting)
@@ -181,11 +182,12 @@ struct FolderView: View {
                     fileButton(file) { FileTile(file: file, showsFolder: !query.isEmpty) }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            if listing.loadingMore { ProgressView().padding(.bottom, 24) }
+            .padding(.horizontal, Theme.Space.s4)
+            .padding(.vertical, Theme.Space.s3)
+            if listing.loadingMore { ProgressView().padding(.bottom, Theme.Space.s5) }
         }
         .onScrollGeometryChange(for: Bool.self, of: Self.titleGone) { _, gone in titleGone = gone }
+        .softScrollEdge()
         .background { AuraBackground() }
     }
 
@@ -194,10 +196,12 @@ struct FolderView: View {
             header
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 20, leading: 20, bottom: 12, trailing: 20))
+                .listRowInsets(EdgeInsets(top: Theme.Space.gutter, leading: Theme.Space.gutter,
+                                          bottom: Theme.Space.s3, trailing: Theme.Space.gutter))
             ForEach(listing.subfolders) { node in
                 NavigationLink(value: FolderRoute(place: route.place, folder: node.folder)) {
-                    FolderRow(node: node, items: listing.itemCounts[node.folder] ?? node.count)
+                    FolderRow(node: node, items: listing.itemCounts[node.folder] ?? node.count,
+                              tint: route.place.tint)
                 }
                 .disabled(selecting)
                 .listRowBackground(Color.clear)
@@ -213,6 +217,7 @@ struct FolderView: View {
         .listStyle(.plain)
         .listRowSeparatorTint(Theme.edge)
         .onScrollGeometryChange(for: Bool.self, of: Self.titleGone) { _, gone in titleGone = gone }
+        .softScrollEdge()
         .auraBackground()
     }
 
@@ -318,7 +323,7 @@ struct FolderView: View {
                 .font(.headline)
                 .lineLimit(1)
                 .opacity(selecting || titleGone ? 1 : 0)
-                .animation(.easeOut(duration: 0.15), value: titleGone)
+                .animation(Theme.motion(.quick), value: titleGone)
                 .accessibilityHidden(!(selecting || titleGone))
         }
         if !selecting, let parentName {
@@ -349,7 +354,9 @@ struct FolderView: View {
                     let starred = session.isStarred(route)
                     Button { star(route, !starred) } label: {
                         Image(systemName: starred ? "star.fill" : "star")
+                            .bounce(on: starred)
                     }
+                    .sensoryFeedback(.impact(weight: .light), trigger: starred)
                     .accessibilityLabel(starred ? "Remove from Starred" : "Add to Starred")
                 }
             }
@@ -370,24 +377,16 @@ struct FolderView: View {
         case .idle, .loading:
             if listing.isEmpty { ProgressView().controlSize(.large) }
         case let .failed(words):
-            ContentUnavailableView {
-                Label("Can't Open \(title)", systemImage: "exclamationmark.triangle")
-            } description: {
-                Text(words)
-            } actions: {
-                Button("Try Again") { Task { await listing.load(session, sort: sort, query: query, refresh: true) } }
-                    .buttonStyle(BrandButtonStyle())
-            }
-            .onyxStyle()
+            EmptyState(symbol: "exclamationmark.triangle", title: "Can't Open \(title)", message: words,
+                       action: ("Try Again", { Task { await listing.load(session, sort: sort, query: query, refresh: true) } }))
         case .loaded:
             if listing.isEmpty {
                 if query.isEmpty {
-                    ContentUnavailableView("Nothing Here Yet", systemImage: "folder",
-                                           description: Text("Files added on the web or from a Mac appear here."))
-                        .onyxStyle()
+                    EmptyState(symbol: "folder", title: "Nothing Here Yet",
+                               message: "Files added on the web or from a Mac appear here.")
                 } else {
-                    ContentUnavailableView.search(text: query)
-                        .onyxStyle()
+                    EmptyState(symbol: "magnifyingglass", title: "No Results",
+                               message: "Nothing in \(title) matches “\(query)”.")
                 }
             }
         }

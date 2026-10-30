@@ -46,7 +46,7 @@ export function useCommandPaletteShortcut(setOpen) {
   }, [setOpen]);
 }
 
-export default function CommandPalette({ open, onClose, drives = [], library = null, isAdmin = false, onShortcuts, initialQuery = '' }) {
+export default function CommandPalette({ open, onClose, drives = [], library = null, isAdmin = false, onShortcuts, onScreensaver, initialQuery = '' }) {
   // Asked drive by drive unless the page said there is an All files: the
   // server refuses a listing that names no drive when there is none.
   const perDrive = library !== true && drives.length > 0;
@@ -144,12 +144,13 @@ export default function CommandPalette({ open, onClose, drives = [], library = n
     isAdmin && { id: 'duplicates', label: 'Find duplicate files', hint: 'Storage', run: () => go('/admin/usage/duplicates') },
     isAdmin && { id: 'admin', label: 'Admin', run: () => go('/admin') },
     { id: 'shortcuts', label: 'Keyboard shortcuts', hint: '?', run: () => { onClose(); onShortcuts?.(); } },
+    { id: 'screensaver', label: 'Screen saver…', hint: 'This device', run: () => { onClose(); onScreensaver?.(); } },
     { id: 'light', label: 'Theme: Light', run: () => { setThemePref('light'); onClose(); } },
     { id: 'dark', label: 'Theme: Dark', run: () => { setThemePref('dark'); onClose(); } },
     { id: 'system', label: 'Theme: System', run: () => { setThemePref('system'); onClose(); } },
     // The pictures kept of the library go first, as from the account menu.
     { id: 'signout', label: 'Sign out', run: () => { clearPreviewCaches().then(() => { window.location.href = '/api/auth/signout'; }); } },
-  ].filter(Boolean), [onFiles, isAdmin, library, go, command, onClose, onShortcuts]);
+  ].filter(Boolean), [onFiles, isAdmin, library, go, command, onClose, onShortcuts, onScreensaver]);
 
   const term = q.trim().toLowerCase();
   const match = (s) => !term || String(s).toLowerCase().includes(term);

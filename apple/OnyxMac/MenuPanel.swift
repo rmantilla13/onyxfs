@@ -31,6 +31,10 @@ struct MenuPanel: View {
             footer
         }
         .frame(width: Self.width)
+        // The material the system's own extras have (VibrantPanel): the
+        // WindowServer draws it, so the once-a-second graphs cost no more
+        // over it than over a flat colour.
+        .background(VibrantPanel().ignoresSafeArea())
         // The drives as the web has them now, their colours and names; and,
         // while they are in ~/Onyx because the file system is off, whether
         // it has been switched on since.
@@ -51,7 +55,11 @@ struct MenuPanel: View {
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1).truncationMode(.middle)
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    // The dot turns between states rather than snapping:
+                    // a crossfade bound to the change, and still with
+                    // Reduce Motion.
                     Circle().fill(status.tint).frame(width: 7, height: 7)
+                        .animation(Motion.gated(Motion.quick), value: status)
                     Text(status.line)
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .lineLimit(2).fixedSize(horizontal: false, vertical: true)
@@ -59,8 +67,10 @@ struct MenuPanel: View {
                 .help(status.line)
             }
             Spacer(minLength: 8)
+            // The panel's one lit action.
             Button(model.phase == .signedIn ? "Open Onyx" : "Sign In…") { open() }
-                .controlSize(.small)
+                .prominent()
+                .tint(Theme.accent)
                 .keyboardShortcut("o")
         }
         .padding(12)
@@ -89,22 +99,30 @@ struct MenuPanel: View {
     private var drives: some View {
         let rows = model.finderDrives.count + 1
         return VStack(alignment: .leading, spacing: 6) {
+            // Level with the rows' icons and switches, which sit 10pt
+            // inside their group.
             HStack {
                 PanelTitle("Drives")
                 Spacer()
                 PanelTitle("In Finder")
             }
+            .padding(.horizontal, 10)
             // In ~/Onyx rather than disks of their own: said here, not only
             // in Settings, with the way to put it right.
             if let note = finder.fileSystemNote {
                 FileSystemNoteRow(finder: finder, note: note)
             }
-            // A long list scrolls rather than running off the screen.
-            if rows > 9 {
-                ScrollView { driveRows }.frame(height: 9 * DriveRow.height)
-            } else {
-                driveRows
+            // One inset group, as the system's extras list theirs. A long
+            // list scrolls rather than running off the screen.
+            Group {
+                if rows > 9 {
+                    ScrollView { driveRows }.frame(height: 9 * DriveRow.height)
+                } else {
+                    driveRows
+                }
             }
+            .padding(.vertical, 2)
+            .panelGroup()
             if finder.pinnedBytes > 0 {
                 Text("\(ByteCountFormatter.string(fromByteCount: finder.pinnedBytes, countStyle: .file)) kept offline on this Mac")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -117,8 +135,15 @@ struct MenuPanel: View {
     private var driveRows: some View {
         VStack(spacing: 0) {
             if model.finderDrives.isEmpty {
-                Text("No drives yet").font(.system(size: 12)).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: DriveRow.height, alignment: .leading)
+                // Nothing to list, said as a picture over a line — the
+                // shape every empty state takes, on the web and the phone —
+                // rather than a bare sentence where a row would be.
+                VStack(spacing: 6) {
+                    Image(lucide: "hard-drive", size: 24, strokeWidth: 1.5).foregroundStyle(.tertiary)
+                    Text("No drives yet").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
             }
             ForEach(model.finderDrives) { drive in
                 DriveRow(scope: .drive(id: drive.id), name: drive.name, detail: Self.roleWord(drive.role),
@@ -142,7 +167,7 @@ struct MenuPanel: View {
     // MARK: Footer
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             if let release = updater.available {
                 Button {
                     open()
@@ -158,35 +183,38 @@ struct MenuPanel: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(Theme.accent)
+                .padding(.horizontal, 4)
             }
-            HStack(spacing: 12) {
+            // The system's own bar buttons: a highlight under the pointer, a
+            // focus ring, a hit area of their own — and Quit kept apart from
+            // the rest by a line, so it is never one pixel from Settings.
+            HStack(spacing: 2) {
                 if model.phase == .signedIn {
                     Button {
                         Task { await model.syncNow() }
                     } label: {
                         Label { Text("Sync Now") } icon: { Image(lucide: "refresh-cw", size: 12) }
                     }
-                    .buttonStyle(.plain)
                     .help("Bring every drive up to date with the web now")
                 }
                 Spacer()
                 SettingsLink {
                     Label { Text("Settings…") } icon: { Image(lucide: "settings", size: 12) }
                 }
-                .buttonStyle(.plain)
                 .keyboardShortcut(",")
+                Divider().frame(height: 14).padding(.horizontal, 6)
                 // ⌥⌘Q, as in the app menu: ⌘Q never quits Onyx
                 // (OnyxCommands), here any more than in its window.
                 Button("Quit") { NSApp.terminate(nil) }
-                    .buttonStyle(.plain)
                     .keyboardShortcut("q", modifiers: [.command, .option])
                     .help("Quit Onyx (⌥⌘Q). Drives leave Finder until it opens again.")
             }
+            .buttonStyle(.accessoryBar)
             .font(.system(size: 12))
-            .foregroundStyle(.secondary)
         }
-        .padding(12)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
     }
 
     private func open() {
@@ -201,7 +229,9 @@ private struct PanelTitle: View {
     init(_ text: String) { self.text = text }
 
     var body: some View {
-        Text(text).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+        Text(text).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            // A heading to VoiceOver, so the panel can be read section by section.
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -216,34 +246,26 @@ private struct FileSystemNoteRow: View {
     let note: DriveService.FileSystemNote
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(lucide: "hard-drive", size: 12).foregroundStyle(.orange)
-                Text(title).font(.system(size: 12, weight: .semibold))
-            }
-            Text(detail)
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        // icons: hard-drive
+        NoteCard(tone: tone, icon: "hard-drive", title: title, message: detail,
+                 problem: note == .switchedOff ? finder.turnOnProblem : nil) {
             if note == .switchedOff {
-                HStack(spacing: 8) {
-                    Button("System Settings…") { finder.openFileSystemSettings() }
-                    if finder.offersTurnOn {
-                        Button(finder.turningOnDisks ? "Turning On…" : "Turn On") {
-                            Task { await finder.turnOnDisks() }
-                        }
-                        .disabled(finder.turningOnDisks)
+                Button("System Settings…") { finder.openFileSystemSettings() }
+                if finder.offersTurnOn {
+                    Button(finder.turningOnDisks ? "Turning On…" : "Turn On") {
+                        Task { await finder.turnOnDisks() }
                     }
-                }
-                .controlSize(.small)
-                if let problem = finder.turnOnProblem {
-                    Text(problem).font(.system(size: 11)).foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
+                    .disabled(finder.turningOnDisks)
                 }
             }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Something to do, or — a disk that would not mount — something that
+    /// went wrong.
+    private var tone: NoteTone {
+        if case .failed = note { return .problem }
+        return .warning
     }
 
     private var title: String {
@@ -279,7 +301,7 @@ private struct DriveRow: View {
     let detail: String?
     let icon: NSImage
 
-    static let height: CGFloat = 34
+    static let height: CGFloat = 36
 
     var body: some View {
         HStack(spacing: 9) {
@@ -287,7 +309,7 @@ private struct DriveRow: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text(name).font(.system(size: 13)).lineLimit(1).truncationMode(.tail)
                 if let detail {
-                    Text(detail).font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 6)
@@ -296,14 +318,16 @@ private struct DriveRow: View {
             case .mounting?:
                 ProgressView().controlSize(.small)
             case let .failed(message)?:
-                Image(lucide: "triangle-alert", size: 13).foregroundStyle(.orange).help(message)
+                Image(lucide: "triangle-alert", size: 13).foregroundStyle(Theme.warning).help(message)
             case .mounted?:
+                // The system's bar button: it lights under the pointer and
+                // takes a click a little around the glyph.
                 Button { model.reveal(scope) } label: {
-                    Image(lucide: "folder-open", size: 14).frame(width: 22, height: 22).contentShape(Rectangle())
+                    Image(lucide: "folder-open", size: 14)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .buttonStyle(.accessoryBar)
                 .help("Open in Finder")
+                .accessibilityLabel("Open \(name) in Finder")
             case nil:
                 EmptyView()
             }
@@ -312,10 +336,11 @@ private struct DriveRow: View {
                 set: { on in Task { await model.setMounted(scope, name: name, on) } }
             )) { Text("Show \(name) in Finder") }
                 .toggleStyle(.switch)
-                .controlSize(.mini)
+                .controlSize(.small)
                 .labelsHidden()
                 .disabled(model.busy.contains(scope.identifier))
         }
+        .padding(.horizontal, 10)
         .frame(height: Self.height)
     }
 }

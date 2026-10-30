@@ -1,6 +1,7 @@
 'use client';
 
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { flushSync } from 'react-dom';
 import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { buildFacets, fileMatchesFacets, hasAnyFacet, deriveAuto, expiryState } from '@/lib/dam';
@@ -783,11 +784,43 @@ export default function FilesClient({
     setCursor(null);
     if (view.builtin) keepBuiltin(view.id, { sort: next, display });
   };
+  // The morph in flight (changeDisplay), so a stale one cannot undo a newer.
+  const morphRef = useRef(null);
   const changeDisplay = (patch) => {
     const next = normalizeDisplay({ ...display, ...patch }, display);
-    if ((next.flatten && next.layout !== 'column') !== flat) setCursor(null);
-    setDisplay(next);
-    if (view.builtin) keepBuiltin(view.id, { sort, display: next });
+    const apply = () => {
+      if ((next.flatten && next.layout !== 'column') !== flat) setCursor(null);
+      setDisplay(next);
+      if (view.builtin) keepBuiltin(view.id, { sort, display: next });
+    };
+    // A change of layout morphs: the page as it is and as it becomes,
+    // crossfaded by a same-document view transition (two snapshots, one
+    // frame of work) where the browser has them and nobody asked for less
+    // motion. flushSync, so the new layout is in the DOM before the second
+    // snapshot; data-morphing on the pane keeps the new listing's own
+    // arrival (globals.css) out from under the crossfade. Anything else —
+    // a field, the thumbnail fit — is applied plainly.
+    const morph = next.layout !== display.layout
+      && typeof document.startViewTransition === 'function'
+      && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!morph) { apply(); return; }
+    const pane = paneRef.current;
+    pane?.setAttribute('data-morphing', '');
+    // Only the latest morph takes the attribute off again: a second switch
+    // skips the first transition, whose `finished` then settles at once —
+    // before the second's update has run — and would otherwise bare the
+    // listing the second one mounts.
+    const token = (morphRef.current = {});
+    const done = () => { if (morphRef.current === token) pane?.removeAttribute('data-morphing'); };
+    let transition;
+    try {
+      transition = document.startViewTransition(() => flushSync(apply));
+    } catch {
+      done();
+      apply();
+      return;
+    }
+    transition.finished.finally(done);
   };
   // The grid/list choice and columns from before views are All files'
   // starting point only until it is changed here: from then on its own
@@ -2559,14 +2592,33 @@ export default function FilesClient({
   const emptyState = useMemo(() => {
     if (loading && noFiles) return <SkeletonItems layout={layout} count={expected} />;
     if (showTiles && subfolders.length > 0 && noFiles) return null;
+    // Composed, not a sentence alone: a glyph for what is missing, a short
+    // title, the sentence, and — where there is one — the thing to do about
+    // it (globals.css .empty-state, whose parts arrive a beat apart). The
+    // Upload here is a plain button: the header's is the page's one primary.
+    const filtered = !noFiles;
+    const narrowed = filtered || !!query || kinds.length > 0;
+    const glyph = narrowed ? 'list-filter' : noDrive ? 'hard-drive' : 'folder-open';
+    const title = filtered ? 'No files match'
+      : query ? 'No matches'
+        : kinds.length ? `No ${kinds.length === 1 ? KIND_WORDS[kinds[0]] : 'files of those kinds'} here`
+          : noDrive ? 'No drive yet' : 'Nothing here yet';
+    const body = filtered ? 'No files match those filters.'
+      : emptyWords || (canWrite ? 'Drop files anywhere on this page to upload them, or choose them.' : 'Files added here will show up as they arrive.');
+    const action = !narrowed && !noDrive && canWrite ? (
+      <button type="button" className="btn empty-action" onClick={() => inputRef.current?.click()}>
+        <Icon name="upload" size={16} />Upload files
+      </button>
+    ) : null;
     return (
-      <div className="empty">
-        {noFiles
-          ? emptyWords || (canWrite ? 'Nothing here yet. Drop files anywhere on this page to upload.' : 'Nothing here yet.')
-          : 'No files match those filters.'}
+      <div className="empty empty-state">
+        <Icon name={glyph} size={28} className="empty-glyph" /* icons: list-filter hard-drive folder-open upload */ />
+        <p className="empty-title">{title}</p>
+        <p className="empty-body small">{body}</p>
+        {action}
       </div>
     );
-  }, [loading, noFiles, layout, expected, showTiles, subfolders.length, canWrite, emptyWords]);
+  }, [loading, noFiles, layout, expected, showTiles, subfolders.length, canWrite, emptyWords, query, kinds, noDrive]);
   // The view's fields as column definitions: the list's columns, and the
   // line under each name on a card or a tile.
   const gridProps = useMemo(() => ({
@@ -2756,7 +2808,11 @@ export default function FilesClient({
           <div className="side-folders">
             <Section title={activeDrive ? `Folders in ${activeDrive.name}` : 'Folders'}>
               <div className="folder-list edge-scroll">
-                <FolderDrop target="" enabled={canWrite} onDrop={onTreeDrop}>
+                {/* The root is the drive: on a phone the strip's first chip
+                    wears its dot, and with the root open the chip is not
+                    shown — the drive chip and the title already say it
+                    (globals.css, .folder-root). */}
+                <FolderDrop target="" enabled={canWrite} onDrop={onTreeDrop} className={`folder-root${folder ? '' : ' is-here'}`} style={{ '--dot': driveColor(filespaceId) }}>
                   <FolderLink active={!folder} onClick={() => navigate('')} path=""><span className="folder-name">{rootName}</span>{keptFolder('') && <OfflineMark size={12} />}</FolderLink>
                 </FolderDrop>
                 <FolderTree
@@ -2993,8 +3049,12 @@ export default function FilesClient({
         <div className="files-selbar" role="toolbar" aria-label="Selection">
           <span className="small">{anySelected} selected</span>
           <div className="spacer" />
-          {/* More is the menu a long-press would have opened: the one a
-              right-click on the selection opens. */}
+          {/* Download is here rather than in the toolbar on a phone (the
+              toolbar has scrolled away, and it needs a selection anyway);
+              More is the menu a long-press would have opened: the one a
+              right-click on the selection opens. Done clears, it commits
+              nothing, so it is not the page's lit button. */}
+          {selected.size > 0 && <button type="button" className="btn" onClick={downloadSelection}>Download</button>}
           <button type="button" className="btn" aria-haspopup="menu" onClick={(e) => openSelectionMenu(e.currentTarget)}>More</button>
           {selected.size > 0 && canForSome(selected, files, 'delete', { canWrite }) && (
             // Folders go through their own menu: with some selected, the
@@ -3003,7 +3063,7 @@ export default function FilesClient({
               {sel.selectedFolders.size ? `Remove ${selected.size}` : 'Remove'}
             </button>
           )}
-          <button type="button" className="btn btn-primary" onClick={() => sel.clear()}>Done</button>
+          <button type="button" className="btn" onClick={() => sel.clear()}>Done</button>
         </div>
       )}
       <UploadPanel
@@ -3182,7 +3242,7 @@ function SkeletonItems({ layout, count }) {
     );
   }
   return (
-    <div className="files-grid" aria-busy="true" aria-label="Loading">
+    <div className="files-grid is-skeleton" aria-busy="true" aria-label="Loading">
       {items.map((i) => (
         <div key={i} className="card filecard is-skeleton" aria-hidden>
           <div className="filecard-thumb" />
