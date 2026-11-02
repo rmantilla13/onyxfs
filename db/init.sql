@@ -11,7 +11,7 @@
 -- library indexes the app builds CONCURRENTLY appear here in the plain form,
 -- which on a fresh database is instant.
 --
--- Statements: 163
+-- Statements: 167
 
 CREATE TABLE IF NOT EXISTS "user" (
   id              TEXT PRIMARY KEY,
@@ -683,6 +683,14 @@ CREATE INDEX IF NOT EXISTS desktop_tokens_email_idx ON desktop_tokens (email);
 ALTER TABLE desktop_auth_codes ADD COLUMN IF NOT EXISTS client_id TEXT;
 
 ALTER TABLE desktop_auth_codes ADD COLUMN IF NOT EXISTS redirect_uri TEXT;
+
+ALTER TABLE desktop_auth_codes ADD COLUMN IF NOT EXISTS scope TEXT;
+
+ALTER TABLE desktop_auth_codes ADD COLUMN IF NOT EXISTS drive_ids TEXT;
+
+ALTER TABLE desktop_tokens ADD COLUMN IF NOT EXISTS scope TEXT;
+
+ALTER TABLE desktop_tokens ADD COLUMN IF NOT EXISTS drive_ids TEXT;
 
 CREATE TABLE IF NOT EXISTS oauth_clients (
   id TEXT PRIMARY KEY,

@@ -1,8 +1,8 @@
 import { redirect } from 'next/navigation';
 import { getSessionUser } from '@/lib/session';
 import { loadBrand } from '@/lib/brand-config';
-import { getOAuthClient } from '@/lib/db';
-import { checkAuthorize, withQuery } from '@/lib/oauth';
+import { getOAuthClient, listFilespacesForSpace } from '@/lib/db';
+import { READ_SCOPE, checkAuthorize, withQuery } from '@/lib/oauth';
 import ConsentClient from './ConsentClient';
 
 export const dynamic = 'force-dynamic';
@@ -16,6 +16,9 @@ export const metadata = { title: 'Allow access' };
  *
  * A request that names an unknown client, or an address it did not register,
  * is refused here and sent nowhere.
+ *
+ * A client asking for `onyx.read` is offered the drives this person can open,
+ * to pick the ones it may read (lib/token-scope.js).
  */
 export default async function OAuthAuthorizePage({ searchParams }) {
   const user = await getSessionUser();
@@ -27,6 +30,8 @@ export default async function OAuthAuthorizePage({ searchParams }) {
   if (checked.error && checked.redirect) {
     redirect(withQuery(checked.redirectUri, { error: checked.error, error_description: checked.description, state: checked.state }));
   }
+  const readOnly = checked.value?.scope === READ_SCOPE;
+  const drives = readOnly ? (await listFilespacesForSpace(user.email)).map((d) => ({ id: d.id, name: d.name })) : [];
   return (
     <ConsentClient
       brandName={brand.name}
@@ -34,6 +39,8 @@ export default async function OAuthAuthorizePage({ searchParams }) {
       email={user.email}
       problem={checked.error || null}
       request={checked.value || null}
+      readOnly={readOnly}
+      drives={drives}
     />
   );
 }

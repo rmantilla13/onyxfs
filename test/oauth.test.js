@@ -63,7 +63,7 @@ describe('registration', () => {
 describe('authorization requests', () => {
   test('a good one: what the code needs', () => {
     assert.deepEqual(checkAuthorize(ok(), client).value, {
-      clientId: client.id, clientName: 'Claude', redirectUri: client.redirectUris[0], state: 's1', challenge: CHALLENGE,
+      clientId: client.id, clientName: 'Claude', redirectUri: client.redirectUris[0], state: 's1', challenge: CHALLENGE, scope: 'onyx',
     });
   });
 
