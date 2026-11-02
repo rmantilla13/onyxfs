@@ -8,6 +8,7 @@ import { presignFileUrls } from '@/lib/storage';
 import { syncFeedRow } from '@/lib/media';
 import { drivePatterns } from '@/lib/drive-access';
 import { accessFingerprint, foldersTag, syncScope } from '@/lib/sync-scope';
+import { readScoped, tokenHasDrive } from '@/lib/token-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -56,6 +57,11 @@ export async function GET(req) {
     return NextResponse.json({ error: 'Changes could not be read right now.' }, { status: 503, headers: { 'retry-after': '30' } });
   }
   const driveParam = (url.searchParams.get('drive') || '').trim();
+  // A read-only token reads the drives it was given, one at a time: never
+  // everything, never the library (lib/token-scope.js).
+  if (readScoped(principal) && (!driveParam || !tokenHasDrive(principal, driveParam))) {
+    return NextResponse.json({ error: 'This connection can’t read that drive.' }, { status: 404 });
+  }
   // A failed read of the drives is a 503 to retry, never a 404: a device
   // takes "No access to this drive" as the drive taken away.
   let allDrives;

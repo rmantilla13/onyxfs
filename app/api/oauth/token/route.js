@@ -40,9 +40,14 @@ export async function POST(req) {
   const verifier = String(p.code_verifier || '');
   if (!verifier || (await pkceChallenge(verifier)) !== row.codeChallenge) return fail('invalid_grant', 'PKCE verification failed.');
   if (!(await isEmailGrantedAccess(row.email))) return fail('access_denied', 'This account no longer has access.', 403);
-  const { token } = await createDesktopToken({ email: row.email, label: row.label || 'Claude', ttlMs: ACCESS_TOKEN_TTL_S * 1000 });
+  // A read-only code becomes a read-only token for the same drives
+  // (lib/token-scope.js); every other code, the full scope as before.
+  const { token } = await createDesktopToken({
+    email: row.email, label: row.label || 'Claude', ttlMs: ACCESS_TOKEN_TTL_S * 1000,
+    scope: row.scope || null, driveIds: row.scope ? row.driveIds : null,
+  });
   return NextResponse.json(
-    { access_token: token, token_type: 'Bearer', expires_in: ACCESS_TOKEN_TTL_S, scope: SCOPE },
+    { access_token: token, token_type: 'Bearer', expires_in: ACCESS_TOKEN_TTL_S, scope: row.scope || SCOPE },
     { headers: { 'Cache-Control': 'no-store' } },
   );
 }

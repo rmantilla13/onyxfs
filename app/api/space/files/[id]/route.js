@@ -3,6 +3,7 @@ import { requireDesktopAuth } from '@/lib/desktop-guard';
 import { getFileById, canAccessFile, attachProxies } from '@/lib/db';
 import { can } from '@/lib/authz';
 import { presignFileUrls } from '@/lib/storage';
+import { withinTokenDrives } from '@/lib/token-scope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,7 +38,9 @@ export async function GET(req, { params }) {
   const file = await getFileById(params.id);
   // A file you may not see and a file that does not exist answer the same, so
   // an id cannot be used to learn that something is there.
-  if (!file || file.deletedAt || !(await canAccessFile(file, principal))) {
+  // A read-only token also needs the file to be in one of its drives: a
+  // library file visible to the org is one canAccessFile opens to anyone.
+  if (!file || file.deletedAt || !withinTokenDrives(principal, file.storageKey) || !(await canAccessFile(file, principal))) {
     return NextResponse.json({ error: 'File not found' }, { status: 404 });
   }
 

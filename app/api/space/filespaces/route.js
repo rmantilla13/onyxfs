@@ -62,7 +62,13 @@ export async function GET(req) {
 
   let spaces;
   try {
-    spaces = principal.isAdmin
+    // A read-only token's drives are the ones it was given, whoever is behind
+    // it (an admin has no access rows to join on): read from its principal.
+    spaces = gate.readOnly
+      ? (await listFilespaces())
+        .map((f) => ({ ...f, role: principal.driveScope?.roles?.[f.id] || null }))
+        .filter((f) => f.role)
+      : principal.isAdmin
       ? (await listFilespaces()).map((f) => ({ ...f, role: 'owner' }))
       : (await listFilespacesForUser(gate.email))
         .map((f) => ({ ...f, role: principal.driveScope?.roles?.[f.id] || null }))
