@@ -17,7 +17,7 @@ const MAX_ROWS = 400;
  *
  * `folders` is the tree the sidebar already has ({ folder, depth }), so this
  * costs no request. `exclude` hides a folder and everything beneath it — a
- * folder cannot move into itself.
+ * folder cannot move into itself — or, as a list, each of several moving.
  */
 export function useFolderPicker() {
   const [state, setState] = useState(null);
@@ -34,8 +34,9 @@ function FolderPickerDialog({ title = 'Move to…', folders = [], exclude = null
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     const all = [{ folder: '', name: rootName, depth: 0 }, ...folders.map((f) => ({ ...f, depth: f.depth || f.folder.split('/').length }))];
+    const out = (Array.isArray(exclude) ? exclude : [exclude]).filter((x) => x != null && x !== '');
     return all.filter((f) => {
-      if (exclude != null && exclude !== '' && (f.folder === exclude || f.folder.startsWith(`${exclude}/`))) return false;
+      if (out.some((x) => f.folder === x || f.folder.startsWith(`${x}/`))) return false;
       return !q || f.folder.toLowerCase().includes(q) || (f.folder === '' && rootName.toLowerCase().includes(q));
     });
   }, [folders, exclude, query, rootName]);

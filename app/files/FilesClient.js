@@ -47,8 +47,8 @@ import useMacApp from '@/app/components/useMacApp';
 import OfflineMark from '@/app/components/ui/OfflineMark';
 import { offlineMarks, keptWith } from '@/lib/offline-marks';
 import { canFor, canForSome } from './can-for';
-import { fileKey, folderKey, parseKey } from '@/lib/selection';
-import FolderDrop, { DRAG_FILES, DRAG_FOLDER, startFolderDrag } from './FolderDrop';
+import { fileKey, folderKey, parseKey, splitKeys } from '@/lib/selection';
+import FolderDrop, { DRAG_FILES, DRAG_FOLDER, DRAG_ITEMS, startFolderDrag } from './FolderDrop';
 import StarredFolders from './StarredFolders';
 import CollectionsList from './CollectionsList';
 import CollectionEditor from './CollectionEditor';
@@ -68,6 +68,9 @@ import { isTouch } from './usePointerIntent';
 import {
   folderNameProblem, fileNameProblem, parentOf, baseName, isWithin, rebase, mapLimit, cleanFolder, folderStats, folderSummaries,
 } from '@/lib/folder-ops';
+import {
+  outermostFolders, planMove, sumSummaries, describeItems, deleteWords, movedWords, deletedWords,
+} from '@/lib/bulk-items';
 import Icon from '@/app/components/ui/Icon';
 import { startActivity, countOf } from '@/lib/activity';
 import { TRASH_RETENTION_DAYS } from '@/lib/storage-report';
@@ -143,6 +146,8 @@ const DOWNLOAD_GAP_MS = 350;
 const MOVE_PARALLEL = 6;
 // Files per restore request: what POST /api/files/trash/restore takes.
 const RESTORE_BATCH = 200;
+// Folders asked at once what a delete of them would take (?summary=).
+const SUMMARY_PARALLEL = 6;
 
 // Whether the filter panel was left open, and whether the sidebar is shown
 // (lib/views.js SIDEBAR_KEY), per browser.
@@ -1115,6 +1120,38 @@ export default function FilesClient({
     else toast.success(`Restored ${back} file${back === 1 ? '' : 's'}.`);
   };
 
+  // The deletes themselves, once they are agreed to — removeFiles' and a
+  // selection's with folders in it (deleteItemsUI). Gone from the page at
+  // once, rather than when the last answer is in: a large selection on a
+  // slow line still takes a moment, and nothing here needs to wait for it.
+  // One that could not be removed is back with the caller's reload, which
+  // says how many. → { failed, undoable }: undoable is only what the server
+  // says it put in the trash — never a file it deleted for good, whatever
+  // this page took the flag to be.
+  const runFileDeletes = async (ids) => {
+    const n = ids.length;
+    const one = n === 1 ? files.find((f) => f.id === ids[0]) : null;
+    const gone = new Set(ids);
+    setFiles((prev) => prev.filter((f) => !gone.has(f.id)));
+    setSelected((s) => { const next = new Set(s); ids.forEach((id) => next.delete(id)); return next; });
+    // The server decides trash-vs-purge from its own flag state.
+    const task = startActivity({
+      title: `Removing ${one ? `“${one.name}”` : `${n.toLocaleString()} files`}`,
+      done: 0, total: n, detail: countOf(0, n, 'files'),
+    });
+    let finished = 0;
+    const results = await Promise.all(ids.map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' }).catch(() => null).then(async (r) => {
+      finished++;
+      task.update({ done: finished, detail: countOf(finished, n, 'files') });
+      return { id, ok: !!r?.ok, trashed: r?.ok ? (await r.json().catch(() => ({}))).trashed === true : false };
+    })));
+    task.end();
+    return {
+      failed: results.filter((r) => !r.ok).length,
+      undoable: results.filter((r) => r.ok && r.trashed).map((r) => r.id),
+    };
+  };
+
   // Remove files by id: the selection, or one file from its context menu.
   const removeFiles = async (ids) => {
     if (!ids.length) return;
@@ -1131,29 +1168,7 @@ export default function FilesClient({
       destructive: !flags.trash,
     });
     if (!ok) return;
-    // Gone from the page at once, rather than when the last answer is in: a
-    // large selection on a slow line still takes a moment, and nothing here
-    // needs to wait for it. One that could not be removed is back with the
-    // reload below, and the toast says how many.
-    const gone = new Set(ids);
-    setFiles((prev) => prev.filter((f) => !gone.has(f.id)));
-    setSelected((s) => { const next = new Set(s); ids.forEach((id) => next.delete(id)); return next; });
-    // The server decides trash-vs-purge from its own flag state.
-    const task = startActivity({
-      title: `Removing ${one ? `“${one.name}”` : `${n.toLocaleString()} files`}`,
-      done: 0, total: n, detail: countOf(0, n, 'files'),
-    });
-    let finished = 0;
-    const results = await Promise.all(ids.map((id) => fetch(`/api/files/${id}`, { method: 'DELETE' }).catch(() => null).then(async (r) => {
-      finished++;
-      task.update({ done: finished, detail: countOf(finished, n, 'files') });
-      return { id, ok: !!r?.ok, trashed: r?.ok ? (await r.json().catch(() => ({}))).trashed === true : false };
-    })));
-    task.end();
-    const failed = results.filter((r) => !r.ok).length;
-    // Undo only what the server says it put in the trash — never a file it
-    // deleted for good, whatever this page took the flag to be.
-    const undoable = results.filter((r) => r.ok && r.trashed).map((r) => r.id);
+    const { failed, undoable } = await runFileDeletes(ids);
     load();
     loadFolders();
     if (failed) toast.error(`${failed} of ${n} could not be removed.`);
@@ -1331,9 +1346,13 @@ export default function FilesClient({
     note ? toast.error(`Renamed to “${name}”. ${note}`) : toast.success(`Renamed to “${name}”.`);
   };
 
-  const moveFolderTo = async (path, dest) => {
+  // One folder's move into `dest`, asking first about anything already
+  // stored where it is going (replaceOccupied) — the move itself, for
+  // moveFolderTo and a selection's (moveItems), which reload and say how it
+  // went once for everything they moved. → { ok, to, body, error }, with
+  // `declined` when they kept what was there and nothing moved.
+  const runFolderMove = async (path, dest) => {
     const to = joinFolder(dest, baseName(path));
-    if (to === path || isWithin(dest, path)) return;
     const where = dest || rootName;
     const run = (extra) => {
       const task = folderTask(`Moving “${baseName(path)}” to ${where}`);
@@ -1341,10 +1360,19 @@ export default function FilesClient({
     };
     let { ok, status, body } = await run();
     if (body.code === 'occupied') {
-      if (!(await replaceOccupied(body))) return;
+      if (!(await replaceOccupied(body))) return { ok: false, declined: true, to, body };
       ({ ok, status, body } = await run({ replace: true }));
     }
-    if (!ok) { toast.error(body.error || `Could not move the folder (HTTP ${status}).`); return; }
+    return { ok, to, body, error: ok ? null : body.error || `Could not move the folder (HTTP ${status}).` };
+  };
+
+  const moveFolderTo = async (path, dest) => {
+    const to = joinFolder(dest, baseName(path));
+    if (to === path || isWithin(dest, path)) return;
+    const where = dest || rootName;
+    const { ok, body, error, declined } = await runFolderMove(path, dest);
+    if (declined) return;
+    if (!ok) { toast.error(error); return; }
     followFolder(path, to);
     const note = describeRename(body);
     note ? toast.error(`Moved “${baseName(path)}” to ${where}. ${note}`) : toast.success(`Moved “${baseName(path)}” to ${where}.`);
@@ -1355,10 +1383,51 @@ export default function FilesClient({
     if (dest != null) await moveFolderTo(path, dest);
   };
 
-  const deleteFolderUI = async (path) => {
-    const r = await fetch(`/api/files/folders?summary=${encodeURIComponent(path)}${fsQuery}`);
+  // What a delete of the folder would take, as its confirmation states it
+  // (GET ?summary=). → { ok, sum } or { ok: false, error }.
+  const folderSummary = async (path) => {
+    const r = await fetch(`/api/files/folders?summary=${encodeURIComponent(path)}${fsQuery}`).catch(() => null);
+    if (!r) return { ok: false, error: 'Could not reach Onyx.' };
     const sum = await r.json().catch(() => ({}));
-    if (!r.ok) { toast.error(sum.error || `Could not read the folder (HTTP ${r.status}).`); return; }
+    return r.ok ? { ok: true, sum } : { ok: false, error: sum.error || `Could not read the folder (HTTP ${r.status}).` };
+  };
+
+  // One folder's delete, once it is agreed to: the server trashes a batch per
+  // call and says whether there is more. `total` is how many files the
+  // summary said it holds, for the activity panel's count. → { deleted,
+  // failed, error, trashedIds } — the folder stays when anything failed.
+  const runFolderDelete = async (path, total = 0) => {
+    let deleted = 0;
+    let failed = 0;
+    let lastError = null;
+    const trashedIds = [];
+    const task = startActivity({
+      title: `Deleting “${baseName(path)}”`,
+      ...(total ? { done: 0, total, detail: countOf(0, total, 'files') } : {}),
+    });
+    try {
+      for (let round = 0; round < 1000; round++) {
+        const d = await fetch(`/api/files/folders?name=${encodeURIComponent(path)}${fsQuery}`, { method: 'DELETE' }).catch(() => null);
+        if (!d) { lastError = 'Could not reach Onyx.'; break; }
+        const body = await d.json().catch(() => ({}));
+        if (!d.ok) { lastError = body.error || `HTTP ${d.status}`; break; }
+        deleted += body.deleted || 0;
+        if (Array.isArray(body.trashedIds)) trashedIds.push(...body.trashedIds);
+        failed = body.failed || 0;
+        lastError = body.error;
+        if (total) task.update({ done: Math.min(deleted, total), detail: countOf(Math.min(deleted, total), total, 'files') });
+        if (!body.more || !body.deleted) break;
+      }
+    } finally {
+      task.end();
+    }
+    return { deleted, failed, error: lastError || null, trashedIds };
+  };
+
+  const deleteFolderUI = async (path) => {
+    const read = await folderSummary(path);
+    if (!read.ok) { toast.error(read.error); return; }
+    const { sum } = read;
     const parts = [];
     if (sum.files) parts.push(`${sum.files} file${sum.files === 1 ? '' : 's'}`);
     if (sum.folders) parts.push(`${sum.folders} subfolder${sum.folders === 1 ? '' : 's'}`);
@@ -1376,32 +1445,7 @@ export default function FilesClient({
       confirmLabel: 'Delete folder',
     });
     if (!ok) return;
-    let deleted = 0;
-    let failed = 0;
-    let lastError = null;
-    const trashedIds = [];
-    const total = sum.files || 0;
-    const task = startActivity({
-      title: `Deleting “${baseName(path)}”`,
-      ...(total ? { done: 0, total, detail: countOf(0, total, 'files') } : {}),
-    });
-    // The server trashes a batch per call and says whether there is more.
-    try {
-      for (let round = 0; round < 1000; round++) {
-        const d = await fetch(`/api/files/folders?name=${encodeURIComponent(path)}${fsQuery}`, { method: 'DELETE' }).catch(() => null);
-        if (!d) { lastError = 'Could not reach Onyx.'; break; }
-        const body = await d.json().catch(() => ({}));
-        if (!d.ok) { lastError = body.error || `HTTP ${d.status}`; break; }
-        deleted += body.deleted || 0;
-        if (Array.isArray(body.trashedIds)) trashedIds.push(...body.trashedIds);
-        failed = body.failed || 0;
-        lastError = body.error;
-        if (total) task.update({ done: Math.min(deleted, total), detail: countOf(Math.min(deleted, total), total, 'files') });
-        if (!body.more || !body.deleted) break;
-      }
-    } finally {
-      task.end();
-    }
+    const { deleted, failed, error: lastError, trashedIds } = await runFolderDelete(path, sum.files || 0);
     if (!failed && !lastError) followStars(path, null);
     if (isWithin(folder, path) && !failed && !lastError) navigate(parentOf(path), { replace: true });
     load();
@@ -1417,10 +1461,13 @@ export default function FilesClient({
   };
 
   // Move files one request each, a few at a time: PATCH /api/files/[id]
-  // moves the object and the row together and refuses to do half.
-  const moveFiles = async (ids, dest) => {
+  // moves the object and the row together and refuses to do half. The moves
+  // themselves, for moveFiles and a selection's with folders (moveItems):
+  // those already in `dest` are left out. → { tried, failed, catalogOnly,
+  // firstError }.
+  const runFileMoves = async (ids, dest) => {
     const list = ids.filter((id) => files.find((f) => f.id === id)?.folder !== dest);
-    if (!list.length) return;
+    if (!list.length) return { tried: 0, failed: 0, catalogOnly: 0, firstError: null };
     let failed = 0;
     let catalogOnly = 0;
     let firstError = null;
@@ -1452,13 +1499,23 @@ export default function FilesClient({
     } finally {
       task.end();
     }
+    return { tried: list.length, failed, catalogOnly, firstError };
+  };
+
+  // A stored file the move could not take along stays where it is, though
+  // the library now lists it in `where` (objectMoved: false).
+  const catalogOnlyWords = (n) => `${n} stored file${n === 1 ? '' : 's'} could not be moved from here: open its filespace to move it.`;
+
+  const moveFiles = async (ids, dest) => {
+    const { tried, failed, catalogOnly, firstError } = await runFileMoves(ids, dest);
+    if (!tried) return;
     setSelected(new Set());
     load();
     loadFolders();
-    const n = list.length - failed;
+    const n = tried - failed;
     const where = dest || rootName;
-    if (failed) toast.error(`${failed} of ${list.length} could not be moved. ${firstError}`);
-    else if (catalogOnly) toast.error(`Moved ${n} to ${where}, but ${catalogOnly} stored file${catalogOnly === 1 ? '' : 's'} could not be moved from here: open its filespace to move it.`);
+    if (failed) toast.error(`${failed} of ${tried} could not be moved. ${firstError}`);
+    else if (catalogOnly) toast.error(`Moved ${n} to ${where}, but ${catalogOnlyWords(catalogOnly)}`);
     else toast.success(`Moved ${n} file${n === 1 ? '' : 's'} to ${where}.`);
   };
 
@@ -1470,6 +1527,109 @@ export default function FilesClient({
     const one = n === 1 ? files.find((f) => f.id === ids[0]) : null;
     const dest = await pick({ title: one ? `Move “${one.name}”` : `Move ${n} files`, folders, current: one ? one.folder || '' : folder || '', rootName });
     if (dest != null) await moveFiles(ids, dest);
+  };
+
+  // ── A selection with folders in it ────────────────────────────────────────
+  // Several folders, or folders and files, picked in the pane: Move and
+  // Delete act on all of it at once. Each folder still goes through the
+  // route a single folder takes (PATCH and DELETE /api/files/folders, which
+  // keep a drive's boundary and take a folder's stars along), one after
+  // another: each is a resumable copy that may stop to ask about what is
+  // already where it is going, and two of those at once would be a muddle.
+  // The files go as a selection of files does. One confirmation, one word
+  // on how it went, and the selection is let go of. The arithmetic is
+  // lib/bulk-items.js. A single item goes the way it always has.
+
+  // A server's error as a sentence of the toast, whether or not it ended one.
+  const asSentence = (s) => (/[.!?…]$/.test(s) ? s : `${s}.`);
+
+  // Folders and files into `dest` together: Move… on a selection, or a drag of one.
+  const moveItems = async (paths, ids, dest) => {
+    const where = dest || rootName;
+    const plan = planMove(paths, dest);
+    // Refused whole, as a drop on one of them is (the picker never offers it).
+    if (plan.into.length) { toast.error(`“${baseName(plan.into[0])}” cannot go into itself.`); return; }
+    let moved = 0;
+    const problems = [];
+    for (const path of plan.move) {
+      const r = await runFolderMove(path, dest);
+      if (r.declined) continue;
+      if (!r.ok) { problems.push(asSentence(`“${baseName(path)}” could not be moved: ${r.error}`)); continue; }
+      moved++;
+      followStars(path, r.to);
+      if (isWithin(folder, path)) navigate(rebase(folder, path, r.to), { replace: true });
+      const note = describeRename(r.body);
+      if (note) problems.push(note);
+    }
+    const f = ids.length ? await runFileMoves(ids, dest) : { tried: 0, failed: 0, catalogOnly: 0, firstError: null };
+    if (f.failed) problems.push(asSentence(`${f.failed} of ${f.tried} files could not be moved: ${f.firstError}`));
+    if (f.catalogOnly) problems.push(catalogOnlyWords(f.catalogOnly));
+    sel.clear();
+    load();
+    loadFolders();
+    const done = movedWords({ folders: [moved, plan.move.length], files: [f.tried - f.failed, f.tried] }, where);
+    const said = [done, ...problems].filter(Boolean).join(' ');
+    if (!said) return;
+    problems.length ? toast.error(said) : toast.success(said);
+  };
+
+  const moveItemsUI = async (paths, ids) => {
+    if (paths.length === 1 && !ids.length) { await moveFolderUI(paths[0]); return; }
+    if (!paths.length) { await moveFilesUI(ids); return; }
+    const dest = await pick({
+      title: `Move ${describeItems({ folders: paths.length, files: ids.length }, { exact: true })}`,
+      folders, exclude: paths, current: folder || '', rootName,
+    });
+    if (dest != null) await moveItems(paths, ids, dest);
+  };
+
+  const deleteItemsUI = async (paths, ids) => {
+    if (paths.length === 1 && !ids.length) { await deleteFolderUI(paths[0]); return; }
+    if (!paths.length) { await removeFiles(ids); return; }
+    const tops = outermostFolders(paths);
+    // What each would take, asked of them together: they are only reads.
+    const reads = await mapLimit(tops, SUMMARY_PARALLEL, folderSummary);
+    const refused = reads.findIndex((r) => !r.ok);
+    if (refused >= 0) { toast.error(asSentence(`Nothing was deleted. “${baseName(tops[refused])}”: ${reads[refused].error}`)); return; }
+    const sums = reads.map((r) => r.sum);
+    const words = deleteWords({
+      folders: tops.length, files: ids.length, inside: sumSummaries(sums), trash: !!flags.trash, days: TRASH_RETENTION_DAYS,
+    });
+    const ok = await confirm({ ...words, destructive: !flags.trash });
+    if (!ok) return;
+    let gone = 0;
+    let removed = 0;
+    const problems = [];
+    const trashed = [];
+    for (const [i, path] of tops.entries()) {
+      const r = await runFolderDelete(path, sums[i].files || 0);
+      removed += r.deleted;
+      trashed.push(...r.trashedIds);
+      if (r.failed || r.error) {
+        problems.push(r.failed
+          ? `In “${baseName(path)}”, ${r.failed} file${r.failed === 1 ? '' : 's'} could not be removed, so the folder stays.`
+          : asSentence(`“${baseName(path)}” could not be deleted: ${r.error}`));
+        continue;
+      }
+      gone++;
+      followStars(path, null);
+      if (isWithin(folder, path)) navigate(parentOf(path), { replace: true });
+    }
+    if (ids.length) {
+      const d = await runFileDeletes(ids);
+      removed += ids.length - d.failed;
+      trashed.push(...d.undoable);
+      if (d.failed) problems.push(`${d.failed} of ${ids.length} files could not be removed.`);
+    }
+    sel.clear();
+    load();
+    loadFolders();
+    const done = deletedWords({ folders: [gone, tops.length], files: removed, trash: trashed.length > 0 });
+    const said = [done, ...problems].filter(Boolean).join(' ');
+    // Not "Undo": the files come back, and their folders with them, but not
+    // the folders' own tags, notes or stars, which went with their rows.
+    const restore = trashed.length ? { action: { label: 'Restore files', onClick: () => restoreFromTrash(trashed) } } : undefined;
+    problems.length ? toast.error(said, restore) : toast.success(said, restore);
   };
 
   // Renames the stored object too when it can (PATCH moves the key), so a
@@ -1544,6 +1704,7 @@ export default function FilesClient({
   // ref, so the memoized cards are not re-rendered for it.
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  // The folders of the selection go too (DRAG_ITEMS), beside the files.
   const onDragFile = useCallback((e, key) => {
     const id = parseKey(key)?.id;
     const all = filesRef.current;
@@ -1551,20 +1712,54 @@ export default function FilesClient({
     if (!f) return;
     const cur = selectedRef.current;
     const ids = cur.has(f.id) ? [...cur] : [f.id];
+    const paths = cur.has(f.id) ? [...(selRef.current?.selectedFolders || [])] : [];
     if (!cur.has(f.id)) selRef.current?.setKeys([key]);
+    const count = ids.length + paths.length;
     e.dataTransfer.setData(DRAG_FILES, JSON.stringify(ids));
-    e.dataTransfer.setData('text/plain', ids.length === 1 ? f.name : `${ids.length} files`);
+    if (paths.length) e.dataTransfer.setData(DRAG_ITEMS, JSON.stringify({ folders: paths, files: ids }));
+    e.dataTransfer.setData('text/plain', count === 1 ? f.name : paths.length ? `${count} items` : `${count} files`);
     e.dataTransfer.effectAllowed = 'move';
     const moving = new Set(ids);
-    beginDrag(e, { kind: 'files', ids, rows: all.filter((x) => moving.has(x.id)), label: kindLabel });
+    beginDrag(e, { kind: 'files', ids, paths, rows: all.filter((x) => moving.has(x.id)), label: kindLabel });
   }, []);
 
-  // Something dropped on a folder in the tree: files or a folder from inside
-  // the library move there; files from the desktop upload into it.
+  // A folder item's drag, by the same rule as a card's: one that is part of
+  // the selection carries all of it — its other folders and its files — and
+  // one outside it is selected on its own and dragged alone.
+  const onDragFolder = useCallback((e, key) => {
+    const path = parseKey(key)?.id;
+    const s = selRef.current;
+    if (!path || !s) return;
+    if (!s.keys.has(key)) {
+      s.setKeys([key]);
+      startFolderDrag(e, path);
+      return;
+    }
+    const { files: fset, folders: dset } = splitKeys(s.keys);
+    const ids = [...fset];
+    const moving = new Set(ids);
+    // The grabbed folder first: the chip shows its name.
+    startFolderDrag(e, path, {
+      paths: [path, ...[...dset].filter((p) => p !== path)],
+      ids,
+      rows: filesRef.current.filter((x) => moving.has(String(x.id))),
+    });
+  }, []);
+
+  // Something dropped on a folder in the tree: files or folders from inside
+  // the library move there — a selection's together (DRAG_ITEMS); files
+  // from the desktop upload into it.
   const onTreeDrop = (target, e) => {
     const dt = e.dataTransfer;
     const types = [...(dt?.types || [])];
-    if (types.includes(DRAG_FILES)) {
+    if (types.includes(DRAG_ITEMS)) {
+      let items = null;
+      try { items = JSON.parse(dt.getData(DRAG_ITEMS)); } catch {}
+      const paths = Array.isArray(items?.folders) ? items.folders.filter((p) => typeof p === 'string' && p) : [];
+      const ids = Array.isArray(items?.files) ? items.files.filter((id) => typeof id === 'string' && id) : [];
+      if (paths.length) moveItems(paths, ids, target);
+      else if (ids.length) moveFiles(ids, target);
+    } else if (types.includes(DRAG_FILES)) {
       let ids = [];
       try { ids = JSON.parse(dt.getData(DRAG_FILES)); } catch {}
       if (ids.length) moveFiles(ids, target);
@@ -1607,8 +1802,8 @@ export default function FilesClient({
       }
     }
     const pick = hasAnyFacet(facets) ? rows.filter((f) => fileMatchesFacets(f, facets, schema)) : rows;
-    // Every folder shown too, as Finder's ⌘A does; the file actions still
-    // say how many files they act on.
+    // Every folder shown too, as Finder's ⌘A does, and the selection's
+    // Move and Delete take them along.
     sel.setKeys([...itemFolders.map((f) => folderKey(f.folder)), ...pick.map((f) => fileKey(f.id))]);
     if (after) toast.success(`Selected the first ${pick.length.toLocaleString()}. Move them, then select all again for the rest.`);
   };
@@ -1623,6 +1818,28 @@ export default function FilesClient({
   const infoForFolder = (path) => setInfo({
     type: 'folder', path, stats: folderStats(folders, path), canOpen: path !== folder,
   });
+  // Several folders, and any files picked with them: what they hold in all.
+  const infoForItems = (paths, ids) => {
+    const stats = outermostFolders(paths).map((p) => folderStats(folders, p));
+    setInfo({
+      type: 'items',
+      folders: paths,
+      files: files.filter((f) => ids.includes(f.id)),
+      total: stats.reduce((n, s) => n + s.total, 0),
+      nested: stats.reduce((n, s) => n + s.nested, 0),
+    });
+  };
+  // ⌘I, the toolbar's and the palette's Get info: what is selected — files,
+  // folders or both — else the file with focus, else the open folder.
+  const infoForSelection = (focused = null) => {
+    const paths = [...sel.selectedFolders];
+    const ids = [...selected];
+    if (paths.length === 1 && !ids.length) infoForFolder(paths[0]);
+    else if (paths.length) infoForItems(paths, ids);
+    else if (ids.length) infoForFiles(ids);
+    else if (focused) infoForFiles([focused]);
+    else infoForFolder(folder);
+  };
 
   // Keeping offline, in the Mac app. A file or folder that a kept folder
   // already keeps says so instead of offering to keep it: letting go of it
@@ -1650,6 +1867,33 @@ export default function FilesClient({
     return kept
       ? { label: 'Remove offline copies', onSelect: () => mac.pinFolder(path, filespaceId, false) }
       : { label: 'Keep folder offline on this Mac', onSelect: () => mac.pinFolder(path, filespaceId, true) };
+  };
+  // Several folders and files: keeps what is not kept yet, or — when all of
+  // it is — lets go of it all. As for one, a folder or file that a kept
+  // folder above it keeps is that folder's to let go of, and is left alone.
+  const itemsOfflineItem = (paths, ids) => {
+    const byId = new Map(files.map((x) => [x.id, x]));
+    const ownFolders = paths.filter((p) => { const m = marks?.folder(p); return !m?.kept || m.by === p; });
+    const ownFiles = ids.filter((id) => !(byId.has(id) && fileKeptWords(byId.get(id))));
+    if (!ownFolders.length && !ownFiles.length) return { label: 'Kept offline with their folders', disabled: true };
+    const keepFolders = ownFolders.filter((p) => !marks?.folder(p).kept);
+    const keepFiles = ownFiles.filter((id) => !mac.pinned.has(id));
+    if (keepFolders.length || keepFiles.length) {
+      return {
+        label: `Keep ${describeItems({ folders: keepFolders.length, files: keepFiles.length })} offline on this Mac`,
+        onSelect: () => {
+          keepFolders.forEach((p) => mac.pinFolder(p, filespaceId, true));
+          if (keepFiles.length) mac.pinFiles(keepFiles, filespaceId);
+        },
+      };
+    }
+    return {
+      label: 'Remove offline copies',
+      onSelect: () => {
+        ownFolders.forEach((p) => mac.pinFolder(p, filespaceId, false));
+        if (ownFiles.length) mac.unpinFiles(ownFiles, filespaceId);
+      },
+    };
   };
 
   // Per file, the server's word on what may be done to it (./can-for.js):
@@ -1720,6 +1964,30 @@ export default function FilesClient({
     canWrite && '-',
     canWrite && { label: 'Delete folder…', danger: true, onSelect: () => deleteFolderUI(path) },
   ];
+
+  // The menu for a selection of more than one thing with a folder in it —
+  // from a right-click on any of it, or the phone bar's More: what may be
+  // done to all of it at once. What only makes sense for one — Open,
+  // Rename, New folder inside, Share, Tags and metadata — is on a folder's
+  // own menu. `key` is the item it was opened on, where Quick Look starts.
+  const itemsMenu = (paths, ids, key = folderKey(paths[0])) => {
+    const what = describeItems({ folders: paths.length, files: ids.length });
+    const n = paths.length;
+    const folderWords = n === 1 ? 'folder' : `${n} folders`;
+    return [
+      { heading: `${what} selected` },
+      { label: `Quick Look ${paths.length + ids.length} items`, hint: 'Space', onSelect: () => quickLook(key) },
+      { label: 'Get info', hint: `${modKey()}I`, onSelect: () => infoForItems(paths, ids) },
+      paths.every(isStarred)
+        ? { label: `Remove ${folderWords} from Starred`, onSelect: () => starFolders(paths, false) }
+        : { label: `Add ${folderWords} to Starred`, onSelect: () => starFolders(paths.filter((p) => !isStarred(p)), true) },
+      mac.inApp && itemsOfflineItem(paths, ids),
+      canWrite && { label: `Move ${what}…`, onSelect: () => moveItemsUI(paths, ids) },
+      { label: 'Clear selection', onSelect: () => sel.clear() },
+      canWrite && '-',
+      canWrite && { label: `Delete ${what}…`, danger: true, onSelect: () => deleteItemsUI(paths, ids) },
+    ];
+  };
 
   // The menu for empty space — anywhere on the page that is not a file, a
   // folder or a field. `at` is the folder it acts on: the open one, or the
@@ -1792,11 +2060,21 @@ export default function FilesClient({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Could not change Starred.');
       setStars(data.stars);
+      return true;
     } catch (e) {
       if (before) setStars(before);
       toast.error(e.message);
+      return false;
     }
   }, [toast]);
+  // Several folders here, one after another: each answer is the whole list,
+  // so answers to calls made at once could each leave out the others' stars.
+  // Stops at the first the server refuses (at the most one person keeps, say).
+  const starFolders = async (paths, starred) => {
+    for (const path of paths) {
+      if (!(await setStar({ driveId: filespaceId || '', folder: path }, starred))) return;
+    }
+  };
   const openStar = useCallback((s) => {
     if (s.driveId === (filespaceId || '')) { navigate(s.folder); return; }
     setPendingDrive(s.driveId);
@@ -2072,7 +2350,7 @@ export default function FilesClient({
   commands.current = (name, detail = {}) => {
     if (name === 'new-folder' && canWrite) newFolder();
     else if (name === 'upload' && canWrite) inputRef.current?.click();
-    else if (name === 'info') (selected.size ? infoForFiles([...selected]) : infoForFolder(folder));
+    else if (name === 'info') infoForSelection();
     else if (name === 'new-drive' && isAdmin) setNewDrive(true);
     // "Filter this view by …": the palette's search, as this listing's.
     else if (name === 'filter') applyQuery(detail.query);
@@ -2119,9 +2397,11 @@ export default function FilesClient({
       const f = files.find((x) => x.id === card.dataset.fileId);
       if (!f) return null;
       // A right-click on something outside the selection selects it alone
-      // first, so the menu is about what is highlighted (Finder's rule).
+      // first, so the menu is about what is highlighted (Finder's rule) —
+      // from the keys it answers with: the selection state is this render's.
       const keys = sel.ensureSelected(fileKey(f.id));
-      const ids = new Set([...keys].map(parseKey).filter((k) => k?.type === 'file').map((k) => k.id));
+      const { files: ids, folders: paths } = splitKeys(keys);
+      if (paths.size) return { el: card, items: itemsMenu([...paths], [...ids], fileKey(f.id)) };
       return { el: card, items: fileMenu(f, ids) };
     }
     const disk = target?.closest?.('[data-drive]');
@@ -2161,8 +2441,15 @@ export default function FilesClient({
     const dir = target?.closest?.('[data-folder]');
     if (dir) {
       const path = dir.dataset.folder;
-      // A folder item in the pane is selectable; the tree and the crumbs are not.
-      if (path && dir.closest('.files-pane')) sel.ensureSelected(folderKey(path));
+      // A folder item in the pane is selectable, and one of several selected
+      // gets the selection's menu; the tree and the crumbs are not.
+      if (path && dir.closest('.files-pane')) {
+        const keys = sel.ensureSelected(folderKey(path));
+        if (keys.size > 1) {
+          const { files: ids, folders: paths } = splitKeys(keys);
+          return { el: dir, items: itemsMenu([...paths], [...ids], folderKey(path)) };
+        }
+      }
       return { el: dir, items: path ? folderMenu(path) : blankMenu('') };
     }
     return { el: target?.closest?.('.files-pane') || target, items: blankMenu() };
@@ -2193,10 +2480,7 @@ export default function FilesClient({
     if (onPage && !e.altKey && sel.bodyKey(e)) return;
     if (mod && !e.altKey && !e.shiftKey && (e.key === 'i' || e.key === 'I')) {
       e.preventDefault();
-      const focused = document.activeElement?.closest?.('[data-file-id]')?.dataset.fileId;
-      if (selected.size) infoForFiles([...selected]);
-      else if (focused) infoForFiles([focused]);
-      else infoForFolder(folder);
+      infoForSelection(document.activeElement?.closest?.('[data-file-id]')?.dataset.fileId);
       return;
     }
     // ⌘A: every file in the folder, as in Finder — then drag any one of them
@@ -2570,8 +2854,8 @@ export default function FilesClient({
     return expiry || review || kept ? <>{expiry}{review}{kept}</> : null;
   }, [flags.usageRights, flags.review, schema, marks, fileKeptWords]);
   const itemHandlers = useMemo(
-    () => ({ ...sel.handlers, dragStart: canWrite ? onDragFile : undefined }),
-    [sel.handlers, canWrite, onDragFile],
+    () => ({ ...sel.handlers, dragStart: canWrite ? onDragFile : undefined, dragFolder: canWrite ? onDragFolder : undefined }),
+    [sel.handlers, canWrite, onDragFile, onDragFolder],
   );
   const noFiles = files.length === 0;
   // A folder's file count from the tree: how many placeholder cards to show
@@ -2649,11 +2933,12 @@ export default function FilesClient({
   const paneDropTarget = canWrite && layout !== 'column';
 
   // The phone bar's More: the selection's own menu, as a right-click on it
-  // would open.
+  // would open — for more than one thing with a folder in it, itemsMenu.
   const openSelectionMenu = (anchor) => {
+    const paths = [...sel.selectedFolders];
     const firstFile = visible.find((f) => selected.has(f.id));
-    const firstFolder = [...sel.selectedFolders][0];
-    const items = firstFile ? fileMenu(firstFile) : firstFolder != null ? folderMenu(firstFolder) : null;
+    const items = paths.length && paths.length + selected.size > 1 ? itemsMenu(paths, [...selected])
+      : firstFile ? fileMenu(firstFile) : paths.length ? folderMenu(paths[0]) : null;
     if (items) openMenu({ anchor, returnFocus: anchor }, items);
   };
 
@@ -2695,6 +2980,10 @@ export default function FilesClient({
 
   const canMoveSel = selected.size > 0 && canForSome(selected, files, 'edit', { canWrite });
   const canDeleteSel = selected.size > 0 && canForSome(selected, files, 'delete', { canWrite });
+  // With folders in it, the selection is moved and deleted as one, as its
+  // menu does (moveItemsUI, deleteItemsUI): a folder's changes are `canWrite`'s.
+  const selPaths = [...sel.selectedFolders];
+  const selWhat = describeItems({ folders: selPaths.length, files: selected.size });
   const canReset = view.builtin && (!!local[view.id] || (view.id === DEFAULT_VIEW_ID && !!legacy));
   const cards = layout === 'grid' || layout === 'tile';
   const fileCount = `${visible.length.toLocaleString()}${visible.length !== files.length ? ` of ${files.length.toLocaleString()}` : ''}${cursor ? '+' : ''}`;
@@ -2707,9 +2996,18 @@ export default function FilesClient({
         {selectingAll ? 'Selecting…' : 'Select all'}
       </MenuItem>
       <MenuItem icon="square" disabled={!anySelected} onClick={() => sel.clear()}>Deselect all</MenuItem>
-      {canMoveSel && <MenuItem icon="folder-open" onClick={moveSelectedUI}>Move {selected.size} file{selected.size === 1 ? '' : 's'}…</MenuItem>}
-      {canDeleteSel && <MenuItem icon="trash" danger onClick={trashSelected}>Delete {selected.size} file{selected.size === 1 ? '' : 's'}…</MenuItem>}
-      <MenuItem icon="info" hint={`${modKey()}I`} onClick={() => (selected.size ? infoForFiles([...selected]) : infoForFolder(folder))}>Get info</MenuItem>
+      {selPaths.length > 0 ? canWrite && (
+        <>
+          <MenuItem icon="folder-open" onClick={() => moveItemsUI(selPaths, [...selected])}>Move {selWhat}…</MenuItem>
+          <MenuItem icon="trash" danger onClick={() => deleteItemsUI(selPaths, [...selected])}>Delete {selWhat}…</MenuItem>
+        </>
+      ) : (
+        <>
+          {canMoveSel && <MenuItem icon="folder-open" onClick={moveSelectedUI}>Move {selected.size} file{selected.size === 1 ? '' : 's'}…</MenuItem>}
+          {canDeleteSel && <MenuItem icon="trash" danger onClick={trashSelected}>Delete {selected.size} file{selected.size === 1 ? '' : 's'}…</MenuItem>}
+        </>
+      )}
+      <MenuItem icon="info" hint={`${modKey()}I`} onClick={() => infoForSelection()}>Get info</MenuItem>
       {canWrite && (
         <>
           <MenuSeparator />
@@ -2988,7 +3286,7 @@ export default function FilesClient({
                     summaries={summaries}
                     columns={cols}
                     selected={sel.selectedFolders}
-                    handlers={sel.handlers}
+                    handlers={itemHandlers}
                     canWrite={canWrite}
                     onDrop={onItemDrop}
                     navRef={sel.navRef}
@@ -3009,7 +3307,7 @@ export default function FilesClient({
                       filespace={filespaceId || ''}
                       cardSize={display.size}
                       selected={sel.selectedFolders}
-                      handlers={sel.handlers}
+                      handlers={itemHandlers}
                       canWrite={canWrite}
                       onDrop={onItemDrop}
                       navRef={sel.navRef}
@@ -3056,11 +3354,14 @@ export default function FilesClient({
               nothing, so it is not the page's lit button. */}
           {selected.size > 0 && <button type="button" className="btn" onClick={downloadSelection}>Download</button>}
           <button type="button" className="btn" aria-haspopup="menu" onClick={(e) => openSelectionMenu(e.currentTarget)}>More</button>
-          {selected.size > 0 && canForSome(selected, files, 'delete', { canWrite }) && (
-            // Folders go through their own menu: with some selected, the
+          {selPaths.length > 0 && canWrite ? (
+            // With folders in it, all of it, as the menus' Delete is.
+            <button type="button" className="btn btn-danger" onClick={() => deleteItemsUI(selPaths, [...selected])}>Remove</button>
+          ) : selected.size > 0 && canForSome(selected, files, 'delete', { canWrite }) && (
+            // Folders this role may not remove stay: with some selected, the
             // count says how many files this removes.
             <button type="button" className="btn btn-danger" onClick={trashSelected}>
-              {sel.selectedFolders.size ? `Remove ${selected.size}` : 'Remove'}
+              {selPaths.length ? `Remove ${selected.size}` : 'Remove'}
             </button>
           )}
           <button type="button" className="btn" onClick={() => sel.clear()}>Done</button>

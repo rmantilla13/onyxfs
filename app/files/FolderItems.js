@@ -117,7 +117,7 @@ const FolderTile = memo(function FolderTile({ folder: f, filespace = '', preview
         onDoubleClick={(e) => handlers.dblclick(e, key)}
         onKeyDown={(e) => handlers.keyDown(e, key)}
         draggable={canWrite}
-        onDragStart={canWrite ? (e) => startFolderDrag(e, f.folder) : undefined}
+        onDragStart={canWrite ? (e) => (handlers.dragFolder ? handlers.dragFolder(e, key) : startFolderDrag(e, f.folder)) : undefined}
       >
         <FolderMosaic tiles={previews ? tiles : null} glyph={glyph} className="folder-tile-icon" />
         <span className="folder-tile-text">
@@ -138,7 +138,8 @@ const FolderTile = memo(function FolderTile({ folder: f, filespace = '', preview
  * read as one kind of thing. They are items like the files: a click selects
  * (⌘ and ⇧ as for files), a double-click, Return, ⌘↓ or a tap opens, arrows
  * cross between them and the files. Each is a drop target for moves and
- * uploads, draggable onto another folder on its own, and carries data-folder
+ * uploads, draggable onto another folder — with the rest of the selection
+ * when it is part of one (`handlers.dragFolder`) — and carries data-folder
  * so the page's context menu finds it. `summaries` is folderSummaries().
  *
  * Each shows what is in it — its newest few pictures, as a mosaic
@@ -203,7 +204,7 @@ const FolderRow = memo(function FolderRow({ folder: f, summary, columns, selecte
         onDoubleClick={(e) => handlers.dblclick(e, key)}
         onKeyDown={(e) => handlers.keyDown(e, key)}
         draggable={canWrite}
-        onDragStart={canWrite ? (e) => startFolderDrag(e, f.folder) : undefined}
+        onDragStart={canWrite ? (e) => (handlers.dragFolder ? handlers.dragFolder(e, key) : startFolderDrag(e, f.folder)) : undefined}
       >
         <span className="filelist-thumb filelist-folder-icon" aria-hidden><FolderGlyph size={24} /></span>
         <span className="filelist-name"><span className="truncate">{f.name}</span>{kept && <OfflineMark />}</span>

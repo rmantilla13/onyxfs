@@ -9,7 +9,7 @@ import { lastPointer } from './usePointerIntent';
 import {
   SPRING_MS, SPRING_WARN_MS, CHIP_H, OVER_SCALE, LAND_SCALE, LABEL_ROOM, HANG, SPRINGS,
   compactBox, previewLayout, hangAt, stepSpring, atRest, swayFor,
-  describeFiles, classifyDrop, isRefused, springsOpen,
+  describeDrag, classifyDrop, isRefused, springsOpen,
 } from '@/lib/drag-preview';
 
 /**
@@ -128,6 +128,9 @@ export function paneDrop() {
  * handler, once its data is set. `spec` is
  *   { kind: 'files', ids, rows, label }   rows: the files being moved that the page has; label(row) → e.g. "PDF"
  *   { kind: 'folder', path }
+ * either with `paths` too — every folder of a selection the item is part
+ * of, and a folder's with `ids` and `rows` for the files in it — so the
+ * picture counts all of it and the verdicts are for all of it.
  * The item is `e.currentTarget`. Returns false, leaving the browser's own
  * drag image, when there is no layer on the page or the image cannot be
  * swapped — or when a finger began it (an iPad's long-press), which the
@@ -151,27 +154,30 @@ export function beginDrag(e, spec) {
   const compact = isFolder ? { width: 0, height: CHIP_H } : compactBox(from);
   const layout = previewLayout(from, compact);
 
-  let what;
+  // What moves: the selection the item is part of — its folders and its
+  // files — or the folder alone, each dimmed wherever the page shows it.
+  const paths = (spec.paths?.length ? spec.paths : isFolder ? [spec.path] : []).filter(Boolean);
+  const ids = spec.ids || [];
+  const what = describeDrag({ paths, ids, rows: spec.rows });
+  const count = paths.length + ids.length;
+  const wantFolders = new Set(paths);
+  const wantFiles = new Set(ids.map(String));
+  const marks = [...document.querySelectorAll('[data-folder], [data-file-id]')].filter((x) => (x.hasAttribute('data-file-id')
+    ? wantFiles.has(x.getAttribute('data-file-id'))
+    : wantFolders.has(x.getAttribute('data-folder')) && !x.closest('.crumbs')));
   let content;
-  let marks;
   if (isFolder) {
-    what = { kind: 'folder', path: spec.path };
-    content = { kind: 'folder', count: 1, name: baseName(spec.path) || spec.path, glyph: Math.round(26 * layout.k) };
-    marks = [...document.querySelectorAll('[data-folder]')]
-      .filter((x) => x.getAttribute('data-folder') === spec.path && !x.closest('.crumbs'));
+    content = { kind: 'folder', count, name: baseName(spec.path) || spec.path, glyph: Math.round(26 * layout.k) };
   } else {
-    const ids = spec.ids || [];
-    what = describeFiles(ids, spec.rows);
     const rows = new Map((spec.rows || []).map((f) => [String(f.id), f]));
     const grabbed = el.getAttribute('data-file-id');
     const order = [grabbed, ...ids.map(String).filter((id) => id !== grabbed)].filter(Boolean).slice(0, 3);
-    const want = new Set(ids.map(String));
-    marks = [...document.querySelectorAll('[data-file-id]')].filter((x) => want.has(x.getAttribute('data-file-id')));
-    const cardOf = (id) => (id === grabbed ? el : marks.find((x) => x.getAttribute('data-file-id') === id));
+    const cards = marks.filter((x) => x.hasAttribute('data-file-id'));
+    const cardOf = (id) => (id === grabbed ? el : cards.find((x) => x.getAttribute('data-file-id') === id));
     content = {
       kind: 'files',
-      count: ids.length,
-      name: ids.length === 1 ? rows.get(grabbed)?.name || '' : '',
+      count,
+      name: count === 1 ? rows.get(grabbed)?.name || '' : '',
       pictures: order.map((id) => pictureOf(id, rows.get(id), cardOf(id), spec.label)),
     };
   }
