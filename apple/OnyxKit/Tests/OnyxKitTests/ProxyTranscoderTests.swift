@@ -202,33 +202,48 @@ enum Clip {
         guard writer.startWriting() else { throw writer.error ?? CancellationError() }
         writer.startSession(atSourceTime: .zero)
 
-        // Sound written alongside the frames, as a camera writes them: the
-        // writer interleaves, and holds one track back while the other is
-        // too far behind — all the video first would wait forever.
+        // Each input fed whenever it will take more, as ProxyTranscoder's
+        // pump feeds them, and finished the moment it runs out. The writer
+        // interleaves the tracks itself, and under load it can hold the
+        // video back until the sound is all in and finished: a loop that
+        // waits on the video with sound still to give waits forever, as one
+        // run did for two hours. A writer that has failed says why; one
+        // that takes nothing for a minute is stuck.
         let frames = Int(seconds * Double(fps))
         let rate = 48_000, chunk = 1024
-        var sound = 0
-        func soundUpTo(_ sample: Int) async throws {
-            guard let tone else { return }
-            while sound < min(sample, Int(seconds * Double(rate))) {
-                while !tone.isReadyForMoreMediaData { try await Task.sleep(nanoseconds: 1_000_000) }
-                tone.append(try pcm(start: sound, count: chunk, rate: rate))
-                sound += chunk
+        let samples = tone == nil ? 0 : Int(seconds * Double(rate))
+        var frame = 0, sample = 0
+        var last = ContinuousClock.now
+        while frame < frames || sample < samples {
+            guard writer.status == .writing else { throw writer.error ?? CancellationError() }
+            var took = false
+            if frame < frames, video.isReadyForMoreMediaData {
+                // A writer that fails drops its pool.
+                guard let pool = adaptor.pixelBufferPool else { throw writer.error ?? CancellationError() }
+                var buffer: CVPixelBuffer?
+                CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
+                guard let buffer else { throw CancellationError() }
+                fill(buffer, shade: UInt8(frame * 255 / max(1, frames - 1)))
+                adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: fps))
+                frame += 1
+                if frame == frames { video.markAsFinished() }
+                took = true
+            }
+            if let tone, sample < samples, tone.isReadyForMoreMediaData {
+                tone.append(try pcm(start: sample, count: chunk, rate: rate))
+                sample += chunk
+                if sample >= samples { tone.markAsFinished() }
+                took = true
+            }
+            if took {
+                last = .now
+            } else if ContinuousClock.now - last > .seconds(60) {
+                struct Stuck: Error { let frame: Int, sample: Int }
+                throw Stuck(frame: frame, sample: sample)
+            } else {
+                try await Task.sleep(nanoseconds: 1_000_000)
             }
         }
-        for frame in 0..<frames {
-            try await soundUpTo((frame + 1) * rate / Int(fps))
-            while !video.isReadyForMoreMediaData { try await Task.sleep(nanoseconds: 1_000_000) }
-            guard let pool = adaptor.pixelBufferPool else { throw CancellationError() }
-            var buffer: CVPixelBuffer?
-            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
-            guard let buffer else { throw CancellationError() }
-            fill(buffer, shade: UInt8(frame * 255 / max(1, frames - 1)))
-            adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: fps))
-        }
-        video.markAsFinished()
-        try await soundUpTo(Int(seconds * Double(rate)))
-        tone?.markAsFinished()
         await writer.finishWriting()
         if writer.status != .completed { throw writer.error ?? CancellationError() }
     }
