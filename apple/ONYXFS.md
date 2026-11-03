@@ -515,6 +515,40 @@ called "Collections (Onyx)".
   support with no names. So macOS keeps them the way it does on a FAT disk,
   in `._` AppleDouble files (the root's in `._.`). Those files are
   local-only names, stored in the same LocalStore.
+- **How the LocalStore is written.** Each drive's is in the extension's
+  container (`Application Support/onyxfs/<drive id>/local/`): `index.json`
+  (every local item's path, blob and date, and any item's attributes), the
+  log of changes since it was written (`index-<generation>.log`), and
+  `blobs/` for the bytes. A call's changes are on disk before it returns,
+  as one line added to the log — what each path it touched holds now,
+  about 150 bytes for a `._` file however much the store holds — so a
+  crash leaves all of a call's changes or none. `index.json` is written
+  whole only once the log has grown past it (and past 256 KB), at most
+  once a second, and as the drive mounts, when the log is folded in. Each
+  `index.json` names its log: one left beside an `index.json` written
+  since — by an Onyx from before the log, which reads and writes
+  `index.json` alone — is not read back over it, or what that Onyx removed
+  would come back. A blob is removed only once the line that lets go of
+  it is on disk. What is in a folder, or under a path, is found through
+  the folders it is in, so a real file renamed or deleted (the store has
+  nothing of it) costs the store nothing.
+  Neither file is fsynced, as before: the extension stopping — a crash,
+  `kill -9` — loses nothing written, and a power cut may lose what the
+  disk had not written yet. An Onyx from before the log, run after this
+  one, sees only `index.json`, without what the log held since.
+  Written whole on every change, the index cost 20–30 ms a change in a
+  store of 10,000 `._` files (1.6 MB) — four changes for each `._` file a
+  copy makes — and was the extension's hottest path during a big copy. A
+  change now costs 8–170 µs at any size, most of it the blob's own file
+  calls (`LocalStoreBenchTests`), and `index.json` is written whole about
+  once in as many changes as the store has entries (14–24 ms at 10,000).
+  The mount pays for it: at 10,000 entries the store opens in some 20 ms
+  with no log (15 ms before; 5 of it finding each item's folder), and in
+  some 100 ms with a log just short of being folded in, read back and
+  folded in as it opens. It holds some 450 KB more for the folders.
+  A save put off and done now and then would cost as little, but a crash
+  inside the wait would lose the `._` files made in it, and with them the
+  quarantine flags and Finder tags they hold.
 - **Finder's Trash**: the volume has none — making `/.Trashes` is refused
   (EPERM), so Finder offers "Delete Immediately", and the delete goes to the
   web's trash (the server's `trash` flag decides, as for the web's Delete).
