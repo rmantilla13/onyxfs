@@ -9,11 +9,12 @@ import Foundation
 /// nowhere else. Sessions do not survive the app, so there is no reconnect:
 /// when the app comes back it mounts the drive again, with a new ticket.
 ///
-/// Three URLSessions, all ephemeral (no cookies, no URL cache, no credential
-/// store): the bridge's, with 30 s timeouts; the `changes` long-poll's, whose
-/// timeout outlasts its wait and which keeps the poll off the connections
-/// reads use; and storage's, for presigned range reads, which never carries
-/// the session key.
+/// Four URLSessions, all ephemeral (no cookies, no URL cache, no credential
+/// store): the bridge's, with 30 s timeouts; the writes', with a longer one
+/// (`writeTimeout`) and connections of their own; the `changes` long-poll's,
+/// whose timeout outlasts its wait and which keeps the poll off the
+/// connections reads use; and storage's, for presigned range reads, which
+/// never carries the session key.
 public final class FSBridgeClient: Sendable {
     public let resource: FSMountResource
     /// What the ticket exchange answered: the starting generation, the
@@ -21,11 +22,21 @@ public final class FSBridgeClient: Sendable {
     public let session: FSSessionInfo
 
     public static let requestTimeout: TimeInterval = 30
+    /// A file sent, a folder made, a rename, a delete. The app answers these
+    /// once the server has made the change and the drive's mirror shows it:
+    /// its call to the server may wait 60 s for an answer, and the mirror up
+    /// to two passes after it. Given up on at 30 s, a change the server
+    /// went on to make came back to Finder as an I/O error, and the whole
+    /// copy stopped there — a folder made while the network dropped out for
+    /// a minute did on 3 November.
+    public static let writeTimeout: TimeInterval = 180
     public static let changesTimeout: TimeInterval = 40
     public static let defaultChangesWait = 25
 
     private let key: String
     private let bridge: URLSession
+    /// Writes', so a slow one never holds a connection a listing needs.
+    private let writes: URLSession
     private let longPoll: URLSession
     let storage: URLSession
     /// What this disk moved, told to the app as it goes (`activity`). The
@@ -60,6 +71,7 @@ public final class FSBridgeClient: Sendable {
         self.key = key
         self.session = session
         bridge = sessions.bridge
+        writes = sessions.writes
         longPoll = sessions.longPoll
         storage = sessions.storage
         // The meter reports through this client, and must not keep it.
@@ -88,6 +100,7 @@ public final class FSBridgeClient: Sendable {
 
     deinit {
         bridge.finishTasksAndInvalidate()
+        writes.finishTasksAndInvalidate()
         longPoll.finishTasksAndInvalidate()
         storage.finishTasksAndInvalidate()
     }
@@ -204,7 +217,7 @@ public final class FSBridgeClient: Sendable {
         let body: Data
         let response: HTTPURLResponse
         do {
-            let (data, answer) = try await bridge.upload(for: request, fromFile: fileURL)
+            let (data, answer) = try await writes.upload(for: request, fromFile: fileURL)
             guard let http = answer as? HTTPURLResponse else {
                 throw FSBridgeError.server("The Onyx app gave an answer that is not HTTP.")
             }
@@ -219,21 +232,21 @@ public final class FSBridgeClient: Sendable {
     /// POST /fs/v1/mkdir. A folder already there is fine; a file there is
     /// `.conflict`.
     public func mkdir(path: String) async throws -> FSEntry {
-        try await post("mkdir", PathRequest(path: path), as: EntryReply.self).entry
+        try await post("mkdir", PathRequest(path: path), as: EntryReply.self, on: writes).entry
     }
 
     /// POST /fs/v1/rename: files and folders, across folders too. With
     /// `replace`, a file at `to` goes to the web's trash first; without it,
     /// one there is `.conflict`.
     public func rename(from: String, to: String, replace: Bool = false) async throws -> FSEntry {
-        try await post("rename", RenameRequest(from: from, to: to, replace: replace), as: EntryReply.self).entry
+        try await post("rename", RenameRequest(from: from, to: to, replace: replace), as: EntryReply.self, on: writes).entry
     }
 
     /// DELETE /fs/v1/item: a file goes to the web's trash (the server's trash
     /// setting decides); a folder goes with its contents.
     public func delete(path: String) async throws {
         let request = self.request("DELETE", "item", query: [("path", path)])
-        let (body, response) = try await Self.send(request, on: bridge)
+        let (body, response) = try await Self.send(request, on: writes)
         try Self.check(response, body)
     }
 
@@ -310,11 +323,12 @@ public final class FSBridgeClient: Sendable {
         return try Self.decode(type, body)
     }
 
-    private func post<B: Encodable, T: Decodable>(_ endpoint: String, _ payload: B, as type: T.Type) async throws -> T {
+    private func post<B: Encodable, T: Decodable>(_ endpoint: String, _ payload: B, as type: T.Type,
+                                                  on session: URLSession) async throws -> T {
         var request = self.request("POST", endpoint, query: [])
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(payload)
-        let (body, response) = try await Self.send(request, on: bridge)
+        let (body, response) = try await Self.send(request, on: session)
         try Self.check(response, body)
         return try Self.decode(type, body)
     }
@@ -431,6 +445,7 @@ public final class FSBridgeClient: Sendable {
 /// The client's URLSessions, made from one configuration.
 struct Sessions {
     let bridge: URLSession
+    let writes: URLSession
     let longPoll: URLSession
     let storage: URLSession
 
@@ -449,6 +464,7 @@ struct Sessions {
             return URLSession(configuration: copy)
         }
         bridge = make(FSBridgeClient.requestTimeout, connections: 8)
+        writes = make(FSBridgeClient.writeTimeout, connections: 8)
         longPoll = make(FSBridgeClient.changesTimeout, connections: 2)
         // Up to four chunk fetches per open file, and several files open.
         storage = make(FSBridgeClient.requestTimeout, connections: 16)

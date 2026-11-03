@@ -107,6 +107,10 @@ public actor DriveWriter {
     /// Moves whenever the pending files change, so the bridge's view of the
     /// drive (mirror + overlay) moves with it.
     public private(set) var revision: UInt64 = 0
+    /// The overlay as last laid out, and the revision it is of: every
+    /// question the bridge answers asks for it, and it stays the same until a
+    /// file on its way comes, moves or goes.
+    private var laidOut: (overlay: FSOverlay, revision: UInt64)?
 
     public init(scope: String, filespaceId: String?, api: any DriveWriteAPI, tree: any DriveTree, uploads: UploadQueue) {
         self.scope = scope
@@ -125,13 +129,16 @@ public actor DriveWriter {
     /// at their paths, read from their staged copies, under an id of their
     /// own until the server gives them theirs.
     public func overlay() -> (FSOverlay, UInt64) {
+        if let laidOut, laidOut.revision == revision { return laidOut }
         let nodes = pending.values.map { file in
             FSNode(path: Self.relative(file.path), name: (file.path as NSString).lastPathComponent, isFolder: false,
                    fileId: Self.pendingID(file.job), size: file.size, modified: file.modified,
                    content: "pending:\(file.job.uuidString):\(file.size)", pending: true,
                    staged: URL(fileURLWithPath: file.staged), created: file.created)
         }
-        return (FSOverlay(nodes: nodes), revision)
+        let made = (overlay: FSOverlay(nodes: nodes), revision: revision)
+        laidOut = made
+        return made
     }
 
     /// The id a pending file answers to at the bridge ("pending:<job>").
