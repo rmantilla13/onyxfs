@@ -239,6 +239,36 @@ extension OnyxAPI {
         _ = try await request(config.url("api/files/folders"), method: "PATCH", json: body)
     }
 
+    /// A folder move that may take more than one call, as the web's does: for
+    /// a big folder the server copies what it can and answers 202 `more`,
+    /// and the next call carries on from the copies already made. `replace`
+    /// replaces files already stored where it is going that the library
+    /// does not list — refused without it (a Refusal, code "occupied").
+    public func moveFolderResumably(from: String, to: String, filespaceId: String?, replace: Bool = false) async throws {
+        var body: [String: Any] = ["from": from, "to": to, "resumable": true]
+        if let filespaceId { body["filespaceId"] = filespaceId }
+        if replace { body["replace"] = true }
+        let url = config.url("api/files/folders")
+        for _ in 0..<200 {
+            let (data, status) = try await send(url, method: "PATCH", body: try JSONSerialization.data(withJSONObject: body))
+            if status == 202, ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["more"] as? Bool == true { continue }
+            guard (200..<300).contains(status) else {
+                if status == 401 { throw OnyxError.notAuthenticated }
+                let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                throw Refusal(status: status, code: object?["code"] as? String, message: object?["error"] as? String)
+            }
+            return
+        }
+        throw OnyxError.http(status: 504, message: "The folder is taking too long to move. Try again: it carries on where it stopped.")
+    }
+
+    /// What deleting a folder would take, as its confirmation says it.
+    public func folderSummary(path: String, filespaceId: String?) async throws -> BulkPlan.Summary {
+        var query = [URLQueryItem(name: "summary", value: path)]
+        if let filespaceId { query.append(URLQueryItem(name: "filespace", value: filespaceId)) }
+        return try decode(BulkPlan.Summary.self, from: try await request(config.url("api/files/folders", query: query)))
+    }
+
     /// The folder and what is in it, the way the web's folder delete does:
     /// a few hundred files a call, so asked again while it says there is more.
     /// A refusal is thrown as it came — no such folder (404), files in it the

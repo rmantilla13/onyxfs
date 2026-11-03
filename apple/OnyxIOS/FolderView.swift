@@ -4,7 +4,8 @@ import SwiftUI
 /// A folder: its subfolders, then its files, as icons or a list, in the
 /// order chosen — searchable, a page at a time, pulled to refresh. A file
 /// opens full screen, zooming out of its tile. Select chooses files to save
-/// together: to Photos, to Files, or to share.
+/// together — to Photos, to Files, or to share — and folders with them, to
+/// star, move or delete all at once, as the web's selection does.
 struct FolderView: View {
     let route: FolderRoute
     @Environment(Session.self) private var session
@@ -24,9 +25,16 @@ struct FolderView: View {
     @State private var tagging: FolderNode?
     /// The collection on screen, being edited.
     @State private var editingCollection: FileCollection?
-    /// Choosing files, and the ones chosen.
+    /// Choosing files and folders, and the ones chosen: file ids, folder paths.
     @State private var selecting = false
     @State private var selection: Set<String> = []
+    @State private var chosenFolders: Set<String> = []
+    /// Choosing where the chosen things go.
+    @State private var choosingDestination = false
+    /// The delete asked about, once what it takes is known.
+    @State private var deleting: PendingDelete?
+    /// A move or delete under way.
+    @State private var working = false
     /// The big title has scrolled away: the bar says the name instead.
     @State private var titleGone = false
     @Namespace private var zoom
@@ -44,11 +52,16 @@ struct FolderView: View {
             }
         }
         .environment(\.fileSelection, selecting ? selection : nil)
+        .environment(\.folderSelection, selecting && route.collection == nil ? chosenFolders : nil)
         .overlay { overlay }
         .safeAreaInset(edge: .bottom) { problemBanner }
+        .safeAreaInset(edge: .bottom) {
+            if working { ProgressView().padding(10).glassSurface(Capsule()).padding(.bottom, 8) }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if selecting {
-                SelectionBar(files: chosenFiles) { endSelecting() }
+                SelectionBar(files: chosenFiles, started: endSelecting) { selectionMenu }
+                    .disabled(working)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -66,6 +79,20 @@ struct FolderView: View {
         .onChange(of: listing.files.map(\.id)) { _, ids in
             // What left the listing cannot stay chosen.
             selection.formIntersection(ids)
+        }
+        .onChange(of: listing.subfolders.map(\.folder)) { _, paths in
+            chosenFolders.formIntersection(paths)
+        }
+        .sheet(isPresented: $choosingDestination) {
+            MoveDestinationSheet(place: route.place, title: "Move \(chosenWords(exact: true))",
+                                 moving: Array(chosenFolders), current: route.folder) { move(to: $0) }
+        }
+        .confirmationDialog(deleting?.words.title ?? "", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                            titleVisibility: .visible, presenting: deleting) { ask in
+            Button(ask.words.confirm, role: .destructive) { delete(ask) }
+            Button("Cancel", role: .cancel) {}
+        } message: { ask in
+            Text(ask.words.message)
         }
         .task(id: FolderListing.Key(sort: sort, query: query)) {
             // A keystroke is not a search: wait for the typing to settle.
@@ -106,7 +133,9 @@ struct FolderView: View {
     }
 
     private var selectionTitle: String {
-        selection.isEmpty ? "Select Files" : (selection.count == 1 ? "1 Selected" : "\(selection.count) Selected")
+        let n = selection.count + chosenFolders.count
+        if n == 0 { return route.collection == nil && !listing.subfolders.isEmpty ? "Select Items" : "Select Files" }
+        return "\(n) Selected"
     }
 
     /// The folder this one is in, for the chip beside the back chevron: its
@@ -158,6 +187,16 @@ struct FolderView: View {
         listing.files.filter { selection.contains($0.id) }
     }
 
+    /// The chosen folders, in the listing's order.
+    private var chosenPaths: [String] {
+        listing.subfolders.map(\.folder).filter { chosenFolders.contains($0) }
+    }
+
+    /// "3 folders", "5 items" — or "2 folders and 3 files".
+    private func chosenWords(exact: Bool = false) -> String {
+        BulkPlan.describe(folders: chosenFolders.count, files: selection.count, exact: exact)
+    }
+
     // MARK: - Layouts
 
     private var grid: some View {
@@ -170,12 +209,11 @@ struct FolderView: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 250), spacing: 14, alignment: .top)],
                       spacing: 22) {
                 ForEach(listing.subfolders) { node in
-                    NavigationLink(value: FolderRoute(place: route.place, folder: node.folder)) {
+                    folderItem(node) {
                         FolderTile(node: node, items: listing.itemCounts[node.folder] ?? node.count,
                                    tint: route.place.tint)
                     }
                     .buttonStyle(.plain)
-                    .disabled(selecting)
                     .contextMenu { folderMenu(node) }
                 }
                 ForEach(listing.files) { file in
@@ -199,11 +237,10 @@ struct FolderView: View {
                 .listRowInsets(EdgeInsets(top: Theme.Space.gutter, leading: Theme.Space.gutter,
                                           bottom: Theme.Space.s3, trailing: Theme.Space.gutter))
             ForEach(listing.subfolders) { node in
-                NavigationLink(value: FolderRoute(place: route.place, folder: node.folder)) {
+                folderItem(node) {
                     FolderRow(node: node, items: listing.itemCounts[node.folder] ?? node.count,
                               tint: route.place.tint)
                 }
-                .disabled(selecting)
                 .listRowBackground(Color.clear)
                 .contextMenu { folderMenu(node) }
             }
@@ -219,6 +256,18 @@ struct FolderView: View {
         .onScrollGeometryChange(for: Bool.self, of: Self.titleGone) { _, gone in titleGone = gone }
         .softScrollEdge()
         .auraBackground()
+    }
+
+    /// A subfolder: opened by a tap — or, while choosing, chosen or not.
+    @ViewBuilder private func folderItem<Label: View>(_ node: FolderNode, @ViewBuilder label: () -> Label) -> some View {
+        if selecting {
+            Button {
+                if chosenFolders.remove(node.folder) == nil { chosenFolders.insert(node.folder) }
+            } label: { label() }
+            .disabled(route.collection != nil)
+        } else {
+            NavigationLink(value: FolderRoute(place: route.place, folder: node.folder)) { label() }
+        }
     }
 
     // MARK: - Starring
@@ -286,6 +335,106 @@ struct FolderView: View {
     private func endSelecting() {
         selecting = false
         selection = []
+        chosenFolders = []
+    }
+
+    // MARK: - Acting on what is chosen
+
+    /// The selection bar's ⋯: what may be done to the chosen folders, and the
+    /// files with them. Nothing until a folder is chosen — files alone have
+    /// the bar's own ways out.
+    @ViewBuilder private var selectionMenu: some View {
+        if !chosenFolders.isEmpty {
+            let paths = chosenPaths
+            let routes = paths.map { FolderRoute(place: route.place, folder: $0) }
+            let allStarred = routes.allSatisfy { session.isStarred($0) }
+            let n = paths.count
+            Section(chosenWords() + " selected") {
+                Button {
+                    starAll(routes, !allStarred)
+                } label: {
+                    SwiftUI.Label(allStarred ? "Remove \(n == 1 ? "folder" : "\(n) folders") from Starred" : "Add \(n == 1 ? "folder" : "\(n) folders") to Starred",
+                                  systemImage: allStarred ? "star.slash" : "star")
+                }
+            }
+            if BulkActions.mayChangeFolders(in: route.place) {
+                Section {
+                    Button { choosingDestination = true } label: {
+                        SwiftUI.Label("Move \(chosenWords())…", systemImage: "folder")
+                    }
+                    Button(role: .destructive) { askDelete() } label: {
+                        SwiftUI.Label("Delete \(chosenWords())…", systemImage: "trash")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Choose `node` alone and start choosing — the folder's long press.
+    private func chooseAlone(_ node: FolderNode) {
+        selection = []
+        chosenFolders = [node.folder]
+        selecting = true
+    }
+
+    /// One after another: each answer is the whole list of stars.
+    private func starAll(_ routes: [FolderRoute], _ starred: Bool) {
+        Task {
+            for target in routes where session.isStarred(target) != starred {
+                if let problem = await session.setStarred(target, starred) {
+                    withAnimation { listing.problem = problem }
+                    return
+                }
+            }
+        }
+    }
+
+    private func move(to destination: String) {
+        let paths = chosenPaths
+        let files = chosenFiles
+        Task {
+            working = true
+            let result = await BulkActions.move(folders: paths, files: files, to: destination, in: route.place, session: session)
+            await finish(result)
+        }
+    }
+
+    /// The one confirmation: what every chosen folder holds, asked first.
+    private func askDelete(_ only: [String]? = nil) {
+        let paths = BulkPlan.outermost(only ?? chosenPaths)
+        let files = only == nil ? chosenFiles : []
+        Task {
+            working = true
+            switch await BulkActions.summaries(of: paths, in: route.place, session: session) {
+            case let .success(sums):
+                working = false
+                deleting = PendingDelete(folders: paths, files: files,
+                                         words: BulkPlan.deleteWords(folders: paths.count, files: files.count,
+                                                                     inside: .sum(sums), trash: session.deletesToTrash))
+            case let .failure(said):
+                working = false
+                withAnimation { listing.problem = said.message }
+            }
+        }
+    }
+
+    private func delete(_ ask: PendingDelete) {
+        Task {
+            working = true
+            let result = await BulkActions.delete(folders: ask.folders, files: ask.files, in: route.place, session: session)
+            await finish(result)
+        }
+    }
+
+    private func finish(_ result: BulkActions.Outcome?) async {
+        working = false
+        endSelecting()
+        await listing.load(session, sort: sort, query: query, refresh: true)
+        // How it went: in the tray's pill above the tab bar, or — when any of
+        // it failed — in the folder's banner, which stays until tapped.
+        guard let result else { return }
+        if result.failed { withAnimation { listing.problem = result.message } }
+        else { DownloadCenter.shared.announce(result.message) }
     }
 
     // MARK: - Links
@@ -312,6 +461,21 @@ struct FolderView: View {
         if let share = shareAction(node) {
             Button(action: share) { Label("Share Link…", systemImage: "link") }
         }
+        if !selecting, route.collection == nil {
+            if BulkActions.mayChangeFolders(in: route.place) {
+                Section {
+                    Button {
+                        chooseAlone(node)
+                        choosingDestination = true
+                    } label: { Label("Move…", systemImage: "folder") }
+                    Button(role: .destructive) {
+                        chooseAlone(node)
+                        askDelete([node.folder])
+                    } label: { Label("Delete…", systemImage: "trash") }
+                }
+            }
+            Button { chooseAlone(node) } label: { Label("Select", systemImage: "checkmark.circle") }
+        }
     }
 
     // MARK: - Toolbar
@@ -333,11 +497,13 @@ struct FolderView: View {
         }
         if selecting {
             ToolbarItem(placement: .topBarLeading) {
-                let all = !listing.files.isEmpty && selection.count == listing.files.count
+                let folders = route.collection == nil ? listing.subfolders.map(\.folder) : []
+                let all = !listing.isEmpty && selection.count == listing.files.count && chosenFolders.count == folders.count
                 Button(all ? "Deselect All" : "Select All") {
                     selection = all ? [] : Set(listing.files.map(\.id))
+                    chosenFolders = all ? [] : Set(folders)
                 }
-                .disabled(listing.files.isEmpty)
+                .disabled(listing.isEmpty)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Done", action: endSelecting)
@@ -362,7 +528,7 @@ struct FolderView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Select") { selecting = true }
-                    .disabled(listing.files.isEmpty)
+                    .disabled(route.collection == nil ? listing.isEmpty : listing.files.isEmpty)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 ViewOptions(layout: $layout, sort: $sort, share: listing.current.flatMap { shareAction($0) })
@@ -515,4 +681,11 @@ private struct ViewOptions: View {
                 .accessibilityLabel(share == nil ? "View Options" : "More")
         }
     }
+}
+
+/// A delete of what was chosen, waiting on its confirmation.
+private struct PendingDelete {
+    let folders: [String]
+    let files: [FileItem]
+    let words: BulkPlan.DeleteWords
 }

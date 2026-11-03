@@ -102,6 +102,7 @@ struct FolderTile: View {
     /// The drive's colour, which its folders are drawn in.
     var tint: Color = .accentColor
     @Environment(\.fileSelection) private var selection
+    @Environment(\.folderSelection) private var folderSelection
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -123,10 +124,14 @@ struct FolderTile: View {
             }
             .padding(.horizontal, Theme.Space.s1)
         }
+        .overlay(alignment: .topTrailing) {
+            if let chosen = folderSelection { SelectionCheck(chosen: chosen.contains(node.folder)).padding(10) }
+        }
         .contentShape(Rectangle())
-        // Choosing files: a folder is not one of them.
-        .opacity(selection == nil ? 1 : 0.4)
+        // Choosing files only (a collection's): a folder is not one of them.
+        .opacity(selection != nil && folderSelection == nil ? 0.4 : 1)
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(folderSelection?.contains(node.folder) == true ? .isSelected : [])
     }
 }
 
@@ -135,9 +140,11 @@ struct FolderRow: View {
     let items: Int
     var tint: Color = .accentColor
     @Environment(\.fileSelection) private var selection
+    @Environment(\.folderSelection) private var folderSelection
 
     var body: some View {
         HStack(spacing: 14) {
+            if let chosen = folderSelection { SelectionCheck(chosen: chosen.contains(node.folder)) }
             RoundedRectangle(cornerRadius: Theme.rowCorner, style: .continuous)
                 .fill(Theme.card)
                 .frame(width: 52, height: 52)
@@ -155,7 +162,8 @@ struct FolderRow: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .opacity(selection == nil ? 1 : 0.4)
+        .opacity(selection != nil && folderSelection == nil ? 0.4 : 1)
+        .accessibilityAddTraits(folderSelection?.contains(node.folder) == true ? .isSelected : [])
     }
 }
 
@@ -229,6 +237,9 @@ private struct FolderBack: Shape {
 extension EnvironmentValues {
     /// The files chosen in the folder on screen, while choosing; nil when not.
     @Entry var fileSelection: Set<String>? = nil
+    /// The folders chosen with them (paths), while choosing; nil when folders
+    /// can't be chosen.
+    @Entry var folderSelection: Set<String>? = nil
 }
 
 /// Approved, changes asked for, and open comments: a file's review at a glance.

@@ -23,11 +23,15 @@ public struct Identity: Decodable, Sendable, Equatable {
     /// The name it gave itself, when it has one.
     public let name: String?
     public let isAdmin: Bool?
+    /// Whether a delete goes to Trash (the server's `trash` flag); nil from
+    /// a server too old to say.
+    public let trash: Bool?
 
-    public init(email: String, name: String? = nil, isAdmin: Bool? = nil) {
+    public init(email: String, name: String? = nil, isAdmin: Bool? = nil, trash: Bool? = nil) {
         self.email = email
         self.name = name
         self.isAdmin = isAdmin
+        self.trash = trash
     }
 
     /// Who to greet: the first word of the name, or else the part of the
