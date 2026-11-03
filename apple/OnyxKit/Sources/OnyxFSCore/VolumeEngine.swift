@@ -42,7 +42,10 @@ public protocol VolumeEngine: AnyObject, Sendable {
     func rename(_ id: UInt64, from directory: UInt64, name: String,
                 to newDirectory: UInt64, newName: String, replacing: UInt64?) async throws -> VolumeNode
     func remove(_ id: UInt64, name: String, from directory: UInt64) async throws
-    func synchronize() async throws
+    /// What was written goes to the app now: a sync, or with `everything`
+    /// the volume going — empty files made here (Finder's placeholders,
+    /// which a sync in the middle of a copy leaves where they are) too.
+    func synchronize(everything: Bool) async throws
     /// The kernel no longer holds the item.
     func forget(_ id: UInt64) async
 

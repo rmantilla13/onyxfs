@@ -487,7 +487,9 @@ called "Collections (Onyx)".
 - `createItem(file)` → a local node, bytes in a staging file in the
   extension's own container; `write` fills it; `setAttributes(size)` truncates;
   when the last writer closes it (or on `synchronize`), the extension streams
-  it to `PUT /fs/v1/file` and then serves it like any other file.
+  it to `PUT /fs/v1/file` and then serves it like any other file. One made
+  here and closed empty waits on this Mac instead ("Copying a selection of
+  files in Finder", below).
 - Opening an existing remote file for writing (not truncating) first fetches
   it whole into staging (copy-on-write), then the same.
 - `mkdir`, `rename` (incl. `overItem`), `remove` → the bridge calls above.
@@ -584,6 +586,59 @@ files costs the same as before (1.72 ms), re-listing 10,000 files is within
 noise (11.5 ms), and a thousand moves out of a folder while its listing
 was out left a thousand old names in it before and none after, merged in
 0.4 ms, with no listing more.
+
+### Copying a selection of files in Finder
+The owner: "copying or moving large amounts of files into or out of onyxfs i
+get errors and incomplete transfers." On 2 November two copies of photos
+from an SMB share into a drive, some 300 and 150 at a time and 20 to 50 MB
+each, stopped with "an item with that name already exists" (dupFNErr,
+`kWriterCreateItem` in DesktopServicesHelper's log). They left 119 and 148
+files on the drive empty, on the web too. The videos copied beside them
+arrived whole, as did 40 of the photos copied back out.
+
+- **What Finder does.** Watched on a test disk (the 0.5.27 extension against
+  a stand-in bridge): given a selection of files, Finder first makes every
+  one of them, empty, and closes it (40 in 2 s). Then, file by file, it
+  removes the empty one and makes the file in its place. The last one it
+  writes into instead, and so it does with any whose remove fails. A folder
+  dragged whole makes no empty files: only the folder, then each file as it
+  comes.
+- **What that cost.** Each empty file went up as it closed. It became a file
+  on the server, then went to the web's trash as Finder removed it, and then
+  the file itself went up: three server writes for each, with a delete's
+  round trip (about 0.5 s) between every two files.
+- **Why the copy stopped.** A listing that still had a deleted empty file
+  brought it back, so making the file in its place was refused (EEXIST): the
+  app's mirror a pass behind (`syncAfterWrite`, above, is the app's side of
+  that) as the change feed listed the folder again. Finder then stops the
+  copy and leaves the files it had not reached empty. It removes none of
+  them, where on the Mac's own disk it leaves none.
+- **Now** (`DriveEngine.heldEmpty`): a file made here and closed with
+  nothing in it stays on this Mac. Removing it asks nothing of the server,
+  which never had it, so no listing can bring it back; written, it goes up
+  once, with its bytes. An empty file nothing comes for — a `touch`, or what
+  a stopped copy left — goes up once nothing has been changed on the disk
+  for 30 s (`emptyFileQuiet`), or as the volume goes. A sync does not send
+  it: one can come in the middle of a copy. One sleeping task waits, and
+  only while something is held. One moved over a file the server has (an
+  app saving an emptied document) is sent first, so it becomes that file's
+  new contents, as before.
+- **Known limits.** A file the web gives the same name while one is held
+  is emptied when the held one goes up, as any copy made here replaces
+  what it lands on; it takes a stopped copy, or a `touch`, and that upload
+  within the same half minute. Quitting Onyx unmounts its disks by force,
+  so an empty file made in the last 30 s may not reach the web; empty
+  files used to go up as they closed.
+
+Measured on 2026-11-03 with a signed dev build on the test disk, its
+stand-in bridge taking 0.5 s for a delete as the server does. A Finder copy
+of 40 files of 3 MB took 33 s on 0.5.27, with 80 uploads (40 of them empty)
+and 40 deletes; now it takes 10.2 s, with 40 uploads and no delete. Then a
+deleted file was kept listed for 1.5 s after its delete, with the folder
+listed again at once, which is what stopped the owner's copies: 0.5.27
+stopped at the first of 12 files and left the other 11 empty, and this
+build copied all 12. A file made with `touch` went up 32 s later, and one
+made just before an eject went up with the eject.
 
 ### Where it lives
 - App: `OnyxKit/FS/` (FSBridge, FSResponder, MirrorFSSource),

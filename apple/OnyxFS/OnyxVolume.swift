@@ -90,13 +90,14 @@ final class OnyxVolume: FSVolume, FSVolume.Handler, FSVolume.PathConfOperations,
 
     func unmount() async {
         // Whatever is still being written goes to the app first: an eject
-        // must not lose a copy that Finder already called done.
-        try? await engine.synchronize()
+        // must not lose a copy that Finder already called done — nor an
+        // empty file still waiting to go (DriveEngine.heldEmpty).
+        try? await engine.synchronize(everything: true)
         await engine.shutdown()
     }
 
     func synchronize(flags: FSSyncFlags) async throws {
-        try await Self.mapped { try await self.engine.synchronize() }
+        try await Self.mapped { try await self.engine.synchronize(everything: false) }
     }
 
     // MARK: - Names
