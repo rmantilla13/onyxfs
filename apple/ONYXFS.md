@@ -693,13 +693,14 @@ time a call from the disk to the app had waited out the extension's 30 s.
   app's call to the server may wait 60 s, and the mirror up to two passes
   after it. The bridge sets no deadline of its own while it answers
   (DAVServer.idleTimeout).
+- **The disk's own store.** Through the owner's copy, the store the
+  extension keeps of macOS's files (LocalStore) wrote its whole index for
+  every change to one — 470 KB for Portfolio's 3,300 `._` files — and cost
+  the extension a fifth of a core. That slowed the copy; it did not stop it.
 - **Known limits.** A call to the server with no answer in 60 s
   (URLSession's default) still fails the change: the app does not ask
   again, as a rename or delete asked again after a lost answer could not
-  tell it had already been made. And the disk's own store of macOS's files
-  (LocalStore) writes its whole index for every change to one — 470 KB for
-  Portfolio's 3,300 `._` files — which cost the extension a fifth of a
-  core through the owner's copy.
+  tell it had already been made.
 
 ### Where it lives
 - App: `OnyxKit/FS/` (FSBridge, FSResponder, MirrorFSSource),
