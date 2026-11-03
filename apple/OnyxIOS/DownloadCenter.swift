@@ -535,7 +535,9 @@ final class DownloadCenter {
         }
     }
 
-    private func announce(_ text: String, failed: Bool = false) {
+    /// Say something once, in the tray's pill above the tab bar — a save, or
+    /// a move or delete of what was selected (FolderView).
+    func announce(_ text: String, failed: Bool = false) {
         notice = Notice(text: text, failed: failed)
         if !failed { UINotificationFeedbackGenerator().notificationOccurred(.success) }
         UIAccessibility.post(notification: .announcement, argument: text)

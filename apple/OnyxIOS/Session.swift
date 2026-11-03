@@ -442,6 +442,16 @@ final class Session {
     /// The same for a folder, whose half is the tree's (`share`).
     func mayLink(_ folder: FolderNode) -> Bool { sharing && folder.share == true }
 
+    /// Whether a delete goes to Trash, as the server last said (/api/desktop/me
+    /// `trash`); nil until it has, or from a server too old to say.
+    var deletesToTrash: Bool? { identity?.trash }
+
+    /// Stars as the server has them now: a folder moved or deleted takes its
+    /// stars along there, and the ones here would point where it was.
+    func reloadStars() async {
+        if let list = try? await api.stars() { stars = list }
+    }
+
     /// Every folder in `place`, from the first visit on; asked again only
     /// when `refresh`.
     func folders(in place: Place, refresh: Bool = false) async throws -> [FolderNode] {

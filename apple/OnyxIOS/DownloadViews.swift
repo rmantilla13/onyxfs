@@ -66,10 +66,13 @@ struct SaveMenuContent: View {
 
 /// A selection's ways out, floating at the foot of the folder: glass, with
 /// Photos — what most people want of a camera's files — as the primary.
-struct SelectionBar: View {
+struct SelectionBar<More: View>: View {
     let files: [FileItem]
     /// Called once a save has begun: the selection is done with.
     let started: () -> Void
+    /// The rest of what the selection may have done to it — Star, Move…,
+    /// Delete… for folders — behind ⋯ at the end of the bar.
+    @ViewBuilder var more: () -> More
     @Environment(Session.self) private var session
 
     var body: some View {
@@ -86,6 +89,14 @@ struct SelectionBar: View {
                     .glassSurface(Capsule())
             }
             GlassGroup(spacing: 10) {
+                if files.isEmpty, More.self != EmptyView.self {
+                    // Only folders chosen: nothing to save, so their actions are the bar.
+                    Menu { more() } label: {
+                        Label("Actions", systemImage: "ellipsis.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(BrandButtonStyle(fullWidth: true))
+                } else {
                 HStack(spacing: 10) {
                     Button {
                         save(photos, to: .photos)
@@ -114,8 +125,21 @@ struct SelectionBar: View {
                     .glassButtonStyle()
                     .accessibilityLabel("Share")
                     .disabled(files.isEmpty)
+
+                    if More.self != EmptyView.self {
+                        Menu {
+                            more()
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .padding(.horizontal, 2)
+                                .frame(minHeight: 20)
+                        }
+                        .glassButtonStyle()
+                        .accessibilityLabel("More")
+                    }
                 }
                 .labelStyle(.titleAndIcon)
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -128,6 +152,12 @@ struct SelectionBar: View {
         guard !chosen.isEmpty else { return }
         DownloadCenter.shared.save(chosen, to: destination, api: session.api)
         started()
+    }
+}
+
+extension SelectionBar where More == EmptyView {
+    init(files: [FileItem], started: @escaping () -> Void) {
+        self.init(files: files, started: started, more: { EmptyView() })
     }
 }
 
