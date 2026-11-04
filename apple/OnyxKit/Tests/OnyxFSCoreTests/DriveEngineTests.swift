@@ -68,6 +68,11 @@ private actor FakeBridge: EngineBridge {
             out.append(BridgeEntry(name: String(filePath.dropFirst(prefix.count)), isDirectory: false, id: file.id,
                                    size: Int64(file.bytes.count), version: file.version, readOnly: locked.contains(filePath)))
         }
+        for (filePath, file) in lagging where files[filePath] == nil && filePath.hasPrefix(prefix)
+            && !filePath.dropFirst(prefix.count).contains("/") {
+            out.append(BridgeEntry(name: String(filePath.dropFirst(prefix.count)), isDirectory: false, id: file.id,
+                                   size: Int64(file.bytes.count), version: file.version))
+        }
         return out
     }
 
@@ -139,10 +144,19 @@ private actor FakeBridge: EngineBridge {
 
     func delete(_ path: String) async throws {
         calls.append("delete \(path)")
+        if mirrorLags, let file = files[path] { lagging[path] = file }
         files[path] = nil
         folders.remove(path)
         await answerChange()
     }
+
+    /// The app's mirror a pass behind its deletes: a file deleted on the
+    /// server is still listed until the mirror catches up (`catchUp`), as
+    /// when a sync pass under way had asked the server before the delete.
+    private var mirrorLags = false
+    private var lagging: [String: (id: String, bytes: Data, version: String)] = [:]
+    func setMirrorLags(_ on: Bool) { mirrorLags = on }
+    func catchUp() { lagging = [:] }
 
     /// What the app was told Archive Utility could not unzip.
     var unzips: [UnzipFailure] = []
@@ -208,11 +222,12 @@ private func reported(_ bridge: FakeBridge) async throws -> UnzipFailure? {
     return nil
 }
 
-private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
+private func makeEngine(_ bridge: FakeBridge, holdEmptyFor: TimeInterval = DriveEngine.emptyFileQuiet) async throws -> DriveEngine {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("engine-\(UUID().uuidString)")
     return DriveEngine(bridge: bridge, volume: try await bridge.volume(),
                        staging: try StagingArea(directory: root.appendingPathComponent("staging")),
-                       local: try LocalStore(directory: root.appendingPathComponent("local")))
+                       local: try LocalStore(directory: root.appendingPathComponent("local")),
+                       holdEmptyFor: holdEmptyFor)
 }
 
 @Suite struct DriveEngineTests {
@@ -781,6 +796,126 @@ private func makeEngine(_ bridge: FakeBridge) async throws -> DriveEngine {
         #expect(try await engine.children(of: inbox.id).isEmpty)
         #expect(Set(try await engine.children(of: out.id).map(\.id)) == Set(files.map(\.id)))
         #expect(await bridge.calls.filter { $0.hasPrefix("list") } == listings)
+    }
+
+    /// Finder copying a selection of files onto the disk, as watched on
+    /// 0.5.27: it makes every one of them first, empty, and closes it; then,
+    /// file by file, removes the empty one and makes the file in its place —
+    /// and the last one it writes into. Each empty one went up, was deleted
+    /// (to the web's trash) and the file went up after it. A listing that
+    /// still had a deleted one — the app's mirror a pass behind, as the
+    /// change feed listed the folder again — brought it back, so making the
+    /// file there was refused (EEXIST): Finder stopped the copy and left the
+    /// rest empty, on the web too (267 files on the owner's drive). The empty
+    /// ones stay on this Mac now: each file goes up once, with its bytes.
+    @Test func finderCopyingASelectionSendsEachFileOnceWithItsBytes() async throws {
+        func photo(_ i: Int) -> Data { Data(String(format: "photo %02d", i).utf8) }
+        let bridge = FakeBridge()
+        await bridge.addFolder("/Selects")
+        await bridge.setMirrorLags(true)
+        let engine = try await makeEngine(bridge)
+        let selects = try await engine.lookup("Selects", in: DriveEngine.rootID)
+        let names = (1...12).map { String(format: "RMX%05d.jpg", 4250 + $0) }
+        var made: [String: UInt64] = [:]
+        for name in names {
+            let empty = try await engine.create(name, in: selects.id, isDirectory: false)
+            try await engine.finishWriting(empty.id)
+            made[name] = empty.id
+        }
+        #expect(try await engine.children(of: selects.id).map(\.name) == names, "listed at once, as Finder made them")
+
+        for (i, name) in names.enumerated() {
+            var id = try #require(made[name])
+            if i < names.count - 1 {
+                try await engine.remove(id, name: name, from: selects.id)
+                await engine.apply(BridgeChanges(generation: UInt64(i + 1), paths: ["/Selects"]))
+                id = try await engine.create(name, in: selects.id, isDirectory: false).id
+            } else {
+                try await engine.beginWriting(id, truncating: false)
+            }
+            _ = try await engine.write(id, at: 0, data: photo(i))
+            try await engine.finishWriting(id)
+        }
+
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") } == names.map { "put /Selects/\($0) 8" },
+                "each once, with its bytes; nothing empty sent, nothing deleted")
+        for (i, name) in names.enumerated() { #expect(await bridge.bytes("/Selects/\(name)") == photo(i)) }
+        #expect(try await engine.children(of: selects.id).map(\.size) == Array(repeating: 8, count: names.count))
+    }
+
+    /// What a stopped copy left empty, and a file made empty on purpose
+    /// (`touch`): the server has them once nothing has been changed on the
+    /// disk for a while — not at a sync, which can come in the middle of a
+    /// copy — under the names they have by then.
+    @Test func emptyFilesNothingComesForGoUpOnceTheDiskIsQuiet() async throws {
+        let bridge = FakeBridge()
+        let engine = try await makeEngine(bridge, holdEmptyFor: 0.5)
+        let left = try await engine.create("RMX09041.jpg", in: DriveEngine.rootID, isDirectory: false)
+        try await engine.finishWriting(left.id)
+        let touched = try await engine.create("untitled", in: DriveEngine.rootID, isDirectory: false)
+        try await engine.finishWriting(touched.id)
+        try await engine.synchronize()
+        _ = try await engine.rename(touched.id, from: DriveEngine.rootID, name: "untitled", to: DriveEngine.rootID,
+                                    newName: "notes.txt", replacing: nil)
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") }.isEmpty, "held through a sync and a rename")
+        #expect(try await engine.lookup("RMX09041.jpg", in: DriveEngine.rootID).size == 0, "listed meanwhile")
+
+        try await eventually { await bridge.calls.filter { $0.hasPrefix("put") }.count == 2 }
+        #expect(Set(await bridge.calls.filter { $0.hasPrefix("put") }) == ["put /RMX09041.jpg 0", "put /notes.txt 0"])
+        #expect(try await engine.lookup("notes.txt", in: DriveEngine.rootID).id == touched.id)
+        #expect(await bridge.fileID("/notes.txt") != nil)
+    }
+
+    /// While a copy goes on, changing the disk again and again, what is held
+    /// waits; it goes once the changes stop.
+    @Test func whatIsHeldWaitsWhileTheDiskIsChanging() async throws {
+        let bridge = FakeBridge()
+        let engine = try await makeEngine(bridge, holdEmptyFor: 0.5)
+        let next = try await engine.create("next.jpg", in: DriveEngine.rootID, isDirectory: false)
+        try await engine.finishWriting(next.id)
+        let current = try await engine.create("current.mov", in: DriveEngine.rootID, isDirectory: false)
+        for i in 0..<8 {
+            _ = try await engine.write(current.id, at: Int64(i), data: Data([UInt8(i)]))
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        #expect(await !bridge.calls.contains { $0.hasPrefix("put /next.jpg") }, "not while the copy went on")
+        try await engine.finishWriting(current.id)
+        #expect(await bridge.calls.contains("put /current.mov 8"))
+        try await eventually { await bridge.calls.contains("put /next.jpg 0") }
+    }
+
+    /// An app saving an emptied document: an empty copy, closed, then moved
+    /// over the document. Held, it would have replaced it as a file of its
+    /// own, with the document in the web's trash; sent first, it becomes the
+    /// document's new contents, as before (DriveWriter): the same file, with
+    /// its comments and links.
+    @Test func anEmptyCopyMovedOverADocumentBecomesItsNewContents() async throws {
+        let bridge = FakeBridge()
+        await bridge.addFile("/notes.txt", Data("old".utf8))
+        let engine = try await makeEngine(bridge)
+        let doc = try await engine.lookup("notes.txt", in: DriveEngine.rootID)
+        let copy = try await engine.create("notes.txt.tmp", in: DriveEngine.rootID, isDirectory: false)
+        try await engine.finishWriting(copy.id)
+        let saved = try await engine.rename(copy.id, from: DriveEngine.rootID, name: "notes.txt.tmp", to: DriveEngine.rootID,
+                                            newName: "notes.txt", replacing: doc.id)
+        #expect(await bridge.calls.filter { !$0.hasPrefix("list") } == [
+            "put /notes.txt.tmp 0", "rename /notes.txt.tmp -> /notes.txt (replace)",
+        ], "nothing deleted")
+        #expect(saved.id == copy.id && saved.size == 0)
+        #expect(await bridge.bytes("/notes.txt") == Data())
+    }
+
+    /// Ejected while something is held: it goes as the volume does.
+    @Test func whatIsHeldGoesAsTheVolumeGoes() async throws {
+        let bridge = FakeBridge()
+        let engine = try await makeEngine(bridge)
+        let empty = try await engine.create("keep.txt", in: DriveEngine.rootID, isDirectory: false)
+        try await engine.finishWriting(empty.id)
+        try await engine.synchronize()
+        #expect(await bridge.calls.filter { $0.hasPrefix("put") }.isEmpty)
+        try await engine.synchronize(everything: true)
+        #expect(await bridge.calls.filter { $0.hasPrefix("put") } == ["put /keep.txt 0"])
+        await engine.shutdown()
     }
 
     @Test func finderGetsNoTrashAndDeletesToTheWebsInstead() async throws {

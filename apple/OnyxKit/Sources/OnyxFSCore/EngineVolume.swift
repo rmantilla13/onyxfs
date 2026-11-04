@@ -53,7 +53,7 @@ public final class EngineVolume: VolumeEngine, @unchecked Sendable {
     public func remove(_ id: UInt64, name: String, from directory: UInt64) async throws {
         try await engine.remove(id, name: name, from: directory)
     }
-    public func synchronize() async throws { try await engine.synchronize() }
+    public func synchronize(everything: Bool) async throws { try await engine.synchronize(everything: everything) }
     public func forget(_ id: UInt64) async { await engine.forget(id) }
     public func xattr(named name: String, of id: UInt64) async throws -> Data { try await engine.xattr(named: name, of: id) }
     public func setXattr(named name: String, of id: UInt64, to value: Data?, createOnly: Bool, replaceOnly: Bool) async throws {

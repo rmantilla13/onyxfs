@@ -24,6 +24,9 @@ public actor DriveEngine {
     /// A folder's listing is asked for again after this long even if the
     /// bridge said nothing (the change feed is the real signal).
     static let listingTTL: TimeInterval = 10
+    /// How long nothing must have been changed on the disk before an empty
+    /// file made here goes up (`heldEmpty`): longer than any pause in a copy.
+    public static let emptyFileQuiet: TimeInterval = 30
 
     struct Node {
         var id: UInt64
@@ -90,6 +93,22 @@ public actor DriveEngine {
     private var nextID: UInt64 = 16
     private var writing: [UInt64: Writing] = [:]
     private var sendingNow: Set<UInt64> = []
+    /// Files made here and closed with nothing in them, not sent yet. Finder
+    /// copying a selection of files makes every one of them first, empty,
+    /// then — file by file — removes it and makes the file in its place.
+    /// Sent, each went up empty, was deleted to the web's trash and went up
+    /// again; and a listing that still had a deleted one brought it back,
+    /// so making the file there was refused (EEXIST) and the copy stopped.
+    /// Held, they cost the server nothing and removing one asks nothing of
+    /// it. What nothing comes for — a `touch`, or what a stopped copy left —
+    /// goes up once the disk has been quiet for `holdEmptyFor`, or as the
+    /// volume goes. Nearly always none.
+    private var heldEmpty: Set<UInt64> = []
+    private let holdEmptyFor: TimeInterval
+    /// When something was last made, written, moved or removed here.
+    private var lastChange: Date
+    /// The one wait for the disk to go quiet, while anything is held.
+    private var sendingHeld: Task<Void, Never>?
     /// Archive Utility's scratch folders, by id; nearly always none.
     private var scratches: [UInt64: ArchiveScratch] = [:]
     /// Paths (folded) whose file a safe save has set aside, and what stands
@@ -116,13 +135,15 @@ public actor DriveEngine {
     private let now: @Sendable () -> Date
 
     public init(bridge: any EngineBridge, volume: BridgeVolume, staging: StagingArea, local: LocalStore,
-                now: @escaping @Sendable () -> Date = { Date() }) {
+                now: @escaping @Sendable () -> Date = { Date() }, holdEmptyFor: TimeInterval = DriveEngine.emptyFileQuiet) {
         self.bridge = bridge
         self.volume = volume
         self.staging = staging
         self.local = local
         self.generation = volume.generation
         self.now = now
+        self.holdEmptyFor = holdEmptyFor
+        lastChange = now()
         let root = Node(id: Self.rootID, parent: Self.rootID, name: volume.name, path: "/", isDirectory: true,
                         size: 0, modified: now(), created: now(), fileId: nil, version: "", localOnly: false,
                         unsent: false, children: nil, listedAt: nil)
@@ -189,6 +210,7 @@ public actor DriveEngine {
     /// The node is named as the server will name it (`stored`), which may
     /// not be quite the name asked for: the kernel is told which it is.
     public func create(_ asked: String, in directory: UInt64, isDirectory: Bool) async throws -> VolumeNode {
+        lastChange = now()
         let dir = try folder(directory)
         try await ensureListed(dir.id)
         let name = Self.stored(asked)
@@ -224,7 +246,8 @@ public actor DriveEngine {
         // as the file's new contents, and the one set aside is only this Mac's.
         if !setAside.isEmpty { setAside[Self.fold(path)] = nil }
         try await wrap { _ = try await self.staging.create(node.id) }
-        // A new file goes up even if nothing is ever written to it.
+        // A new file goes up even if nothing is ever written to it — once
+        // nothing has come for it for a while (heldEmpty).
         writing[node.id] = Writing(dirty: true)
         noteMade(node, in: dir)
         return Self.public(node)
@@ -241,6 +264,7 @@ public actor DriveEngine {
     }
 
     public func write(_ id: UInt64, at offset: Int64, data: Data) async throws -> Int {
+        lastChange = now()
         guard var node = nodes[id], !node.isDirectory else { throw VolumeError.posix(EISDIR) }
         if node.localOnly {
             let n = try await wrap { try await self.local.write(node.path, at: offset, data) }
@@ -261,6 +285,7 @@ public actor DriveEngine {
     }
 
     public func setSize(_ id: UInt64, to size: UInt64) async throws -> VolumeNode {
+        lastChange = now()
         guard var node = nodes[id], !node.isDirectory else { throw VolumeError.posix(EISDIR) }
         if node.localOnly {
             try await wrap { try await self.local.truncate(node.path, to: size) }
@@ -305,8 +330,13 @@ public actor DriveEngine {
     }
 
     /// The last close: what was written goes to the app. On failure it stays
-    /// staged and pending, and is tried again at the next sync.
+    /// staged and pending, and is tried again at the next sync. A file made
+    /// here and closed empty waits instead (heldEmpty).
     public func finishWriting(_ id: UInt64) async throws {
+        try await send(id, holdingEmpty: true)
+    }
+
+    private func send(_ id: UInt64, holdingEmpty: Bool) async throws {
         // One send at a time: a sync while a promoted file is on its way
         // does not send it twice.
         guard !sendingNow.contains(id) else { return }
@@ -317,6 +347,13 @@ public actor DriveEngine {
             if !(state.dirty) { writing[id] = nil; await staging.remove(id) }
             return
         }
+        // Most likely one of Finder's: it is removed, or written into, before
+        // long. Until then it is this Mac's.
+        if holdingEmpty, node.unsent, node.size == 0 {
+            hold(id)
+            return
+        }
+        heldEmpty.remove(id)
         guard let url = await staging.url(id) else { writing[id] = nil; return }
         // Sent to where it is now (removed meanwhile, it is not sent). Its
         // name is changing on the server until the app has answered, which a
@@ -361,9 +398,46 @@ public actor DriveEngine {
         await staging.remove(id)
     }
 
+    /// An empty file made here waits, with one wait for the disk to go quiet
+    /// however many are held.
+    private func hold(_ id: UInt64) {
+        heldEmpty.insert(id)
+        guard sendingHeld == nil else { return }
+        sendingHeld = Task { [weak self] in await self?.sendHeldOnceQuiet() }
+    }
+
+    /// Sleeps out the quiet the disk still owes, then sends what is held and
+    /// still empty: nothing came for it. A change meanwhile — the copy going
+    /// on — starts the wait again; what was written meanwhile is sent as it
+    /// closes, as any file is.
+    private func sendHeldOnceQuiet() async {
+        while !heldEmpty.isEmpty, !Task.isCancelled {
+            let owed = holdEmptyFor - now().timeIntervalSince(lastChange)
+            if owed > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(owed * 1_000_000_000))
+                continue
+            }
+            for id in heldEmpty.sorted() {
+                heldEmpty.remove(id)
+                guard let node = nodes[id], node.unsent, node.size == 0 else { continue }
+                try? await send(id, holdingEmpty: false)
+            }
+        }
+        sendingHeld = nil
+    }
+
     /// Named as the server will name it, as `create` is.
     public func rename(_ id: UInt64, from directory: UInt64, name: String,
                        to newDirectory: UInt64, newName asked: String, replacing: UInt64?) async throws -> VolumeNode {
+        lastChange = now()
+        // An empty file made here (heldEmpty), moved over a file the server
+        // has: an app saving an emptied document. Sent first, as it was at its
+        // close before empty files waited, it becomes that file's new contents
+        // (DriveWriter) — not a file of its own, with the document in the trash.
+        if !heldEmpty.isEmpty, heldEmpty.contains(id), let replacing, replacing != id, let over = nodes[replacing],
+           !over.unsent, !over.localOnly, !over.isDirectory {
+            try await send(id, holdingEmpty: false)
+        }
         guard let node = nodes[id] else { throw VolumeError.posix(ESTALE) }
         let from = try folder(directory), to = try folder(newDirectory)
         try await ensureListed(to.id)
@@ -622,6 +696,7 @@ public actor DriveEngine {
     }
 
     public func remove(_ id: UInt64, name: String, from directory: UInt64) async throws {
+        lastChange = now()
         guard var node = nodes[id] else { throw VolumeError.posix(ESTALE) }
         if node.isDirectory {
             // rmdir takes an empty folder only. The kernel leaves that to the
@@ -735,11 +810,13 @@ public actor DriveEngine {
         return ext.isEmpty ? base : "\(base).\(ext)"
     }
 
-    /// Everything written goes to the app now (an eject, a sync).
-    public func synchronize() async throws {
+    /// Everything written goes to the app now: a sync. Empty files made here
+    /// go too only with `everything`, as the volume goes — a sync comes in
+    /// the middle of a copy too, and they wait for it (heldEmpty).
+    public func synchronize(everything: Bool = false) async throws {
         var failure: Error?
         for id in writing.keys where writing[id]?.dirty == true {
-            do { try await finishWriting(id) } catch { failure = error }
+            do { try await send(id, holdingEmpty: !everything) } catch { failure = error }
         }
         if let failure { throw failure }
     }
@@ -789,6 +866,8 @@ public actor DriveEngine {
     public func shutdown() {
         watching?.cancel()
         watching = nil
+        sendingHeld?.cancel()
+        sendingHeld = nil
     }
 
     /// Folders that changed are listed afresh; what they held that changed
@@ -1077,6 +1156,7 @@ public actor DriveEngine {
             byPath[key] = nil
             nodes[childID] = nil
             writing[childID] = nil
+            if !heldEmpty.isEmpty { heldEmpty.remove(childID) }
         }
         nodes[id] = nil
         if !setAside.isEmpty { setAside = setAside.filter { nodes[$0.value] != nil } }
@@ -1084,8 +1164,11 @@ public actor DriveEngine {
 
     private func removeFromServer(_ node: Node) async throws {
         if node.unsent {
+            // Never sent — still being written, or one of Finder's empty ones
+            // removed as the file it stood for comes: the server never had it.
             await staging.remove(node.id)
             writing[node.id] = nil
+            heldEmpty.remove(node.id)
             return
         }
         try await wrap { try await self.bridge.delete(node.path) }
