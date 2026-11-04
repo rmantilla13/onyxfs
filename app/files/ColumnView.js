@@ -365,7 +365,7 @@ function ColumnView({
                 onDoubleClick={(e) => handlers.dblclick(e, key)}
                 onKeyDown={(e) => keyDown(e, key, true)}
                 draggable={canWrite}
-                onDragStart={canWrite ? (e) => startFolderDrag(e, f.folder) : undefined}
+                onDragStart={canWrite ? (e) => (handlers.dragFolder ? handlers.dragFolder(e, key) : startFolderDrag(e, f.folder)) : undefined}
               >
                 <RowIcon />
                 <span className="col-name truncate">{f.name}</span>

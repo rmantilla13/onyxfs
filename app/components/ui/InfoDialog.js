@@ -3,7 +3,8 @@
 import Dialog from './Dialog';
 import { Thumb, fmtSize } from './FileCard';
 import { fileFacts, selectionFacts, kindLabel } from '@/lib/file-info';
-import { crumbsFor, baseName } from '@/lib/folder-ops';
+import { crumbsFor, baseName, parentOf } from '@/lib/folder-ops';
+import { describeItems } from '@/lib/bulk-items';
 import { fmtDuration } from '@/lib/media';
 import Icon from '@/app/components/ui/Icon';
 
@@ -13,6 +14,10 @@ import Icon from '@/app/components/ui/Icon';
  *   { type: 'file', file }
  *   { type: 'files', files }
  *   { type: 'folder', path, stats }   stats from folderStats (lib/folder-ops)
+ *   { type: 'items', folders, files, total, nested }
+ *                                     several folders, and any files picked
+ *                                     with them: their paths, the file rows,
+ *                                     and folderStats' total and nested summed
  *   { type: 'drive', drive, usage, canManage, isAdmin }
  *                                     usage is the server's count, when the
  *                                     viewer may see it (admins, owners)
@@ -147,6 +152,33 @@ export default function InfoDialog({ info, schema, onClose, onOpenFile, onDownlo
               : [{ key: 'where', label: 'Where', type: 'text', value: `${s.folders.length} folders` }]),
           ]}
         />
+      </Dialog>
+    );
+  }
+
+  if (info.type === 'items') {
+    const picked = info.files || [];
+    const parents = [...new Set(info.folders.map(parentOf))];
+    const inAll = (info.total || 0) + picked.length;
+    const rows = [
+      parents.length === 1
+        ? { key: 'where', label: 'Where', type: 'folder', value: parents[0] }
+        : { key: 'where', label: 'Where', type: 'text', value: `${parents.length} folders` },
+      { key: 'files', label: 'Files', type: 'text', value: String(inAll) },
+      ...(info.nested ? [{ key: 'nested', label: 'Folders inside', type: 'text', value: String(info.nested) }] : []),
+      // Only the files picked have a size here: the folder tree counts files, not bytes.
+      ...(picked.length ? [{ key: 'size', label: 'Picked files', type: 'bytes', value: selectionFacts(picked).bytes }] : []),
+    ];
+    return (
+      <Dialog open onClose={close} title="Info" footer={<button type="button" className="btn btn-primary" onClick={close}>Done</button>}>
+        <div className="info-head">
+          <span className="info-thumb info-folder"><FolderIcon /></span>
+          <div style={{ minWidth: 0 }}>
+            <p className="info-name">{describeItems({ folders: info.folders.length, files: picked.length }, { exact: true })}</p>
+            <p className="small muted" style={{ margin: 0 }}>{inAll.toLocaleString()} file{inAll === 1 ? '' : 's'} in all</p>
+          </div>
+        </div>
+        <Facts rows={rows} onOpenFolder={onOpenFolder && go(onOpenFolder)} />
       </Dialog>
     );
   }

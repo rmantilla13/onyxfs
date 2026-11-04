@@ -4,24 +4,31 @@ import { useRef, useState } from 'react';
 import { beginDrag, draggingHere, dropVerdict } from './DragPreview';
 
 // Drag payloads for moves inside the library. An OS file drag carries
-// 'Files' instead, which is what tells an upload from a move.
+// 'Files' instead, which is what tells an upload from a move. A selection
+// that holds folders carries all of it as DRAG_ITEMS ({ folders, files }),
+// beside the one folder or the files it would have carried on its own.
 export const DRAG_FILES = 'application/x-onyx-files';
 export const DRAG_FOLDER = 'application/x-onyx-folder';
+export const DRAG_ITEMS = 'application/x-onyx-items';
 
 export const isMoveDrag = (e) => {
   const types = [...(e.dataTransfer?.types || [])];
-  return types.includes(DRAG_FILES) || types.includes(DRAG_FOLDER) || types.includes('Files');
+  return types.includes(DRAG_FILES) || types.includes(DRAG_FOLDER) || types.includes(DRAG_ITEMS) || types.includes('Files');
 };
 
 /**
- * Start dragging a folder: it moves alone, whatever else is selected, under
- * a picture of itself that shrinks to a chip beside the pointer (DragPreview).
+ * Start dragging a folder, under a picture of itself that shrinks to a chip
+ * beside the pointer (DragPreview). On its own by default — the tree's
+ * folders, which are not selected; with `paths` (and `ids`, files of `rows`)
+ * it carries a selection it is part of, and the chip counts all of it.
  */
-export function startFolderDrag(e, path) {
+export function startFolderDrag(e, path, { paths = [path], ids = [], rows = [] } = {}) {
+  const many = paths.length > 1 || ids.length > 0;
   e.dataTransfer.setData(DRAG_FOLDER, path);
-  e.dataTransfer.setData('text/plain', path);
+  if (many) e.dataTransfer.setData(DRAG_ITEMS, JSON.stringify({ folders: paths, files: ids }));
+  e.dataTransfer.setData('text/plain', many ? `${paths.length + ids.length} items` : path);
   e.dataTransfer.effectAllowed = 'move';
-  beginDrag(e, { kind: 'folder', path });
+  beginDrag(e, { kind: 'folder', path, paths, ids, rows });
 }
 
 /**

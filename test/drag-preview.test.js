@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import {
   COMPACT, CHIP_H, HANG, MARGIN, SPRINGS, SWAY,
   compactBox, previewLayout, hangAt, stepSpring, atRest, swayFor,
-  describeFiles, classifyDrop, isDroppable, isRefused, springsOpen,
+  describeFiles, describeDrag, classifyDrop, isDroppable, isRefused, springsOpen, springRestarts, SPRING_SLOP,
 } from '../lib/drag-preview.js';
 
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps, `${a} ≉ ${b}`);
@@ -240,6 +240,44 @@ describe('where a drop may go', () => {
     assert.equal(classifyDrop({ kind: 'folder', path: 'Projects/2024' }, at('Projects/2024 old')), 'ok');
   });
 
+  test('several folders go anywhere none of them is, and onto or into none of them', () => {
+    const d = describeDrag({ paths: ['Projects/2024', 'Projects/2023'] });
+    assert.equal(d.kind, 'folder');
+    assert.equal(d.count, 2);
+    assert.equal(classifyDrop(d, at('Archive')), 'ok');
+    assert.equal(classifyDrop(d, at('Projects/2022')), 'ok');
+    // The second one is as much the folder as the first.
+    assert.equal(classifyDrop(d, at('Projects/2023')), 'self');
+    assert.equal(classifyDrop(d, at('Projects/2023/Q4')), 'self');
+    assert.equal(classifyDrop(d, at('Projects/2024')), 'self');
+    assert.equal(classifyDrop(d, at('Projects')), 'same');
+  });
+
+  test('folders from different places may go into where one of them is: the rest move', () => {
+    const d = describeDrag({ paths: ['Projects/2024', 'Old/2019'] });
+    assert.equal(classifyDrop(d, at('Projects')), 'ok');
+  });
+
+  test('folders and files together: there already only when all of it is', () => {
+    const d = describeDrag({ paths: ['Footage/Day 1'], ids: [1, 2], rows });
+    assert.equal(d.count, 3);
+    assert.equal(classifyDrop(d, at('Footage')), 'same');
+    assert.equal(classifyDrop(describeDrag({ paths: ['Footage/Day 1'], ids: [1, 4], rows }), at('Footage')), 'ok');
+    assert.equal(classifyDrop(describeDrag({ paths: ['Stills/Day 1'], ids: [1], rows }), at('Footage')), 'ok');
+    assert.equal(classifyDrop(d, at('Footage/Day 1')), 'self');
+  });
+
+  test('folders move whatever their files may do, but never into a folder that may not be written', () => {
+    const d = describeDrag({ paths: ['A/B'], ids: [3], rows });
+    assert.equal(classifyDrop(d, at('Footage')), 'ok');
+    assert.equal(classifyDrop(d, at('Footage', { writable: false })), 'locked');
+  });
+
+  test('a selection with no folder in it is a drag of files', () => {
+    assert.deepEqual(describeDrag({ paths: [], ids: [1, 2], rows }), describeFiles([1, 2], rows));
+    assert.deepEqual(describeDrag({ paths: [''], ids: [1], rows }), describeFiles([1], rows));
+  });
+
   test('the page around the folders is a place to drop only in a folder the drag has sprung open', () => {
     const d = describeFiles([1], rows);
     assert.equal(classifyDrop(d, at('Stills', { pane: true, sprung: false })), 'none');
@@ -274,6 +312,15 @@ describe('which folders spring open', () => {
     assert.equal(springsOpen('self', t('Projects/2024'), ''), false);
     assert.equal(springsOpen('locked', t('Archive'), ''), false);
     assert.equal(springsOpen('none', t('Archive'), ''), false);
+  });
+
+  test('only while the pointer rests on it: passing over starts the clocks again', () => {
+    const at = { x: 100, y: 100 };
+    assert.equal(springRestarts(at, { x: 103, y: 102 }), false, 'a hand that is still, wobbling');
+    assert.equal(springRestarts(at, { x: 100 + SPRING_SLOP, y: 100 }), false);
+    assert.equal(springRestarts(at, { x: 100 + SPRING_SLOP + 1, y: 100 }), true, 'moving on');
+    assert.equal(springRestarts(at, { x: 140, y: 130 }), true);
+    assert.equal(springRestarts(null, at), true, 'no clock yet');
   });
 
   test('not the folder already open, a crumb, or the page', () => {
