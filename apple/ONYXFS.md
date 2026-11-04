@@ -746,6 +746,46 @@ after Unzip Here (Finder's menu, `Unzipper`) had shipped for exactly that.
   and the server's delete takes a folder whole. A folder is now removed
   only when it is empty, macOS's own files in it included (ENOTEMPTY).
 
+## Saving from a sandboxed app (TextEdit, Preview, Pages)
+
+On 0.5.27 every TextEdit save on a drive failed ("couldn't be saved") and
+left the document under a name like `Report.rtf.sb-d22dcccc-MMh3N9`, its own
+name gone (ESTALE). Watched on a disk (2026-10-30), twice, the second time
+with nothing else looking at the folder.
+
+- **What NSDocument does.** A disk has no item replacement folder (no
+  `MNT_LOCAL`, above) and no atomic swap (FSKit refuses `RENAME_SWAP`), so
+  a sandboxed app saves through the names the App
+  Sandbox lets it write beside a document, `<name>.sb-<8 hex>-<6>`
+  (`LocalOnly.isSafeSave`): it writes the new copy into a folder of that
+  name, renames the document to another, moves the copy into the
+  document's place, then removes the one set aside and the folder.
+- **Why it failed.** Done on the server, the rename that set the document
+  aside took about a second, and a listing of the folder the change feed
+  set off meanwhile came back in the same millisecond as it, older than
+  it. Merged after the rename, it put the document's name back and lost
+  the one set aside: the copy could not be moved in (EEXIST) nor the
+  document put back (ESTALE), and no further rename reached the app (the
+  extension's own network log shows each request's size and answer). Had
+  it worked, every save would have made a new file and sent the document,
+  with its comments and links, to the trash.
+- **What the disk does now** (`DriveEngine.setAside`). The folder for the
+  copy is this Mac's, as `.TemporaryItems` is. The document set aside
+  stays where it is on the server: on this Mac it is a hidden stand-in,
+  read from the server and never sent, and the server's file is not
+  listed at its own name meanwhile. The copy moved into its place goes up
+  to the document's path (`PUT /fs/v1/file`), so it is a new version of
+  the same file. The server is asked for that one thing — no folder, no
+  rename, no trash. A save that fails and puts the document back asks the
+  server for nothing; a document set aside and then removed with nothing
+  in its place is removed, as on any disk. A file with changes still on
+  their way to the server is not set aside (EBUSY), and the save fails
+  with the document as it was.
+- **Not this Mac's.** A folder set aside (a package document such as
+  `.rtfd`) is still the server's own rename. A `….sb-…` item the server
+  already has (one a failed save left) is listed as the drive's, and can
+  be renamed back.
+
 ## Thumbnails
 
 The owner: "Thumbnail generation is not happening fast enough" — seen on the
