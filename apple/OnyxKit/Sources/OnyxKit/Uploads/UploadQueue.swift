@@ -148,6 +148,9 @@ public actor UploadQueue {
     /// over gets a new task, and the old one, still unwinding, changes
     /// nothing.
     private var running: [UUID: (token: UUID, task: Task<Void, Never>)] = [:]
+    /// Jobs in a slot, for tests: one `enqueue` started is counted the
+    /// moment it returns, before its task has sent anything.
+    var sending: Int { running.count }
     /// Bytes sent so far, for the jobs still here that have sent any.
     private var progress: [UUID: Int64] = [:]
     /// Every byte reported sent this run (Summary.movedBytes). A job started

@@ -666,21 +666,32 @@ private actor Seen {
         #expect(await queue.all().isEmpty)
     }
 
+    /// Counted while every PUT is held, not by a clock. Four 50 ms PUTs
+    /// begun a moment apart did not always meet on a busy Mac: with two
+    /// runs of the suite at once, this failed in every one.
     @Test func smallFilesGoFourAtATime() async throws {
         let dir = scratch(); defer { try? FileManager.default.removeItem(at: dir) }
         let server = FakeServer()
-        await server.setPutDelay(50_000_000)
-        // All of them queued before any is sent (the settle moment waits on
-        // the gate), so what goes at once is the queue's limit, not how fast
+        // None lands until let through, so all of them are queued before any
+        // could finish: what goes at once is the queue's limit, not how fast
         // this test could hand them over.
-        let gate = Gate()
-        let queue = try UploadQueue(directory: dir, transport: server, settle: 1, sleep: { _ in await gate.wait() })
+        let turnstile = Turnstile()
+        await server.holdPuts(turnstile)
+        let queue = try UploadQueue(directory: dir, transport: server, settle: 0, sleep: { _ in })
         for n in 1...7 {
             try await queue.enqueue(from: try source(Data([UInt8(n)])), scope: "library", filespaceId: nil, folder: "",
                                     name: "photo-\(n).jpg", mime: "image/jpeg")
         }
-        await gate.open()
-        for _ in 0..<5 { await settle(queue) }
+        // Each enqueue starts what it may before it returns, and none of
+        // them can finish while its PUT is held: this is all it will start.
+        #expect(await queue.sending == UploadQueue.concurrency, "four started, and no fifth")
+        #expect(await server.until { $0.putsInFlight >= UploadQueue.concurrency })
+        #expect(await server.putsInFlight == UploadQueue.concurrency, "four on their way at once")
+        #expect(await server.puts.count == UploadQueue.concurrency)
+
+        await turnstile.openAll()
+        #expect(await server.until { $0.calls.filter { $0.hasPrefix("record") }.count == 7 })
+        await settle(queue)
         #expect(await server.mostPutsAtOnce == UploadQueue.concurrency)
         #expect(await server.objects.count == 7)
         #expect(await queue.all().isEmpty)
