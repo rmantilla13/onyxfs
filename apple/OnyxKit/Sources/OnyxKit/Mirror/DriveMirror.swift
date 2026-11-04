@@ -54,6 +54,11 @@ public actor DriveMirror {
     private let clock: @Sendable () -> Date
 
     private var syncing: Task<Replica.Diff, Error>?
+    /// The pass to begin once the one under way (`after`) has ended, for
+    /// callers that need one begun after they asked (`syncAfterWrite`):
+    /// shared by all who ask while that one is under way, and let go of as it
+    /// begins.
+    private var following: (after: Task<Replica.Diff, Error>, pass: Task<Replica.Diff, Error>)?
     /// Changes applied by a pass that then failed. The index already shows
     /// them, so they are owed to the next caller whose sync succeeds.
     private var unreported = Replica.Diff()
@@ -298,8 +303,10 @@ public actor DriveMirror {
     /// item identifiers ("folder:<server path>" for folders).
     ///
     /// Calls that overlap share one pass: two drains at once would each
-    /// apply pages the other already had and race to save. A pass that fails
-    /// keeps what it applied, and the next one to succeed reports it.
+    /// apply pages the other already had and race to save. So a pass that
+    /// began before the call may answer it; one that must have begun after
+    /// is `syncAfterWrite`. A pass that fails keeps what it applied, and the
+    /// next one to succeed reports it.
     ///
     /// When the server says this account may no longer open the drive, the
     /// drive is withheld at once (`isWithheld`) and the refusal thrown as it
@@ -309,6 +316,39 @@ public actor DriveMirror {
     /// disk — and the app should unmount it and remove its offline copies.
     public func sync() async throws -> Replica.Diff {
         if let syncing { return try await syncing.value }
+        return try await begin()
+    }
+
+    /// `sync`, from a pass begun after this was asked: for a change just made
+    /// to the drive from this Mac (DriveWriter's mkdir, rename, delete), which
+    /// the next listing must already show. A pass under way may have asked
+    /// the server before the change was made; joined, it answered with the
+    /// drive as it was, and Finder's next look undid the rename it had just
+    /// made. So it is waited out, and one more pass runs after it — shared by
+    /// everyone who asks while it waits: a burst of changes costs one pass
+    /// more, not one each.
+    public func syncAfterWrite() async throws -> Replica.Diff {
+        guard let running = syncing else { return try await begin() }
+        // Shared only while the pass it waits for is the one under way: one
+        // begun since (a tick's, before it took over) began before this asked.
+        if let following, following.after == running { return try await following.pass.value }
+        let next = Task { try await self.follow(running) }
+        following = (running, next)
+        return try await next.value
+    }
+
+    /// The pass after `running`, however that one ended. It is let go of as
+    /// it begins — whoever asks from then on needs one after it — and if
+    /// another pass has begun meanwhile (a tick's), that one began after
+    /// everyone waiting here asked, and is theirs.
+    private func follow(_ running: Task<Replica.Diff, Error>) async throws -> Replica.Diff {
+        _ = try? await running.value
+        if following?.after == running { following = nil }
+        if let syncing { return try await syncing.value }
+        return try await begin()
+    }
+
+    private func begin() async throws -> Replica.Diff {
         let task = Task { try await self.drain() }
         syncing = task
         return try await task.value
