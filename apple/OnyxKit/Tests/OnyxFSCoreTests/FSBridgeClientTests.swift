@@ -275,6 +275,19 @@ struct FSBridgeClientTests {
         await #expect(throws: expected) { try await client.delete(path: "/a") }
     }
 
+    /// A change waits as long as the app may take to make it on the server
+    /// and see it in the drive's mirror — the server's answer may take 60 s,
+    /// the mirror up to two passes after it — and on connections of its own,
+    /// which a slow one never takes from a listing. A listing still gives up
+    /// at 30 s.
+    @Test func writesWaitLongerThanTheAppCanTake() {
+        let sessions = Sessions(.ephemeral)
+        #expect(sessions.writes.configuration.timeoutIntervalForRequest == FSBridgeClient.writeTimeout)
+        #expect(sessions.bridge.configuration.timeoutIntervalForRequest == FSBridgeClient.requestTimeout)
+        #expect(FSBridgeClient.writeTimeout >= 3 * 60)
+        #expect(sessions.writes !== sessions.bridge)
+    }
+
     @Test func aReadOnlyDriveRefusesWrites() async throws {
         let stub = Stub()
         stub.volume.readOnly = true

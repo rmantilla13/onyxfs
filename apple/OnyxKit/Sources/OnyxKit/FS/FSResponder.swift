@@ -204,13 +204,16 @@ public struct FSResponder: Sendable {
                                           paths: answer.paths.map(Self.wirePath)))
     }
 
-    /// Whether a write may not touch `raw` (a wire path): it, or the nearest
-    /// folder above it that exists, is locked (FSView.isLocked). An unreadable
-    /// path is not locked here; the write turns it down on its own.
-    func isLocked(_ raw: String) async -> Bool {
-        guard let path = Self.mountedPath(raw) else { return false }
+    /// Whether a write may not touch one of `raws` (wire paths): it, or the
+    /// nearest folder above it that exists, is locked (FSView.isLocked). An
+    /// unreadable path is not locked here; the write turns it down on its
+    /// own. All judged on one view of the drive: a move names two paths, and
+    /// each view asked for can cost a comparison of the tree.
+    func isLocked(any raws: [String]) async -> Bool {
+        let paths = raws.compactMap(Self.mountedPath)
+        guard !paths.isEmpty else { return false }
         let (_, view) = await log.current()
-        return view.isLocked(path)
+        return paths.contains(where: view.isLocked)
     }
 
     /// `GET /fs/v1/volume`: the disk's figures, now.

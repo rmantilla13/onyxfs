@@ -244,7 +244,7 @@ public final class FSBridge: @unchecked Sendable {
         // there would make real folders, or move or delete the real file. The
         // extension refuses it already; this answers an older one, or anyone.
         let touched = [query["path"], body["path"] as? String, body["from"] as? String, body["to"] as? String].compactMap { $0 }
-        for path in touched where await responder.isLocked(path) {
+        if await responder.isLocked(any: touched) {
             return FSResponder.error(403, "Collections are kept up to date by Onyx: their files can be opened and copied, not changed here.")
         }
         do {

@@ -29,7 +29,12 @@ final class DriveService: ObservableObject {
     /// so a new value applies as each drive next mounts (Clear Streaming
     /// Cache remounts them all now) — changing it does not interrupt a
     /// drive something is reading from.
-    @Published var cacheLimitGB: Int { didSet { defaults.set(cacheLimitGB, forKey: Keys.limit) } }
+    @Published var cacheLimitGB: Int {
+        didSet {
+            defaults.set(cacheLimitGB, forKey: Keys.limit)
+            noteOnyxfsVolumes()
+        }
+    }
     /// Drives to keep mounted, across launches (SyncDomain identifiers).
     @Published private(set) var wantMounted: Set<String>
     /// Settings' Turn On (turnOnDisks) under way, and why it did not work
@@ -119,7 +124,23 @@ final class DriveService: ObservableObject {
     var onMirrorSynced: ((DriveMirror, Replica.Diff) -> Void)?
     var onUploadFinished: ((UploadJob) -> Void)?
     private let server = DAVServer()
-    private var mirrors: [String: DriveMirror] = [:]
+    private var mirrors: [String: DriveMirror] = [:] {
+        didSet {
+            let now = mirrors
+            mirrorBook.withLock { $0 = now }
+        }
+    }
+    /// `mirrors`, for the bridge's own threads (filesElsewhere).
+    private let mirrorBook = OSAllocatedUnfairLock<[String: DriveMirror]>(initialState: [:])
+    /// Each disk's figures as `/fs/v1/volume` and every write's check read
+    /// them (onyxfsVolume), kept here as they change — a drive list came, the
+    /// cache's limit moved, a disk is mounting — and read from the bridge's
+    /// own threads. Asked of this actor instead, every change a disk made (a
+    /// file closed, a folder made, a delete) waited for the main thread, and
+    /// the main thread can be waiting on the disk itself: on 3 November each
+    /// waited for the other for 30 s, until the disk gave up and a Replace in
+    /// Finder stopped at the file it was deleting.
+    private let onyxfsVolumes = OSAllocatedUnfairLock<[String: FSVolumeInfo]>(initialState: [:])
     /// Each mounted drive's collections, as its disk's Collections folder.
     private var collectionFolders: [String: CollectionsFolder] = [:]
     private var names: [String: String] = [:]
@@ -322,6 +343,7 @@ final class DriveService: ObservableObject {
         // Nothing more answered for any disk, whatever is still mounted.
         server.fs.endAll()
         onyxfsScopes = []
+        onyxfsVolumes.withLock { $0 = [:] }
         mirrors.removeAll()
         collectionFolders.removeAll()
         // The account's downloads stop now, rather than carry on under the
@@ -498,18 +520,33 @@ final class DriveService: ObservableObject {
         await writers[scope.identifier]?.mirrorChanged()
     }
 
+    /// The same for a change a disk made (DriveWriter, by its tree's
+    /// `refresh`), off the main actor but for the news it leaves here: the
+    /// disk's change is answered only once the mirror has it, and the main
+    /// thread may itself be waiting on the disk (onyxfsVolumes).
+    nonisolated func syncAfterChange(_ scope: SyncDomain, mirror: DriveMirror, writer: DriveWriterLink) async {
+        // Signed out, or the drive gone, meanwhile: not this account's to sync.
+        guard mirrorBook.withLock({ $0[scope.identifier] }) === mirror else { return }
+        let diff = try? await sync(mirror, afterWrite: true)
+        Task { @MainActor [weak self] in
+            self?.noteActivity()
+            if let diff { self?.onMirrorSynced?(mirror, diff) }
+        }
+        await writer.writer?.mirrorChanged()
+    }
+
     /// A drive's mirror brought up to the server — held as work in flight
     /// (WorkActivity) once it has gone on past `syncGrace`, so a pass
     /// bringing pages goes at full speed with the window closed. A quiet
     /// pass, a few hundred bytes, is over well before and never touches the
     /// activity: its timer is called off unfired.
-    private func sync(_ mirror: DriveMirror, afterWrite: Bool = false) async throws -> Replica.Diff {
+    private nonisolated func sync(_ mirror: DriveMirror, afterWrite: Bool = false) async throws -> Replica.Diff {
         let hold = WorkActivity.app.begin(.sync, grace: Self.syncGrace)
         defer { hold.end() }
         return try await afterWrite ? mirror.syncAfterWrite() : mirror.sync()
     }
 
-    static let syncGrace: Duration = .seconds(2)
+    nonisolated static let syncGrace: Duration = .seconds(2)
 
     /// After an upload finished: the drive's mirror before long, so the file
     /// leaves pending for the server's copy. At once for the first; then at
@@ -594,11 +631,13 @@ final class DriveService: ObservableObject {
             }
             let collections = CollectionsFolder(scope: scope, api: { OnyxAPI(config: config) }, elsewhere: elsewhere)
             collectionFolders[id] = collections
+            noteOnyxfsVolume(scope)
+            // Never wanted while the disk has sessions (noteOnyxfsVolumes),
+            // but should the figures go first: read-only, and the cache held
+            // to its limit (0 would be none).
+            let unknown = FSVolumeInfo(name: name, readOnly: true, cacheLimitBytes: Int64(max(0, cacheLimitGB)) << 30)
             let source = MirrorFSSource(scope: id, mirror: mirror, pins: { [currentPins] in currentPins.withLock { $0 } },
-                                        volume: { [weak self] in
-                                            await self?.onyxfsVolume(scope)
-                                                ?? FSVolumeInfo(name: name, readOnly: true, cacheLimitBytes: 0)
-                                        },
+                                        volume: { [onyxfsVolumes] in onyxfsVolumes.withLock { $0[id] } ?? unknown },
                                         overlay: overlay,
                                         icon: { [weak self] in
                                             // Drawn off the main thread: the
@@ -619,10 +658,11 @@ final class DriveService: ObservableObject {
 
     /// Files by id in the mirrors other than `scope`'s, for an All Files
     /// collection's folder: the library's own mirror holds no drive's files.
-    private func filesElsewhere(_ ids: [String], besides scope: String) async -> [String: MirrorEntry] {
+    /// Off the main actor, as the bridge asks it (onyxfsVolumes).
+    private nonisolated func filesElsewhere(_ ids: [String], besides scope: String) async -> [String: MirrorEntry] {
         var found: [String: MirrorEntry] = [:]
         var wanted = ids
-        for (key, mirror) in mirrors where key != scope && !wanted.isEmpty {
+        for (key, mirror) in mirrorBook.withLock({ $0 }) where key != scope && !wanted.isEmpty {
             let index = await mirror.snapshot.index
             wanted = wanted.filter { id in
                 guard let entry = index.file(id: id) else { return true }
@@ -660,6 +700,21 @@ final class DriveService: ObservableObject {
             return FSVolumeInfo(name: drive?.name ?? names[scope.identifier] ?? id,
                                 readOnly: !(drive?.mayAddFiles ?? false), cacheLimitBytes: limit)
         }
+    }
+
+    /// One disk's figures, as the bridge will read them (onyxfsVolumes).
+    func noteOnyxfsVolume(_ scope: SyncDomain) {
+        let figures = onyxfsVolume(scope)
+        onyxfsVolumes.withLock { $0[scope.identifier] = figures }
+    }
+
+    /// Every disk's figures again: the drive list came, or the cache's limit
+    /// moved. A disk is answered for exactly while its scope is here.
+    func noteOnyxfsVolumes() {
+        let figures = Dictionary(uniqueKeysWithValues: onyxfsScopes.compactMap { id in
+            SyncDomain(identifier: id).map { (id, onyxfsVolume($0)) }
+        })
+        onyxfsVolumes.withLock { $0 = figures }
     }
 
     /// What a drive's disk icon is drawn from (DriveIcon): its colour, as

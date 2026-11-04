@@ -55,6 +55,16 @@ public struct MirrorIndex: Sendable, PinnableIndex {
     /// not have arrived yet. Nothing is deleted on the strength of an index
     /// that is not (PinStore.reconcile).
     public let isAuthoritative: Bool
+    /// Which build of the tree this is: a copy, or the same tree vouched for
+    /// anew, shares it; every index built has its own (`isSame`).
+    private let build: Build
+
+    private final class Build: Sendable {}
+
+    /// The same tree as `other`, without comparing a thing: it was built
+    /// once, and both are it. Never the same for two builds, even of one
+    /// replica.
+    public func isSame(as other: MirrorIndex) -> Bool { build === other.build }
 
     /// `authoritative`: the replica holds the whole drive (see
     /// `isAuthoritative`). `emptyFolderDate` dates a folder with no files
@@ -196,6 +206,7 @@ public struct MirrorIndex: Sendable, PinnableIndex {
         self.folderCount = slots.count - 1
         self.byteCount = bytes
         self.isAuthoritative = authoritative
+        self.build = Build()
     }
 
     private init(_ other: MirrorIndex, authoritative: Bool) {
@@ -208,6 +219,7 @@ public struct MirrorIndex: Sendable, PinnableIndex {
         folderCount = other.folderCount
         byteCount = other.byteCount
         isAuthoritative = authoritative
+        build = other.build
     }
 
     /// The same tree, vouched for or not: no rebuild, the storage is shared.

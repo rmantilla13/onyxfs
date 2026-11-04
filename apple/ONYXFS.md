@@ -178,7 +178,8 @@ depending on nothing but Foundation), so the extension stays small and the
 logic is testable with `swift test`.
 
 - `FSBridgeClient` — the protocol above over URLSession (ephemeral config,
-  HTTP/1.1 keep-alive to 127.0.0.1, 30 s timeouts; `changes` 40 s). Parses
+  HTTP/1.1 keep-alive to 127.0.0.1, 30 s timeouts; writes 180 s, on
+  connections of their own, "Copying thousands" below; `changes` 40 s). Parses
   the resource URL. Typed errors: `.disconnected` (401 / connection refused —
   the app is gone or restarted), `.notFound`, `.server(String)`.
 - `NodeTable` (actor) — stable `UInt64` item ids per path (root = 2, then
@@ -673,6 +674,67 @@ listed again at once, which is what stopped the owner's copies: 0.5.27
 stopped at the first of 12 files and left the other 11 empty, and this
 build copied all 12. A file made with `touch` went up 32 s later, and one
 made just before an eject went up with the eject.
+
+### Copying thousands, and Replace
+The owner, on 3 November, still on 0.5.27: "still having issues when
+copying large quantities of files or overwriting files." Folders of photos
+copied from an exFAT card onto folders already in Portfolio's Models
+stopped twice with an I/O error (ioErr in DesktopServicesHelper's log):
+once making a folder (15:23), once as Replace deleted a file (15:43). Each
+time a call from the disk to the app had waited out the extension's 30 s.
+
+- **The bridge's comparison.** Every answer the bridge gives reads the
+  drive through FSChangeLog, which compares the tree before and after each
+  change to say which listings moved — and every file Finder closes, and
+  every upload done, is a change. The comparison looked for each folder's
+  files on their way among all of them, and placed each into its listing
+  from the top. With 618 on their way into Portfolio (1,715 files, 366
+  folders) a change cost 0.11 s; with 2,000, 0.34 s; a 20,000-file drive
+  with 3,000 on their way, 2.5 s. At 15:55, with the 618, the app spent
+  86% of a core there, every answer queued behind it: not yet for 30 s,
+  but for longer the bigger the copy. Now the overlay is filed by folder
+  and by id once for each set of files on their way (DriveWriter keeps it
+  until one comes or goes), a listing merges the mirror's and the
+  overlay's in one pass, and a change that moved only the overlay compares
+  just the folders it touched (FSView.changedFolders; MirrorIndex.isSame
+  says the mirror did not move): 0.7 ms, 3 ms and 4.6 ms. When the mirror
+  moved, the whole tree: 13, 16 and 71 ms. Release builds, the shapes
+  FSViewScaleTests lays out.
+- **The main thread.** Every change a disk made — a file closed, a folder
+  made, a delete — asked the app's main actor whether the drive may be
+  written (`onyxfsVolume`), and brought the mirror up to date through it
+  (`syncForWrites`). Twice on 3 November the main thread stopped (the web
+  view's quarter-second ticks stop with it): from 15:22:49.5 to 15:23:20.9,
+  and from 15:42:48.0 to 15:43:18.8. Each time it went on within 20 ms of
+  the extension giving up on a change after its 30 s, so it was waiting on
+  that change, which was waiting on it. Meanwhile every disk's changes
+  waited, the other drives' too (their `/fs/v1/volume` took 21 s). The
+  first was the folder Finder was making: on the server at 15:23:03, then
+  held at its mirror's refresh. The second was Replace's delete. Both came
+  back to Finder as ioErr. What the main thread was doing is not known: the
+  one read of a disk on it in Onyx's own code is DiskIcons', the disks'
+  icons read with every drive list (every five minutes, and as the menu
+  bar's panel opens). Now a disk's figures are kept where the bridge's
+  threads read them (`onyxfsVolumes`, brought up to date as the drive list
+  comes and the cache's limit moves), a change's refresh runs off the main
+  actor (`syncAfterChange`), and so does the read of the icons. Of what the
+  bridge answers, only a disk's icon (`/fs/v1/icon`, once as it mounts)
+  still asks the main actor.
+- **The network.** From 15:21:40 the app's connection to the server
+  stalled for some 80 s (SYN after SYN retransmitted on the VPN's tunnel),
+  and the folder above waited 13 s of it for the server. Writes now wait
+  180 s (`FSBridgeClient.writeTimeout`), on connections of their own: the
+  app's call to the server may wait 60 s, and the mirror up to two passes
+  after it. The bridge sets no deadline of its own while it answers
+  (DAVServer.idleTimeout).
+- **The disk's own store.** Through the owner's copy, the store the
+  extension keeps of macOS's files (LocalStore) wrote its whole index for
+  every change to one — 470 KB for Portfolio's 3,300 `._` files — and cost
+  the extension a fifth of a core. That slowed the copy; it did not stop it.
+- **Known limits.** A call to the server with no answer in 60 s
+  (URLSession's default) still fails the change: the app does not ask
+  again, as a rename or delete asked again after a lost answer could not
+  tell it had already been made.
 
 ### Where it lives
 - App: `OnyxKit/FS/` (FSBridge, FSResponder, MirrorFSSource),

@@ -84,9 +84,11 @@ extension DriveService {
         return false
     }
 
-    /// Each mounted disk's icon, as its drive now is on the web (DiskIcons):
-    /// after the drive list comes, which may bring a new colour or name.
+    /// Each mounted disk's icon, as its drive now is on the web (DiskIcons),
+    /// and its figures (name, whether this account may write there): after
+    /// the drive list comes, which may bring a new colour, name or role.
     func drivesChanged() {
+        noteOnyxfsVolumes()
         guard let model else { return }
         for drive in model.finderDrives { syncDiskIcon(.drive(id: drive.id)) }
     }
@@ -440,13 +442,30 @@ extension DriveService {
         guard let uploads, let model else { return nil }
         guard let mirror = await mirrorForWrites(scope) else { return nil }
         let filespaceId: String? = if case let .drive(id) = scope { id } else { nil }
+        // A change the disk made waits for its refresh, which runs off the
+        // main actor (syncAfterChange).
+        let link = DriveWriterLink()
         let tree = MirrorTree(mirror: mirror,
-                              refresh: { [weak self] in await self?.syncForWrites(scope) },
+                              refresh: { [weak self] in await self?.syncAfterChange(scope, mirror: mirror, writer: link) },
                               refreshSoon: { [weak self] in await self?.syncSoon(scope) })
         let writer = DriveWriter(scope: scope.identifier, filespaceId: filespaceId, api: model.api,
                                  tree: tree, uploads: uploads)
+        link.writer = writer
         writers[scope.identifier] = writer
         return writer
+    }
+}
+
+/// The writer a drive's tree tells that the mirror moved (syncAfterChange).
+/// The tree is made first and the writer holds it, so the tree holds this,
+/// and this only a weak reference.
+final class DriveWriterLink: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var held: DriveWriter?
+
+    var writer: DriveWriter? {
+        get { lock.withLock { held } }
+        set { lock.withLock { held = newValue } }
     }
 }
 

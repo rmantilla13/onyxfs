@@ -91,20 +91,58 @@ public struct FSNode: Sendable, Equatable {
 /// the overlay does not mention.
 public struct FSOverlay: Sendable, Equatable {
     /// Shown at their paths, in place of whatever the mirror has there.
-    public var nodes: [String: FSNode]
+    public var nodes: [String: FSNode] {
+        didSet { grouped = Grouped(nodes) }
+    }
     /// Paths the mirror still shows that this Mac has moved or deleted:
     /// not shown, and nothing beneath them is either — unless the overlay
     /// has put a node there itself.
     public var hidden: Set<String>
+    /// `nodes` by the folder each is in and by file id, worked out once for
+    /// each set of nodes. A listing wants one folder's and the change log's
+    /// comparison every folder's: looked for among all of them each time, a
+    /// copy with 2,000 files on their way cost 0.34 s for each change to the
+    /// drive, and the bridge answered nothing else meanwhile.
+    private var grouped: Grouped
 
     public init(nodes: [FSNode] = [], hidden: Set<String> = []) {
-        self.nodes = Dictionary(nodes.map { ($0.path, $0) }, uniquingKeysWith: { _, last in last })
+        let byPath = Dictionary(nodes.map { ($0.path, $0) }, uniquingKeysWith: { _, last in last })
+        self.nodes = byPath
         self.hidden = hidden
+        grouped = Grouped(byPath)
     }
 
     public static let none = FSOverlay()
 
     public var isEmpty: Bool { nodes.isEmpty && hidden.isEmpty }
+
+    /// What it shows, not how it is filed.
+    public static func == (a: FSOverlay, b: FSOverlay) -> Bool {
+        a.nodes == b.nodes && a.hidden == b.hidden
+    }
+
+    /// The nodes directly in `folder` ("" for the drive's top), in listing
+    /// order, without the names macOS keeps to itself.
+    func children(of folder: String) -> [FSNode] { grouped.children[folder] ?? [] }
+
+    /// The file nodes with this server id: nearly always none, or one.
+    func files(id: String) -> [FSNode] { grouped.files[id] ?? [] }
+
+    private struct Grouped: Sendable {
+        var children: [String: [FSNode]] = [:]
+        var files: [String: [FSNode]] = [:]
+
+        init(_ nodes: [String: FSNode]) {
+            for node in nodes.values {
+                if !node.isFolder, let id = node.fileId { files[id, default: []].append(node) }
+                guard !node.path.isEmpty, !FSNames.isLocalOnly(node.name) else { continue }
+                children[Replica.parentPath(node.path), default: []].append(node)
+            }
+            for folder in children.keys { children[folder]!.sort(by: FSView.listsBefore) }
+            // Dictionary order is no order: the same nodes, the same answer.
+            for id in files.keys where files[id]!.count > 1 { files[id]!.sort { $0.path < $1.path } }
+        }
+    }
 
     /// Whether the mirror's `path` is out of sight: it, or a folder it is in,
     /// was moved or deleted here.
@@ -152,7 +190,7 @@ struct FSView: Sendable {
         self.index = index
         self.overlay = overlay
         self.collections = collections.isEmpty || index.entry(at: collections.rootName) != nil
-            || overlay.nodes.keys.contains(where: { $0.caseInsensitiveCompare(collections.rootName) == .orderedSame })
+            || overlay.children(of: "").contains(where: { $0.path.caseInsensitiveCompare(collections.rootName) == .orderedSame })
             ? .none : collections
     }
 
@@ -191,32 +229,38 @@ struct FSView: Sendable {
         // listed only when that folder itself is in sight at this very path.
         let mirrorFolder = overlay.hides(path) ? nil : mirrorNode(at: path)
         guard let folder = overlay.nodes[path] ?? mirrorFolder, folder.isFolder else { return nil }
-        let put = overlayChildren(of: path)
+        let put = overlay.children(of: path)
         var kids: [FSNode] = []
         if mirrorFolder?.isFolder == true, let entries = index.children(of: path) {
             // A name the overlay has put here is its node, not the mirror's.
             let covered = Set(put.map(\.name))
-            kids.reserveCapacity(entries.count)
+            kids.reserveCapacity(entries.count + put.count + 1)
             for entry in entries where !FSNames.isLocalOnly(entry.name) {
                 if !covered.isEmpty, covered.contains(entry.name) { continue }
                 if overlay.hides(entry.path) { continue }
                 kids.append(FSNode(entry))
             }
         }
-        // The index has its own in order already; only the overlay's are placed,
-        // and at the top, the Collections folder.
-        for node in put + (path.isEmpty ? [collections.root].compactMap { $0 } : []) {
-            let at = kids.firstIndex { Self.listsBefore(node, $0) } ?? kids.endIndex
-            kids.insert(node, at: at)
+        // The index has its own in order already, and the overlay's are in
+        // order too: the two are merged in one pass. Placed one by one, each
+        // looked for its place from the top, and a folder with 1,500 files on
+        // their way took half a second to list.
+        var merged: [FSNode] = []
+        merged.reserveCapacity(kids.count + put.count + 1)
+        var next = put.startIndex
+        for kid in kids {
+            while next < put.endIndex, Self.listsBefore(put[next], kid) {
+                merged.append(put[next])
+                next += 1
+            }
+            merged.append(kid)
         }
-        return kids
-    }
-
-    private func overlayChildren(of path: String) -> [FSNode] {
-        guard !overlay.nodes.isEmpty else { return [] }
-        return overlay.nodes.values
-            .filter { !$0.path.isEmpty && Replica.parentPath($0.path) == path && !FSNames.isLocalOnly($0.name) }
-            .sorted { Self.listsBefore($0, $1) }
+        merged.append(contentsOf: put[next...])
+        // And at the top, the Collections folder.
+        if path.isEmpty, let root = collections.root {
+            merged.insert(root, at: merged.firstIndex { Self.listsBefore(root, $0) } ?? merged.endIndex)
+        }
+        return merged
     }
 
     /// Folders first, then files, each in Finder's order (MirrorIndex).
@@ -228,8 +272,9 @@ struct FSView: Sendable {
     /// A file by the server's id, when it is in sight: not under a name the
     /// bridge never lists, nor moved or deleted here.
     func file(id: String) -> FSNode? {
-        if let put = overlay.nodes.values.first(where: { !$0.isFolder && $0.fileId == id }) {
-            return node(at: put.path) == put ? put : nil
+        let put = overlay.files(id: id)
+        if !put.isEmpty {
+            return put.first { node(at: $0.path) == $0 }
         }
         if let entry = index.file(id: id), let found = node(at: entry.path), !found.isFolder, found.fileId == id {
             return found
@@ -269,15 +314,44 @@ struct FSView: Sendable {
     /// came or went, or any of whose entries did — its name, size, dates,
     /// version or state. What the extension must list again.
     ///
-    /// The whole tree is compared, which at a hundred thousand files takes a
-    /// fraction of a second; it runs once for each change to the drive, not
-    /// for each question about it (FSChangeLog).
+    /// It runs once for each change to the drive, not for each question
+    /// about it (FSChangeLog), and while Finder copies, a change comes with
+    /// every file closed and every upload done. Most of those move only this
+    /// Mac's overlay — the mirror's tree, what is hidden and the collections
+    /// stay as they were — and then only the folder a node that moved is in,
+    /// and the node's own path, can list differently: those alone are
+    /// compared. Anything else compares the whole tree, which at a hundred
+    /// thousand files takes a fraction of a second.
     static func changedFolders(from old: FSView, to new: FSView) -> Set<String> {
+        guard let moved = overlayMoves(from: old, to: new) else { return everyChangedFolder(from: old, to: new) }
+        return moved.filter { old.children(of: $0) != new.children(of: $0) }
+    }
+
+    /// Every folder in sight in either compared, whatever moved.
+    static func everyChangedFolder(from old: FSView, to new: FSView) -> Set<String> {
         var seen = Set<String>()
         var changed = Set<String>()
         for path in old.folderPaths() + new.folderPaths() where seen.insert(path).inserted {
             if old.children(of: path) != new.children(of: path) { changed.insert(path) }
         }
         return changed
+    }
+
+    /// Where the listings can differ when only the overlay's nodes moved:
+    /// each node's path that came, went or changed, and the folder it is in.
+    /// A listing is made of its folder's own node, the mirror's and the
+    /// overlay's nodes in it, and what is hidden — so nothing else can. Nil
+    /// when the mirror's tree, what is hidden or the collections moved too.
+    private static func overlayMoves(from old: FSView, to new: FSView) -> Set<String>? {
+        guard old.index.isSame(as: new.index), old.overlay.hidden == new.overlay.hidden,
+              old.collections == new.collections else { return nil }
+        var paths = Set<String>()
+        func moved(_ path: String) {
+            paths.insert(path)
+            if !path.isEmpty { paths.insert(Replica.parentPath(path)) }
+        }
+        for (path, node) in old.overlay.nodes where new.overlay.nodes[path] != node { moved(path) }
+        for path in new.overlay.nodes.keys where old.overlay.nodes[path] == nil { moved(path) }
+        return paths
     }
 }

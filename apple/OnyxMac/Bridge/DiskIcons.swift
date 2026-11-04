@@ -21,13 +21,33 @@ enum DiskIcons {
         !(UserDefaults.standard.dictionary(forKey: defaultsKey) ?? [:]).isEmpty
     }
 
+    /// Disks whose icon is being looked at now: one look at a time each.
+    private static var looking: Set<String> = []
+
     /// Bring the disk at `volume` to `drive`'s icon, if its icon is still
     /// this app's to change.
+    ///
+    /// Drawn, and the disk's icon read, off the main thread: this runs with
+    /// every drive list (every five minutes, and as the menu bar's panel
+    /// opens), and a read of a disk waits on the disk, which a copy can keep
+    /// busy. It was the one read of a disk on the main thread, and a disk's
+    /// changes used to wait on that thread (DriveService.onyxfsVolumes).
     static func sync(_ scope: SyncDomain, volume: URL, color: String?, name: String) {
-        guard let wanted = DriveIcon.icns(color: color, name: name) else { return }
+        guard looking.insert(scope.identifier).inserted else { return }
+        Task.detached(priority: .utility) {
+            let wanted = DriveIcon.icns(color: color, name: name)
+            let now = (try? Data(contentsOf: volume.appendingPathComponent(".VolumeIcon.icns"))).map(digest)
+            await apply(scope, volume: volume, wanted: wanted, now: now)
+        }
+    }
+
+    /// What `sync` found, acted on: `wanted` is the icon as drawn today,
+    /// `now` the digest of the one on the disk (nil for none).
+    private static func apply(_ scope: SyncDomain, volume: URL, wanted: Data?, now: String?) {
+        defer { looking.remove(scope.identifier) }
+        guard let wanted else { return }
         let drawing = digest(wanted)
         let file = volume.appendingPathComponent(".VolumeIcon.icns")
-        let now = (try? Data(contentsOf: file)).map(digest)
         var records = UserDefaults.standard.dictionary(forKey: defaultsKey) as? [String: [String: String]] ?? [:]
         let mine = records[scope.identifier]
 
@@ -57,7 +77,7 @@ enum DiskIcons {
         appLog.info("onyxfs: \(scope.identifier, privacy: .public) has its new icon")
     }
 
-    private static func digest(_ data: Data) -> String {
+    nonisolated private static func digest(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
