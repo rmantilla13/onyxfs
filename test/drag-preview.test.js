@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import {
   COMPACT, CHIP_H, HANG, MARGIN, SPRINGS, SWAY,
   compactBox, previewLayout, hangAt, stepSpring, atRest, swayFor,
-  describeFiles, describeDrag, classifyDrop, isDroppable, isRefused, springsOpen,
+  describeFiles, describeDrag, classifyDrop, isDroppable, isRefused, springsOpen, springRestarts, SPRING_SLOP,
 } from '../lib/drag-preview.js';
 
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps, `${a} ≉ ${b}`);
@@ -312,6 +312,15 @@ describe('which folders spring open', () => {
     assert.equal(springsOpen('self', t('Projects/2024'), ''), false);
     assert.equal(springsOpen('locked', t('Archive'), ''), false);
     assert.equal(springsOpen('none', t('Archive'), ''), false);
+  });
+
+  test('only while the pointer rests on it: passing over starts the clocks again', () => {
+    const at = { x: 100, y: 100 };
+    assert.equal(springRestarts(at, { x: 103, y: 102 }), false, 'a hand that is still, wobbling');
+    assert.equal(springRestarts(at, { x: 100 + SPRING_SLOP, y: 100 }), false);
+    assert.equal(springRestarts(at, { x: 100 + SPRING_SLOP + 1, y: 100 }), true, 'moving on');
+    assert.equal(springRestarts(at, { x: 140, y: 130 }), true);
+    assert.equal(springRestarts(null, at), true, 'no clock yet');
   });
 
   test('not the folder already open, a crumb, or the page', () => {

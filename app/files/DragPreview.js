@@ -9,7 +9,7 @@ import { lastPointer } from './usePointerIntent';
 import {
   SPRING_MS, SPRING_WARN_MS, CHIP_H, OVER_SCALE, LAND_SCALE, LABEL_ROOM, HANG, SPRINGS,
   compactBox, previewLayout, hangAt, stepSpring, atRest, swayFor,
-  describeDrag, classifyDrop, isRefused, springsOpen,
+  describeDrag, classifyDrop, isRefused, springsOpen, springRestarts,
 } from '@/lib/drag-preview';
 
 /**
@@ -23,8 +23,9 @@ import {
  * small stack with a count. Over a folder it can go into, the folder lights
  * up and the thumbnail shrinks a little further; over one it cannot (where
  * it is already, a folder into itself, one that may not be written) it
- * greys out and shows a no-entry mark. Held over a folder for a moment, the
- * folder opens (Finder's spring-loaded folders), so a drag can drill down.
+ * greys out and shows a no-entry mark. Held still over a folder for a moment,
+ * the folder opens (Finder's spring-loaded folders), so a drag can drill
+ * down; one only passed over on the way somewhere stays shut.
  * Let go over a folder, it flies into it as the move starts; let go anywhere
  * else, or cancelled, it flies back to where it came from — and folders it
  * opened on the way close again. Files dragged in from the desktop are the
@@ -320,6 +321,9 @@ function onOver(e) {
     findLane(d, e.target);
     aim(d, e.target instanceof Element ? e.target.closest('[data-drop-target]') : null);
   }
+  // Still moving across the folder: its clocks start again from here.
+  const t = d.target;
+  if (t?.restAt && springRestarts(t.restAt, d.pointer)) armSpring(d, t);
   kick();
 }
 
@@ -405,6 +409,17 @@ function aim(d, el) {
   else if (isRefused(t.verdict)) el.setAttribute('data-drop', 'no');
   setVerdict(d, t.verdict);
   if (!springsOpen(t.verdict, t, host.current.folder)) return;
+  armSpring(d, t);
+}
+
+// Start a folder's clocks — the blink and the fetch ahead, then the opening —
+// from where the pointer is now (`restAt`): they run only while it rests
+// there, and onOver starts them again whenever it moves on (SPRING_SLOP).
+function armSpring(d, t) {
+  clearTimeout(d.warn);
+  clearTimeout(d.spring);
+  t.el.removeAttribute('data-spring');
+  t.restAt = { x: d.pointer.x, y: d.pointer.y };
   d.warn = setTimeout(() => {
     if (d.target !== t || d.ended) return;
     t.el.setAttribute('data-spring', 'armed');
